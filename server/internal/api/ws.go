@@ -9,7 +9,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"mindfs/server/internal/agent"
-	"mindfs/server/internal/agent/acp"
+	"mindfs/server/internal/agent/unified"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/router"
 	"mindfs/server/internal/session"
@@ -26,7 +26,7 @@ type WSHandler struct {
 	Agents    *agent.Pool
 	TaskQueue *agent.TaskQueue
 	watcherMu sync.Mutex
-	watchers  map[string]*fs.FileWatcher
+	watchers  map[string]*fs.SharedFileWatcher // rootPath -> SharedFileWatcher
 	connMu    sync.RWMutex
 	conns     map[*websocket.Conn]bool
 }
@@ -265,17 +265,36 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 	}
 
 	manager, _, _ := h.Sessions.GetManager(rootID)
+	sharedWatcher := h.getSharedWatcher(resolved.Path)
 	var responseText string
-	err = proc.SendMessage(ctx, content, func(update acp.SessionUpdate) {
+	err = proc.SendMessage(ctx, content, func(update unified.SessionUpdate) {
+		// Track file writes from ToolCall (precise tracking via ACP protocol)
+		if update.Type == unified.UpdateTypeToolCall {
+			if toolCall, ok := update.Data.(unified.ToolCall); ok {
+				if toolCall.IsWriteOperation() && resolved != nil {
+					for _, path := range toolCall.GetAffectedPaths() {
+						// Record pending write for SharedFileWatcher (precise matching)
+						if sharedWatcher != nil {
+							sharedWatcher.RecordPendingWrite(sessionItem.Key, path)
+						}
+						// Also record directly to session
+						if manager != nil {
+							h.recordSessionFile(ctx, manager, sessionItem.Key, resolved.Path, resolved.ManagedDir, path)
+						}
+					}
+				}
+			}
+		}
+
+		// Mark session as active on any update
+		if sharedWatcher != nil {
+			sharedWatcher.MarkSessionActive(sessionItem.Key)
+		}
+
 		// Convert to legacy chunk format for backward compatibility
 		chunk := updateToChunk(update)
 		if chunk.Content != "" {
 			responseText += chunk.Content
-			if resolved != nil && manager != nil {
-				for _, path := range agent.ExtractFilePaths(chunk.Content) {
-					h.recordSessionFile(ctx, manager, sessionItem.Key, resolved.Path, resolved.ManagedDir, path)
-				}
-			}
 		}
 		h.sendWS(conn, WSResponse{
 			Type: "session.stream",
@@ -312,6 +331,9 @@ func (h *WSHandler) handleSessionClose(ctx context.Context, conn *websocket.Conn
 		return
 	}
 
+	// Get rootPath before closing session
+	rootPath, _, _ := h.resolveRootPaths(rootID)
+
 	closed, err := h.Sessions.CloseSession(ctx, rootID, key)
 	if err != nil {
 		h.sendWSError(conn, req.ID, "session.not_found", err.Error())
@@ -321,7 +343,9 @@ func (h *WSHandler) handleSessionClose(ctx context.Context, conn *websocket.Conn
 	if h.Agents != nil {
 		h.Agents.Close(closed.Key)
 	}
-	h.stopWatcher(closed.Key)
+	if rootPath != "" {
+		h.stopWatcher(rootPath, closed.Key)
+	}
 
 	h.sendWS(conn, WSResponse{
 		ID:   req.ID,
@@ -349,26 +373,26 @@ func (h *WSHandler) sendWSError(conn *websocket.Conn, id, code, message string) 
 	})
 }
 
-// updateToChunk converts an ACP SessionUpdate to a legacy StreamChunk.
-func updateToChunk(update acp.SessionUpdate) agent.StreamChunk {
+// updateToChunk converts a unified SessionUpdate to a legacy StreamChunk.
+func updateToChunk(update unified.SessionUpdate) agent.StreamChunk {
 	switch update.Type {
-	case acp.UpdateTypeMessageChunk:
-		var chunk acp.MessageChunk
-		_ = json.Unmarshal(update.Data, &chunk)
-		return agent.StreamChunk{Type: "text", Content: chunk.Content}
-	case acp.UpdateTypeThoughtChunk:
-		var chunk acp.ThoughtChunk
-		_ = json.Unmarshal(update.Data, &chunk)
-		return agent.StreamChunk{Type: "thinking", Content: chunk.Content}
-	case acp.UpdateTypeToolCall:
-		var tc acp.ToolCall
-		_ = json.Unmarshal(update.Data, &tc)
-		return agent.StreamChunk{Type: "tool_call", Tool: tc.Name}
-	case acp.UpdateTypeToolUpdate:
-		var tu acp.ToolCallUpdate
-		_ = json.Unmarshal(update.Data, &tu)
-		return agent.StreamChunk{Type: "tool_result", Content: tu.Result}
-	case acp.UpdateTypeMessageDone:
+	case unified.UpdateTypeMessageChunk:
+		if chunk, ok := update.Data.(unified.MessageChunk); ok {
+			return agent.StreamChunk{Type: "text", Content: chunk.Content}
+		}
+	case unified.UpdateTypeThoughtChunk:
+		if chunk, ok := update.Data.(unified.ThoughtChunk); ok {
+			return agent.StreamChunk{Type: "thinking", Content: chunk.Content}
+		}
+	case unified.UpdateTypeToolCall:
+		if tc, ok := update.Data.(unified.ToolCall); ok {
+			return agent.StreamChunk{Type: "tool_call", Tool: tc.Name}
+		}
+	case unified.UpdateTypeToolUpdate:
+		if tu, ok := update.Data.(unified.ToolCallUpdate); ok {
+			return agent.StreamChunk{Type: "tool_result", Content: tu.Result}
+		}
+	case unified.UpdateTypeMessageDone:
 		return agent.StreamChunk{Type: "done"}
 	}
 	return agent.StreamChunk{}
@@ -386,44 +410,60 @@ func (h *WSHandler) startWatcher(ctx context.Context, rootID, sessionKey, rootPa
 	if sessionKey == "" || rootPath == "" || managedDir == "" {
 		return
 	}
-	h.watcherMu.Lock()
-	if h.watchers == nil {
-		h.watchers = make(map[string]*fs.FileWatcher)
-	}
-	if _, ok := h.watchers[sessionKey]; ok {
-		h.watcherMu.Unlock()
-		return
-	}
-	h.watcherMu.Unlock()
 	manager, _, err := h.Sessions.GetManager(rootID)
 	if err != nil {
 		return
 	}
-	watcher, err := fs.NewFileWatcher(rootPath, managedDir, sessionKey, func(rel, sessKey string, size int64) {
+
+	// Get or create shared watcher for this rootPath
+	watcher, err := fs.GetSharedWatcher(rootPath, managedDir, func(rel, sessKey string, size int64) {
 		h.recordSessionFile(ctx, manager, sessKey, rootPath, managedDir, rel)
 	})
 	if err != nil {
 		return
 	}
+
+	// Register this session with the shared watcher
+	watcher.RegisterSession(sessionKey)
+
+	// Store reference for cleanup
 	h.watcherMu.Lock()
-	h.watchers[sessionKey] = watcher
+	if h.watchers == nil {
+		h.watchers = make(map[string]*fs.SharedFileWatcher)
+	}
+	h.watchers[rootPath] = watcher
 	h.watcherMu.Unlock()
 }
 
-func (h *WSHandler) stopWatcher(sessionKey string) {
+func (h *WSHandler) stopWatcher(rootPath, sessionKey string) {
 	h.watcherMu.Lock()
-	if h.watchers == nil {
-		h.watcherMu.Unlock()
+	watcher, ok := h.watchers[rootPath]
+	h.watcherMu.Unlock()
+
+	if !ok || watcher == nil {
 		return
 	}
-	watcher, ok := h.watchers[sessionKey]
-	if ok {
-		delete(h.watchers, sessionKey)
-	}
-	h.watcherMu.Unlock()
-	if ok {
+
+	// Unregister this session
+	watcher.UnregisterSession(sessionKey)
+
+	// If no more sessions, remove the watcher
+	if watcher.SessionCount() == 0 {
+		h.watcherMu.Lock()
+		delete(h.watchers, rootPath)
+		h.watcherMu.Unlock()
 		watcher.Close()
 	}
+}
+
+// getSharedWatcher returns the shared watcher for a rootPath if it exists.
+func (h *WSHandler) getSharedWatcher(rootPath string) *fs.SharedFileWatcher {
+	h.watcherMu.Lock()
+	defer h.watcherMu.Unlock()
+	if h.watchers == nil {
+		return nil
+	}
+	return h.watchers[rootPath]
 }
 
 func (h *WSHandler) recordSessionFile(ctx context.Context, manager *session.Manager, sessionKey, rootPath, managedDir, path string) {

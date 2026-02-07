@@ -92,17 +92,14 @@ func defaultConfigPath() (string, error) {
 }
 
 // defaultConfig returns built-in agent definitions.
+// All agents now use ACP protocol via their respective ACP wrappers.
 func defaultConfig() Config {
 	return Config{
 		Agents: map[string]Definition{
 			"claude": {
 				Command:  "claude",
-				Protocol: ProtocolStreamJSON,
-				Args: []string{
-					"--output-format", "stream-json",
-					"--input-format", "stream-json",
-					"--verbose",
-				},
+				Protocol: ProtocolACP,
+				Args:     []string{"--acp"},
 				Transport: TransportConfig{
 					InitTimeout: 30 * time.Second,
 					IdleTimeout: 500 * time.Millisecond,
@@ -119,8 +116,8 @@ func defaultConfig() Config {
 			},
 			"codex": {
 				Command:  "codex",
-				Protocol: ProtocolMCP,
-				Args:     []string{"mcp-server"},
+				Protocol: ProtocolACP,
+				Args:     []string{"--acp"},
 				Transport: TransportConfig{
 					InitTimeout: 30 * time.Second,
 					IdleTimeout: 500 * time.Millisecond,

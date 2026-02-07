@@ -70,17 +70,6 @@ func Retry(ctx context.Context, cfg RetryConfig, fn func() error) error {
 	return errors.Join(ErrMaxRetries, lastErr)
 }
 
-// StartProcessWithRetry starts a process with retry on failure.
-func StartProcessWithRetry(ctx context.Context, def Definition, rootPath string, cfg RetryConfig) (Process, error) {
-	var proc Process
-	err := Retry(ctx, cfg, func() error {
-		var err error
-		proc, err = StartProcess(ctx, def, rootPath)
-		return err
-	})
-	return proc, err
-}
-
 // RecoverablePool wraps Pool with automatic recovery.
 type RecoverablePool struct {
 	*Pool
@@ -95,36 +84,20 @@ func NewRecoverablePool(cfg Config, retryCfg RetryConfig) *RecoverablePool {
 	}
 }
 
-// GetOrCreateWithRetry returns or creates a process with retry.
+// GetOrCreateWithRetry returns or creates a session with retry.
 func (p *RecoverablePool) GetOrCreateWithRetry(ctx context.Context, sessionKey, agentName, rootPath string) (Process, error) {
-	// First try to get existing
-	p.mu.Lock()
-	if proc, ok := p.processes[sessionKey]; ok {
-		p.mu.Unlock()
-		return proc, nil
-	}
-	p.mu.Unlock()
-
-	def, ok := p.cfg.Agents[agentName]
-	if !ok {
-		return nil, errors.New("agent not configured: " + agentName)
-	}
-
-	// Start with retry
-	proc, err := StartProcessWithRetry(ctx, def, rootPath, p.retryCfg)
-	if err != nil {
-		return nil, err
-	}
-
-	p.mu.Lock()
-	p.processes[sessionKey] = proc
-	p.mu.Unlock()
-	return proc, nil
+	var proc Process
+	err := Retry(ctx, p.retryCfg, func() error {
+		var err error
+		proc, err = p.Pool.GetOrCreate(ctx, sessionKey, agentName, rootPath)
+		return err
+	})
+	return proc, err
 }
 
-// RecoverProcess attempts to restart a crashed process.
-func (p *RecoverablePool) RecoverProcess(ctx context.Context, sessionKey, agentName, rootPath string) (Process, error) {
-	// Close existing if any
+// RecoverSession attempts to restart a session after failure.
+func (p *RecoverablePool) RecoverSession(ctx context.Context, sessionKey, agentName, rootPath string) (Process, error) {
+	// Close existing session if any
 	p.Close(sessionKey)
 
 	// Start new with retry
