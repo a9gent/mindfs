@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
+
+	"mindfs/server/internal/fs"
 )
 
 const historyFileName = "history.jsonl"
@@ -28,10 +29,10 @@ type Record struct {
 	Meta      any       `json:"meta,omitempty"`
 }
 
-// Append writes a record to the managed directory's history.jsonl.
-func Append(managedDir string, record Record) error {
-	if managedDir == "" {
-		return errors.New("managed dir required")
+// Append writes a record to root/.mindfs/history.jsonl.
+func Append(root fs.RootInfo, record Record) error {
+	if root.MetaDir() == "" {
+		return errors.New("meta dir required")
 	}
 	if record.TS.IsZero() {
 		record.TS = time.Now().UTC()
@@ -40,8 +41,7 @@ func Append(managedDir string, record Record) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(managedDir, historyFileName)
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	file, err := root.OpenMetaFileAppend(historyFileName)
 	if err != nil {
 		return err
 	}
@@ -54,29 +54,21 @@ func Append(managedDir string, record Record) error {
 
 // Writer writes audit entries to a JSONL file with buffering
 type Writer struct {
-	mu       sync.Mutex
-	basePath string
-	file     *os.File
+	mu   sync.Mutex
+	root fs.RootInfo
+	file *os.File
 }
 
-// NewWriter creates a new audit writer for the given managed directory
-func NewWriter(managedDir string) (*Writer, error) {
-	historyPath := filepath.Join(managedDir, historyFileName)
-
-	// Ensure directory exists
-	if err := os.MkdirAll(managedDir, 0755); err != nil {
-		return nil, err
-	}
-
-	// Open file in append mode
-	file, err := os.OpenFile(historyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+// NewWriter creates a new audit writer for the given root.
+func NewWriter(root fs.RootInfo) (*Writer, error) {
+	file, err := root.OpenMetaFileAppend(historyFileName)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Writer{
-		basePath: historyPath,
-		file:     file,
+		root: root,
+		file: file,
 	}, nil
 }
 
@@ -115,7 +107,7 @@ func (w *Writer) Close() error {
 // WriterPool manages audit writers for multiple directories
 type WriterPool struct {
 	mu      sync.RWMutex
-	writers map[string]*Writer
+	writers map[string]*Writer // root id -> writer
 }
 
 // NewWriterPool creates a new writer pool
@@ -125,10 +117,14 @@ func NewWriterPool() *WriterPool {
 	}
 }
 
-// Get returns or creates a writer for the given managed directory
-func (p *WriterPool) Get(managedDir string) (*Writer, error) {
+// Get returns or creates a writer for the given root.
+func (p *WriterPool) Get(root fs.RootInfo) (*Writer, error) {
+	rootID := root.ID
+	if rootID == "" {
+		return nil, errors.New("root id required")
+	}
 	p.mu.RLock()
-	if w, ok := p.writers[managedDir]; ok {
+	if w, ok := p.writers[rootID]; ok {
 		p.mu.RUnlock()
 		return w, nil
 	}
@@ -138,16 +134,16 @@ func (p *WriterPool) Get(managedDir string) (*Writer, error) {
 	defer p.mu.Unlock()
 
 	// Double-check after acquiring write lock
-	if w, ok := p.writers[managedDir]; ok {
+	if w, ok := p.writers[rootID]; ok {
 		return w, nil
 	}
 
-	w, err := NewWriter(managedDir)
+	w, err := NewWriter(root)
 	if err != nil {
 		return nil, err
 	}
 
-	p.writers[managedDir] = w
+	p.writers[rootID] = w
 	return w, nil
 }
 
@@ -164,29 +160,27 @@ func (p *WriterPool) Close() {
 
 // Logger provides a convenient interface for logging audit entries
 type Logger struct {
-	pool       *WriterPool
-	rootID     string
-	managedDir string
+	pool *WriterPool
+	root fs.RootInfo
 }
 
-// NewLogger creates a new logger for a specific root
-func NewLogger(pool *WriterPool, rootID, managedDir string) *Logger {
+// NewLogger creates a new logger for a specific root.
+func NewLogger(pool *WriterPool, root fs.RootInfo) *Logger {
 	return &Logger{
-		pool:       pool,
-		rootID:     rootID,
-		managedDir: managedDir,
+		pool: pool,
+		root: root,
 	}
 }
 
 // Log writes an audit entry
 func (l *Logger) Log(entry *Entry) error {
-	if l.pool == nil || l.managedDir == "" {
+	if l.pool == nil || l.root.ID == "" {
 		return nil
 	}
 
-	entry.RootID = l.rootID
+	entry.RootID = l.root.ID
 
-	w, err := l.pool.Get(l.managedDir)
+	w, err := l.pool.Get(l.root)
 	if err != nil {
 		return err
 	}

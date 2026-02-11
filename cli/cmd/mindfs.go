@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -37,33 +38,49 @@ func main() {
 
 	if serverRunning(*addr) {
 		fmt.Fprintf(os.Stdout, "server already running on %s, reusing existing process\n", *addr)
-		if err := addManagedDir(*addr, root); err != nil {
+		if err := addManagedDir(*addr, absRoot); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
 		fmt.Fprintln(os.Stdout, "added managed directory:", absRoot)
-		if *web {
-			if err := runWeb(context.Background(), *webDir); err != nil {
-				fmt.Fprintln(os.Stderr, err.Error())
-				os.Exit(1)
-			}
-		}
 		return
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- app.Start(ctx, *addr)
+	}()
+	if err := waitForServer(*addr, 8*time.Second); err != nil {
+		cancel()
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+	if err := addManagedDir(*addr, absRoot); err != nil {
+		cancel()
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stdout, "added managed directory:", absRoot)
+
 	if *web {
 		if err := startWeb(ctx, *webDir); err != nil {
+			cancel()
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
 	}
 
-	if err := app.Start(ctx, *addr, absRoot); err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
-		os.Exit(1)
+	select {
+	case <-ctx.Done():
+		return
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
 	}
 }
 
@@ -119,6 +136,17 @@ func addrToURL(addr, path string) string {
 	return fmt.Sprintf("http://%s:%s%s", host, port, path)
 }
 
+func waitForServer(addr string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if serverRunning(addr) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("server did not become ready on %s within %s", addr, timeout)
+}
+
 func startWeb(ctx context.Context, dir string) error {
 	cmd := exec.CommandContext(ctx, "npm", "run", "dev")
 	cmd.Dir = dir
@@ -132,13 +160,4 @@ func startWeb(ctx context.Context, dir string) error {
 		_ = cmd.Wait()
 	}()
 	return nil
-}
-
-func runWeb(ctx context.Context, dir string) error {
-	cmd := exec.CommandContext(ctx, "npm", "run", "dev")
-	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
-	return cmd.Run()
 }

@@ -3,8 +3,9 @@ package skills
 import (
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
+
+	"mindfs/server/internal/fs"
 )
 
 // SkillManifest describes a skill's metadata.
@@ -35,23 +36,22 @@ type LoadedSkill struct {
 	Config   SkillRuntimeConfig
 }
 
-func LoadSkill(managedDir, skillID string) (LoadedSkill, error) {
-	if managedDir == "" {
+func LoadSkill(root fs.RootInfo, skillID string) (LoadedSkill, error) {
+	if root.MetaDir() == "" {
 		return LoadedSkill{}, errors.New("managed dir required")
 	}
 	if skillID == "" {
 		return LoadedSkill{}, errors.New("skill id required")
 	}
-	skillDir := filepath.Join(managedDir, "skills", skillID)
-	manifestPath := filepath.Join(skillDir, "manifest.json")
-	configPath := filepath.Join(skillDir, "config.json")
+	manifestPath := filepath.Join("skills", skillID, "manifest.json")
+	configPath := filepath.Join("skills", skillID, "config.json")
 
 	var manifest SkillManifest
-	if payload, err := os.ReadFile(manifestPath); err == nil {
+	if payload, err := root.ReadMetaFile(manifestPath); err == nil {
 		_ = json.Unmarshal(payload, &manifest)
 	}
 	var cfg SkillRuntimeConfig
-	payload, err := os.ReadFile(configPath)
+	payload, err := root.ReadMetaFile(configPath)
 	if err != nil {
 		return LoadedSkill{}, err
 	}

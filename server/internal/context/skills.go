@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"mindfs/server/internal/fs"
 )
 
 type skillConfig struct {
@@ -12,9 +14,8 @@ type skillConfig struct {
 	Params      []ParamDef `json:"params"`
 }
 
-func LoadDirectorySkills(managedDir string) ([]SkillBrief, error) {
-	skillsDir := filepath.Join(managedDir, "skills")
-	entries, err := os.ReadDir(skillsDir)
+func LoadDirectorySkills(root fs.RootInfo) ([]SkillBrief, error) {
+	entries, err := root.ListMetaEntries("skills")
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []SkillBrief{}, nil
@@ -26,8 +27,8 @@ func LoadDirectorySkills(managedDir string) ([]SkillBrief, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		configPath := filepath.Join(skillsDir, entry.Name(), "config.json")
-		payload, err := os.ReadFile(configPath)
+		configPath := filepath.Join("skills", entry.Name(), "config.json")
+		payload, err := root.ReadMetaFile(configPath)
 		if err != nil {
 			continue
 		}

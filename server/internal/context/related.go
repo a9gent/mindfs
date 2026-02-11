@@ -1,17 +1,18 @@
 package context
 
 import (
+	"context"
 	"path/filepath"
 	"sort"
 
 	"mindfs/server/internal/session"
 )
 
-func FindRelatedSessions(store *session.Store, currentPath string, limit int) ([]SessionBrief, error) {
-	if store == nil {
+func FindRelatedSessions(manager *session.Manager, currentPath string, limit int) ([]SessionBrief, error) {
+	if manager == nil {
 		return []SessionBrief{}, nil
 	}
-	sessions, err := store.List()
+	sessions, err := manager.List(context.Background())
 	if err != nil {
 		return nil, err
 	}

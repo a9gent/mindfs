@@ -13,11 +13,8 @@ type SessionInfo = {
 type ActionBarProps = {
   status?: string;
   rootId?: string | null;
-  pendingView?: boolean;
   currentSession?: SessionInfo | null;
   selectedFileName?: string | null;
-  onAcceptView?: () => void;
-  onRevertView?: () => void;
   onSendMessage?: (message: string, mode: SessionMode, agent: string) => void;
   onSessionClick?: () => void;
 };
@@ -31,21 +28,14 @@ const modePlaceholders: Record<SessionMode, string> = {
 export function ActionBar({
   status = "Disconnected",
   rootId,
-  pendingView = false,
   currentSession,
   selectedFileName,
-  onAcceptView,
-  onRevertView,
   onSendMessage,
   onSessionClick,
 }: ActionBarProps) {
   const [mode, setMode] = useState<SessionMode>("chat");
-  const [agent, setAgent] = useState("claude");
-  const [agents, setAgents] = useState<AgentStatus[]>([
-    { name: "claude", available: true },
-    { name: "gemini", available: true },
-    { name: "codex", available: true },
-  ]);
+  const [agent, setAgent] = useState("");
+  const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
 
@@ -66,9 +56,18 @@ export function ActionBar({
       .catch((err) => console.error("Failed to fetch agents:", err));
   }, []);
 
+  // 当无当前 Session 时，如果选中 Agent 不在列表内，自动切到首个可选 Agent
+  useEffect(() => {
+    if (currentSession || agents.length === 0) return;
+    const exists = agents.some((a) => a.name === agent);
+    if (exists) return;
+    const preferred = agents.find((a) => a.available) ?? agents[0];
+    setAgent(preferred.name);
+  }, [agent, agents, currentSession]);
+
   // 发送消息
   const handleSend = useCallback(async () => {
-    if (!input.trim() || sending) return;
+    if (!input.trim() || sending || !agent) return;
 
     const message = input.trim();
     setInput("");
@@ -174,55 +173,6 @@ export function ActionBar({
             }}
           />
           {selectedFileName || status}
-        </div>
-      )}
-
-      {/* 待处理视图 */}
-      {pendingView && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            background: "rgba(59, 130, 246, 0.08)",
-            border: "1px solid rgba(59, 130, 246, 0.2)",
-            padding: "6px 10px",
-            borderRadius: "8px",
-            fontSize: "12px",
-            color: "#1d4ed8",
-          }}
-        >
-          <span>AI 视图已生成</span>
-          <button
-            type="button"
-            onClick={onAcceptView}
-            style={{
-              padding: "4px 8px",
-              borderRadius: "6px",
-              border: "none",
-              background: "#1d4ed8",
-              color: "#fff",
-              cursor: "pointer",
-              fontSize: "12px",
-            }}
-          >
-            接受
-          </button>
-          <button
-            type="button"
-            onClick={onRevertView}
-            style={{
-              padding: "4px 8px",
-              borderRadius: "6px",
-              border: "1px solid rgba(29, 78, 216, 0.35)",
-              background: "transparent",
-              color: "#1d4ed8",
-              cursor: "pointer",
-              fontSize: "12px",
-            }}
-          >
-            回退
-          </button>
         </div>
       )}
 

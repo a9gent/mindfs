@@ -97,7 +97,7 @@ export function ModeAgentSelector({
             color: currentAgent?.available ? "var(--text-primary)" : "var(--text-secondary)",
           }}
         >
-          {agent}
+          {agent || "未选择"}
         </span>
         {currentAgent && !currentAgent.available && (
           <span

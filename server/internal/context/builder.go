@@ -3,18 +3,20 @@ package context
 import (
 	"fmt"
 
+	"mindfs/server/internal/fs"
 	"mindfs/server/internal/session"
 	"mindfs/server/internal/skills"
 )
 
-func BuildServerContext(mode, rootPath, managedDir, currentPath string, currentView *CurrentViewRef, store *session.Store) (ServerContext, error) {
-	dirCfg, err := skills.LoadDirConfig(managedDir)
+func BuildServerContext(mode string, root fs.RootInfo, currentPath string, currentView *CurrentViewRef, manager *session.Manager) (ServerContext, error) {
+	dirCfg, err := skills.LoadDirConfig(root)
 	if err != nil {
 		// 配置加载失败时使用空配置，不阻断流程
 		dirCfg = skills.DirConfig{}
 	}
+	rootPath, _ := root.RootDir()
 
-	related, err := FindRelatedSessions(store, currentPath, 3)
+	related, err := FindRelatedSessions(manager, currentPath, 3)
 	if err != nil {
 		// 关联 Session 查找失败时使用空列表
 		related = []SessionBrief{}
@@ -40,8 +42,7 @@ func BuildServerContext(mode, rootPath, managedDir, currentPath string, currentV
 		var viewDef *ViewDefinition
 		if currentView != nil {
 			viewDef = &ViewDefinition{
-				RuleID:  currentView.RuleID,
-				Version: currentView.Version,
+				RuleID: currentView.RuleID,
 			}
 		}
 		ctx.View = &ViewContext{
@@ -52,7 +53,7 @@ func BuildServerContext(mode, rootPath, managedDir, currentPath string, currentV
 			ViewExamples:   SelectExamples(examples, dirCfg.UserDescription, 3),
 		}
 	case "skill":
-		dirSkills, err := LoadDirectorySkills(managedDir)
+		dirSkills, err := LoadDirectorySkills(root)
 		if err != nil {
 			return ctx, fmt.Errorf("load directory skills: %w", err)
 		}

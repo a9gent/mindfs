@@ -8,54 +8,35 @@ import (
 
 	"mindfs/server/internal/agent"
 	"mindfs/server/internal/api"
+	"mindfs/server/internal/audit"
 	"mindfs/server/internal/fs"
-	"mindfs/server/internal/router"
-	"mindfs/server/internal/session"
 )
 
-// Start boots the HTTP/WS server for a managed directory.
-func Start(ctx context.Context, addr, root string) error {
-	managedDir, err := fs.EnsureManagedDir(root)
-	if err != nil {
-		return err
-	}
+// Start boots the HTTP/WS server.
+func Start(ctx context.Context, addr string) error {
 	registry, err := fs.NewDefaultRegistry()
 	if err != nil {
 		return err
 	}
 	_ = registry.Load()
-	_, _ = registry.Upsert(root)
-	viewStores := router.NewViewStoreManager()
 
-	actionRouter := router.New()
-	actionRouter.SetFallback(router.DefaultHandler(func() ([]fs.Entry, error) {
-		return fs.ListEntries(root, root)
-	}))
-	actionService := &router.ActionService{
-		Root:       root,
-		ManagedDir: managedDir,
-		Router:     actionRouter,
-		Registry:   registry,
-	}
-	if err := actionService.RegisterDefaults(); err != nil {
+	auditPool := audit.NewWriterPool()
+	agentConfig, err := agent.LoadConfig("")
+	if err != nil {
 		return err
 	}
-
-	sessionStores := session.NewStoreManager()
-	sessionService := &api.SessionService{
-		Stores:   sessionStores,
-		Root:     root,
-		Registry: registry,
-	}
-	agentConfig, _ := agent.LoadConfig("agents.json")
 	agentPool := agent.NewPool(agentConfig)
 	agentProber := agent.NewProber(&agentConfig, 5*time.Minute)
 	agentProber.Start(ctx)
-	idleChecker := session.NewIdleChecker(sessionStores, 1*time.Minute, 10*time.Minute, 30*time.Minute)
-	idleChecker.Start(ctx)
 
-	httpHandler := &api.HTTPHandler{Router: actionRouter, Root: root, Views: viewStores, Registry: registry, Sessions: sessionService, Prober: agentProber}
-	wsHandler := &api.WSHandler{Router: actionRouter, Root: root, Registry: registry, Sessions: sessionService, Agents: agentPool, Prober: agentProber}
+	services := &api.AppContext{
+		Dirs:   registry,
+		Audit:  auditPool,
+		Agents: agentPool,
+		Prober: agentProber,
+	}
+	httpHandler := &api.HTTPHandler{AppContext: services}
+	wsHandler := &api.WSHandler{AppContext: services}
 
 	mux := http.NewServeMux()
 	mux.Handle("/", httpHandler.Routes())
@@ -71,12 +52,12 @@ func Start(ctx context.Context, addr, root string) error {
 
 	go func() {
 		<-ctx.Done()
-		idleChecker.Stop()
 		agentProber.Stop()
 		agentPool.CloseAll()
+		auditPool.Close()
 		_ = server.Shutdown(context.Background())
 	}()
 
-	log.Printf("[server] listening addr=%s root=%s", addr, root)
+	log.Printf("[server] listening addr=%s", addr)
 	return server.ListenAndServe()
 }

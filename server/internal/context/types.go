@@ -17,8 +17,7 @@ type Selection struct {
 }
 
 type CurrentViewRef struct {
-	RuleID  string `json:"rule_id"`
-	Version string `json:"version"`
+	RuleID string `json:"rule_id"`
 }
 
 type ServerContext struct {
@@ -82,8 +81,7 @@ type ViewExample struct {
 }
 
 type ViewDefinition struct {
-	RuleID  string `json:"rule_id"`
-	Version string `json:"version"`
+	RuleID string `json:"rule_id"`
 }
 
 type SkillBrief struct {

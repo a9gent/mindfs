@@ -3,7 +3,8 @@ package skills
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
+
+	"mindfs/server/internal/fs"
 )
 
 const defaultConfigName = "config.json"
@@ -15,12 +16,11 @@ type DirConfig struct {
 }
 
 // LoadDirConfig reads .mindfs/config.json if present.
-func LoadDirConfig(managedDir string) (DirConfig, error) {
-	if managedDir == "" {
+func LoadDirConfig(root fs.RootInfo) (DirConfig, error) {
+	if root.MetaDir() == "" {
 		return DirConfig{}, nil
 	}
-	path := filepath.Join(managedDir, defaultConfigName)
-	payload, err := os.ReadFile(path)
+	payload, err := root.ReadMetaFile(defaultConfigName)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return DirConfig{}, nil
@@ -35,17 +35,13 @@ func LoadDirConfig(managedDir string) (DirConfig, error) {
 }
 
 // SaveDirConfig writes .mindfs/config.json with provided settings.
-func SaveDirConfig(managedDir string, cfg DirConfig) error {
-	if managedDir == "" {
+func SaveDirConfig(root fs.RootInfo, cfg DirConfig) error {
+	if root.MetaDir() == "" {
 		return nil
 	}
-	path := filepath.Join(managedDir, defaultConfigName)
 	payload, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(managedDir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, payload, 0o644)
+	return root.WriteMetaFile(defaultConfigName, payload)
 }

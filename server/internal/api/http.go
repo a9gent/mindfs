@@ -5,25 +5,19 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
-	"time"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"mindfs/server/internal/agent"
-	"mindfs/server/internal/fs"
-	"mindfs/server/internal/router"
+	"mindfs/server/internal/api/usecase"
+	"mindfs/server/internal/session"
+	"mindfs/server/internal/skills"
 )
 
 // HTTPHandler provides REST endpoints for health, tree, file, and action.
 type HTTPHandler struct {
-	Router   *router.Router
-	Root     string
-	Views    *router.ViewStoreManager
-	Registry *fs.Registry
-	Sessions *SessionService
-	Prober   *agent.Prober
+	AppContext *AppContext
 }
 
 // Routes constructs the chi router with all endpoints.
@@ -33,8 +27,6 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/health", h.handleHealth)
 	r.Get("/api/tree", h.handleTree)
 	r.Get("/api/file", h.handleFile)
-	r.Post("/api/view/accept", h.handleViewAccept)
-	r.Post("/api/view/revert", h.handleViewRevert)
 	r.Get("/api/sessions", h.handleSessions)
 	r.Get("/api/sessions/{key}", h.handleSessionGet)
 	r.Post("/api/sessions", h.handleSessionCreate)
@@ -43,7 +35,6 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Put("/api/dirs/{id}/config", h.handleDirConfigPut)
 	r.Get("/api/dirs", h.handleDirs)
 	r.Post("/api/dirs", h.handleAddDir)
-	r.Post("/api/action", h.handleAction)
 
 	// File metadata API
 	r.Get("/api/file/meta", h.handleFileMeta)
@@ -52,21 +43,214 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/dirs/{id}/skills", h.handleDirSkills)
 
 	// Agent status API
-	agentHandler := &AgentHandler{Prober: h.Prober}
-	r.Mount("/api/agents", agentHandler.Routes())
+	r.Get("/api/agents", h.handleAgentsList)
+	r.Post("/api/agents/{name}/probe", h.handleAgentsProbe)
 
 	// View routes API
-	viewHandler := &ViewHandler{Root: h.Root, Registry: h.Registry}
-	r.Route("/api/view", func(v chi.Router) {
-		v.Get("/", h.handleView)
-		v.Get("/routes", viewHandler.handleRoutes)
-		v.Post("/switch", viewHandler.handleSwitch)
-		v.Post("/preference", viewHandler.handlePreference)
-		v.Get("/versions/{routeId}", viewHandler.handleVersions)
-		v.Post("/generate", viewHandler.handleGenerate)
-	})
+	r.Get("/api/view/routes", h.handleViewRoutes)
+	r.Post("/api/view/preference", h.handleViewPreference)
 
 	return r
+}
+
+func (h *HTTPHandler) handleSessions(w http.ResponseWriter, r *http.Request) {
+	rootID := r.URL.Query().Get("root")
+	uc := &usecase.Service{Registry: h.AppContext}
+	out, err := uc.ListSessions(r.Context(), usecase.ListSessionsInput{RootID: rootID})
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	payload := make([]map[string]any, 0, len(out.Sessions))
+	for _, s := range out.Sessions {
+		payload = append(payload, sessionResponse(s))
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"sessions": payload})
+}
+
+func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {
+	rootID := r.URL.Query().Get("root")
+	key := chi.URLParam(r, "key")
+	if strings.TrimSpace(key) == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("session key required"))
+		return
+	}
+	uc := &usecase.Service{Registry: h.AppContext}
+	out, err := uc.GetSession(r.Context(), usecase.GetSessionInput{
+		RootID: rootID,
+		Key:    key,
+	})
+	if err != nil {
+		respondError(w, http.StatusNotFound, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"session": sessionResponse(out)})
+}
+
+func (h *HTTPHandler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
+	rootID := r.URL.Query().Get("root")
+	var req struct {
+		Key   string `json:"key"`
+		Type  string `json:"type"`
+		Agent string `json:"agent"`
+		Name  string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json"))
+		return
+	}
+	uc := &usecase.Service{Registry: h.AppContext}
+	created, err := uc.CreateSession(r.Context(), usecase.CreateSessionInput{
+		RootID: rootID,
+		Input: session.CreateInput{
+			Key:   req.Key,
+			Type:  req.Type,
+			Agent: req.Agent,
+			Name:  req.Name,
+		},
+	})
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"session": sessionResponse(created)})
+}
+
+func sessionResponse(s *session.Session) map[string]any {
+	if s == nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"key":              s.Key,
+		"session_key":      s.Key,
+		"type":             s.Type,
+		"agent":            s.Agent,
+		"agent_session_id": s.AgentSessionID,
+		"name":             s.Name,
+		"status":           s.Status,
+		"summary":          s.Summary,
+		"exchanges":        s.Exchanges,
+		"related_files":    s.RelatedFiles,
+		"generated_view":   s.GeneratedView,
+		"created_at":       s.CreatedAt,
+		"updated_at":       s.UpdatedAt,
+		"closed_at":        s.ClosedAt,
+	}
+}
+
+func (h *HTTPHandler) handleViewRoutes(w http.ResponseWriter, r *http.Request) {
+	rootID := r.URL.Query().Get("root")
+	uc := &usecase.Service{Registry: h.AppContext}
+	out, err := uc.ListViewRoutes(r.Context(), usecase.ListViewRoutesInput{
+		RootID: rootID,
+		Path:   r.URL.Query().Get("path"),
+	})
+	if err != nil {
+		respondError(w, http.StatusNotFound, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"routes": out.Routes})
+}
+
+func (h *HTTPHandler) handleViewPreference(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RootID  string `json:"root_id"`
+		Path    string `json:"path"`
+		RouteID string `json:"route_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json"))
+		return
+	}
+	uc := &usecase.Service{Registry: h.AppContext}
+	if err := uc.SetViewPreference(r.Context(), usecase.SetViewPreferenceInput{
+		RootID:  req.RootID,
+		Path:    req.Path,
+		RouteID: req.RouteID,
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+func (h *HTTPHandler) handleSkillExecute(w http.ResponseWriter, r *http.Request) {
+	rootID := r.URL.Query().Get("root")
+	skillID := chi.URLParam(r, "id")
+	if strings.TrimSpace(skillID) == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("skill id required"))
+		return
+	}
+	var req struct {
+		Params map[string]any `json:"params"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json"))
+		return
+	}
+	uc := &usecase.Service{Registry: h.AppContext}
+	out, err := uc.ExecuteSkill(r.Context(), usecase.ExecuteSkillInput{
+		RootID:  rootID,
+		SkillID: skillID,
+		Params:  req.Params,
+	})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"result": out.Result})
+}
+
+func (h *HTTPHandler) handleDirConfigGet(w http.ResponseWriter, r *http.Request) {
+	rootID := chi.URLParam(r, "id")
+	uc := &usecase.Service{Registry: h.AppContext}
+	out, err := uc.GetDirConfig(r.Context(), usecase.GetDirConfigInput{RootID: rootID})
+	if err != nil {
+		respondError(w, http.StatusNotFound, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, out.Config)
+}
+
+func (h *HTTPHandler) handleDirConfigPut(w http.ResponseWriter, r *http.Request) {
+	rootID := chi.URLParam(r, "id")
+	var cfg skills.DirConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json"))
+		return
+	}
+	uc := &usecase.Service{Registry: h.AppContext}
+	if err := uc.SetDirConfig(r.Context(), usecase.SetDirConfigInput{
+		RootID: rootID,
+		Config: cfg,
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, cfg)
+}
+
+func (h *HTTPHandler) handleAgentsList(w http.ResponseWriter, r *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetProber() == nil {
+		respondJSON(w, http.StatusOK, []map[string]any{})
+		return
+	}
+	statuses := h.AppContext.GetProber().GetAllStatuses()
+	respondJSON(w, http.StatusOK, statuses)
+}
+
+func (h *HTTPHandler) handleAgentsProbe(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if name == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("agent name required"))
+		return
+	}
+	if h.AppContext == nil || h.AppContext.GetProber() == nil {
+		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("prober not available"))
+		return
+	}
+	status := h.AppContext.GetProber().ProbeOne(r.Context(), name)
+	respondJSON(w, http.StatusOK, status)
 }
 
 func (h *HTTPHandler) handleIndex(w http.ResponseWriter, _ *http.Request) {
@@ -80,419 +264,143 @@ func (h *HTTPHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *HTTPHandler) handleTree(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	root := h.Root
 	rootID := r.URL.Query().Get("root")
-	if rootID != "" && h.Registry != nil {
-		if dir, ok := h.Registry.Get(rootID); ok {
-			root = dir.RootPath
-		} else {
-			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": "root not found"})
-			return
-		}
-	}
-	if root == "" {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "root not configured"})
-		return
-	}
-	dir := r.URL.Query().Get("dir")
-	if dir == "" || dir == "." {
-		dir = root
-	}
-	resolved, err := fs.ResolvePath(root, dir)
+	uc := &usecase.Service{Registry: h.AppContext}
+	out, err := uc.ListTree(r.Context(), usecase.ListTreeInput{
+		RootID: rootID,
+		Dir:    r.URL.Query().Get("dir"),
+	})
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		respondError(w, http.StatusBadRequest, err)
 		return
 	}
-	entries, err := fs.ListEntries(root, resolved)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"tree": entries})
+	respondJSON(w, http.StatusOK, map[string]any{"tree": out.Entries})
 }
 
 func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	root := h.Root
 	rootID := r.URL.Query().Get("root")
-	if rootID != "" && h.Registry != nil {
-		if dir, ok := h.Registry.Get(rootID); ok {
-			root = dir.RootPath
-		} else {
-			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": "root not found"})
-			return
-		}
-	}
-	if root == "" {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "root not configured"})
-		return
-	}
+	uc := &usecase.Service{Registry: h.AppContext}
 	path := r.URL.Query().Get("path")
 	if path == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "path required"})
+		respondError(w, http.StatusBadRequest, errInvalidRequest("path required"))
 		return
 	}
 	raw := r.URL.Query().Get("raw")
 	if raw == "1" {
-		resolved, err := fs.ResolvePath(root, path)
+		rawOut, err := uc.OpenFileRaw(r.Context(), usecase.OpenFileRawInput{
+			RootID: rootID,
+			Path:   path,
+		})
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			respondError(w, http.StatusBadRequest, err)
 			return
 		}
-		file, err := os.Open(resolved)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-			return
-		}
-		defer file.Close()
-		info, err := file.Stat()
-		if err == nil {
-			w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
-		}
-		ext := filepath.Ext(resolved)
+		defer rawOut.File.Close()
+		w.Header().Set("Content-Length", strconv.FormatInt(rawOut.Info.Size(), 10))
+		ext := filepath.Ext(rawOut.RelPath)
 		if mimeType := mime.TypeByExtension(ext); mimeType != "" {
 			w.Header().Set("Content-Type", mimeType)
 		} else {
 			w.Header().Set("Content-Type", "application/octet-stream")
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = io.Copy(w, file)
+		_, _ = io.Copy(w, rawOut.File)
 		return
 	}
-	result, err := fs.ReadFile(root, path, 128*1024)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-	if rootID != "" && h.Registry != nil {
-		if dir, ok := h.Registry.Get(rootID); ok {
-			result.Root = dir.Name
-		}
-	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"file": result})
-}
-
-func (h *HTTPHandler) handleAction(w http.ResponseWriter, r *http.Request) {
-	if h.Router == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		return
-	}
-	var req struct {
-		Action  string         `json:"action"`
-		Path    string         `json:"path"`
-		Context map[string]any `json:"context"`
-		Meta    map[string]any `json:"meta"`
-		Version string         `json:"version"`
-		Root    string         `json:"root"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "invalid json"})
-		return
-	}
-	resp, err := h.Router.Dispatch(r.Context(), router.ActionRequest{
-		Action:  req.Action,
-		Path:    req.Path,
-		Context: req.Context,
-		Meta:    req.Meta,
-		Version: req.Version,
-		Root:    req.Root,
+	out, err := uc.ReadFile(r.Context(), usecase.ReadFileInput{
+		RootID:   rootID,
+		Path:     path,
+		MaxBytes: 128 * 1024,
 	})
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		respondError(w, http.StatusBadRequest, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":  resp.Status,
-		"handled": resp.Handled,
-		"data":    resp.Data,
-		"view":    resp.View,
-		"effects": resp.Effects,
-		"error":   resp.Error,
-	})
-}
-
-func (h *HTTPHandler) handleView(w http.ResponseWriter, r *http.Request) {
-	if h.Views == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "view store not configured"})
-		return
-	}
-	rootID := r.URL.Query().Get("root")
-	resolved, err := resolveRoot(rootID, h.Root, h.Registry)
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-	managedDir := resolved.ManagedDir
-	store, err := h.Views.Get(managedDir)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-	status, _ := fs.LoadViewStatus(managedDir)
-	if view, ts, modTime, ok := store.Get(); ok {
-		if info, err := os.Stat(filepath.Join(managedDir, "view.json")); err == nil && info.ModTime().After(modTime) {
-			view, err = store.Load()
-			if err == nil {
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(map[string]any{"view": view, "updated_at": time.Now().UTC(), "pending": status.Pending, "view_id": status.CurrentID})
-				return
-			}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"view": view, "updated_at": ts, "pending": status.Pending, "view_id": status.CurrentID})
-		return
-	}
-	view, err := store.Load()
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"view": nil, "pending": status.Pending, "view_id": status.CurrentID})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"view": view, "pending": status.Pending, "view_id": status.CurrentID})
-}
-
-func (h *HTTPHandler) handleViewAccept(w http.ResponseWriter, r *http.Request) {
-	rootID := r.URL.Query().Get("root")
-	resolved, err := resolveRoot(rootID, h.Root, h.Registry)
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-	status, err := fs.AcceptView(resolved.ManagedDir)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "pending": status.Pending, "view_id": status.CurrentID})
-}
-
-func (h *HTTPHandler) handleViewRevert(w http.ResponseWriter, r *http.Request) {
-	rootID := r.URL.Query().Get("root")
-	resolved, err := resolveRoot(rootID, h.Root, h.Registry)
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-	status, err := fs.RevertView(resolved.ManagedDir)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-	var view map[string]any
-	if h.Views != nil {
-		if store, err := h.Views.Get(resolved.ManagedDir); err == nil {
-			view, _ = store.Load()
-		}
-	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "pending": status.Pending, "view_id": status.CurrentID, "view": view})
+	respondJSON(w, http.StatusOK, map[string]any{"file": out.File})
 }
 
 func (h *HTTPHandler) handleDirs(w http.ResponseWriter, _ *http.Request) {
-	if h.Registry == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "registry not configured"})
+	uc := &usecase.Service{Registry: h.AppContext}
+	out, err := uc.ListManagedDirs(nil)
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
 		return
 	}
-	if h.Root == "" {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "root not configured"})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	dirs := h.Registry.List()
-	resp := make([]map[string]any, 0, len(dirs))
-	for _, dir := range dirs {
+	resp := make([]map[string]any, 0, len(out.Dirs))
+	for _, dir := range out.Dirs {
 		display := dir.Name
 		resp = append(resp, map[string]any{
 			"id":           dir.ID,
-			"root_path":    ".",
 			"display_name": display,
 			"created_at":   dir.CreatedAt,
 			"updated_at":   dir.UpdatedAt,
 		})
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"dirs": resp})
+	respondJSON(w, http.StatusOK, map[string]any{"dirs": resp})
 }
 
 func (h *HTTPHandler) handleAddDir(w http.ResponseWriter, r *http.Request) {
-	if h.Registry == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "registry not configured"})
-		return
-	}
-	if h.Root == "" {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "root not configured"})
-		return
-	}
 	var req struct {
 		Path string `json:"path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "invalid json"})
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json"))
 		return
 	}
-	if req.Path == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "path required"})
-		return
-	}
-	if filepath.IsAbs(req.Path) {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "absolute paths not allowed"})
-		return
-	}
-	abs := filepath.Join(h.Root, req.Path)
-	info, err := os.Stat(abs)
-	if err != nil || !info.IsDir() {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "path must be a directory"})
-		return
-	}
-	if _, err := fs.EnsureManagedDir(abs); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-	dir, err := h.Registry.Add(abs)
+	uc := &usecase.Service{Registry: h.AppContext}
+	out, err := uc.AddManagedDir(r.Context(), usecase.AddManagedDirInput{Path: req.Path})
 	if err != nil {
-		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		respondError(w, http.StatusBadRequest, err)
 		return
 	}
-	rel, _ := filepath.Rel(h.Root, dir.RootPath)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"id":           dir.ID,
-		"root_path":    rel,
-		"display_name": dir.Name,
-		"created_at":   dir.CreatedAt,
-		"updated_at":   dir.UpdatedAt,
+	respondJSON(w, http.StatusOK, map[string]any{
+		"id":           out.Dir.ID,
+		"display_name": out.Dir.Name,
+		"created_at":   out.Dir.CreatedAt,
+		"updated_at":   out.Dir.UpdatedAt,
 	})
 }
 
 func (h *HTTPHandler) handleFileMeta(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	rootID := r.URL.Query().Get("root")
-	resolved, err := resolveRoot(rootID, h.Root, h.Registry)
+	uc := &usecase.Service{Registry: h.AppContext}
+	out, err := uc.GetFileMeta(r.Context(), usecase.GetFileMetaInput{
+		RootID: rootID,
+		Path:   r.URL.Query().Get("path"),
+	})
 	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		respondError(w, http.StatusBadRequest, err)
 		return
 	}
 
-	path := r.URL.Query().Get("path")
-	if path == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "path required"})
+	if out.Meta == nil {
+		respondJSON(w, http.StatusOK, map[string]any{"meta": nil})
 		return
 	}
 
-	meta, err := fs.GetFileMeta(resolved.ManagedDir, path)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-
-	if meta == nil {
-		_ = json.NewEncoder(w).Encode(map[string]any{"meta": nil})
-		return
-	}
-
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"meta": map[string]any{
-			"source_session": meta.SourceSession,
-			"session_name":   meta.SessionName,
-			"agent":          meta.Agent,
-			"created_at":     meta.CreatedAt,
-			"updated_at":     meta.UpdatedAt,
-			"created_by":     meta.CreatedBy,
+			"source_session": out.Meta.SourceSession,
+			"session_name":   out.Meta.SessionName,
+			"agent":          out.Meta.Agent,
+			"created_at":     out.Meta.CreatedAt,
+			"updated_at":     out.Meta.UpdatedAt,
+			"created_by":     out.Meta.CreatedBy,
 		},
 	})
 }
 
 func (h *HTTPHandler) handleDirSkills(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	rootID := chi.URLParam(r, "id")
-	resolved, err := resolveRoot(rootID, h.Root, h.Registry)
+	uc := &usecase.Service{Registry: h.AppContext}
+	out, err := uc.ListDirectorySkills(r.Context(), usecase.ListDirectorySkillsInput{
+		RootID: rootID,
+	})
 	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		respondError(w, http.StatusNotFound, err)
 		return
 	}
-
-	// Load skills from .mindfs/skills/ directory
-	skillsDir := filepath.Join(resolved.ManagedDir, "skills")
-	skills := make([]map[string]any, 0)
-
-	entries, err := os.ReadDir(skillsDir)
-	if err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			ext := filepath.Ext(name)
-			if ext != ".json" && ext != ".yaml" && ext != ".yml" {
-				continue
-			}
-
-			skillID := name[:len(name)-len(ext)]
-			skillPath := filepath.Join(skillsDir, name)
-
-			// Try to read skill metadata
-			data, err := os.ReadFile(skillPath)
-			if err != nil {
-				continue
-			}
-
-			var skillMeta map[string]any
-			if err := json.Unmarshal(data, &skillMeta); err != nil {
-				continue
-			}
-
-			skillName, _ := skillMeta["name"].(string)
-			if skillName == "" {
-				skillName = skillID
-			}
-			description, _ := skillMeta["description"].(string)
-
-			skills = append(skills, map[string]any{
-				"id":          skillID,
-				"name":        skillName,
-				"description": description,
-				"source":      "directory",
-			})
-		}
-	}
-
-	_ = json.NewEncoder(w).Encode(map[string]any{"skills": skills})
+	respondJSON(w, http.StatusOK, map[string]any{"skills": out.Skills})
 }
 
 const indexHTML = `<!doctype html>

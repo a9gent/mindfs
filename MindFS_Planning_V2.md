@@ -690,7 +690,7 @@ interface ServerContext {
 │  if mode == "view":                                                     │
 │    - 加载 catalog + registry schema                                     │
 │    - 加载 server API 列表                                               │
-│    - 读取当前 view.json                                                 │
+│    - 读取当前视图路由配置                                               │
 │    - 加载 few-shot 示例                                                 │
 │                                                                         │
 │  if mode == "skill":                                                    │
@@ -1016,7 +1016,7 @@ interface APIEndpoint {
 interface ViewExample {
   description: string;               // 场景描述
   prompt: string;                    // 用户提示词
-  view: object;                      // 生成的 view.json
+  view: object;                      // 生成的视图数据
 }
 ```
 
@@ -1028,26 +1028,17 @@ interface ViewExample {
 
 ```
 .mindfs/
-├── view.json                    # 路由配置
-├── view.status.json             # 状态 (激活版本、用户选择)
-└── views/
-    ├── _default/                # 系统默认视图
-    │   ├── file-list.json
-    │   └── markdown.json
-    ├── novels/                  # 路径规则: novels/**
-    │   ├── v1.json
-    │   ├── v1.meta.json
-    │   ├── v2.json
-    │   └── v2.meta.json
-    ├── code/                    # 路径规则: code/** 或 *.ts/*.js
-    │   ├── v1.json
-    │   └── v1.meta.json
-    └── _root/                   # 根目录视图
-        ├── v1.json
-        └── v1.meta.json
+├── view-router.json                    # 路由配置
+├── view-preference.json         # 用户选择偏好
+└── views/                       # 视图文件（扁平存放）
+    ├── file-list.json           # 系统默认: 文件列表
+    ├── markdown.json            # 系统默认: Markdown
+    ├── novels-reader.json       # 路径规则: novels/**
+    ├── code-viewer.json         # 路径规则: code/** 或 *.ts/*.js
+    └── root.json                # 根目录视图
 ```
 
-### view.json 路由配置
+### view-router.json 路由配置
 
 ```json
 {
@@ -1057,7 +1048,7 @@ interface ViewExample {
       "id": "novels-reader",
       "name": "小说阅读器",
       "match": { "path": "novels/**" },
-      "view": "novels/v2.json",
+      "view": "novels-reader.json",
       "priority": 10
     },
     {
@@ -1069,25 +1060,25 @@ interface ViewExample {
           { "ext": [".ts", ".js", ".go", ".py"] }
         ]
       },
-      "view": "code/v1.json",
+      "view": "code-viewer.json",
       "priority": 10
     },
     {
       "id": "markdown-viewer",
       "name": "Markdown 文档",
       "match": { "ext": [".md"] },
-      "view": "_default/markdown.json",
+      "view": "markdown.json",
       "priority": 5
     },
     {
       "id": "file-list",
       "name": "文件列表",
       "match": { "all": true },
-      "view": "_default/file-list.json",
+      "view": "file-list.json",
       "priority": 0
     }
   ],
-  "root_view": "_root/v1.json"
+  "root_view": "root.json"
 }
 ```
 
@@ -1104,21 +1095,13 @@ type MatchRule =
   | { all: MatchRule[] | true }           // AND 或 fallback
 ```
 
-### view.status.json
+### view-preference.json
 
 ```json
 {
-  "active_versions": {
-    "novels-reader": "v2",
-    "code-viewer": "v1",
-    "markdown-viewer": "v1"
-  },
   "last_selected": {
     "novels/erta/readme.md": "markdown-viewer",
     "novels/erta": "novels-reader"
-  },
-  "pending": {
-    "novels-reader": "v3"
   }
 }
 ```
@@ -1147,39 +1130,27 @@ function resolveView(path: string): { current: View, alternatives: View[] } {
 
 ### 多视图切换 UI
 
-**视图+版本合并为单个下拉框**（参考模式+Agent 下拉框设计）:
+**视图选择下拉框**（参考模式+Agent 下拉框设计）:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ [●] Connected  [小说阅读器 · v2 ▼]  [输入消息...]       [对话 · Claude ▼] [发送] │
+│ [●] Connected  [小说阅读器 ▼]  [输入消息...]              [对话 · Claude ▼] [发送] │
 └──────────────────────────────────────────────────────────────────────────────┘
                         │
-        ┌───────────────┴───────────────────────────────────────┐
-        │  视图类型              版本                            │
-        │ ─────────────────────────────────────────────────────│
-        │  ● 小说阅读器          ● v2 (夜间模式)                 │
-        │  ○ Markdown 文档       ○ v1                          │
-        │  ○ 文件列表                                           │
-        └───────────────────────────────────────────────────────┘
+        ┌───────────────┴───────────────────┐
+        │  匹配的视图                        │
+        │ ─────────────────────────────────│
+        │  ● 小说阅读器                     │
+        │  ○ Markdown 文档                  │
+        │  ○ 文件列表                       │
+        └───────────────────────────────────┘
 ```
-
-**下拉框交互**:
-- 左侧：视图类型列表（匹配当前路径的所有视图）
-- 右侧：当前视图的版本列表
-- 切换视图类型时，右侧版本列表同步更新
-- 按钮显示：`{视图名称} · {版本}` 如 `小说阅读器 · v2`
 
 **单个匹配时简化显示**:
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ [●] Connected  [代码编辑器 · v1 ▼]  [输入消息...]       [对话 · Claude ▼] [发送] │
+│ [●] Connected  [代码编辑器]  [输入消息...]                [对话 · Claude ▼] [发送] │
 └──────────────────────────────────────────────────────────────────────────────┘
-                        │
-        ┌───────────────┴───────────────────────────────────────┐
-        │  视图类型              版本                            │
-        │ ─────────────────────────────────────────────────────│
-        │  ● 代码编辑器          ● v1                           │
-        └───────────────────────────────────────────────────────┘
 ```
 
 **无自定义视图时**:
@@ -1188,77 +1159,10 @@ function resolveView(path: string): { current: View, alternatives: View[] } {
 │ [●] Connected  [文件列表 ▼]  [输入消息...]              [对话 · Claude ▼] [发送] │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
-- 仅显示视图名称，无版本
+- 仅显示视图名称
 - 需要生成自定义视图时，切换到"生成视图"模式
 
-**用户切换自动记住**: 下次打开同一文件/目录，默认使用上次选择的视图和版本。
-
----
-
-## 五、视图版本管理
-
-### 版本元数据
-
-```typescript
-// views/novels/v2.meta.json
-interface ViewVersionMeta {
-  id: "novels-reader";
-  version: "v2";
-  name: "小说阅读器";
-  created_at: string;
-  prompt: "小说阅读器，支持夜间模式和书签";
-  agent: "claude";
-  parent: "v1";                    // 基于 v1 修改
-  match_rule: { path: "novels/**" };
-  status: "active" | "archived";
-}
-```
-
-### 回退与重新生成
-
-**视图版本下拉菜单**:
-```
-┌─────────────────────┐
-│ ● v2 (夜间模式)     │  ← 当前
-│ ○ v1                │
-│ ○ 默认文件列表      │
-│ ───────────────────│
-│ ↻ 重新生成...       │
-│ ↺ 恢复默认选择      │
-└─────────────────────┘
-```
-
-**重新生成对话框**:
-```
-┌─────────────────────────────────────────┐
-│ 重新生成视图                             │
-│                                         │
-│ 上次提示: "生成小说阅读器"                │
-│                                         │
-│ 新提示: [生成小说阅读器，增加夜间模式___] │
-│                                         │
-│ 应用范围:                                │
-│ ● 当前规则 (novels/**)                  │
-│ ○ 仅当前目录 (novels/erta/**)           │
-│ ○ 仅当前文件类型 (*.txt)                │
-│ ○ 新建规则...                           │
-│                                         │
-│ 版本:                                    │
-│ ● 基于 v2 创建 v3                        │
-│ ○ 全新生成                              │
-│                                         │
-│              [取消]  [生成]              │
-└─────────────────────────────────────────┘
-```
-
-### 快捷操作
-
-| 操作 | 方式 | 说明 |
-|-----|------|------|
-| 回退到上一版本 | 下拉菜单选择 | 切换到历史版本 |
-| 切换到默认视图 | 下拉菜单选择 | 临时查看原始文件 |
-| 重新生成 | `/view [提示词]` | 命令行方式 |
-| 恢复默认选择 | 下拉菜单底部 | 清除用户偏好 |
+**用户切换自动记住**: 下次打开同一文件/目录，默认使用上次选择的视图。
 
 ---
 
@@ -1309,7 +1213,7 @@ interface RelatedFile {
 | 类型 | 图标 | 典型内容 | 关联产物 |
 |-----|------|---------|---------|
 | chat | 💬 | 问答对话 | 可能有文件输出 |
-| view | 🎨 | 视图生成过程 | view.json 版本 |
+| view | 🎨 | 视图生成过程 | 视图文件 |
 | skill | ⚡ | 技能执行过程 | 文件输出 |
 
 ### Session 视图布局（含摘要）
@@ -1360,17 +1264,12 @@ interface FileMeta {
 ```
 .mindfs/
 ├── config.json                  # 目录配置 (Agent 偏好等)
-├── view.json                    # 视图路由配置
-├── view.status.json             # 视图状态
-├── views/                       # 视图版本
-│   ├── _default/
-│   │   ├── file-list.json
-│   │   └── markdown.json
-│   ├── novels/
-│   │   ├── v1.json
-│   │   ├── v1.meta.json
-│   │   ├── v2.json
-│   │   └── v2.meta.json
+├── view-router.json                    # 视图路由配置
+├── view-preference.json         # 用户视图选择偏好
+├── views/                       # 视图文件（扁平存放）
+│   ├── file-list.json
+│   ├── markdown.json
+│   ├── novels-reader.json
 │   └── ...
 ├── sessions/                    # Session 数据 (无 index.json，直接扫描)
 │   ├── session-001.json
@@ -1811,11 +1710,8 @@ func (p *AgentProcess) Shutdown() error {
 
 | 端点 | 方法 | 描述 |
 |-----|------|------|
-| `/api/view` | GET | 获取当前视图 (根据路径解析路由) |
-| `/api/view/routes` | GET | 获取路由配置 |
-| `/api/view/versions/:ruleId` | GET | 获取某规则的版本列表 |
-| `/api/view/switch` | POST | 切换视图版本 |
-| `/api/view/generate` | POST | 生成新视图 |
+| `/api/view/routes` | GET | 获取匹配的视图路由列表（含视图数据） |
+| `/api/view/preference` | POST | 保存用户视图选择偏好 |
 
 ### 文件相关
 
@@ -1870,8 +1766,7 @@ interface WSResponse {
 
 | 类型 | 方向 | 描述 | Payload |
 |-----|------|------|---------|
-| `view.update` | S→C | 视图更新推送 | `{ root_id, view, pending }` |
-| `view.switch` | C→S | 切换视图 | `{ root_id, rule_id, version }` |
+| `view.update` | S→C | 视图更新推送 | `{ root_id, view }` |
 
 **文件相关**:
 
@@ -2562,6 +2457,6 @@ interface WSError {
 | Agent 角色 | 仅用于生成 UI | 用户交互的主要对象 |
 | Session 定义 | 用户操作序列 | 与 Agent 的对话会话 |
 | UI 生成触发 | 目录加入管理时 | 用户触发或 Agent 建议 |
-| 视图管理 | 单一 view.json | 路由规则 + 版本管理 |
+| 视图管理 | 单一 view-router.json | 路由规则 + 偏好 |
 | 文件关联 | 无 | 记录来源 Session |
 | ActionBar | 装饰性输入框 | Agent 对话入口 |

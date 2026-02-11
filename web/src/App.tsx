@@ -9,8 +9,6 @@ import {
   type UITree,
 } from "./renderer/defaultTree";
 import { registry } from "./renderer/registry";
-import { ActionClient } from "./services/actions";
-import { applyViewUpdate } from "./services/viewUpdates";
 import { mergeViewIntoShell } from "./renderer/merge";
 import { sessionService, type Session } from "./services/session";
 import { buildClientContext } from "./services/context";
@@ -34,10 +32,6 @@ export function App() {
   const [status, setStatus] = useState("Connecting");
   const [file, setFile] = useState<FilePayload | null>(null);
   const [viewTree, setViewTree] = useState<UITree | null>(null);
-  const [pendingView, setPendingView] = useState(false);
-  const viewIdRef = useRef<string | null>(null);
-  const previousViewRef = useRef<UITree | null>(null);
-  const actionClientRef = useRef<ActionClient | null>(null);
   const [currentRootId, setCurrentRootId] = useState<string | null>(null);
   const [managedRootIds, setManagedRootIds] = useState<string[]>([]);
   const managedRootIdsRef = useRef<Set<string>>(new Set());
@@ -49,7 +43,6 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
-    actionClientRef.current = new ActionClient();
     let cancelled = false;
     const load = async () => {
       try {
@@ -81,9 +74,6 @@ export function App() {
         setSelectedDir(first.path);
         setMainEntries(list);
         setViewTree(null);
-        setPendingView(false);
-        viewIdRef.current = null;
-        previousViewRef.current = null;
         setSelectedSession(null);
         setSettingsOpen(false);
         setStatus("Connected");
@@ -101,39 +91,6 @@ export function App() {
   useEffect(() => {
     expandedRef.current = expanded;
   }, [expanded]);
-
-  const handleAcceptView = useCallback(async () => {
-    if (!currentRootId) return;
-    try {
-      await fetch(`/api/view/accept?root=${encodeURIComponent(currentRootId)}`, {
-        method: "POST",
-      });
-      setPendingView(false);
-      previousViewRef.current = null;
-    } catch {
-      // ignore accept errors
-    }
-  }, [currentRootId]);
-
-  const handleRevertView = useCallback(async () => {
-    if (!currentRootId) return;
-    try {
-      const res = await fetch(`/api/view/revert?root=${encodeURIComponent(currentRootId)}`, {
-        method: "POST",
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (payload.view) {
-        const next = applyViewUpdate(null, { type: "full", payload: payload.view });
-        setViewTree(next as UITree);
-      } else if (previousViewRef.current) {
-        setViewTree(previousViewRef.current);
-      }
-      setPendingView(false);
-      previousViewRef.current = null;
-    } catch {
-      setPendingView(false);
-    }
-  }, [currentRootId]);
 
   const handleSelectSession = useCallback((session: SessionSummary) => {
     setSelectedSession(session);
@@ -184,9 +141,6 @@ export function App() {
         mainEntries,
         status,
         file,
-        pendingView,
-        handleAcceptView,
-        handleRevertView,
         sessions,
         selectedSession,
         handleSelectSession,
@@ -224,9 +178,6 @@ export function App() {
       mainEntries,
       status,
       file,
-      pendingView,
-      handleAcceptView,
-      handleRevertView,
       sessions,
       selectedSession,
       currentSession,
@@ -251,23 +202,23 @@ export function App() {
       open: async (params: Record<string, unknown>) => {
         const path = params.path as string | undefined;
         const rootParam = params.root as string | undefined;
-        if (!path || !actionClientRef.current) return;
+        if (!path) return;
         setStatus(`Opening ${path}`);
         try {
-          const resp = await actionClientRef.current.dispatch({
-            action: "open",
-            path,
-            version: "v1",
-            root: rootParam ?? currentRootId ?? undefined,
-          });
-          if (resp.status === "ok" && resp.data?.file) {
-            setFile(resp.data.file as FilePayload);
+          const root = rootParam ?? currentRootId ?? undefined;
+          const query = new URLSearchParams({ path });
+          if (root) query.set("root", root);
+          const res = await fetch(`/api/file?${query.toString()}`);
+          const payload = await res.json().catch(() => ({}));
+          if (res.ok && payload?.file) {
+            setFile(payload.file as FilePayload);
             setSelectedSession(null);
             setStatus("Connected");
             return;
           }
-          setStatus(resp.error?.message ?? "Open failed");
-          console.error("open failed", resp);
+          const msg = (payload as { error?: string })?.error ?? `http ${res.status}`;
+          setStatus(msg || "Open failed");
+          console.error("open failed", payload);
         } catch (err) {
           setStatus("Open failed");
           console.error(err);
@@ -292,9 +243,6 @@ export function App() {
         setMainEntries(list);
         setFile(null);
         setViewTree(null);
-        setPendingView(false);
-        viewIdRef.current = null;
-        previousViewRef.current = null;
         setSelectedSession(null);
         setSettingsOpen(false);
         return;
@@ -324,6 +272,12 @@ export function App() {
     if (!currentRootId) return;
     sessionService.connect(currentRootId);
     let cancelled = false;
+    let viewTimer: number | null = null;
+    let sessionTimer: number | null = null;
+
+    const sessionDelay = () => (document.visibilityState === "visible" ? 30000 : 120000);
+    const viewDelay = () => (document.visibilityState === "visible" ? 30000 : 120000);
+
     const loadSessions = async () => {
       try {
         const res = await fetch(`/api/sessions?root=${encodeURIComponent(currentRootId)}`);
@@ -332,55 +286,81 @@ export function App() {
         if (cancelled) return;
         const list = Array.isArray(payload.sessions) ? payload.sessions : [];
         setSessions(list);
-        if (currentSession) {
-          const refreshed = list.find((s: any) => s.key === currentSession.key);
-          if (refreshed) {
-            setCurrentSession(refreshed as Session);
-          }
-        }
+        setCurrentSession((prev) => {
+          if (!prev) return prev;
+          const refreshed = list.find((s: any) => s.key === prev.key);
+          return refreshed ? (refreshed as Session) : prev;
+        });
       } catch {
         // ignore
       }
     };
-    const poll = async () => {
+
+    const pollView = async () => {
       try {
-        const res = await fetch(`/api/view?root=${encodeURIComponent(currentRootId)}`);
+        const res = await fetch(`/api/view/routes?root=${encodeURIComponent(currentRootId)}`);
         if (!res.ok) return;
         const payload = await res.json();
         if (cancelled) return;
-        if (payload.view) {
-          const viewId = (payload.view_id as string | undefined) ?? null;
-          if (viewId && viewIdRef.current === viewId) {
-            setPendingView(Boolean(payload.pending));
-            return;
-          }
-          const next = applyViewUpdate(null, { type: "full", payload: payload.view });
-          if (payload.pending) {
-            previousViewRef.current = viewTree;
-            setViewTree(next as UITree);
-            setPendingView(true);
-          } else {
-            setViewTree(next as UITree);
-            setPendingView(false);
-            previousViewRef.current = null;
-          }
-          viewIdRef.current = viewId;
+        const routes = Array.isArray(payload.routes) ? payload.routes : [];
+        const first = routes.find((r: any) => r.view_data) ?? null;
+        if (first?.view_data) {
+          setViewTree(first.view_data as UITree);
         }
       } catch {
         // ignore polling errors
       }
     };
-    poll();
-    loadSessions();
-    const timer = window.setInterval(poll, 5000);
-    const sessionTimer = window.setInterval(loadSessions, 8000);
+
+    const scheduleSessions = () => {
+      if (cancelled) return;
+      sessionTimer = window.setTimeout(async () => {
+        await loadSessions();
+        scheduleSessions();
+      }, sessionDelay());
+    };
+
+    const scheduleView = () => {
+      if (cancelled) return;
+      viewTimer = window.setTimeout(async () => {
+        await pollView();
+        scheduleView();
+      }, viewDelay());
+    };
+
+    const unsubscribeEvents = sessionService.subscribeEvents((event) => {
+      if (
+        event.type === "session.done" ||
+        event.type === "session.created" ||
+        event.type === "session.closed" ||
+        event.type === "session.resumed"
+      ) {
+        void loadSessions();
+      }
+    });
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void loadSessions();
+        void pollView();
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    void loadSessions();
+    void pollView();
+    scheduleSessions();
+    scheduleView();
+
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
-      window.clearInterval(sessionTimer);
+      if (viewTimer) window.clearTimeout(viewTimer);
+      if (sessionTimer) window.clearTimeout(sessionTimer);
+      unsubscribeEvents();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       sessionService.disconnect();
     };
-  }, [currentRootId, viewTree, currentSession]);
+  }, [currentRootId]);
 
   return (
     <JSONUIProvider

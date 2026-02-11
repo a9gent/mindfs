@@ -48,9 +48,15 @@ type SessionEventHandler = {
   onPermissionRequest?: (req: PermissionRequest) => void;
 };
 
+type SessionServiceEvent = {
+  type: string;
+  sessionKey?: string;
+};
+
 class SessionService {
   private ws: WebSocket | null = null;
   private handlers = new Map<string, SessionEventHandler>();
+  private listeners = new Set<(event: SessionServiceEvent) => void>();
   private reconnectTimer: number | null = null;
   private rootId: string | null = null;
 
@@ -114,6 +120,7 @@ class SessionService {
     const type = msg.type as string;
     const payload = msg.payload || {};
     const sessionKey = payload.session_key as string;
+    this.emit({ type, sessionKey });
 
     if (!sessionKey) return;
 
@@ -133,6 +140,19 @@ class SessionService {
       case "permission.request":
         handler.onPermissionRequest?.(payload as PermissionRequest);
         break;
+    }
+  }
+
+  subscribeEvents(listener: (event: SessionServiceEvent) => void) {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private emit(event: SessionServiceEvent) {
+    for (const listener of this.listeners) {
+      listener(event);
     }
   }
 

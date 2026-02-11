@@ -32,18 +32,31 @@ func NewProber(cfg *Config, probeInterval time.Duration) *Prober {
 	if probeInterval <= 0 {
 		probeInterval = 5 * time.Minute
 	}
-	return &Prober{
+	p := &Prober{
 		cfg:           cfg,
 		statuses:      make(map[string]Status),
 		probeInterval: probeInterval,
 		stopCh:        make(chan struct{}),
 	}
+	// Seed configured agents so API can return stable list before first probe completes.
+	if cfg != nil {
+		now := time.Now().UTC()
+		for name := range cfg.Agents {
+			p.statuses[name] = Status{
+				Name:      name,
+				Available: false,
+				Error:     "probing",
+				LastProbe: now,
+			}
+		}
+	}
+	return p
 }
 
 // Start 启动定期探测
 func (p *Prober) Start(ctx context.Context) {
-	// 立即执行一次探测
-	p.ProbeAll(ctx)
+	// 首次全量探测放到后台，避免阻塞服务启动和请求处理。
+	go p.ProbeAll(ctx)
 
 	// 启动定期探测：仅重试失败状态
 	ticker := time.NewTicker(p.probeInterval)

@@ -7,33 +7,27 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-)
 
-type ManagedDir struct {
-	ID        string    `json:"id"`
-	RootPath  string    `json:"root_path"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
+	configpkg "mindfs/server/internal/config"
+)
 
 type Registry struct {
 	mu    sync.Mutex
 	path  string
-	dirs  map[string]ManagedDir
+	dirs  map[string]RootInfo
 	order []string
 }
 
 func NewRegistry(path string) *Registry {
-	return &Registry{path: path, dirs: make(map[string]ManagedDir)}
+	return &Registry{path: path, dirs: make(map[string]RootInfo)}
 }
 
 func NewDefaultRegistry() (*Registry, error) {
-	configDir, err := os.UserConfigDir()
+	configDir, err := configpkg.MindFSConfigDir()
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(configDir, "mindfs", "registry.json")
+	path := filepath.Join(configDir, "registry.json")
 	return NewRegistry(path), nil
 }
 
@@ -48,19 +42,19 @@ func (r *Registry) Load() error {
 		return err
 	}
 	var stored struct {
-		Dirs  []ManagedDir `json:"dirs"`
-		Order []string     `json:"order"`
+		Dirs  []RootInfo `json:"dirs"`
+		Order []string   `json:"order"`
 	}
 	if err := json.Unmarshal(payload, &stored); err != nil {
 		return err
 	}
-	r.dirs = make(map[string]ManagedDir)
+	r.dirs = make(map[string]RootInfo)
 	r.order = nil
 	seen := make(map[string]struct{})
-	for _, dir := range stored.Dirs {
-		name := dir.Name
+	for _, info := range stored.Dirs {
+		name := info.Name
 		if name == "" {
-			name = filepath.Base(dir.RootPath)
+			name = filepath.Base(info.RootPath)
 		}
 		if name == "" || name == "." || name == string(filepath.Separator) {
 			continue
@@ -69,9 +63,9 @@ func (r *Registry) Load() error {
 			continue
 		}
 		seen[name] = struct{}{}
-		dir.Name = name
-		dir.ID = name
-		r.dirs[name] = dir
+		info.Name = name
+		info.ID = name
+		r.dirs[name] = info
 		r.order = append(r.order, name)
 	}
 	return nil
@@ -90,26 +84,23 @@ func (r *Registry) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
 		return err
 	}
-	dirs := make([]ManagedDir, 0, len(r.dirs))
+	recs := make([]RootInfo, 0, len(r.dirs))
 	for _, id := range r.order {
 		if dir, ok := r.dirs[id]; ok {
-			dirs = append(dirs, dir)
+			recs = append(recs, dir)
 		}
 	}
-	payload, err := json.MarshalIndent(map[string]any{
-		"dirs":  dirs,
-		"order": r.order,
-	}, "", "  ")
+	payload, err := json.MarshalIndent(map[string]any{"dirs": recs, "order": r.order}, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(r.path, payload, 0o644)
 }
 
-func (r *Registry) List() []ManagedDir {
+func (r *Registry) List() []RootInfo {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	result := make([]ManagedDir, 0, len(r.order))
+	result := make([]RootInfo, 0, len(r.order))
 	for _, id := range r.order {
 		if dir, ok := r.dirs[id]; ok {
 			result = append(result, dir)
@@ -118,69 +109,31 @@ func (r *Registry) List() []ManagedDir {
 	return result
 }
 
-func (r *Registry) Get(id string) (ManagedDir, bool) {
+func (r *Registry) Get(id string) (RootInfo, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	dir, ok := r.dirs[id]
 	return dir, ok
 }
 
-func (r *Registry) Upsert(root string) (ManagedDir, error) {
+func (r *Registry) Upsert(root string) (RootInfo, error) {
 	if root == "" {
-		return ManagedDir{}, errors.New("root required")
+		return RootInfo{}, errors.New("root required")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now().UTC()
 	name := filepath.Base(root)
 	if name == "" || name == "." || name == string(filepath.Separator) {
-		return ManagedDir{}, errors.New("invalid directory name")
+		return RootInfo{}, errors.New("invalid directory name")
 	}
 	dir, ok := r.dirs[name]
 	if !ok {
-		dir = ManagedDir{
-			ID:        name,
-			RootPath:  root,
-			Name:      name,
-			CreatedAt: now,
-		}
+		dir = NewRootInfo(name, name, root)
+		dir.CreatedAt = now
 		r.order = append(r.order, name)
 	}
 	dir.UpdatedAt = now
 	r.dirs[name] = dir
-	return dir, r.saveLocked()
-}
-
-func (r *Registry) Add(root string) (ManagedDir, error) {
-	if root == "" {
-		return ManagedDir{}, errors.New("root required")
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	name := filepath.Base(root)
-	if name == "" || name == "." || name == string(filepath.Separator) {
-		return ManagedDir{}, errors.New("invalid directory name")
-	}
-	for _, existing := range r.dirs {
-		if existing.Name == name && existing.RootPath != root {
-			return ManagedDir{}, errors.New("managed directory name already exists")
-		}
-	}
-	now := time.Now().UTC()
-	if _, ok := r.dirs[name]; ok {
-		dir := r.dirs[name]
-		dir.UpdatedAt = now
-		r.dirs[name] = dir
-		return dir, r.saveLocked()
-	}
-	dir := ManagedDir{
-		ID:        name,
-		RootPath:  root,
-		Name:      name,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	r.dirs[name] = dir
-	r.order = append(r.order, name)
 	return dir, r.saveLocked()
 }

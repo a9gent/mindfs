@@ -80,54 +80,24 @@ func LoadAPIList() []APIEndpoint {
 		// View API
 		{
 			Method:      "GET",
-			Path:        "/api/view",
-			Description: "获取当前视图",
+			Path:        "/api/view/routes",
+			Description: "获取匹配的视图路由列表（含视图数据）",
 			Params: []ParamDef{
 				{Name: "root", Type: "string", Required: true, Description: "管理目录 ID"},
 				{Name: "path", Type: "string", Required: false, Description: "文件/目录路径，用于路由匹配"},
 			},
-			Response: "{ view: UITree, view_id: string, pending: boolean }",
-		},
-		{
-			Method:      "GET",
-			Path:        "/api/view/routes",
-			Description: "获取视图路由配置",
-			Params: []ParamDef{
-				{Name: "root", Type: "string", Required: true, Description: "管理目录 ID"},
-			},
-			Response: "{ routes: ViewRoute[] }",
-		},
-		{
-			Method:      "GET",
-			Path:        "/api/view/versions/:ruleId",
-			Description: "获取某规则的版本列表",
-			Params: []ParamDef{
-				{Name: "root", Type: "string", Required: true, Description: "管理目录 ID"},
-				{Name: "ruleId", Type: "string", Required: true, Description: "视图规则 ID"},
-			},
-			Response: "{ versions: ViewVersion[] }",
+			Response: "{ routes: ResolvedView[] }",
 		},
 		{
 			Method:      "POST",
-			Path:        "/api/view/switch",
-			Description: "切换视图版本",
+			Path:        "/api/view/preference",
+			Description: "保存用户视图偏好",
 			Params: []ParamDef{
-				{Name: "root", Type: "string", Required: true, Description: "管理目录 ID"},
-				{Name: "rule_id", Type: "string", Required: true, Description: "视图规则 ID"},
-				{Name: "version", Type: "string", Required: true, Description: "目标版本"},
+				{Name: "root_id", Type: "string", Required: true, Description: "管理目录 ID"},
+				{Name: "path", Type: "string", Required: true, Description: "文件/目录路径"},
+				{Name: "route_id", Type: "string", Required: true, Description: "视图路由 ID"},
 			},
-			Response: "{ view: UITree }",
-		},
-		{
-			Method:      "POST",
-			Path:        "/api/view/generate",
-			Description: "生成新视图",
-			Params: []ParamDef{
-				{Name: "root", Type: "string", Required: true, Description: "管理目录 ID"},
-				{Name: "prompt", Type: "string", Required: true, Description: "视图描述"},
-				{Name: "base_version", Type: "string", Required: false, Description: "基于的版本，为空则全新生成"},
-			},
-			Response: "{ view: UITree, version: string }",
+			Response: "{ status: \"ok\" }",
 		},
 		// Skill API
 		{
@@ -225,18 +195,6 @@ func LoadWSActions() []APIEndpoint {
 				{Name: "session_key", Type: "string", Required: true, Description: "Session Key"},
 			},
 			Response: "session.resumed { session_key }",
-		},
-		// View WebSocket
-		{
-			Method:      "WS",
-			Path:        "view.switch",
-			Description: "切换视图",
-			Params: []ParamDef{
-				{Name: "root_id", Type: "string", Required: true, Description: "管理目录 ID"},
-				{Name: "rule_id", Type: "string", Required: true, Description: "视图规则 ID"},
-				{Name: "version", Type: "string", Required: false, Description: "版本"},
-			},
-			Response: "view.update { root_id, view, pending }",
 		},
 		// File WebSocket (Server -> Client push)
 		{

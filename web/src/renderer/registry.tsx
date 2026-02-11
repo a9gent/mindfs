@@ -87,9 +87,6 @@ const FileViewerNode: React.FC<ComponentProps> = ({ element }) => (
 const ActionBarNode: React.FC<ComponentProps> = ({ element }) => (
   <ActionBar
     status={(element.props?.status as string) ?? "Disconnected"}
-    pendingView={(element.props?.pendingView as boolean) ?? false}
-    onAcceptView={(element.props?.onAcceptView as any) ?? undefined}
-    onRevertView={(element.props?.onRevertView as any) ?? undefined}
     currentSession={(element.props?.currentSession as any) ?? null}
     onSendMessage={(element.props?.onSendMessage as any) ?? undefined}
     onSessionClick={(element.props?.onSessionClick as any) ?? undefined}

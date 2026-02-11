@@ -9,31 +9,31 @@ import (
 	"testing"
 
 	"mindfs/server/internal/fs"
-	"mindfs/server/internal/router"
 )
 
-func TestHandleViewRouteIsReachable(t *testing.T) {
+func TestHandleViewRoutesIsReachable(t *testing.T) {
 	tempDir := t.TempDir()
 	root := filepath.Join(tempDir, "mindfs")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("mkdir root: %v", err)
 	}
-	if _, err := fs.EnsureManagedDir(root); err != nil {
+	name := filepath.Base(root)
+	if _, err := fs.NewRootInfo(name, name, root).EnsureMetaDir(); err != nil {
 		t.Fatalf("ensure managed dir: %v", err)
 	}
 
 	registry := fs.NewRegistry(filepath.Join(tempDir, "registry.json"))
-	if _, err := registry.Add(root); err != nil {
-		t.Fatalf("add registry dir: %v", err)
+	if _, err := registry.Upsert(root); err != nil {
+		t.Fatalf("upsert registry dir: %v", err)
 	}
 
 	handler := &HTTPHandler{
-		Root:     root,
-		Registry: registry,
-		Views:    router.NewViewStoreManager(),
+		AppContext: &AppContext{
+			Dirs: registry,
+		},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/view?root=mindfs", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/view/routes?root=mindfs", nil)
 	rec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(rec, req)
 
@@ -45,7 +45,7 @@ func TestHandleViewRouteIsReachable(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if _, ok := body["view"]; !ok {
-		t.Fatalf("expected response to include view field, got: %v", body)
+	if _, ok := body["routes"]; !ok {
+		t.Fatalf("expected response to include routes field, got: %v", body)
 	}
 }
