@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { sessionService, type StreamChunk, type PermissionRequest } from "../services/session";
+import { sessionService, type StreamEvent, type PermissionRequest } from "../services/session";
 
 type UseSessionStreamResult = {
-  chunks: StreamChunk[];
+  chunks: StreamEvent[];
   isStreaming: boolean;
   permissionRequest: PermissionRequest | null;
   respondToPermission: (requestId: string, granted: boolean, always?: boolean) => void;
@@ -10,7 +10,7 @@ type UseSessionStreamResult = {
 };
 
 export function useSessionStream(sessionKey: string | null): UseSessionStreamResult {
-  const [chunks, setChunks] = useState<StreamChunk[]>([]);
+  const [chunks, setChunks] = useState<StreamEvent[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -34,7 +34,7 @@ export function useSessionStream(sessionKey: string | null): UseSessionStreamRes
       },
       onError: (error) => {
         setIsStreaming(false);
-        setChunks((prev) => [...prev, { type: "error", error }]);
+        setChunks((prev) => [...prev, { type: "error", data: { message: error } }]);
       },
       onPermissionRequest: (req) => {
         setPermissionRequest(req);

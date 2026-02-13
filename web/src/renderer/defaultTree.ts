@@ -48,6 +48,7 @@ export type CurrentSession = {
   type: "chat" | "view" | "skill";
   status: "active" | "idle" | "closed";
   agent: string;
+  exchanges?: any[];
 };
 
 export function buildDefaultTree(
@@ -76,6 +77,12 @@ export function buildDefaultTree(
   const elements: Record<string, UIElement> = {};
   const rootKey = "root";
 
+  // 1. 核心状态计算
+  const isSelectedSessionActive = currentSession && (selectedSession?.key === currentSession.key || selectedSession?.session_key === currentSession.key);
+  const showSessionInMain = selectedSession && !isSelectedSessionActive;
+  const showAssociation = false; // 占位逻辑
+
+  // 2. 基础框架定义
   elements[rootKey] = {
     key: rootKey,
     type: "Shell",
@@ -90,37 +97,38 @@ export function buildDefaultTree(
     children: [],
   };
 
+  // 3. 浮窗逻辑
   if (currentSession) {
-        if (isFloatingOpen) {
-          elements["agent-panel"] = {
-            key: "agent-panel",
-            type: "AgentPanel",
-            props: {
-              onClose: () => onToggleFloating?.(false),
-            },
-            children: ["agent-header", "agent-messages"]
-          };
-    
-          elements["agent-header"] = {
-            key: "agent-header",
-            type: "AgentHeader",
-            props: {
-              session: currentSession,
-              onClose: () => onToggleFloating?.(false),
-            }
-          };
-    
-                elements["agent-messages"] = {
-                  key: "agent-messages",
-                  type: "AgentMessageList",
-                  props: {
-                    session: currentSession,
-                    exchanges: (currentSession as any).exchanges || [],
-                  }
-                };
-                    elements["floating-container"].children = ["agent-panel"];
+    if (isFloatingOpen) {
+      elements["agent-panel"] = {
+        key: "agent-panel",
+        type: "AgentPanel",
+        props: {
+          onClose: () => onToggleFloating?.(false),
+        },
+        children: ["agent-header", "agent-messages"]
+      };
+
+      elements["agent-header"] = {
+        key: "agent-header",
+        type: "AgentHeader",
+        props: {
+          session: currentSession,
+          onClose: () => onToggleFloating?.(false),
         }
-     else {
+      };
+
+      elements["agent-messages"] = {
+        key: "agent-messages",
+        type: "AgentMessageList",
+        props: {
+          session: currentSession,
+          exchanges: (currentSession as any).exchanges || [],
+        }
+      };
+
+      elements["floating-container"].children = ["agent-panel"];
+    } else {
       elements["agent-bubble"] = {
         key: "agent-bubble",
         type: "AgentBubble",
@@ -133,6 +141,7 @@ export function buildDefaultTree(
     }
   }
 
+  // 4. 侧边栏与文件树
   elements.sidebar = {
     key: "sidebar",
     type: "Sidebar",
@@ -147,18 +156,15 @@ export function buildDefaultTree(
       entries: rootEntries,
       childrenByPath,
       expanded,
-      selectedDir,
+      // 只有在显示“目录预览”时才显示目录选中态
+      selectedDir: (file || showSessionInMain || showAssociation) ? null : selectedDir,
+      selectedPath: file?.path,
       rootId,
       managedRoots,
     },
   };
 
-  const isSelectedSessionActive = currentSession && (selectedSession?.key === currentSession.key || selectedSession?.session_key === currentSession.key);
-  const showSessionInMain = selectedSession && !isSelectedSessionActive;
-  
-  // Logic for association view (P1: could be triggered by specific URL or action)
-  const showAssociation = false; // Placeholder for activation logic
-
+  // 5. 主视图内容
   elements.main = {
     key: "main",
     type: "Main",
@@ -172,7 +178,6 @@ export function buildDefaultTree(
   };
 
   if (showAssociation) {
-    // Collect all related files from all sessions for global association view
     const allFiles = (sessions || []).flatMap(s => 
       (s.related_files || []).map(f => ({
         ...f,
@@ -195,7 +200,10 @@ export function buildDefaultTree(
     elements["session-viewer"] = {
       key: "session-viewer",
       type: "SessionViewer",
-      props: { session: selectedSession },
+      props: { 
+        session: selectedSession,
+        root: rootId 
+      },
     };
   }
 
@@ -205,14 +213,19 @@ export function buildDefaultTree(
       type: "FileViewer",
       props: { file },
     };
-  } else {
+  } else if (!showSessionInMain && !showAssociation) {
     elements["default-list"] = {
       key: "default-list",
       type: "DefaultListView",
-      props: { entries: mainEntries },
+      props: { 
+        entries: mainEntries,
+        path: selectedDir || "",
+        root: rootId
+      },
     };
   }
 
+  // 6. 右侧边栏与底部
   elements.right = {
     key: "right",
     type: "RightSidebar",

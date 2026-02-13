@@ -25,14 +25,39 @@ export type Session = {
   }>;
 };
 
-export type StreamChunk = {
-  type: "text" | "thinking" | "tool_call" | "tool_result" | "progress" | "file_start" | "file_done" | "done" | "error";
-  content?: string;
-  tool?: string;
-  path?: string;
-  percent?: number;
-  error?: string;
+export type ToolCallLocation = {
+  path: string;
+  line?: number;
 };
+
+export type ToolCallContentItem =
+  | {
+      type: "text";
+      text?: string;
+    }
+  | {
+      type: "diff";
+      path?: string;
+      oldText?: string;
+      newText?: string;
+    };
+
+export type ToolCall = {
+  callId: string;
+  name: string;
+  status: string;
+  kind: string;
+  content?: ToolCallContentItem[];
+  locations?: ToolCallLocation[];
+};
+
+export type StreamEvent =
+  | { type: "message_chunk"; data: { content: string } }
+  | { type: "thought_chunk"; data: { content: string } }
+  | { type: "tool_call"; data: ToolCall }
+  | { type: "tool_call_update"; data: ToolCall }
+  | { type: "message_done"; data?: Record<string, never> }
+  | { type: "error"; data: { message: string } };
 
 export type PermissionRequest = {
   requestId: string;
@@ -42,7 +67,7 @@ export type PermissionRequest = {
 };
 
 type SessionEventHandler = {
-  onStream?: (chunk: StreamChunk) => void;
+  onStream?: (event: StreamEvent) => void;
   onDone?: () => void;
   onError?: (error: string) => void;
   onPermissionRequest?: (req: PermissionRequest) => void;
@@ -174,7 +199,7 @@ class SessionService {
 
     switch (type) {
       case "session.stream":
-        handler.onStream?.(payload.chunk as StreamChunk);
+        handler.onStream?.(payload.event as StreamEvent);
         break;
       case "session.done":
         handler.onDone?.();

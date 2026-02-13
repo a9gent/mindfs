@@ -100,6 +100,39 @@ func (c *mindfsClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 func (c *mindfsClient) RequestPermission(ctx context.Context, params acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
 	v, _ := json.Marshal(params)
 	log.Printf("[agent/acp] request.permission session_id=%s params=%s", params.SessionId, v)
+	// Emit a synthetic tool_call update for permission-gated operations so upper
+	// layers can track tool execution and associate file paths immediately.
+	if session := c.proc.getSessionByID(string(params.SessionId)); session != nil {
+		if handler := session.getOnUpdate(); handler != nil {
+			toolCall := &acp.SessionUpdateToolCall{
+				Content:    params.ToolCall.Content,
+				Locations:  params.ToolCall.Locations,
+				RawInput:   params.ToolCall.RawInput,
+				RawOutput:  params.ToolCall.RawOutput,
+				Title:      "",
+				ToolCallId: params.ToolCall.ToolCallId,
+				Status:     acp.ToolCallStatusPending,
+			}
+			if params.ToolCall.Title != nil {
+				toolCall.Title = *params.ToolCall.Title
+			}
+			if params.ToolCall.Kind != nil {
+				toolCall.Kind = *params.ToolCall.Kind
+			} else {
+				toolCall.Kind = acp.ToolKindOther
+			}
+			if params.ToolCall.Status != nil {
+				toolCall.Status = *params.ToolCall.Status
+			}
+			handler(SessionUpdate{
+				Type:      UpdateTypeToolCall,
+				SessionID: string(params.SessionId),
+				Raw: acp.SessionUpdate{
+					ToolCall: toolCall,
+				},
+			})
+		}
+	}
 	// TODO: Forward to frontend for user approval
 	// For now, auto-approve with first allow option
 	for _, opt := range params.Options {

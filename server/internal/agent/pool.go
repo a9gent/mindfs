@@ -182,6 +182,7 @@ func convertUnifiedEvent(update acpproc.SessionUpdate) Event {
 				Name:      raw.ToolCall.Title,
 				Status:    status,
 				Kind:      ToolKind(raw.ToolCall.Kind),
+				Content:   convertToolCallContent(raw.ToolCall.Content),
 				Locations: locations,
 			}
 		}
@@ -191,11 +192,58 @@ func convertUnifiedEvent(update acpproc.SessionUpdate) Event {
 			if raw.ToolCallUpdate.Status != nil && *raw.ToolCallUpdate.Status == acp.ToolCallStatusFailed {
 				status = "failed"
 			}
-			ev.Data = ToolCallUpdate{
-				CallID: string(raw.ToolCallUpdate.ToolCallId),
-				Status: status,
+			kind := ToolKindOther
+			if raw.ToolCallUpdate.Kind != nil {
+				kind = ToolKind(*raw.ToolCallUpdate.Kind)
+			}
+			name := ""
+			if raw.ToolCallUpdate.Title != nil {
+				name = *raw.ToolCallUpdate.Title
+			}
+			locations := make([]ToolCallLocation, 0, len(raw.ToolCallUpdate.Locations))
+			for _, loc := range raw.ToolCallUpdate.Locations {
+				locations = append(locations, ToolCallLocation{
+					Path: loc.Path,
+					Line: loc.Line,
+				})
+			}
+			ev.Data = ToolCall{
+				CallID:    string(raw.ToolCallUpdate.ToolCallId),
+				Name:      name,
+				Status:    status,
+				Kind:      kind,
+				Content:   convertToolCallContent(raw.ToolCallUpdate.Content),
+				Locations: locations,
 			}
 		}
 	}
 	return ev
+}
+
+func convertToolCallContent(items []acp.ToolCallContent) []ToolCallContentItem {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]ToolCallContentItem, 0, len(items))
+	for _, item := range items {
+		if item.Content != nil {
+			contentItem := ToolCallContentItem{Type: "text"}
+			block := item.Content.Content
+			if block.Text != nil {
+				contentItem.Text = block.Text.Text
+				out = append(out, contentItem)
+			}
+			continue
+		}
+		if item.Diff != nil {
+			out = append(out, ToolCallContentItem{
+				Type:    "diff",
+				Path:    item.Diff.Path,
+				OldText: item.Diff.OldText,
+				NewText: item.Diff.NewText,
+			})
+			continue
+		}
+	}
+	return out
 }

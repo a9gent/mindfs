@@ -23,6 +23,11 @@ type WSHandler struct {
 	conns      map[*websocket.Conn]bool
 }
 
+type StreamEvent struct {
+	Type string `json:"type"`
+	Data any    `json:"data,omitempty"`
+}
+
 // InitTaskListener sets up the task update listener for broadcasting.
 func (h *WSHandler) InitTaskListener() {
 	if h.TaskQueue == nil {
@@ -165,12 +170,15 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 		Content:   content,
 		ClientCtx: clientCtx,
 		OnUpdate: func(update agent.Event) {
-			chunk := updateToChunk(update)
+			event := updateToEvent(update)
+			if event == nil {
+				return
+			}
 			h.sendWS(conn, WSResponse{
 				Type: "session.stream",
 				Payload: map[string]any{
 					"session_key": key,
-					"chunk":       chunk,
+					"event":       event,
 				},
 			})
 		},
@@ -265,29 +273,28 @@ func (h *WSHandler) sendWSError(conn *websocket.Conn, id, code, message string) 
 	})
 }
 
-// updateToChunk converts an agent Event to a legacy StreamChunk.
-func updateToChunk(update agent.Event) agent.StreamChunk {
+func updateToEvent(update agent.Event) *StreamEvent {
 	switch update.Type {
 	case agent.EventTypeMessageChunk:
 		if chunk, ok := update.Data.(agent.MessageChunk); ok {
-			return agent.StreamChunk{Type: "text", Content: chunk.Content}
+			return &StreamEvent{Type: "message_chunk", Data: chunk}
 		}
 	case agent.EventTypeThoughtChunk:
 		if chunk, ok := update.Data.(agent.ThoughtChunk); ok {
-			return agent.StreamChunk{Type: "thinking", Content: chunk.Content}
+			return &StreamEvent{Type: "thought_chunk", Data: chunk}
 		}
 	case agent.EventTypeToolCall:
 		if tc, ok := update.Data.(agent.ToolCall); ok {
-			return agent.StreamChunk{Type: "tool_call", Tool: tc.Name}
+			return &StreamEvent{Type: "tool_call", Data: tc}
 		}
 	case agent.EventTypeToolUpdate:
-		if tu, ok := update.Data.(agent.ToolCallUpdate); ok {
-			return agent.StreamChunk{Type: "tool_result", Content: tu.Result}
+		if tu, ok := update.Data.(agent.ToolCall); ok {
+			return &StreamEvent{Type: "tool_call_update", Data: tu}
 		}
 	case agent.EventTypeMessageDone:
-		return agent.StreamChunk{Type: "done"}
+		return &StreamEvent{Type: "message_done"}
 	}
-	return agent.StreamChunk{}
+	return nil
 }
 
 func getString(payload map[string]any, key string) string {

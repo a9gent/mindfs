@@ -42,24 +42,62 @@ const languageByExt: Record<string, string> = {
 
 export function CodeViewer({ content, ext }: { content: string; ext?: string }) {
   const language = languageByExt[ext ?? ""] ?? "markup";
+  
+  // 计算行数
+  const lines = useMemo(() => content.split("\n"), [content]);
+  
   const html = useMemo(() => {
     const grammar = Prism.languages[language] ?? Prism.languages.markup;
     return Prism.highlight(content, grammar, language);
   }, [content, language]);
 
   return (
-    <pre
+    <div
       style={{
+        display: "flex",
         margin: 0,
-        padding: "24px",
         fontFamily: 'Menlo, Monaco, "Courier New", monospace',
         fontSize: "13px",
-        lineHeight: "1.6",
-        color: "#0f172a",
-        background: "#f8fafc",
+        lineHeight: "20px",
+        color: "var(--text-primary)",
+        background: "transparent",
+        minHeight: "100%",
       }}
     >
-      <code dangerouslySetInnerHTML={{ __html: html }} />
-    </pre>
+      {/* 行号列 */}
+      <div
+        style={{
+          padding: "24px 12px 24px 16px",
+          textAlign: "right",
+          color: "var(--text-secondary)",
+          opacity: 0.4,
+          userSelect: "none",
+          borderRight: "1px solid rgba(0,0,0,0.05)",
+          minWidth: "32px",
+          background: "rgba(0,0,0,0.02)",
+          flexShrink: 0,
+        }}
+      >
+        {lines.map((_, i) => (
+          <div key={i}>{i + 1}</div>
+        ))}
+      </div>
+
+      {/* 代码内容列 */}
+      <pre
+        style={{
+          margin: 0,
+          padding: "24px 8px", // 再次缩小左侧间距
+          overflow: "visible", 
+          background: "transparent",
+          flex: 1,
+        }}
+      >
+        <code 
+          style={{ whiteSpace: "pre" }}
+          dangerouslySetInnerHTML={{ __html: html }} 
+        />
+      </pre>
+    </div>
   );
 }

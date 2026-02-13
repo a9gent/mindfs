@@ -2,17 +2,9 @@ import React, { useMemo } from "react";
 import { TextChunk } from "./TextChunk";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallCard } from "./ToolCallCard";
+import type { StreamEvent, ToolCallContentItem } from "../../services/session";
 
-export type StreamChunkData = {
-  type: "text" | "thinking" | "tool_call" | "tool_result" | "progress" | "done" | "error";
-  content?: string;
-  tool?: string;
-  callId?: string;
-  status?: string;
-  result?: string;
-  percent?: number;
-  error?: string;
-};
+export type StreamChunkData = StreamEvent;
 
 type StreamMessageProps = {
   chunks: StreamChunkData[];
@@ -25,10 +17,29 @@ type GroupedContent = {
   tool?: string;
   callId?: string;
   status?: string;
-  result?: string;
+  contentDetail?: string;
 };
 
 export function StreamMessage({ chunks, isStreaming = false }: StreamMessageProps) {
+  const formatToolContent = (items?: ToolCallContentItem[]): string | undefined => {
+    if (!items || items.length === 0) return undefined;
+    const lines: string[] = [];
+    for (const item of items) {
+      if (item.type === "text") {
+        if (item.text) {
+          lines.push(item.text);
+        }
+        continue;
+      }
+      if (item.type === "diff") {
+        const target = item.path || "(unknown)";
+        lines.push(`diff: ${target}`);
+      }
+    }
+    if (lines.length === 0) return undefined;
+    return lines.join("\n");
+  };
+
   // Group consecutive chunks of the same type
   const grouped = useMemo(() => {
     const result: GroupedContent[] = [];
@@ -38,20 +49,20 @@ export function StreamMessage({ chunks, isStreaming = false }: StreamMessageProp
 
     for (const chunk of chunks) {
       switch (chunk.type) {
-        case "text":
+        case "message_chunk":
           if (currentThinking) {
             result.push({ type: "thinking", content: currentThinking });
             currentThinking = "";
           }
-          currentText += chunk.content || "";
+          currentText += chunk.data.content || "";
           break;
 
-        case "thinking":
+        case "thought_chunk":
           if (currentText) {
             result.push({ type: "text", content: currentText });
             currentText = "";
           }
-          currentThinking += chunk.content || "";
+          currentThinking += chunk.data.content || "";
           break;
 
         case "tool_call":
@@ -63,22 +74,36 @@ export function StreamMessage({ chunks, isStreaming = false }: StreamMessageProp
             result.push({ type: "thinking", content: currentThinking });
             currentThinking = "";
           }
-          if (chunk.callId) {
-            toolCalls.set(chunk.callId, {
+          if (chunk.data.callId) {
+            toolCalls.set(chunk.data.callId, {
               type: "tool",
-              tool: chunk.tool,
-              callId: chunk.callId,
-              status: "running",
+              tool: chunk.data.name,
+              callId: chunk.data.callId,
+              status: chunk.data.status || "running",
+              contentDetail: formatToolContent(chunk.data.content),
             });
           }
           break;
 
-        case "tool_result":
-          if (chunk.callId && toolCalls.has(chunk.callId)) {
-            const tc = toolCalls.get(chunk.callId)!;
-            tc.status = "complete";
-            tc.result = chunk.result;
+        case "tool_call_update":
+          if (chunk.data.callId && toolCalls.has(chunk.data.callId)) {
+            const tc = toolCalls.get(chunk.data.callId)!;
+            tc.status = chunk.data.status || "complete";
+            tc.contentDetail = formatToolContent(chunk.data.content) || tc.contentDetail;
           }
+          break;
+        case "message_done":
+          break;
+        case "error":
+          if (currentText) {
+            result.push({ type: "text", content: currentText });
+            currentText = "";
+          }
+          if (currentThinking) {
+            result.push({ type: "thinking", content: currentThinking });
+            currentThinking = "";
+          }
+          result.push({ type: "text", content: chunk.data.message });
           break;
       }
     }
@@ -118,7 +143,7 @@ export function StreamMessage({ chunks, isStreaming = false }: StreamMessageProp
                 tool={item.tool || "unknown"}
                 callId={item.callId || ""}
                 status={item.status || "running"}
-                result={item.result}
+                result={item.contentDetail}
               />
             );
           default:

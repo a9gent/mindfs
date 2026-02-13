@@ -176,7 +176,7 @@ func LoadWSActions() []APIEndpoint {
 				{Name: "content", Type: "string", Required: true, Description: "消息内容"},
 				{Name: "context", Type: "ClientContext", Required: false, Description: "客户端上下文"},
 			},
-			Response: "session.stream { session_key, chunk } -> session.done { session_key }",
+			Response: "session.stream { session_key, event { type, data } } -> session.done { session_key }",
 		},
 		{
 			Method:      "WS",

@@ -28,11 +28,18 @@ type FileViewerProps = {
   file?: FilePayload | null;
   meta?: FileMeta | null;
   onSessionClick?: (sessionKey: string) => void;
+  onPathClick?: (path: string) => void;
 };
 
-// 路径分割组件
-function Breadcrumbs({ path }: { path: string }) {
+// 升级版面包屑：支持点击导航
+function Breadcrumbs({ path, onPathClick }: { path: string; onPathClick?: (path: string) => void }) {
   const parts = path.split('/').filter(Boolean);
+  
+  // 构造每一级的完整路径
+  const getPathAt = (index: number) => {
+    return parts.slice(0, index + 1).join('/');
+  };
+
   return (
     <div style={{ 
       display: 'flex', 
@@ -47,13 +54,23 @@ function Breadcrumbs({ path }: { path: string }) {
     }}>
       {parts.map((part, index) => (
         <React.Fragment key={index}>
-          <span style={{ 
-            fontWeight: index === parts.length - 1 ? 600 : 400,
-            color: index === parts.length - 1 ? 'var(--text-primary)' : 'inherit',
-            flexShrink: index === parts.length - 1 ? 0 : 1,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis'
-          }}>
+          <span 
+            onClick={() => index < parts.length - 1 && onPathClick?.(getPathAt(index))}
+            style={{ 
+              fontWeight: index === parts.length - 1 ? 600 : 400,
+              color: index === parts.length - 1 ? 'var(--text-primary)' : 'inherit',
+              cursor: index < parts.length - 1 ? 'pointer' : 'default',
+              flexShrink: index === parts.length - 1 ? 0 : 1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis'
+            }}
+            onMouseEnter={(e) => {
+              if (index < parts.length - 1) e.currentTarget.style.textDecoration = 'underline';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.textDecoration = 'none';
+            }}
+          >
             {part}
           </span>
           {index < parts.length - 1 && (
@@ -65,7 +82,7 @@ function Breadcrumbs({ path }: { path: string }) {
   );
 }
 
-export function FileViewer({ file, meta, onSessionClick }: FileViewerProps) {
+export function FileViewer({ file, meta, onSessionClick, onPathClick }: FileViewerProps) {
   if (!file) {
     return (
       <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", flexDirection: "column", gap: "12px" }}>
@@ -78,21 +95,23 @@ export function FileViewer({ file, meta, onSessionClick }: FileViewerProps) {
   const ext = file.ext || (file.path.includes(".") ? `.${file.path.split(".").pop()}` : "");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "white" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "transparent" }}>
       <header
         style={{
-          padding: "10px 20px",
-          borderBottom: "1px solid rgba(0,0,0,0.05)",
+          height: "36px",
+          padding: "0 16px",
+          borderBottom: "1px solid var(--border-color)",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          background: "#fff",
-          minHeight: "44px",
-          boxSizing: "border-box"
+          background: "transparent",
+          boxSizing: "border-box",
+          zIndex: 10,
+          flexShrink: 0
         }}
       >
         <div style={{ display: "flex", alignItems: "center", overflow: "hidden", flex: 1 }}>
-          <Breadcrumbs path={file.path} />
+          <Breadcrumbs path={file.path} onPathClick={onPathClick} />
         </div>
         
         <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "12px", flexShrink: 0, opacity: 0.7 }}>
@@ -105,7 +124,7 @@ export function FileViewer({ file, meta, onSessionClick }: FileViewerProps) {
         <div
           style={{
             padding: "6px 20px",
-            background: "rgba(59, 130, 246, 0.03)",
+            background: "rgba(0,0,0,0.02)",
             borderBottom: "1px solid rgba(0,0,0,0.03)",
             display: "flex",
             alignItems: "center",
@@ -141,15 +160,28 @@ export function FileViewer({ file, meta, onSessionClick }: FileViewerProps) {
       )}
 
       <div style={{ flex: 1, overflow: "auto", position: "relative" }}>
-        {file.mime?.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].includes(ext.toLowerCase()) ? (
-          <ImageViewer path={file.path} root={file.root} />
-        ) : file.encoding === "binary" ? (
-          <BinaryViewer />
-        ) : ext === ".md" || ext === ".markdown" ? (
-          <MarkdownViewer content={file.content} />
-        ) : (
-          <CodeViewer content={file.content} ext={ext} />
-        )}
+        <div style={{ 
+          minWidth: "100%", 
+          minHeight: "100%",
+          display: "inline-block", 
+          background: "transparent",
+        }}>
+          {file.mime?.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].includes(ext.toLowerCase()) ? (
+            <div style={{ padding: "24px" }}>
+              <ImageViewer path={file.path} root={file.root} />
+            </div>
+          ) : file.encoding === "binary" ? (
+            <div style={{ padding: "24px" }}>
+              <BinaryViewer />
+            </div>
+          ) : ext === ".md" || ext === ".markdown" ? (
+            <div style={{ padding: "24px 40px" }}>
+              <MarkdownViewer content={file.content} />
+            </div>
+          ) : (
+            <CodeViewer content={file.content} ext={ext} />
+          )}
+        </div>
       </div>
       
       {file.truncated && (

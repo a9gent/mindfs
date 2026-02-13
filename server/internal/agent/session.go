@@ -36,11 +36,11 @@ type Event struct {
 }
 
 type MessageChunk struct {
-	Content string
+	Content string `json:"content"`
 }
 
 type ThoughtChunk struct {
-	Content string
+	Content string `json:"content"`
 }
 
 type ToolKind string
@@ -59,16 +59,25 @@ const (
 )
 
 type ToolCallLocation struct {
-	Path string
-	Line *int
+	Path string `json:"path"`
+	Line *int   `json:"line,omitempty"`
+}
+
+type ToolCallContentItem struct {
+	Type    string  `json:"type"`
+	Text    string  `json:"text,omitempty"`
+	Path    string  `json:"path,omitempty"`
+	OldText *string `json:"oldText,omitempty"`
+	NewText string  `json:"newText,omitempty"`
 }
 
 type ToolCall struct {
-	CallID    string
-	Name      string
-	Status    string
-	Kind      ToolKind
-	Locations []ToolCallLocation
+	CallID    string                `json:"callId"`
+	Name      string                `json:"name"`
+	Status    string                `json:"status"`
+	Kind      ToolKind              `json:"kind"`
+	Content   []ToolCallContentItem `json:"content,omitempty"`
+	Locations []ToolCallLocation    `json:"locations,omitempty"`
 }
 
 func (tc ToolCall) IsWriteOperation() bool {
@@ -88,20 +97,4 @@ func (tc ToolCall) GetAffectedPaths() []string {
 		}
 	}
 	return paths
-}
-
-type ToolCallUpdate struct {
-	CallID string
-	Status string
-	Result string
-}
-
-// StreamChunk is the legacy streaming chunk type for backward compatibility.
-type StreamChunk struct {
-	Type    string `json:"type"`
-	Content string `json:"content,omitempty"`
-	Tool    string `json:"tool,omitempty"`
-	Path    string `json:"path,omitempty"`
-	Size    int64  `json:"size,omitempty"`
-	Percent int    `json:"percent,omitempty"`
 }

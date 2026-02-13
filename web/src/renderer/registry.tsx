@@ -95,7 +95,7 @@ const FileTreeNode: React.FC<ComponentProps> = ({ element, onAction }) => {
     execute(action);
   };
   const handleOpenDir = (path: string, rootId?: string) => {
-    const action = { name: "open_dir", params: { path, root: rootId } };
+    const action = { name: "open_dir", params: { path, root: rootId, toggle: true } };
     if (onAction) {
       onAction(action);
       return;
@@ -111,19 +111,44 @@ const FileTreeNode: React.FC<ComponentProps> = ({ element, onAction }) => {
       }
       expanded={(element.props?.expanded as string[]) ?? []}
       selectedDir={(element.props?.selectedDir as string) ?? null}
+      selectedPath={(element.props?.selectedPath as string) ?? null}
+      rootId={(element.props?.rootId as string) ?? null}
+      managedRoots={(element.props?.managedRoots as string[]) ?? []}
       onSelectFile={(entry, root) => handleOpen(entry.path, root)}
       onToggleDir={(entry, root) => handleOpenDir(entry.path, root)}
     />
   );
 };
 
-const DefaultListNode: React.FC<ComponentProps> = ({ element }) => (
-  <DefaultListView entries={(element.props?.entries as FileEntry[]) ?? []} />
-);
+const DefaultListNode: React.FC<ComponentProps> = ({ element }) => {
+  const { execute } = useActions();
+  const root = element.props?.root as string | undefined;
+  return (
+    <DefaultListView 
+      path={(element.props?.path as string) ?? ""}
+      entries={(element.props?.entries as FileEntry[]) ?? []} 
+      onItemClick={(entry) => {
+        if (entry.is_dir) {
+          execute({ name: "open_dir", params: { path: entry.path, root } });
+        } else {
+          execute({ name: "open", params: { path: entry.path, root } });
+        }
+      }}
+      onPathClick={(path) => execute({ name: "open_dir", params: { path, root } })}
+    />
+  );
+};
 
-const FileViewerNode: React.FC<ComponentProps> = ({ element }) => (
-  <FileViewer file={(element.props?.file as any) ?? null} />
-);
+const FileViewerNode: React.FC<ComponentProps> = ({ element }) => {
+  const { execute } = useActions();
+  const root = (element.props?.file as any)?.root;
+  return (
+    <FileViewer 
+      file={(element.props?.file as any) ?? null} 
+      onPathClick={(path) => execute({ name: "open_dir", params: { path, root } })}
+    />
+  );
+};
 
 const ActionBarNode: React.FC<ComponentProps> = ({ element }) => (
   <ActionBar
@@ -152,9 +177,16 @@ const SessionListNode: React.FC<ComponentProps> = ({ element }) => (
   />
 );
 
-const SessionViewerNode: React.FC<ComponentProps> = ({ element }) => (
-  <SessionViewer session={(element.props?.session as any) ?? null} />
-);
+const SessionViewerNode: React.FC<ComponentProps> = ({ element }) => {
+  const { execute } = useActions();
+  const root = element.props?.root as string | undefined;
+  return (
+    <SessionViewer 
+      session={(element.props?.session as any) ?? null} 
+      onFileClick={(path) => execute({ name: "open", params: { path, root } })}
+    />
+  );
+};
 
 const SettingsPanelNode: React.FC<ComponentProps> = ({ element }) => (
   <SettingsPanel open={(element.props?.open as boolean) ?? false} />
@@ -181,16 +213,16 @@ const AgentPanelNode: React.FC<ComponentProps> = ({ element, children }) => {
           left: isMobile ? "5%" : "10%",
           width: isMobile ? "90%" : "80%",
           height: isMobile ? "80%" : "75%",
-          background: "rgba(255, 255, 255, 0.98)",
-          backdropFilter: "blur(20px)",
+          background: "rgba(255, 255, 255, 0.95)", // 对话框稍微厚一点，增加层级
+          backdropFilter: "blur(30px)", 
           borderRadius: "16px",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
+          boxShadow: "0 30px 80px rgba(0,0,0,0.25)", // 增强阴影
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
           zIndex: 100,
           animation: "panelFadeIn 0.2s ease-out",
-          border: "1px solid rgba(0,0,0,0.1)",
+          border: "1px solid rgba(255, 255, 255, 0.4)",
         }}
       >
         <style>
@@ -219,7 +251,7 @@ const AgentHeaderNode: React.FC<ComponentProps> = ({ element }) => {
         display: "flex",
         alignItems: "center",
         gap: "10px",
-        background: "rgba(0,0,0,0.01)",
+        background: "transparent",
       }}
     >
       <span style={{ fontSize: "16px" }}>

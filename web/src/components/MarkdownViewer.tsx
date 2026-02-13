@@ -18,10 +18,10 @@ export function MarkdownViewer({ content }: { content: string }) {
   return (
     <div
       style={{
-        padding: "24px",
-        color: "#334155",
-        lineHeight: 1.7,
-        fontSize: "14px",
+        padding: "0", // 移除内层 padding，由 FileViewer 统一控制
+        color: "var(--text-primary)",
+        lineHeight: 1.75,
+        fontSize: "15px",
       }}
     >
       <ReactMarkdown
@@ -54,11 +54,11 @@ export function MarkdownViewer({ content }: { content: string }) {
                return (
                  <pre
                     style={{
-                      background: "#f5f7fa",
-                      padding: "16px",
-                      borderRadius: "8px",
+                      background: "rgba(0,0,0,0.03)", // 更细腻的半透明背景
+                      padding: "16px", 
+                      borderRadius: "8px", 
                       overflow: "auto",
-                      border: "1px solid #e2e8f0",
+                      border: "1px solid rgba(0,0,0,0.05)",
                       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
                       fontSize: "13px"
                     }}

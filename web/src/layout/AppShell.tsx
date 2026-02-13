@@ -237,6 +237,17 @@ export function AppShell({
   return (
     <div style={shellStyle}>
       <aside style={sidebarStyle}>{sidebar}</aside>
+      
+      {/* 统一的中央列容器 */}
+      <div style={{ 
+        gridArea: "main / main / footer / main", // 跨越 main 到 footer 的 grid 区域
+        background: "rgba(255, 255, 255, 0.8)",
+        backdropFilter: "blur(20px)",
+        zIndex: 0,
+        pointerEvents: "none", // 仅作为背景，不拦截事件
+        borderRight: "1px solid var(--border-color)",
+      }} />
+
       <main style={mainStyle}>{main}</main>
       <aside style={rightStyle}>{rightSidebar}</aside>
       <footer style={footerStyle}>{footer}</footer>

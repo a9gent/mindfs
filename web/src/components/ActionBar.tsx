@@ -132,16 +132,23 @@ export function ActionBar({
         style={{
           width: "100%",
           maxWidth: "1000px",
-          background: "rgba(255, 255, 255, 0.85)",
-          backdropFilter: "blur(12px)",
-          border: "1px solid rgba(0, 0, 0, 0.1)",
+          background: "rgba(255, 255, 255, 0.4)", // 极淡的背景
+          border: "1px solid rgba(0, 0, 0, 0.08)",
           borderRadius: "12px",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.06)",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.04)",
           display: "flex",
           alignItems: "center",
           position: "relative",
           transition: "all 0.2s ease-in-out",
           minHeight: "44px",
+        }}
+        onFocusCapture={(e) => {
+          e.currentTarget.style.borderColor = "rgba(59,130,246,0.4)";
+          e.currentTarget.style.background = "rgba(255, 255, 255, 0.8)";
+        }}
+        onBlurCapture={(e) => {
+          e.currentTarget.style.borderColor = "rgba(0, 0, 0, 0.08)";
+          e.currentTarget.style.background = "rgba(255, 255, 255, 0.4)";
         }}
       >
         <textarea

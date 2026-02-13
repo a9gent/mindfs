@@ -24,6 +24,7 @@ type FileTreeProps = {
   childrenByPath: Record<string, FileEntry[]>;
   expanded: string[];
   selectedDir?: string | null;
+  selectedPath?: string | null;
   rootId?: string | null;
   managedRoots?: string[];
   fileMetas?: Record<string, FileMeta>;
@@ -33,7 +34,6 @@ type FileTreeProps = {
   onOpenSettings?: (rootId: string) => void;
 };
 
-// 强化后的 Chevron
 const ChevronRight = ({ isOpen }: { isOpen: boolean }) => (
   <svg
     width="14"
@@ -54,27 +54,17 @@ const ChevronRight = ({ isOpen }: { isOpen: boolean }) => (
   </svg>
 );
 
-// 多元化文件图标映射
 const getFileIcon = (filename: string) => {
   const ext = filename.split('.').pop()?.toLowerCase();
-  
   const iconStyle = { minWidth: 16 };
-  
-  // 代码类
   if (['js', 'ts', 'jsx', 'tsx'].includes(ext!)) return <span style={{...iconStyle, color: '#f7df1e'}}>JS</span>;
   if (['py'].includes(ext!)) return <span style={{...iconStyle, color: '#3776ab'}}>Py</span>;
   if (['go'].includes(ext!)) return <span style={{...iconStyle, color: '#00add8'}}>Go</span>;
   if (['html', 'css'].includes(ext!)) return <span style={{...iconStyle, color: '#e34f26'}}>网页</span>;
-  
-  // 文档类
   if (['md'].includes(ext!)) return <span style={{...iconStyle, color: '#64748b'}}>M↓</span>;
   if (['pdf'].includes(ext!)) return <span style={{...iconStyle, color: '#ef4444'}}>PDF</span>;
   if (['txt'].includes(ext!)) return <span style={{...iconStyle, color: '#94a3b8'}}>TXT</span>;
-  
-  // 图片类
   if (['png', 'jpg', 'jpeg', 'gif', 'svg'].includes(ext!)) return <span style={{...iconStyle, color: '#ec4899'}}>图</span>;
-  
-  // 默认图标
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={iconStyle}>
       <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
@@ -88,6 +78,7 @@ export function FileTree({
   childrenByPath,
   expanded,
   selectedDir,
+  selectedPath,
   rootId,
   managedRoots = [],
   fileMetas = {},
@@ -111,9 +102,7 @@ export function FileTree({
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        closeContextMenu();
-      }
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) closeContextMenu();
     };
     if (contextMenu.visible) {
       document.addEventListener("mousedown", handleClickOutside);
@@ -125,31 +114,33 @@ export function FileTree({
     (e: React.MouseEvent, entry: FileEntry, entryRoot: string) => {
       if (!entry.is_dir) return;
       e.preventDefault();
-      setContextMenu({
-        visible: true,
-        x: e.clientX,
-        y: e.clientY,
-        entry,
-        rootId: entryRoot,
-      });
+      setContextMenu({ visible: true, x: e.clientX, y: e.clientY, entry, rootId: entryRoot });
     },
     []
   );
 
   const expandedSet = new Set(expanded);
   const managedSet = new Set(managedRoots);
-  const childKeyFor = (entry: FileEntry, depth: number, branchRoot?: string | null) => {
-    if (depth === 0 || managedSet.has(entry.path)) return `${entry.path}:.`;
-    return `${branchRoot ?? rootId ?? entry.path}:${entry.path}`;
+
+  const childKeyFor = (entry: FileEntry, entryRoot: string) => {
+    if (managedSet.has(entry.path)) return `${entry.path}:.`;
+    return `${entryRoot}:${entry.path}`;
   };
 
-  const renderEntries = (items: FileEntry[], depth: number, branchRoot?: string | null) => (
+  const renderEntries = (items: FileEntry[], depth: number, branchRoot: string) => (
     <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
       {items.map((entry) => {
-        const isOpen = expandedSet.has(entry.path);
-        const entryRoot = depth === 0 || managedSet.has(entry.path) ? entry.path : branchRoot ?? rootId ?? entry.path;
-        const children = childrenByPath[childKeyFor(entry, depth, entryRoot)] ?? childrenByPath[entry.path] ?? [];
-        const isSelected = entry.path === selectedDir;
+        const entryRoot = managedSet.has(entry.path) ? entry.path : branchRoot;
+        const expandedKey = managedSet.has(entry.path) ? entry.path : `${entryRoot}:${entry.path}`;
+        const isOpen = expandedSet.has(expandedKey);
+        
+        const cKey = childKeyFor(entry, entryRoot);
+        const children = childrenByPath[cKey] ?? childrenByPath[entry.path] ?? [];
+        
+        // 关键修复：增加 rootId 匹配校验，防止不同 root 下同名目录同时高亮
+        const isSelected = 
+          entry.path === (entry.is_dir ? selectedDir : selectedPath) && 
+          entryRoot === rootId;
 
         const meta = fileMetas[entry.path];
         const hasSessionLink = !entry.is_dir && meta?.source_session;
@@ -163,7 +154,7 @@ export function FileTree({
               onContextMenu={(e) => handleContextMenu(e, entry, entryRoot)}
               style={{
                 border: "none",
-                background: isSelected ? "rgba(59, 130, 246, 0.08)" : "transparent",
+                background: isSelected ? "rgba(59, 130, 246, 0.1)" : "transparent",
                 cursor: "pointer",
                 padding: "6px 8px",
                 paddingLeft: 8 + depth * 16,
@@ -176,7 +167,7 @@ export function FileTree({
                 fontSize: "13px",
                 borderRadius: "6px",
                 transition: "all 0.1s",
-                fontWeight: isSelected ? 500 : 400,
+                fontWeight: isSelected ? 600 : 400,
                 outline: "none",
               }}
               onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = "rgba(0,0,0,0.03)"; }}
@@ -189,11 +180,9 @@ export function FileTree({
                    </div>
                  )}
               </div>
-
               <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1, marginLeft: "4px" }}>
                 {entry.name}
               </span>
-
               {hasSessionLink && (
                 <span style={{ fontSize: "10px", color: isFromActiveSession ? "#3b82f6" : "#9ca3af" }}>
                   {isFromActiveSession ? "◆" : "◇"}
@@ -208,17 +197,18 @@ export function FileTree({
   );
 
   return (
-    <div style={{ padding: "12px 0" }}>
-      <div style={{ padding: "0 16px 8px", marginBottom: "4px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      <div style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center", boxSizing: "border-box", flexShrink: 0 }}>
         <h3 style={{ margin: 0, fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", letterSpacing: "0.5px", textTransform: "uppercase" }}>Project</h3>
       </div>
-      <div style={{ padding: "4px 8px" }}>{renderEntries(entries, 0, null)}</div>
+      <div style={{ padding: "8px", flex: 1, overflow: "auto" }}>
+        {renderEntries(entries, 0, rootId || "")}
+      </div>
 
       {contextMenu.visible && contextMenu.entry && (
         <div ref={menuRef} style={{ position: "fixed", left: contextMenu.x, top: contextMenu.y, background: "#fff", border: "1px solid var(--border-color)", borderRadius: "8px", boxShadow: "0 4px 12px rgba(0,0,0,0.15)", padding: "4px 0", minWidth: "160px", zIndex: 1000 }}>
           <button type="button" onClick={() => { if (contextMenu.rootId) onOpenSettings?.(contextMenu.rootId); closeContextMenu(); }} style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%", padding: "8px 12px", border: "none", background: "transparent", cursor: "pointer", fontSize: "13px", color: "var(--text-primary)", textAlign: "left" }}>
-            <span>⚙️</span>
-            <span>目录设置</span>
+            <span>⚙️</span><span>目录设置</span>
           </button>
         </div>
       )}
