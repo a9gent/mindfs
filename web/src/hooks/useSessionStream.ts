@@ -25,9 +25,11 @@ export function useSessionStream(sessionKey: string | null): UseSessionStreamRes
 
     // Subscribe to session events
     unsubscribeRef.current = sessionService.subscribe(sessionKey, {
-      onStream: (chunk) => {
+      onStream: (event) => {
         setIsStreaming(true);
-        setChunks((prev) => [...prev, chunk]);
+        // 如果收到的是新消息块，且之前不是在生成状态，或者根据逻辑判断是新回合，则不应在这里盲目清除
+        // 但为了解决消失问题，我们让 chunks 的清理完全受控于调用者或特定起始事件
+        setChunks((prev) => [...prev, event]);
       },
       onDone: () => {
         setIsStreaming(false);

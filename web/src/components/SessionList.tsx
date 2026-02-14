@@ -52,62 +52,28 @@ export function SessionList({
     );
   }
 
-  // Group sessions by status
   const activeSessions = sessions.filter((s) => s.status === "active" || s.status === "idle");
   const closedSessions = sessions.filter((s) => s.status === "closed");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-      {/* Active Sessions */}
+    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
       {activeSessions.length > 0 && (
         <div>
-          <div
-            style={{
-              fontSize: "11px",
-              fontWeight: 600,
-              color: "var(--text-secondary)",
-              marginBottom: "6px",
-              textTransform: "uppercase",
-            }}
-          >
-            进行中
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+          <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.5px" }}>进行中</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
             {activeSessions.map((session) => (
-              <SessionCard
-                key={session.key}
-                session={session}
-                selected={session.key === selectedKey}
-                onSelect={onSelect}
-              />
+              <SessionCard key={session.key} session={session} selected={session.key === selectedKey} onSelect={onSelect} />
             ))}
           </div>
         </div>
       )}
 
-      {/* Closed Sessions */}
       {closedSessions.length > 0 && (
         <div>
-          <div
-            style={{
-              fontSize: "11px",
-              fontWeight: 600,
-              color: "var(--text-secondary)",
-              marginBottom: "6px",
-              textTransform: "uppercase",
-            }}
-          >
-            已结束
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+          <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.5px" }}>已结束</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
             {closedSessions.map((session) => (
-              <SessionCard
-                key={session.key}
-                session={session}
-                selected={session.key === selectedKey}
-                onSelect={onSelect}
-                onRestore={onRestore}
-              />
+              <SessionCard key={session.key} session={session} selected={session.key === selectedKey} onSelect={onSelect} onRestore={onRestore} />
             ))}
           </div>
         </div>
@@ -116,16 +82,10 @@ export function SessionList({
   );
 }
 
-type SessionCardProps = {
-  session: SessionItem;
-  selected: boolean;
-  onSelect?: (session: SessionItem) => void;
-  onRestore?: (session: SessionItem) => void;
-};
-
-function SessionCard({ session, selected, onSelect, onRestore }: SessionCardProps) {
+function SessionCard({ session, selected, onSelect, onRestore }: { session: SessionItem; selected: boolean; onSelect?: (session: SessionItem) => void; onRestore?: (session: SessionItem) => void }) {
   const isClosed = session.status === "closed";
   const displayName = session.summary?.title || session.name || `Session ${session.key.slice(0, 8)}`;
+  const fileCount = session.related_files?.length || 0;
 
   return (
     <button
@@ -135,129 +95,72 @@ function SessionCard({ session, selected, onSelect, onRestore }: SessionCardProp
         textAlign: "left",
         padding: "10px 12px",
         borderRadius: "10px",
-        border: selected
-          ? "1px solid rgba(59,130,246,0.6)"
-          : "1px solid var(--border-color)",
-        background: selected
-          ? "rgba(59,130,246,0.08)"
-          : isClosed
-          ? "rgba(0,0,0,0.02)"
-          : "rgba(255,255,255,0.8)",
+        border: "1px solid transparent",
+        background: selected ? "rgba(59, 130, 246, 0.1)" : "transparent",
         cursor: "pointer",
         width: "100%",
-        opacity: isClosed ? 0.8 : 1,
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
+        transition: "all 0.15s ease",
+        position: "relative"
       }}
+      onMouseEnter={(e) => { if(!selected) e.currentTarget.style.background = "rgba(0,0,0,0.03)"; }}
+      onMouseLeave={(e) => { if(!selected) e.currentTarget.style.background = "transparent"; }}
     >
-      {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "6px",
-          marginBottom: "4px",
-        }}
-      >
-        <span style={{ fontSize: "12px" }}>{typeIcons[session.type]}</span>
-        <span
-          style={{
-            fontSize: "11px",
-            padding: "1px 6px",
-            borderRadius: "4px",
-            background: "rgba(0,0,0,0.05)",
-            color: "var(--text-secondary)",
-          }}
-        >
-          {session.agent}
-        </span>
-        <span
-          style={{
-            width: "6px",
-            height: "6px",
-            borderRadius: "50%",
-            background: statusColors[session.status],
-            marginLeft: "auto",
-          }}
-        />
-      </div>
-
-      {/* Title */}
-      <div
-        style={{
-          fontSize: "13px",
-          fontWeight: 500,
-          color: "var(--text-primary)",
-          marginBottom: "4px",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
+      {/* 第一行：标题 */}
+      <div style={{ 
+        fontSize: "13px", 
+        fontWeight: selected ? 600 : 500, 
+        color: selected ? "var(--accent-color)" : "var(--text-primary)",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        width: "100%"
+      }}>
         {displayName}
       </div>
 
-      {/* Description or Files */}
-      {session.summary?.description && (
-        <div
-          style={{
-            fontSize: "11px",
-            color: "var(--text-secondary)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {session.summary.description}
-        </div>
-      )}
+      {/* 第二行：混合辅助信息 */}
+      <div style={{ 
+        display: "flex", 
+        alignItems: "center", 
+        gap: "6px", 
+        fontSize: "11px", 
+        color: "var(--text-secondary)",
+        width: "100%",
+        opacity: 0.8
+      }}>
+        <span style={{ 
+          width: "6px", 
+          height: "6px", 
+          borderRadius: "50%", 
+          background: statusColors[session.status],
+          flexShrink: 0,
+          marginRight: "2px"
+        }} />
+        <span>{typeIcons[session.type]}</span>
+        <span style={{ fontWeight: 500 }}>{session.agent}</span>
+        <span>•</span>
+        <span style={{ flexShrink: 0 }}>{formatTime(isClosed && session.closed_at ? session.closed_at : session.updated_at)}</span>
+        
+        {fileCount > 0 && (
+          <>
+            <span>•</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+              <span style={{ opacity: 0.7 }}>📎</span>{fileCount}
+            </span>
+          </>
+        )}
 
-      {/* Related Files */}
-      {session.related_files && session.related_files.length > 0 && (
-        <div
-          style={{
-            fontSize: "11px",
-            color: "var(--text-secondary)",
-            marginTop: "4px",
-          }}
-        >
-          📎 {session.related_files.length} 个文件
-        </div>
-      )}
-
-      {/* Restore Button for Closed Sessions */}
-      {isClosed && onRestore && (
-        <div style={{ marginTop: "6px" }}>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRestore(session);
-            }}
-            style={{
-              fontSize: "11px",
-              padding: "3px 8px",
-              borderRadius: "4px",
-              border: "1px solid var(--border-color)",
-              background: "#fff",
-              cursor: "pointer",
-              color: "#3b82f6",
-            }}
+        {isClosed && onRestore && (
+          <div 
+            style={{ marginLeft: "auto" }}
+            onClick={(e) => { e.stopPropagation(); onRestore(session); }}
           >
-            ↻ 恢复
-          </button>
-        </div>
-      )}
-
-      {/* Time */}
-      <div
-        style={{
-          fontSize: "10px",
-          color: "var(--text-secondary)",
-          marginTop: "4px",
-        }}
-      >
-        {isClosed && session.closed_at
-          ? `结束于 ${formatTime(session.closed_at)}`
-          : `更新于 ${formatTime(session.updated_at)}`}
+            <span style={{ color: "var(--accent-color)", cursor: "pointer", fontWeight: 500 }}>恢复</span>
+          </div>
+        )}
       </div>
     </button>
   );
@@ -267,15 +170,11 @@ function formatTime(isoString: string): string {
   const date = new Date(isoString);
   const now = new Date();
   const diff = now.getTime() - date.getTime();
-
-  if (diff < 60000) {
-    return "刚刚";
+  if (diff < 60000) return "刚刚";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
+  if (now.getFullYear() === date.getFullYear()) {
+    return `${date.getMonth() + 1}/${date.getDate()}`;
   }
-  if (diff < 3600000) {
-    return `${Math.floor(diff / 60000)} 分钟前`;
-  }
-  if (diff < 86400000) {
-    return `${Math.floor(diff / 3600000)} 小时前`;
-  }
-  return date.toLocaleDateString();
+  return `${date.getFullYear() % 100}/${date.getMonth() + 1}`;
 }

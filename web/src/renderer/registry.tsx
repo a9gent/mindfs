@@ -24,33 +24,20 @@ type ComponentProps = {
   onAction?: (action: { name: string; params?: Record<string, unknown> }) => void;
 };
 
-// 时间格式化工具
 const formatTime = (isoString?: string) => {
-  if (!isoString) return "";
+  if (!isoString) return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
   try {
     const date = new Date(isoString);
     const now = new Date();
-    
     const isToday = date.toDateString() === now.toDateString();
     const isThisYear = date.getFullYear() === now.getFullYear();
-    
     const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-    
-    if (isToday) {
-      return timeStr;
-    }
-    
+    if (isToday) return timeStr;
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const day = date.getDate().toString().padStart(2, '0');
-    
-    if (isThisYear) {
-      return `${month}-${day} ${timeStr}`;
-    }
-    
+    if (isThisYear) return `${month}-${day} ${timeStr}`;
     return `${date.getFullYear()}-${month}-${day} ${timeStr}`;
-  } catch {
-    return "";
-  }
+  } catch { return ""; }
 };
 
 const Shell: React.FC<ComponentProps> = ({ children }) => {
@@ -73,7 +60,7 @@ const Sidebar: React.FC<ComponentProps> = ({ children }) => (
 );
 
 const Main: React.FC<ComponentProps> = ({ children }) => (
-  <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column" }}>{children}</div>
+  <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>{children}</div>
 );
 
 const Footer: React.FC<ComponentProps> = ({ children }) => (
@@ -88,27 +75,19 @@ const FileTreeNode: React.FC<ComponentProps> = ({ element, onAction }) => {
   const { execute } = useActions();
   const handleOpen = (path: string, rootId?: string) => {
     const action = { name: "open", params: { path, root: rootId } };
-    if (onAction) {
-      onAction(action);
-      return;
-    }
+    if (onAction) { onAction(action); return; }
     execute(action);
   };
   const handleOpenDir = (path: string, rootId?: string) => {
     const action = { name: "open_dir", params: { path, root: rootId, toggle: true } };
-    if (onAction) {
-      onAction(action);
-      return;
-    }
+    if (onAction) { onAction(action); return; }
     execute(action);
   };
 
   return (
     <FileTree
       entries={(element.props?.entries as FileEntry[]) ?? []}
-      childrenByPath={
-        (element.props?.childrenByPath as Record<string, FileEntry[]>) ?? {}
-      }
+      childrenByPath={(element.props?.childrenByPath as Record<string, FileEntry[]>) ?? {}}
       expanded={(element.props?.expanded as string[]) ?? []}
       selectedDir={(element.props?.selectedDir as string) ?? null}
       selectedPath={(element.props?.selectedPath as string) ?? null}
@@ -198,41 +177,16 @@ const AgentPanelNode: React.FC<ComponentProps> = ({ element, children }) => {
     <>
       <div 
         onClick={(element.props?.onClose as any)}
-        style={{
-          position: "fixed",
-          inset: 0,
-          background: "rgba(0,0,0,0.1)",
-          backdropFilter: "blur(1px)",
-          zIndex: 90,
-        }}
+        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.1)", backdropFilter: "blur(1px)", zIndex: 90 }}
       />
       <div
         style={{
-          position: "absolute",
-          top: isMobile ? "5%" : "10%",
-          left: isMobile ? "5%" : "10%",
-          width: isMobile ? "90%" : "80%",
-          height: isMobile ? "80%" : "75%",
-          background: "rgba(255, 255, 255, 0.95)", // 对话框稍微厚一点，增加层级
-          backdropFilter: "blur(30px)", 
-          borderRadius: "16px",
-          boxShadow: "0 30px 80px rgba(0,0,0,0.25)", // 增强阴影
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-          zIndex: 100,
-          animation: "panelFadeIn 0.2s ease-out",
-          border: "1px solid rgba(255, 255, 255, 0.4)",
+          position: "absolute", top: isMobile ? "5%" : "10%", left: isMobile ? "5%" : "10%", width: isMobile ? "90%" : "80%", height: isMobile ? "80%" : "75%",
+          background: "rgba(255, 255, 255, 0.95)", backdropFilter: "blur(30px)", borderRadius: "16px", boxShadow: "0 30px 80px rgba(0,0,0,0.25)",
+          display: "flex", flexDirection: "column", overflow: "hidden", zIndex: 100, animation: "panelFadeIn 0.2s ease-out", border: "1px solid rgba(255, 255, 255, 0.4)"
         }}
       >
-        <style>
-          {`
-            @keyframes panelFadeIn {
-              from { opacity: 0; transform: scale(0.98) translateY(10px); }
-              to { opacity: 1; transform: scale(1) translateY(0); }
-            }
-          `}
-        </style>
+        <style>{`@keyframes panelFadeIn { from { opacity: 0; transform: scale(0.98) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }`}</style>
         {children}
       </div>
     </>
@@ -244,47 +198,13 @@ const AgentHeaderNode: React.FC<ComponentProps> = ({ element }) => {
   if (!session) return null;
   const displayName = session.name || `Session ${session.key.slice(0, 8)}`;
   return (
-    <div
-      style={{
-        padding: "10px 16px",
-        borderBottom: "1px solid rgba(0,0,0,0.05)",
-        display: "flex",
-        alignItems: "center",
-        gap: "10px",
-        background: "transparent",
-      }}
-    >
-      <span style={{ fontSize: "16px" }}>
-        {session.type === "chat" ? "💬" : session.type === "view" ? "🎨" : "⚡"}
-      </span>
+    <div style={{ padding: "10px 16px", borderBottom: "1px solid rgba(0,0,0,0.05)", display: "flex", alignItems: "center", gap: "10px", background: "transparent" }}>
+      <span style={{ fontSize: "16px" }}>{session.type === "chat" ? "💬" : session.type === "view" ? "🎨" : "⚡"}</span>
       <div style={{ flex: 1, display: "flex", alignItems: "baseline", gap: "8px", minWidth: 0 }}>
-        <span style={{ fontSize: "14px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {displayName}
-        </span>
-        <span style={{ fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>
-          {session.agent}
-        </span>
+        <span style={{ fontSize: "14px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayName}</span>
+        <span style={{ fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>{session.agent}</span>
       </div>
-      <button
-        onClick={(element.props?.onClose as any)}
-        style={{
-          background: "none",
-          border: "none",
-          borderRadius: "4px",
-          cursor: "pointer",
-          padding: "4px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: "14px",
-          color: "var(--text-secondary)",
-          transition: "background 0.2s",
-        }}
-        onMouseEnter={(e) => e.currentTarget.style.background = "rgba(0,0,0,0.05)"}
-        onMouseLeave={(e) => e.currentTarget.style.background = "none"}
-      >
-        ✕
-      </button>
+      <button onClick={(element.props?.onClose as any)} style={{ background: "none", border: "none", borderRadius: "4px", cursor: "pointer", padding: "4px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px", color: "var(--text-secondary)", transition: "background 0.2s" }} onMouseEnter={(e) => e.currentTarget.style.background = "rgba(0,0,0,0.05)"} onMouseLeave={(e) => e.currentTarget.style.background = "none"}>✕</button>
     </div>
   );
 };
@@ -292,108 +212,70 @@ const AgentHeaderNode: React.FC<ComponentProps> = ({ element }) => {
 const AgentMessageListNode: React.FC<ComponentProps> = ({ element }) => {
   const session = element.props?.session as any;
   const exchanges = (element.props?.exchanges as any[]) ?? [];
+  const onAgentResponse = element.props?.onAgentResponse as (content: string) => void;
   const { chunks, isStreaming, permissionRequest, respondToPermission, clearChunks } = useSessionStream(session?.key ?? null);
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
-  const prevExchangesLength = React.useRef(exchanges.length);
+  
+  // 追踪生成状态
+  const wasStreamingRef = React.useRef(false);
 
+  // 核心逻辑：监听生成结束，立即执行前端追加
   React.useEffect(() => {
-    if (exchanges.length > prevExchangesLength.current) {
-      clearChunks();
+    if (wasStreamingRef.current && !isStreaming) {
+      // 提取 chunks 中的所有文本内容
+      const fullContent = chunks
+        .filter(c => c.type === "message_chunk")
+        .map(c => c.data.content)
+        .join("");
+      
+      if (fullContent && onAgentResponse) {
+        onAgentResponse(fullContent); // 通知父组件追加
+        clearChunks(); // 立即清理，由追加后的 history 接管
+      }
     }
-    prevExchangesLength.current = exchanges.length;
-  }, [exchanges.length, clearChunks]);
+    wasStreamingRef.current = isStreaming;
+  }, [isStreaming, chunks, onAgentResponse, clearChunks]);
 
   React.useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
   }, [exchanges, chunks, isStreaming]);
 
   return (
-    <div
-      style={{
-        flex: 1,
-        overflow: "auto",
-        padding: "24px",
-        display: "flex",
-        flexDirection: "column",
-        gap: "24px",
-      }}
-    >
-      {exchanges.map((ex, i) => {
+    <div style={{ flex: 1, overflow: "auto", padding: "24px", display: "flex", flexDirection: "column", gap: "24px" }}>
+      {exchanges.map((ex: any, i) => {
         const isUser = ex.role === "user";
         const time = formatTime(ex.timestamp);
         return (
-          <div
-            key={i}
-            style={{
-              alignSelf: isUser ? "flex-end" : "flex-start",
-              width: isUser ? "auto" : "100%",
-              maxWidth: isUser ? "85%" : "100%",
-              position: "relative"
-            }}
-          >
+          <div key={`ex-${i}`} style={{ alignSelf: isUser ? "flex-end" : "flex-start", width: isUser ? "auto" : "100%", maxWidth: isUser ? "85%" : "100%", display: 'flex', flexDirection: 'column' }}>
             {isUser ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-                <div
-                  style={{
-                    padding: "10px 16px",
-                    borderRadius: "18px 18px 4px 18px",
-                    background: "var(--accent-color)",
-                    color: "#fff",
-                    fontSize: "14px",
-                    lineHeight: "1.5",
-                    boxShadow: "0 4px 12px rgba(59,130,246,0.2)",
-                  }}
-                >
-                  {ex.content}
-                </div>
+                <div style={{ padding: "10px 16px", borderRadius: "18px 18px 4px 18px", background: "var(--accent-color)", color: "#fff", fontSize: "14px", lineHeight: "1.5", boxShadow: "0 4px 12px rgba(59,130,246,0.2)" }}>{ex.content}</div>
                 <span style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, marginRight: '4px' }}>{time}</span>
               </div>
             ) : (
-              <div style={{ width: "100%", position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+              <div style={{ width: "100%", display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                 <div style={{ color: "var(--text-primary)", fontSize: "15px", lineHeight: "1.7", width: "100%" }}>
-                  <ReactMarkdown 
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      p: ({node, ...props}) => <p style={{ margin: "0 0 1em 0" }} {...props} />,
-                      pre: ({node, ...props}) => (
-                        <pre style={{ 
-                          background: "rgba(0,0,0,0.04)", 
-                          padding: "16px", 
-                          borderRadius: "8px", 
-                          overflow: "auto",
-                          fontSize: "13px",
-                          margin: "1em 0"
-                        }} {...props} />
-                      ),
-                      code: ({node, ...props}) => (
-                        <code style={{ 
-                          background: "rgba(0,0,0,0.04)", 
-                          padding: "2px 4px", 
-                          borderRadius: "4px" 
-                        }} {...props} />
-                      )
-                    }}
-                  >
-                    {ex.content}
-                  </ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                    p: ({node, ...props}) => <p style={{ margin: "0 0 1em 0" }} {...props} />,
+                    pre: ({node, ...props}) => <pre style={{ background: "rgba(0,0,0,0.04)", padding: "16px", borderRadius: "8px", overflow: "auto", fontSize: "13px", margin: "1em 0" }} {...props} />,
+                    code: ({node, ...props}) => <code style={{ background: "rgba(0,0,0,0.04)", padding: "2px 4px", borderRadius: "4px" }} {...props} />
+                  }}>{ex.content}</ReactMarkdown>
                 </div>
-                {time && <span style={{ alignSelf: 'flex-start', fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, marginTop: '-10px', marginBottom: '4px' }}>{time}</span>}
+                <span style={{ alignSelf: 'flex-start', fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, marginTop: '-10px', marginBottom: '4px' }}>{time}</span>
               </div>
             )}
           </div>
         );
       })}
-      {(chunks.length > 0 || isStreaming) && (
+      
+      {chunks.length > 0 && (
         <div style={{ alignSelf: "flex-start", width: "100%" }}>
-          <StreamMessage chunks={chunks as any} isStreaming={isStreaming} />
+          <StreamMessage chunks={chunks} isStreaming={isStreaming} />
         </div>
       )}
-      <div ref={messagesEndRef} />
       
-      <PermissionDialog
-        request={permissionRequest as any}
-        onRespond={respondToPermission}
-      />
+      <div ref={messagesEndRef} />
+      <PermissionDialog request={permissionRequest as any} onRespond={respondToPermission} />
     </div>
   );
 };
@@ -401,101 +283,23 @@ const AgentMessageListNode: React.FC<ComponentProps> = ({ element }) => {
 const AgentInputNode: React.FC<ComponentProps> = ({ element }) => {
   const [input, setInput] = React.useState("");
   const onSend = element.props?.onSend as (msg: string) => void;
-
   return (
-    <div
-      style={{
-        padding: "12px 16px",
-        borderTop: "1px solid var(--border-color)",
-        display: "flex",
-        gap: "8px",
-      }}
-    >
-      <textarea
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            if (input.trim()) {
-              onSend(input);
-              setInput("");
-            }
-          }
-        }}
-        placeholder="输入消息..."
-        style={{
-          flex: 1,
-          padding: "10px 12px",
-          borderRadius: "8px",
-          border: "1px solid var(--border-color)",
-          fontSize: "13px",
-          resize: "none",
-          minHeight: "40px",
-          maxHeight: "120px",
-        }}
-      />
-      <button
-        onClick={() => {
-          if (input.trim()) {
-            onSend(input);
-            setInput("");
-          }
-        }}
-        style={{
-          padding: "10px 20px",
-          borderRadius: "8px",
-          border: "none",
-          background: "#3b82f6",
-          color: "#fff",
-          fontSize: "13px",
-          cursor: "pointer",
-        }}
-      >
-        发送
-      </button>
+    <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border-color)", display: "flex", gap: "8px" }}>
+      <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (input.trim()) { onSend(input); setInput(""); } } }} placeholder="输入消息..." style={{ flex: 1, padding: "10px 12px", borderRadius: "8px", border: "1px solid var(--border-color)", fontSize: "13px", resize: "none", minHeight: "40px", maxHeight: "120px" }} />
+      <button onClick={() => { if (input.trim()) { onSend(input); setInput(""); } }} style={{ padding: "10px 20px", borderRadius: "8px", border: "none", background: "#3b82f6", color: "#fff", fontSize: "13px", cursor: "pointer" }}>发送</button>
     </div>
   );
 };
 
 const AgentBubbleNode: React.FC<ComponentProps> = ({ element }) => (
-  <AgentBubble
-    session={(element.props?.session as any) ?? null}
-    isStreaming={(element.props?.isStreaming as boolean) ?? false}
-    onClick={(element.props?.onClick as any) ?? undefined}
-  />
+  <AgentBubble session={(element.props?.session as any) ?? null} isStreaming={(element.props?.isStreaming as boolean) ?? false} onClick={(element.props?.onClick as any) ?? undefined} />
 );
 
 const AssociationViewNode: React.FC<ComponentProps> = ({ element }) => {
   const { execute } = useActions();
   return (
-    <AssociationView
-      title={(element.props?.title as string) ?? undefined}
-      files={(element.props?.files as any[]) ?? []}
-      onFileClick={(path) => execute({ name: "open", params: { path } })}
-      onSessionClick={(key) => execute({ name: "select_session", params: { key } })}
-    />
+    <AssociationView title={(element.props?.title as string) ?? undefined} files={(element.props?.files as any[]) ?? []} onFileClick={(path) => execute({ name: "open", params: { path } })} onSessionClick={(key) => execute({ name: "select_session", params: { key } })} />
   );
 };
 
-export const registry = {
-  Shell,
-  Sidebar,
-  Main,
-  Footer,
-  Container,
-  RightSidebar: RightSidebarNode,
-  FileTree: FileTreeNode,
-  DefaultListView: DefaultListNode,
-  FileViewer: FileViewerNode,
-  ActionBar: ActionBarNode,
-  SessionList: SessionListNode,
-  SessionViewer: SessionViewerNode,
-  SettingsPanel: SettingsPanelNode,
-  AgentPanel: AgentPanelNode,
-  AgentHeader: AgentHeaderNode,
-  AgentMessageList: AgentMessageListNode,
-  AgentInput: AgentInputNode,
-  AgentBubble: AgentBubbleNode,
-  AssociationView: AssociationViewNode,
-};
+export const registry = { Shell, Sidebar, Main, Footer, Container, RightSidebar: RightSidebarNode, FileTree: FileTreeNode, DefaultListView: DefaultListNode, FileViewer: FileViewerNode, ActionBar: ActionBarNode, SessionList: SessionListNode, SessionViewer: SessionViewerNode, SettingsPanel: SettingsPanelNode, AgentPanel: AgentPanelNode, AgentHeader: AgentHeaderNode, AgentMessageList: AgentMessageListNode, AgentInput: AgentInputNode, AgentBubble: AgentBubbleNode, AssociationView: AssociationViewNode };

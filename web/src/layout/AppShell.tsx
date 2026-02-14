@@ -46,11 +46,12 @@ const sidebarStyle: React.CSSProperties = {
 
 const mainStyle: React.CSSProperties = {
   gridArea: "main",
-  overflow: "auto",
+  overflow: "hidden", // 禁用全局滚动，由内部组件控制
   padding: "0",
   background: "transparent",
   display: "flex",
   flexDirection: "column",
+  minHeight: 0, // 关键：允许 flex 子项在高度溢出时收缩
 };
 
 const footerStyle: React.CSSProperties = {

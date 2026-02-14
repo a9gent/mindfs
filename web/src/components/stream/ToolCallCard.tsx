@@ -22,8 +22,11 @@ const toolIcons: Record<string, string> = {
 
 const statusColors: Record<string, string> = {
   running: "#f59e0b",
+  in_progress: "#f59e0b",
   complete: "#22c55e",
+  success: "#22c55e",
   failed: "#ef4444",
+  error: "#ef4444",
 };
 
 export function ToolCallCard({
@@ -35,7 +38,12 @@ export function ToolCallCard({
 }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const icon = toolIcons[tool] || "🔧";
-  const statusColor = statusColors[status] || "#9ca3af";
+  const normalizedStatus = (status || "").toLowerCase();
+  const isRunning = normalizedStatus === "running" || normalizedStatus === "in_progress";
+  const isComplete = normalizedStatus === "complete" || normalizedStatus === "success";
+  const isFailed = normalizedStatus === "failed" || normalizedStatus === "error";
+  
+  const statusColor = statusColors[normalizedStatus] || "#9ca3af";
 
   return (
     <div
@@ -73,19 +81,19 @@ export function ToolCallCard({
             gap: "4px",
           }}
         >
-          {status === "running" && (
+          {isRunning && (
             <span
               style={{
                 width: "6px",
                 height: "6px",
                 borderRadius: "50%",
-                background: statusColor,
+                background: "#f59e0b",
                 animation: "pulse 1s infinite",
               }}
             />
           )}
           <span style={{ color: statusColor, fontSize: "11px" }}>
-            {status === "running" ? "执行中" : status === "complete" ? "完成" : "失败"}
+            {isRunning ? "执行中" : isComplete ? "完成" : isFailed ? "失败" : normalizedStatus}
           </span>
         </span>
         <span

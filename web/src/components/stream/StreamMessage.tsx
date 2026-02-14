@@ -40,87 +40,69 @@ export function StreamMessage({ chunks, isStreaming = false }: StreamMessageProp
     return lines.join("\n");
   };
 
-  // Group consecutive chunks of the same type
+  // 顺序分组逻辑：保持内容、思考、工具调用的原始顺序
   const grouped = useMemo(() => {
     const result: GroupedContent[] = [];
     let currentText = "";
     let currentThinking = "";
-    const toolCalls = new Map<string, GroupedContent>();
+    
+    // 用于快速查找并更新已存在的工具块
+    const toolCallRefs = new Map<string, GroupedContent>();
+
+    const flush = () => {
+      if (currentText) {
+        result.push({ type: "text", content: currentText });
+        currentText = "";
+      }
+      if (currentThinking) {
+        result.push({ type: "thinking", content: currentThinking });
+        currentThinking = "";
+      }
+    };
 
     for (const chunk of chunks) {
       switch (chunk.type) {
         case "message_chunk":
-          if (currentThinking) {
-            result.push({ type: "thinking", content: currentThinking });
-            currentThinking = "";
-          }
+          if (currentThinking) flush();
           currentText += chunk.data.content || "";
           break;
 
         case "thought_chunk":
-          if (currentText) {
-            result.push({ type: "text", content: currentText });
-            currentText = "";
-          }
+          if (currentText) flush();
           currentThinking += chunk.data.content || "";
           break;
 
         case "tool_call":
-          if (currentText) {
-            result.push({ type: "text", content: currentText });
-            currentText = "";
-          }
-          if (currentThinking) {
-            result.push({ type: "thinking", content: currentThinking });
-            currentThinking = "";
-          }
+          flush(); // 工具调用出现前，先清空之前的文字/思考
           if (chunk.data.callId) {
-            toolCalls.set(chunk.data.callId, {
+            const toolBlock: GroupedContent = {
               type: "tool",
               tool: chunk.data.name,
               callId: chunk.data.callId,
               status: chunk.data.status || "running",
               contentDetail: formatToolContent(chunk.data.content),
-            });
+            };
+            result.push(toolBlock);
+            toolCallRefs.set(chunk.data.callId, toolBlock);
           }
           break;
 
         case "tool_call_update":
-          if (chunk.data.callId && toolCalls.has(chunk.data.callId)) {
-            const tc = toolCalls.get(chunk.data.callId)!;
+          if (chunk.data.callId && toolCallRefs.has(chunk.data.callId)) {
+            const tc = toolCallRefs.get(chunk.data.callId)!;
             tc.status = chunk.data.status || "complete";
             tc.contentDetail = formatToolContent(chunk.data.content) || tc.contentDetail;
           }
           break;
-        case "message_done":
-          break;
+
         case "error":
-          if (currentText) {
-            result.push({ type: "text", content: currentText });
-            currentText = "";
-          }
-          if (currentThinking) {
-            result.push({ type: "thinking", content: currentThinking });
-            currentThinking = "";
-          }
+          flush();
           result.push({ type: "text", content: chunk.data.message });
           break;
       }
     }
 
-    // Flush remaining content
-    if (currentText) {
-      result.push({ type: "text", content: currentText });
-    }
-    if (currentThinking) {
-      result.push({ type: "thinking", content: currentThinking });
-    }
-
-    // Add tool calls
-    for (const tc of toolCalls.values()) {
-      result.push(tc);
-    }
-
+    flush();
     return result;
   }, [chunks]);
 
@@ -133,13 +115,13 @@ export function StreamMessage({ chunks, isStreaming = false }: StreamMessageProp
       {grouped.map((item, index) => {
         switch (item.type) {
           case "text":
-            return <TextChunk key={index} content={item.content || ""} />;
+            return <TextChunk key={`text-${index}`} content={item.content || ""} />;
           case "thinking":
-            return <ThinkingBlock key={index} content={item.content || ""} />;
+            return <ThinkingBlock key={`thought-${index}`} content={item.content || ""} />;
           case "tool":
             return (
               <ToolCallCard
-                key={item.callId || index}
+                key={item.callId || `tool-${index}`}
                 tool={item.tool || "unknown"}
                 callId={item.callId || ""}
                 status={item.status || "running"}
@@ -159,6 +141,7 @@ export function StreamMessage({ chunks, isStreaming = false }: StreamMessageProp
             gap: "6px",
             fontSize: "12px",
             color: "var(--text-secondary)",
+            marginTop: "4px"
           }}
         >
           <span
@@ -166,7 +149,7 @@ export function StreamMessage({ chunks, isStreaming = false }: StreamMessageProp
               width: "8px",
               height: "8px",
               borderRadius: "50%",
-              background: "#3b82f6",
+              background: "var(--accent-color)",
               animation: "pulse 1s infinite",
             }}
           />

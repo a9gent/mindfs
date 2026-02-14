@@ -72,7 +72,8 @@ export function buildDefaultTree(
   onOpenSettings?: (() => void) | null,
   settingsOpen?: boolean,
   isFloatingOpen?: boolean,
-  onToggleFloating?: (open: boolean) => void
+  onToggleFloating?: (open: boolean) => void,
+  onAgentResponse?: (content: string) => void
 ): UITree {
   const elements: Record<string, UIElement> = {};
   const rootKey = "root";
@@ -124,6 +125,7 @@ export function buildDefaultTree(
         props: {
           session: currentSession,
           exchanges: (currentSession as any).exchanges || [],
+          onAgentResponse: onAgentResponse || undefined,
         }
       };
 
