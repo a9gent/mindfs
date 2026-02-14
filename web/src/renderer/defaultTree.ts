@@ -26,6 +26,14 @@ export type FilePayload = {
   ext?: string;
   mime?: string;
   root?: string;
+  file_meta?: Array<{
+    source_session: string;
+    session_name?: string;
+    agent?: string;
+    created_at?: string;
+    updated_at?: string;
+    created_by?: string;
+  }>;
 };
 
 export type SessionSummary = {
@@ -69,8 +77,6 @@ export function buildDefaultTree(
   onSessionClick?: (() => void) | null,
   rightCollapsed?: boolean,
   onToggleRight?: (() => void) | null,
-  onOpenSettings?: (() => void) | null,
-  settingsOpen?: boolean,
   isFloatingOpen?: boolean,
   onToggleFloating?: (open: boolean) => void,
   onAgentResponse?: (content: string) => void
@@ -234,9 +240,8 @@ export function buildDefaultTree(
     props: {
       collapsed: rightCollapsed ?? false,
       onToggle: onToggleRight ?? undefined,
-      onOpenSettings: onOpenSettings ?? undefined,
     },
-    children: ["session-list", "settings-panel"],
+    children: ["session-list"],
   };
 
   elements["session-list"] = {
@@ -246,14 +251,6 @@ export function buildDefaultTree(
       sessions: sessions ?? [],
       selectedKey: selectedSession?.key ?? selectedSession?.session_key ?? "",
       onSelect: onSelectSession ?? undefined,
-    },
-  };
-
-  elements["settings-panel"] = {
-    key: "settings-panel",
-    type: "SettingsPanel",
-    props: {
-      open: settingsOpen ?? false,
     },
   };
 

@@ -11,13 +11,17 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"mindfs/server/internal/api/usecase"
+	"mindfs/server/internal/fs"
 	"mindfs/server/internal/session"
-	"mindfs/server/internal/skills"
 )
 
 // HTTPHandler provides REST endpoints for health, tree, file, and action.
 type HTTPHandler struct {
 	AppContext *AppContext
+}
+
+func (h *HTTPHandler) service() *usecase.Service {
+	return &usecase.Service{Registry: h.AppContext}
 }
 
 // Routes constructs the chi router with all endpoints.
@@ -31,20 +35,14 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/sessions/{key}", h.handleSessionGet)
 	r.Post("/api/sessions", h.handleSessionCreate)
 	r.Post("/api/skills/{id}/execute", h.handleSkillExecute)
-	r.Get("/api/dirs/{id}/config", h.handleDirConfigGet)
-	r.Put("/api/dirs/{id}/config", h.handleDirConfigPut)
 	r.Get("/api/dirs", h.handleDirs)
 	r.Post("/api/dirs", h.handleAddDir)
-
-	// File metadata API
-	r.Get("/api/file/meta", h.handleFileMeta)
 
 	// Directory skills API
 	r.Get("/api/dirs/{id}/skills", h.handleDirSkills)
 
 	// Agent status API
 	r.Get("/api/agents", h.handleAgentsList)
-	r.Post("/api/agents/{name}/probe", h.handleAgentsProbe)
 
 	// View routes API
 	r.Get("/api/view/routes", h.handleViewRoutes)
@@ -55,7 +53,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 
 func (h *HTTPHandler) handleSessions(w http.ResponseWriter, r *http.Request) {
 	rootID := r.URL.Query().Get("root")
-	uc := &usecase.Service{Registry: h.AppContext}
+	uc := h.service()
 	out, err := uc.ListSessions(r.Context(), usecase.ListSessionsInput{RootID: rootID})
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err)
@@ -75,7 +73,7 @@ func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("session key required"))
 		return
 	}
-	uc := &usecase.Service{Registry: h.AppContext}
+	uc := h.service()
 	out, err := uc.GetSession(r.Context(), usecase.GetSessionInput{
 		RootID: rootID,
 		Key:    key,
@@ -99,7 +97,7 @@ func (h *HTTPHandler) handleSessionCreate(w http.ResponseWriter, r *http.Request
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json"))
 		return
 	}
-	uc := &usecase.Service{Registry: h.AppContext}
+	uc := h.service()
 	created, err := uc.CreateSession(r.Context(), usecase.CreateSessionInput{
 		RootID: rootID,
 		Input: session.CreateInput{
@@ -156,7 +154,7 @@ func sessionListResponse(s *session.Session) map[string]any {
 
 func (h *HTTPHandler) handleViewRoutes(w http.ResponseWriter, r *http.Request) {
 	rootID := r.URL.Query().Get("root")
-	uc := &usecase.Service{Registry: h.AppContext}
+	uc := h.service()
 	out, err := uc.ListViewRoutes(r.Context(), usecase.ListViewRoutesInput{
 		RootID: rootID,
 		Path:   r.URL.Query().Get("path"),
@@ -178,7 +176,7 @@ func (h *HTTPHandler) handleViewPreference(w http.ResponseWriter, r *http.Reques
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json"))
 		return
 	}
-	uc := &usecase.Service{Registry: h.AppContext}
+	uc := h.service()
 	if err := uc.SetViewPreference(r.Context(), usecase.SetViewPreferenceInput{
 		RootID:  req.RootID,
 		Path:    req.Path,
@@ -204,7 +202,7 @@ func (h *HTTPHandler) handleSkillExecute(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json"))
 		return
 	}
-	uc := &usecase.Service{Registry: h.AppContext}
+	uc := h.service()
 	out, err := uc.ExecuteSkill(r.Context(), usecase.ExecuteSkillInput{
 		RootID:  rootID,
 		SkillID: skillID,
@@ -217,35 +215,6 @@ func (h *HTTPHandler) handleSkillExecute(w http.ResponseWriter, r *http.Request)
 	respondJSON(w, http.StatusOK, out.Result)
 }
 
-func (h *HTTPHandler) handleDirConfigGet(w http.ResponseWriter, r *http.Request) {
-	rootID := chi.URLParam(r, "id")
-	uc := &usecase.Service{Registry: h.AppContext}
-	out, err := uc.GetDirConfig(r.Context(), usecase.GetDirConfigInput{RootID: rootID})
-	if err != nil {
-		respondError(w, http.StatusNotFound, err)
-		return
-	}
-	respondJSON(w, http.StatusOK, out.Config)
-}
-
-func (h *HTTPHandler) handleDirConfigPut(w http.ResponseWriter, r *http.Request) {
-	rootID := chi.URLParam(r, "id")
-	var cfg skills.DirConfig
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json"))
-		return
-	}
-	uc := &usecase.Service{Registry: h.AppContext}
-	if err := uc.SetDirConfig(r.Context(), usecase.SetDirConfigInput{
-		RootID: rootID,
-		Config: cfg,
-	}); err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	respondJSON(w, http.StatusOK, cfg)
-}
-
 func (h *HTTPHandler) handleAgentsList(w http.ResponseWriter, r *http.Request) {
 	if h.AppContext == nil || h.AppContext.GetProber() == nil {
 		respondJSON(w, http.StatusOK, []map[string]any{})
@@ -253,20 +222,6 @@ func (h *HTTPHandler) handleAgentsList(w http.ResponseWriter, r *http.Request) {
 	}
 	statuses := h.AppContext.GetProber().GetAllStatuses()
 	respondJSON(w, http.StatusOK, statuses)
-}
-
-func (h *HTTPHandler) handleAgentsProbe(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	if name == "" {
-		respondError(w, http.StatusBadRequest, errInvalidRequest("agent name required"))
-		return
-	}
-	if h.AppContext == nil || h.AppContext.GetProber() == nil {
-		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("prober not available"))
-		return
-	}
-	status := h.AppContext.GetProber().ProbeOne(r.Context(), name)
-	respondJSON(w, http.StatusOK, status)
 }
 
 func (h *HTTPHandler) handleIndex(w http.ResponseWriter, _ *http.Request) {
@@ -281,7 +236,7 @@ func (h *HTTPHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (h *HTTPHandler) handleTree(w http.ResponseWriter, r *http.Request) {
 	rootID := r.URL.Query().Get("root")
-	uc := &usecase.Service{Registry: h.AppContext}
+	uc := h.service()
 	out, err := uc.ListTree(r.Context(), usecase.ListTreeInput{
 		RootID: rootID,
 		Dir:    r.URL.Query().Get("dir"),
@@ -295,7 +250,7 @@ func (h *HTTPHandler) handleTree(w http.ResponseWriter, r *http.Request) {
 
 func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 	rootID := r.URL.Query().Get("root")
-	uc := &usecase.Service{Registry: h.AppContext}
+	uc := h.service()
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("path required"))
@@ -336,7 +291,7 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) handleDirs(w http.ResponseWriter, _ *http.Request) {
-	uc := &usecase.Service{Registry: h.AppContext}
+	uc := h.service()
 	out, err := uc.ListManagedDirs(nil)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err)
@@ -344,13 +299,7 @@ func (h *HTTPHandler) handleDirs(w http.ResponseWriter, _ *http.Request) {
 	}
 	resp := make([]map[string]any, 0, len(out.Dirs))
 	for _, dir := range out.Dirs {
-		display := dir.Name
-		resp = append(resp, map[string]any{
-			"id":           dir.ID,
-			"display_name": display,
-			"created_at":   dir.CreatedAt,
-			"updated_at":   dir.UpdatedAt,
-		})
+		resp = append(resp, managedDirResponse(dir))
 	}
 	respondJSON(w, http.StatusOK, resp)
 }
@@ -363,50 +312,18 @@ func (h *HTTPHandler) handleAddDir(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json"))
 		return
 	}
-	uc := &usecase.Service{Registry: h.AppContext}
+	uc := h.service()
 	out, err := uc.AddManagedDir(r.Context(), usecase.AddManagedDirInput{Path: req.Path})
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, map[string]any{
-		"id":           out.Dir.ID,
-		"display_name": out.Dir.Name,
-		"created_at":   out.Dir.CreatedAt,
-		"updated_at":   out.Dir.UpdatedAt,
-	})
-}
-
-func (h *HTTPHandler) handleFileMeta(w http.ResponseWriter, r *http.Request) {
-	rootID := r.URL.Query().Get("root")
-	uc := &usecase.Service{Registry: h.AppContext}
-	out, err := uc.GetFileMeta(r.Context(), usecase.GetFileMetaInput{
-		RootID: rootID,
-		Path:   r.URL.Query().Get("path"),
-	})
-	if err != nil {
-		respondError(w, http.StatusBadRequest, err)
-		return
-	}
-
-	if out.Meta == nil {
-		respondJSON(w, http.StatusOK, nil)
-		return
-	}
-
-	respondJSON(w, http.StatusOK, map[string]any{
-		"source_session": out.Meta.SourceSession,
-		"session_name":   out.Meta.SessionName,
-		"agent":          out.Meta.Agent,
-		"created_at":     out.Meta.CreatedAt,
-		"updated_at":     out.Meta.UpdatedAt,
-		"created_by":     out.Meta.CreatedBy,
-	})
+	respondJSON(w, http.StatusOK, managedDirResponse(out.Dir))
 }
 
 func (h *HTTPHandler) handleDirSkills(w http.ResponseWriter, r *http.Request) {
 	rootID := chi.URLParam(r, "id")
-	uc := &usecase.Service{Registry: h.AppContext}
+	uc := h.service()
 	out, err := uc.ListDirectorySkills(r.Context(), usecase.ListDirectorySkillsInput{
 		RootID: rootID,
 	})
@@ -415,6 +332,15 @@ func (h *HTTPHandler) handleDirSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, out.Skills)
+}
+
+func managedDirResponse(dir fs.RootInfo) map[string]any {
+	return map[string]any{
+		"id":           dir.ID,
+		"display_name": dir.Name,
+		"created_at":   dir.CreatedAt,
+		"updated_at":   dir.UpdatedAt,
+	}
 }
 
 const indexHTML = `<!doctype html>

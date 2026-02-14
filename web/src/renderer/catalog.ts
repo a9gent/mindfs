@@ -39,7 +39,6 @@ export const catalog = createCatalog({
         slot: z.literal("right").optional(),
         collapsed: z.boolean().optional(),
         onToggle: z.any().optional(),
-        onOpenSettings: z.any().optional(),
       }),
       hasChildren: true,
     },
@@ -91,11 +90,6 @@ export const catalog = createCatalog({
     SessionViewer: {
       props: z.object({
         session: sessionSchema.nullable().optional(),
-      }),
-    },
-    SettingsPanel: {
-      props: z.object({
-        open: z.boolean().optional(),
       }),
     },
   },

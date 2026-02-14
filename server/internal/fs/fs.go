@@ -212,15 +212,16 @@ func (r RootInfo) ListEntries(dirRelPath string) ([]Entry, error) {
 }
 
 type ReadResult struct {
-	Path      string `json:"path"`
-	Name      string `json:"name"`
-	Content   string `json:"content"`
-	Encoding  string `json:"encoding"`
-	Truncated bool   `json:"truncated"`
-	Size      int64  `json:"size"`
-	Ext       string `json:"ext"`
-	Mime      string `json:"mime"`
-	Root      string `json:"root,omitempty"`
+	Path      string          `json:"path"`
+	Name      string          `json:"name"`
+	Content   string          `json:"content"`
+	Encoding  string          `json:"encoding"`
+	Truncated bool            `json:"truncated"`
+	Size      int64           `json:"size"`
+	Ext       string          `json:"ext"`
+	Mime      string          `json:"mime"`
+	Root      string          `json:"root,omitempty"`
+	FileMeta  []FileMetaEntry `json:"file_meta,omitempty"`
 }
 
 func (r RootInfo) ReadFile(pathRel string, maxBytes int64) (ReadResult, error) {
@@ -328,7 +329,7 @@ type FileMetaEntry struct {
 	CreatedBy     string    `json:"created_by"`
 }
 
-type FileMeta map[string]FileMetaEntry
+type FileMeta map[string][]FileMetaEntry
 
 func (r RootInfo) LoadFileMeta() (FileMeta, error) {
 	payload, err := r.ReadMetaFile("file-meta.json")
@@ -339,11 +340,21 @@ func (r RootInfo) LoadFileMeta() (FileMeta, error) {
 		return nil, err
 	}
 	var meta FileMeta
-	if err := json.Unmarshal(payload, &meta); err != nil {
+	if err := json.Unmarshal(payload, &meta); err == nil {
+		if meta == nil {
+			meta = FileMeta{}
+		}
+		return meta, nil
+	}
+
+	// Backward compatibility: old format was map[path]FileMetaEntry.
+	var legacy map[string]FileMetaEntry
+	if err := json.Unmarshal(payload, &legacy); err != nil {
 		return nil, err
 	}
-	if meta == nil {
-		meta = FileMeta{}
+	meta = FileMeta{}
+	for path, entry := range legacy {
+		meta[path] = []FileMetaEntry{entry}
 	}
 	return meta, nil
 }
@@ -367,17 +378,38 @@ func (r RootInfo) UpdateFileMeta(relativePath, sessionKey, createdBy string) err
 	if err != nil {
 		return err
 	}
-	meta[relativePath] = FileMetaEntry{SourceSession: sessionKey, CreatedAt: time.Now().UTC(), CreatedBy: createdBy}
+	now := time.Now().UTC()
+	entries := meta[relativePath]
+	updated := false
+	for i := range entries {
+		if entries[i].SourceSession == sessionKey {
+			entries[i].UpdatedAt = now
+			if entries[i].CreatedBy == "" {
+				entries[i].CreatedBy = createdBy
+			}
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		entries = append(entries, FileMetaEntry{
+			SourceSession: sessionKey,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+			CreatedBy:     createdBy,
+		})
+	}
+	meta[relativePath] = entries
 	return r.SaveFileMeta(meta)
 }
 
-func (r RootInfo) GetFileMeta(relativePath string) (*FileMetaEntry, error) {
+func (r RootInfo) GetFileMeta(relativePath string) ([]FileMetaEntry, error) {
 	meta, err := r.LoadFileMeta()
 	if err != nil {
 		return nil, err
 	}
 	if entry, ok := meta[relativePath]; ok {
-		return &entry, nil
+		return entry, nil
 	}
 	return nil, nil
 }

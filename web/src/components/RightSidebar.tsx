@@ -3,14 +3,12 @@ import React from "react";
 type RightSidebarProps = {
   collapsed?: boolean;
   onToggle?: () => void;
-  onOpenSettings?: () => void;
   children?: React.ReactNode;
 };
 
 export function RightSidebar({
   collapsed = false,
   onToggle,
-  onOpenSettings,
   children,
 }: RightSidebarProps) {
   return (
@@ -52,24 +50,6 @@ export function RightSidebar({
               会话
             </div>
             <div style={{ display: "flex", gap: "8px" }}>
-              <button
-                type="button"
-                onClick={onOpenSettings}
-                title="目录设置"
-                style={{
-                  padding: "2px 6px",
-                  borderRadius: "4px",
-                  border: "1px solid var(--border-color)",
-                  background: "#fff",
-                  fontSize: "12px",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                ⚙️
-              </button>
               <button
                 type="button"
                 onClick={onToggle}

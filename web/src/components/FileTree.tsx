@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React from "react";
 
 type FileEntry = {
   name: string;
@@ -9,14 +9,6 @@ type FileEntry = {
 type FileMeta = {
   source_session?: string;
   session_name?: string;
-};
-
-type ContextMenuState = {
-  visible: boolean;
-  x: number;
-  y: number;
-  entry: FileEntry | null;
-  rootId: string | null;
 };
 
 type FileTreeProps = {
@@ -31,7 +23,6 @@ type FileTreeProps = {
   activeSessionKey?: string | null;
   onSelectFile?: (entry: FileEntry, rootId: string) => void;
   onToggleDir?: (entry: FileEntry, rootId: string) => void;
-  onOpenSettings?: (rootId: string) => void;
 };
 
 const ChevronRight = ({ isOpen }: { isOpen: boolean }) => (
@@ -85,40 +76,7 @@ export function FileTree({
   activeSessionKey,
   onSelectFile,
   onToggleDir,
-  onOpenSettings,
 }: FileTreeProps) {
-  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
-    visible: false,
-    x: 0,
-    y: 0,
-    entry: null,
-    rootId: null,
-  });
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  const closeContextMenu = useCallback(() => {
-    setContextMenu((prev) => ({ ...prev, visible: false }));
-  }, []);
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) closeContextMenu();
-    };
-    if (contextMenu.visible) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
-    }
-  }, [contextMenu.visible, closeContextMenu]);
-
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent, entry: FileEntry, entryRoot: string) => {
-      if (!entry.is_dir) return;
-      e.preventDefault();
-      setContextMenu({ visible: true, x: e.clientX, y: e.clientY, entry, rootId: entryRoot });
-    },
-    []
-  );
-
   const expandedSet = new Set(expanded);
   const managedSet = new Set(managedRoots);
 
@@ -151,7 +109,6 @@ export function FileTree({
             <button
               type="button"
               onClick={() => entry.is_dir ? onToggleDir?.(entry, entryRoot) : onSelectFile?.(entry, entryRoot)}
-              onContextMenu={(e) => handleContextMenu(e, entry, entryRoot)}
               style={{
                 border: "none",
                 background: isSelected ? "rgba(59, 130, 246, 0.1)" : "transparent",
@@ -204,14 +161,6 @@ export function FileTree({
       <div style={{ padding: "8px", flex: 1, overflow: "auto" }}>
         {renderEntries(entries, 0, rootId || "")}
       </div>
-
-      {contextMenu.visible && contextMenu.entry && (
-        <div ref={menuRef} style={{ position: "fixed", left: contextMenu.x, top: contextMenu.y, background: "#fff", border: "1px solid var(--border-color)", borderRadius: "8px", boxShadow: "0 4px 12px rgba(0,0,0,0.15)", padding: "4px 0", minWidth: "160px", zIndex: 1000 }}>
-          <button type="button" onClick={() => { if (contextMenu.rootId) onOpenSettings?.(contextMenu.rootId); closeContextMenu(); }} style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%", padding: "8px 12px", border: "none", background: "transparent", cursor: "pointer", fontSize: "13px", color: "var(--text-primary)", textAlign: "left" }}>
-            <span>⚙️</span><span>目录设置</span>
-          </button>
-        </div>
-      )}
     </div>
   );
 }

@@ -55,17 +55,7 @@ func LoadAPIList() []APIEndpoint {
 				{Name: "root", Type: "string", Required: true, Description: "管理目录 ID"},
 				{Name: "path", Type: "string", Required: true, Description: "文件相对路径"},
 			},
-			Response: "{ file: { path, content, mime_type, size } }",
-		},
-		{
-			Method:      "GET",
-			Path:        "/api/file/meta",
-			Description: "获取文件元数据",
-			Params: []ParamDef{
-				{Name: "root", Type: "string", Required: true, Description: "管理目录 ID"},
-				{Name: "path", Type: "string", Required: true, Description: "文件相对路径"},
-			},
-			Response: "{ meta: { source_session, created_at, created_by } }",
+			Response: "{ file: { path, content, mime_type, size, file_meta[] } }",
 		},
 		{
 			Method:      "GET",
@@ -119,28 +109,6 @@ func LoadAPIList() []APIEndpoint {
 				{Name: "params", Type: "object", Required: false, Description: "技能参数"},
 			},
 			Response: "{ result: any, files_created: string[] }",
-		},
-		// Dir Config API
-		{
-			Method:      "GET",
-			Path:        "/api/dirs/:id/config",
-			Description: "获取目录配置",
-			Params: []ParamDef{
-				{Name: "id", Type: "string", Required: true, Description: "管理目录 ID"},
-			},
-			Response: "{ config: DirConfig }",
-		},
-		{
-			Method:      "PUT",
-			Path:        "/api/dirs/:id/config",
-			Description: "更新目录配置",
-			Params: []ParamDef{
-				{Name: "id", Type: "string", Required: true, Description: "管理目录 ID"},
-				{Name: "user_description", Type: "string", Required: false, Description: "目录描述"},
-				{Name: "default_agent", Type: "string", Required: false, Description: "默认 Agent"},
-				{Name: "view_create_agent", Type: "string", Required: false, Description: "视图生成 Agent"},
-			},
-			Response: "{ config: DirConfig }",
 		},
 		// Agent API
 		{

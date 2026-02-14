@@ -34,6 +34,18 @@ export function MarkdownViewer({ content }: { content: string }) {
           h2: (props) => (
             <h2 style={{ fontSize: "20px" }} {...props} />
           ),
+          blockquote: (props) => (
+            <blockquote style={{ 
+              borderLeft: "3px solid var(--accent-color)", 
+              margin: "1.5em 0", 
+              paddingLeft: "16px", 
+              color: "var(--text-secondary)",
+              fontStyle: "italic",
+              background: "rgba(0,0,0,0.02)",
+              padding: "12px 16px",
+              borderRadius: "0 8px 8px 0"
+            }} {...props} />
+          ),
           code({ node, inline, className, children, ...props }: any) {
             const match = /language-(\w+)/.exec(className || "");
             const language = match ? match[1] : "";
@@ -42,25 +54,22 @@ export function MarkdownViewer({ content }: { content: string }) {
                // Render block code with highlight
                const codeContent = String(children).replace(/\n$/, "");
                const grammar = Prism.languages[language] ?? Prism.languages.markup;
-               
-               // Use a try-catch or safe highlight if language not found
-               let html = "";
-               try {
-                  html = Prism.highlight(codeContent, grammar, language);
-               } catch (e) {
-                  html = codeContent; // fallback
-               }
+               let html = codeContent;
+               try { html = Prism.highlight(codeContent, grammar, language); } catch (e) {}
 
                return (
                  <pre
                     style={{
-                      background: "rgba(0,0,0,0.03)", // 更细腻的半透明背景
+                      background: "rgba(255,255,255,0.4)", // 更通透
+                      backdropFilter: "blur(10px)",
                       padding: "16px", 
-                      borderRadius: "8px", 
+                      borderRadius: "12px", 
                       overflow: "auto",
-                      border: "1px solid rgba(0,0,0,0.05)",
+                      border: "1px solid rgba(0,0,0,0.06)",
                       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-                      fontSize: "13px"
+                      fontSize: "13px",
+                      margin: "1.5em 0",
+                      boxShadow: "0 4px 12px rgba(0,0,0,0.03)"
                     }}
                  >
                    <code 

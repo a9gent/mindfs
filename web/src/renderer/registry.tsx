@@ -7,7 +7,6 @@ import { FileViewer } from "../components/FileViewer";
 import { SessionList } from "../components/SessionList";
 import { SessionViewer } from "../components/SessionViewer";
 import { RightSidebar } from "../components/RightSidebar";
-import { SettingsPanel } from "../components/SettingsPanel";
 import { AgentBubble } from "../components/AgentBubble";
 import { AssociationView } from "../components/AssociationView";
 import { useSessionStream } from "../hooks/useSessionStream";
@@ -124,6 +123,7 @@ const FileViewerNode: React.FC<ComponentProps> = ({ element }) => {
   return (
     <FileViewer 
       file={(element.props?.file as any) ?? null} 
+      onSessionClick={(sessionKey) => execute({ name: "select_session", params: { key: sessionKey } })}
       onPathClick={(path) => execute({ name: "open_dir", params: { path, root } })}
     />
   );
@@ -142,7 +142,6 @@ const RightSidebarNode: React.FC<ComponentProps> = ({ element, children }) => (
   <RightSidebar
     collapsed={(element.props?.collapsed as boolean) ?? false}
     onToggle={(element.props?.onToggle as any) ?? undefined}
-    onOpenSettings={(element.props?.onOpenSettings as any) ?? undefined}
   >
     {children}
   </RightSidebar>
@@ -166,10 +165,6 @@ const SessionViewerNode: React.FC<ComponentProps> = ({ element }) => {
     />
   );
 };
-
-const SettingsPanelNode: React.FC<ComponentProps> = ({ element }) => (
-  <SettingsPanel open={(element.props?.open as boolean) ?? false} />
-);
 
 const AgentPanelNode: React.FC<ComponentProps> = ({ element, children }) => {
   const isMobile = window.innerWidth < 768;
@@ -249,7 +244,16 @@ const AgentMessageListNode: React.FC<ComponentProps> = ({ element }) => {
           <div key={`ex-${i}`} style={{ alignSelf: isUser ? "flex-end" : "flex-start", width: isUser ? "auto" : "100%", maxWidth: isUser ? "85%" : "100%", display: 'flex', flexDirection: 'column' }}>
             {isUser ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-                <div style={{ padding: "10px 16px", borderRadius: "18px 18px 4px 18px", background: "var(--accent-color)", color: "#fff", fontSize: "14px", lineHeight: "1.5", boxShadow: "0 4px 12px rgba(59,130,246,0.2)" }}>{ex.content}</div>
+                <div style={{ 
+                  padding: "12px 18px", 
+                  borderRadius: "20px 20px 4px 20px", 
+                  background: "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)", 
+                  color: "#fff", 
+                  fontSize: "14px", 
+                  lineHeight: "1.6", 
+                  boxShadow: "0 4px 12px rgba(37,99,235,0.2)",
+                  border: "1px solid rgba(255,255,255,0.1)"
+                }}>{ex.content}</div>
                 <span style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, marginRight: '4px' }}>{time}</span>
               </div>
             ) : (
@@ -302,4 +306,4 @@ const AssociationViewNode: React.FC<ComponentProps> = ({ element }) => {
   );
 };
 
-export const registry = { Shell, Sidebar, Main, Footer, Container, RightSidebar: RightSidebarNode, FileTree: FileTreeNode, DefaultListView: DefaultListNode, FileViewer: FileViewerNode, ActionBar: ActionBarNode, SessionList: SessionListNode, SessionViewer: SessionViewerNode, SettingsPanel: SettingsPanelNode, AgentPanel: AgentPanelNode, AgentHeader: AgentHeaderNode, AgentMessageList: AgentMessageListNode, AgentInput: AgentInputNode, AgentBubble: AgentBubbleNode, AssociationView: AssociationViewNode };
+export const registry = { Shell, Sidebar, Main, Footer, Container, RightSidebar: RightSidebarNode, FileTree: FileTreeNode, DefaultListView: DefaultListNode, FileViewer: FileViewerNode, ActionBar: ActionBarNode, SessionList: SessionListNode, SessionViewer: SessionViewerNode, AgentPanel: AgentPanelNode, AgentHeader: AgentHeaderNode, AgentMessageList: AgentMessageListNode, AgentInput: AgentInputNode, AgentBubble: AgentBubbleNode, AssociationView: AssociationViewNode };

@@ -32,32 +32,3 @@ export async function fetchAgents(): Promise<AgentStatus[]> {
     return cachedAgents;
   }
 }
-
-export async function probeAgent(name: string): Promise<AgentStatus | null> {
-  try {
-    const res = await fetch(`/api/agents/${encodeURIComponent(name)}/probe`, {
-      method: "POST",
-    });
-    if (!res.ok) {
-      throw new Error("Failed to probe agent");
-    }
-    const status = await res.json();
-    // Update cache
-    cachedAgents = cachedAgents.map((a) =>
-      a.name === name ? status : a
-    );
-    return status;
-  } catch (err) {
-    console.error("Failed to probe agent:", err);
-    return null;
-  }
-}
-
-export function getAvailableAgents(): AgentStatus[] {
-  return cachedAgents.filter((a) => a.available);
-}
-
-export function isAgentAvailable(name: string): boolean {
-  const agent = cachedAgents.find((a) => a.name === name);
-  return agent?.available ?? false;
-}

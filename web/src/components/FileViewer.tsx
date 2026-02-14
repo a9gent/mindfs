@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { CodeViewer } from "./CodeViewer";
 import { ImageViewer } from "./ImageViewer";
@@ -14,75 +14,52 @@ type FilePayload = {
   ext?: string;
   mime?: string;
   root?: string;
+  file_meta?: Array<{
+    source_session: string;
+    session_name?: string;
+    agent?: string;
+    created_at?: string;
+    updated_at?: string;
+    created_by?: string;
+  }>;
 };
 
-type FileMeta = {
-  source_session?: string;
+type RelatedSession = {
+  source_session: string;
   session_name?: string;
   agent?: string;
-  created_at?: string;
-  created_by?: string;
 };
 
 type FileViewerProps = {
   file?: FilePayload | null;
-  meta?: FileMeta | null;
   onSessionClick?: (sessionKey: string) => void;
   onPathClick?: (path: string) => void;
 };
 
-// 升级版面包屑：支持点击导航
 function Breadcrumbs({ path, onPathClick }: { path: string; onPathClick?: (path: string) => void }) {
   const parts = path.split('/').filter(Boolean);
-  
-  // 构造每一级的完整路径
-  const getPathAt = (index: number) => {
-    return parts.slice(0, index + 1).join('/');
-  };
+  const getPathAt = (index: number) => parts.slice(0, index + 1).join('/');
 
   return (
-    <div style={{ 
-      display: 'flex', 
-      alignItems: 'center', 
-      gap: '4px', 
-      fontSize: '13px', 
-      color: 'var(--text-secondary)',
-      overflow: 'hidden',
-      whiteSpace: 'nowrap',
-      flex: 1,
-      justifyContent: 'flex-start'
-    }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', color: 'var(--text-secondary)', overflow: 'hidden', whiteSpace: 'nowrap', flexShrink: 1, justifyContent: 'flex-start' }}>
       {parts.map((part, index) => (
         <React.Fragment key={index}>
           <span 
             onClick={() => index < parts.length - 1 && onPathClick?.(getPathAt(index))}
-            style={{ 
-              fontWeight: index === parts.length - 1 ? 600 : 400,
-              color: index === parts.length - 1 ? 'var(--text-primary)' : 'inherit',
-              cursor: index < parts.length - 1 ? 'pointer' : 'default',
-              flexShrink: index === parts.length - 1 ? 0 : 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis'
-            }}
-            onMouseEnter={(e) => {
-              if (index < parts.length - 1) e.currentTarget.style.textDecoration = 'underline';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.textDecoration = 'none';
-            }}
+            style={{ fontWeight: index === parts.length - 1 ? 600 : 400, color: index === parts.length - 1 ? 'var(--text-primary)' : 'inherit', cursor: index < parts.length - 1 ? 'pointer' : 'default', overflow: 'hidden', textOverflow: 'ellipsis' }}
+            onMouseEnter={(e) => { if (index < parts.length - 1) e.currentTarget.style.textDecoration = 'underline'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.textDecoration = 'none'; }}
           >
             {part}
           </span>
-          {index < parts.length - 1 && (
-            <span style={{ opacity: 0.4, fontSize: '10px', flexShrink: 0 }}>❯</span>
-          )}
+          {index < parts.length - 1 && <span style={{ opacity: 0.4, fontSize: '10px', flexShrink: 0 }}>❯</span>}
         </React.Fragment>
       ))}
     </div>
   );
 }
 
-export function FileViewer({ file, meta, onSessionClick, onPathClick }: FileViewerProps) {
+export function FileViewer({ file, onSessionClick, onPathClick }: FileViewerProps) {
   if (!file) {
     return (
       <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", flexDirection: "column", gap: "12px" }}>
@@ -93,102 +70,103 @@ export function FileViewer({ file, meta, onSessionClick, onPathClick }: FileView
   }
 
   const ext = file.ext || (file.path.includes(".") ? `.${file.path.split(".").pop()}` : "");
+  
+  const normalizeRelatedSessions = (raw: unknown): RelatedSession[] => {
+    if (!raw) return [];
+    const list = Array.isArray(raw) ? raw : [raw];
+    const normalized = list.map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const value = item as Record<string, unknown>;
+      const source = (typeof value.source_session === "string" && value.source_session) || (typeof value.sourceSession === "string" && value.sourceSession) || (typeof value.session_key === "string" && value.session_key) || "";
+      if (!source) return null;
+      return { source_session: source, session_name: (typeof value.session_name === "string" && value.session_name) || undefined, agent: typeof value.agent === "string" ? value.agent : undefined };
+    }).filter((v): v is RelatedSession => Boolean(v));
+    const dedup = new Map<string, RelatedSession>();
+    normalized.forEach((item) => { if (!dedup.has(item.source_session)) dedup.set(item.source_session, item); });
+    return Array.from(dedup.values());
+  };
+
+  const relatedSessions = normalizeRelatedSessions((file as any).file_meta);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "transparent" }}>
-      <header
-        style={{
-          height: "36px",
-          padding: "0 16px",
-          borderBottom: "1px solid var(--border-color)",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          background: "transparent",
-          boxSizing: "border-box",
-          zIndex: 10,
-          flexShrink: 0
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", overflow: "hidden", flex: 1 }}>
+      <header style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "10px", background: "transparent", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", overflow: "hidden", flex: 1, minWidth: 0 }}>
           <Breadcrumbs path={file.path} onPathClick={onPathClick} />
-        </div>
-        
-        <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "12px", flexShrink: 0, opacity: 0.7 }}>
-          {(file.size / 1024).toFixed(1)} KB
-        </div>
-      </header>
-
-      {/* 来源 Session 显示 */}
-      {meta?.source_session && (
-        <div
-          style={{
-            padding: "6px 20px",
-            background: "rgba(0,0,0,0.02)",
-            borderBottom: "1px solid rgba(0,0,0,0.03)",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            fontSize: "12px",
-          }}
-        >
-          <span style={{ color: "var(--text-secondary)", opacity: 0.8 }}>来源:</span>
-          <button
-            type="button"
-            onClick={() => onSessionClick?.(meta.source_session!)}
-            style={{
-              background: "none",
-              border: "none",
-              padding: 0,
-              cursor: "pointer",
-              color: "#3b82f6",
-              fontSize: "12px",
-              fontWeight: 500,
-              display: "flex",
-              alignItems: "center",
-              gap: "4px",
-            }}
-          >
-            {meta.session_name || `Session ${meta.source_session.slice(0, 8)}`}
-          </button>
-          {meta.agent && (
-            <span style={{ padding: "1px 6px", borderRadius: "4px", background: "rgba(0,0,0,0.04)", color: "var(--text-secondary)", fontSize: "11px" }}>
-              {meta.agent}
-            </span>
+          
+          {relatedSessions.length > 0 && (
+            <div style={{ 
+              marginLeft: "16px", 
+              display: "flex", 
+              alignItems: "center", 
+              gap: "6px", 
+              minWidth: 0, 
+              flexShrink: 0 
+            }}>
+              {/* 替换文字为图标 */}
+              <svg 
+                width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" 
+                style={{ color: "var(--text-secondary)", opacity: 0.4 }}
+              >
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              <div style={{ display: 'flex', gap: '4px', overflowX: 'auto', whiteSpace: 'nowrap', scrollbarWidth: 'none' }}>
+                {relatedSessions.map((meta) => (
+                  <button
+                    key={meta.source_session}
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault(); e.stopPropagation();
+                      if (meta.source_session) {
+                        onSessionClick?.(meta.source_session);
+                      }
+                    }}
+                    style={{ 
+                      background: "rgba(0, 0, 0, 0.03)", 
+                      border: "1px solid rgba(0, 0, 0, 0.05)", 
+                      borderRadius: "6px", 
+                      padding: "1px 8px", 
+                      cursor: "pointer", 
+                      color: "var(--text-secondary)", 
+                      fontSize: "11px", 
+                      fontWeight: 500, 
+                      flexShrink: 0,
+                      transition: "all 0.2s ease"
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "rgba(59, 130, 246, 0.08)";
+                      e.currentTarget.style.color = "var(--accent-color)";
+                      e.currentTarget.style.borderColor = "rgba(59, 130, 246, 0.2)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "rgba(0, 0, 0, 0.03)";
+                      e.currentTarget.style.color = "var(--text-secondary)";
+                      e.currentTarget.style.borderColor = "rgba(0, 0, 0, 0.05)";
+                    }}
+                  >
+                    {meta.session_name || `Session ${meta.source_session.slice(0, 8)}`}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
         </div>
-      )}
+        <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px", flexShrink: 0, opacity: 0.7 }}>{(file.size / 1024).toFixed(1)} KB</div>
+      </header>
 
       <div style={{ flex: 1, overflow: "auto", position: "relative" }}>
-        <div style={{ 
-          minWidth: "100%", 
-          minHeight: "100%",
-          display: "inline-block", 
-          background: "transparent",
-        }}>
+        <div style={{ minWidth: "100%", minHeight: "100%", display: "inline-block", background: "transparent" }}>
           {file.mime?.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].includes(ext.toLowerCase()) ? (
-            <div style={{ padding: "24px" }}>
-              <ImageViewer path={file.path} root={file.root} />
-            </div>
+            <div style={{ padding: "24px" }}><ImageViewer path={file.path} root={file.root} /></div>
           ) : file.encoding === "binary" ? (
-            <div style={{ padding: "24px" }}>
-              <BinaryViewer />
-            </div>
+            <div style={{ padding: "24px" }}><BinaryViewer /></div>
           ) : ext === ".md" || ext === ".markdown" ? (
-            <div style={{ padding: "24px 40px" }}>
-              <MarkdownViewer content={file.content} />
-            </div>
+            <div style={{ padding: "24px 40px" }}><MarkdownViewer content={file.content} /></div>
           ) : (
             <CodeViewer content={file.content} ext={ext} />
           )}
         </div>
       </div>
-      
-      {file.truncated && (
-        <div style={{ padding: "8px 20px", background: "#fff", borderTop: "1px solid var(--border-color)", fontSize: "11px", color: "#f59e0b", display: "flex", alignItems: "center", gap: "8px" }}>
-          ⚠️ 内容已截断
-        </div>
-      )}
     </div>
   );
 }

@@ -79,7 +79,7 @@ type ReadFileOutput struct {
 	File fs.ReadResult
 }
 
-func (s *Service) ReadFile(_ context.Context, in ReadFileInput) (ReadFileOutput, error) {
+func (s *Service) ReadFile(ctx context.Context, in ReadFileInput) (ReadFileOutput, error) {
 	if err := s.ensureRegistry(); err != nil {
 		return ReadFileOutput{}, err
 	}
@@ -94,8 +94,43 @@ func (s *Service) ReadFile(_ context.Context, in ReadFileInput) (ReadFileOutput,
 	if err != nil {
 		return ReadFileOutput{}, err
 	}
+	meta, err := root.GetFileMeta(in.Path)
+	if err != nil {
+		return ReadFileOutput{}, err
+	}
+	meta = fillFileMetaSessionInfo(ctx, s, in.RootID, meta)
 	result.Root = root.ID
+	result.FileMeta = meta
 	return ReadFileOutput{File: result}, nil
+}
+
+func fillFileMetaSessionInfo(ctx context.Context, s *Service, rootID string, meta []fs.FileMetaEntry) []fs.FileMetaEntry {
+	if len(meta) == 0 {
+		return meta
+	}
+	manager, err := s.Registry.GetSessionManager(rootID)
+	if err != nil || manager == nil {
+		return meta
+	}
+	for i := range meta {
+		if meta[i].SourceSession == "" {
+			continue
+		}
+		if meta[i].SessionName != "" && meta[i].Agent != "" {
+			continue
+		}
+		sess, err := manager.Get(ctx, meta[i].SourceSession)
+		if err != nil || sess == nil {
+			continue
+		}
+		if meta[i].SessionName == "" {
+			meta[i].SessionName = sess.Name
+		}
+		if meta[i].Agent == "" {
+			meta[i].Agent = sess.Agent
+		}
+	}
+	return meta
 }
 
 type GetFileMetaInput struct {
@@ -104,7 +139,7 @@ type GetFileMetaInput struct {
 }
 
 type GetFileMetaOutput struct {
-	Meta *fs.FileMetaEntry
+	Meta []fs.FileMetaEntry
 }
 
 func (s *Service) GetFileMeta(_ context.Context, in GetFileMetaInput) (GetFileMetaOutput, error) {

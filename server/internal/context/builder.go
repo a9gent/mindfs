@@ -4,21 +4,14 @@ import (
 	"fmt"
 
 	"mindfs/server/internal/fs"
-	"mindfs/server/internal/skills"
 )
 
 func BuildServerContext(mode string, root fs.RootInfo, currentView *CurrentViewRef) (ServerContext, error) {
-	dirCfg, err := skills.LoadDirConfig(root)
-	if err != nil {
-		// 配置加载失败时使用空配置，不阻断流程
-		dirCfg = skills.DirConfig{}
-	}
 	rootPath, _ := root.RootDir()
 
 	ctx := ServerContext{
 		Common: CommonContext{
-			RootPath:        rootPath,
-			UserDescription: dirCfg.UserDescription,
+			RootPath: rootPath,
 		},
 	}
 
@@ -42,7 +35,7 @@ func BuildServerContext(mode string, root fs.RootInfo, currentView *CurrentViewR
 			RegistrySchema: schema,
 			ServerAPIs:     apis,
 			CurrentView:    viewDef,
-			ViewExamples:   SelectExamples(examples, dirCfg.UserDescription, 3),
+			ViewExamples:   SelectExamples(examples, "", 3),
 		}
 	case "skill":
 		dirSkills, err := LoadDirectorySkills(root)

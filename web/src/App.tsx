@@ -32,16 +32,24 @@ export function App() {
   const [viewTree, setViewTree] = useState<UITree | null>(null);
   const [currentRootId, setCurrentRootId] = useState<string | null>(null);
   const [managedRootIds, setManagedRootIds] = useState<string[]>([]);
+  
+  // 关键：创建 Ref 镜像以解决 Action 闭包状态滞后问题
+  const currentRootIdRef = useRef<string | null>(null);
   const managedRootIdsRef = useRef<Set<string>>(new Set());
   const expandedRef = useRef<string[]>([]);
+  
   const [sessions, setSessions] = useState<any[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionSummary | null>(null);
   const selectedSessionRef = useRef<SessionSummary | null>(null);
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
   const [currentSessionExchanges, setCurrentSessionExchanges] = useState<any[]>([]);
   const [rightCollapsed, setRightCollapsed] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [isFloatingOpen, setIsFloatingOpen] = useState(false);
+
+  // 同步状态到 Ref
+  useEffect(() => { currentRootIdRef.current = currentRootId; }, [currentRootId]);
+  useEffect(() => { expandedRef.current = expanded; }, [expanded]);
+  useEffect(() => { selectedSessionRef.current = selectedSession; }, [selectedSession]);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,72 +88,62 @@ export function App() {
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    expandedRef.current = expanded;
-  }, [expanded]);
-
-  useEffect(() => {
-    selectedSessionRef.current = selectedSession;
-  }, [selectedSession]);
-
   const handleSelectSession = useCallback(
     async (session: any) => {
       const key = session?.key || session?.session_key;
-      if (!currentRootId || !key) {
-        setSelectedSession(null);
+      // 关键：使用 Ref 获取最实时的 rootId
+      const activeRoot = currentRootIdRef.current;
+      
+      console.log("[handleSelectSession] Navigating:", { key, activeRoot });
+      
+      if (!activeRoot || !key) {
+        console.error("[handleSelectSession] Failed: context missing.");
         return;
       }
       
-      // 用户主动点击 Session 列表时，才发起请求拉取完整 exchanges
-      const full = await sessionService.getSession(currentRootId, key);
-      if (!full) return;
-      
-      setSelectedSession(full as any);
-      
-      if (full.status !== "closed") {
-        setCurrentSession(full as any);
-        setCurrentSessionExchanges(full.exchanges || []);
-        setIsFloatingOpen(true);
-      } else {
-        setFile(null);
-        setIsFloatingOpen(false);
-      }
+      try {
+        const full = await sessionService.getSession(activeRoot, key);
+        if (!full) return;
+        
+        setSelectedSession(full as any);
+        setFile(null); 
+        
+        if (full.status !== "closed") {
+          setCurrentSession(full as any);
+          setCurrentSessionExchanges(full.exchanges || []);
+          setIsFloatingOpen(true);
+        } else {
+          setIsFloatingOpen(false);
+        }
+      } catch (err) { console.error(err); }
     },
-    [currentRootId, currentSession]
+    [] // 减少依赖，完全通过 Ref 运作
   );
 
   const handleSendMessage = useCallback(
     async (message: string, mode: "chat" | "view" | "skill", agent: string) => {
-      if (!currentRootId) return;
+      const activeRoot = currentRootIdRef.current;
+      if (!activeRoot) return;
+      
       let session = currentSession;
       if (!session || session.status === "closed" || session.type !== mode || session.agent !== agent) {
-        session = await sessionService.createSession(currentRootId, mode, agent);
+        session = await sessionService.createSession(activeRoot, mode, agent);
         if (!session) return;
         setCurrentSession(session);
-        setCurrentSessionExchanges([]); // 新会话重置
+        setCurrentSessionExchanges([]); 
       }
       
       setIsFloatingOpen(true);
-      
       const nowISO = new Date().toISOString();
       const newUserExchange = { role: "user", content: message, timestamp: nowISO };
-      
-      // 前端纯追加：用户消息
       setCurrentSessionExchanges((prev) => [...prev, newUserExchange]);
-
-      const context = buildClientContext({ currentRoot: currentRootId, currentPath: file?.path ?? selectedDir ?? undefined });
-      await sessionService.sendMessage(currentRootId, session.key, message, context);
+      await sessionService.sendMessage(activeRoot, session.key, message, context);
     },
-    [currentRootId, currentSession, file?.path, selectedDir]
+    [currentSession]
   );
 
-  // 前端纯追加：Agent 回复归档逻辑
   const handleAgentResponseAppend = useCallback((content: string) => {
-    const newAgentExchange = { 
-      role: "agent", 
-      content, 
-      timestamp: new Date().toISOString() 
-    };
+    const newAgentExchange = { role: "agent", content, timestamp: new Date().toISOString() };
     setCurrentSessionExchanges((prev) => [...prev, newAgentExchange]);
   }, []);
 
@@ -169,13 +167,11 @@ export function App() {
         () => setIsFloatingOpen((prev) => !prev),
         rightCollapsed,
         () => setRightCollapsed((prev) => !prev),
-        () => { setSettingsOpen((prev) => !prev); setRightCollapsed(false); },
-        settingsOpen,
         isFloatingOpen,
         setIsFloatingOpen,
-        handleAgentResponseAppend // 传入回调
+        handleAgentResponseAppend
       ),
-    [rootEntries, entriesByPath, expanded, selectedDir, currentRootId, managedRootIds, mainEntries, status, file, sessions, selectedSession, currentSession, currentSessionExchanges, handleSendMessage, rightCollapsed, handleSelectSession, settingsOpen, isFloatingOpen, handleAgentResponseAppend]
+    [rootEntries, entriesByPath, expanded, selectedDir, currentRootId, managedRootIds, mainEntries, status, file, sessions, selectedSession, currentSession, currentSessionExchanges, handleSendMessage, rightCollapsed, handleSelectSession, isFloatingOpen, handleAgentResponseAppend]
   );
 
   const tree = useMemo(() => {
@@ -186,29 +182,36 @@ export function App() {
 
   const actionHandlers = useMemo(
     () => {
-      const getParents = (path: string, root: string) => {
+      const getParentKeys = (path: string, root: string) => {
         const parts = path.split('/').filter(Boolean);
-        const parents = [root];
+        const parentKeys = [root];
         for (let i = 1; i < parts.length; i++) {
-          parents.push(`${root}:${parts.slice(0, i).join('/')}`);
+          const parentPath = parts.slice(0, i).join('/');
+          parentKeys.push(`${root}:${parentPath}`);
         }
-        return parents;
+        return parentKeys;
       };
 
       return {
         select_session: async (params: Record<string, unknown>) => {
-          if (params.key) handleSelectSession({ key: params.key });
+          console.log("[Action:select_session] Invoked with:", params);
+          if (params.key) {
+            // 如果 Action 带了 root 参数，同步更新状态
+            if (params.root) setCurrentRootId(params.root as string);
+            handleSelectSession({ key: params.key });
+          }
         },
         open: async (params: Record<string, unknown>) => {
           const path = params.path as string | undefined;
           let rootParam = params.root as string | undefined;
           if (!path) return;
-          const root = rootParam || currentRootId || managedRootIds[0] || "";
+          const root = rootParam || currentRootIdRef.current || managedRootIds[0] || "";
           if (!root) return;
-          const parents = getParents(path, root);
+
+          const parents = getParentKeys(path, root);
           setExpanded((prev) => Array.from(new Set([...prev, ...parents])));
           try {
-            if (root !== currentRootId) setCurrentRootId(root);
+            if (root !== currentRootIdRef.current) setCurrentRootId(root);
             const query = new URLSearchParams({ path, root });
             const res = await fetch(`/api/file?${query.toString()}`);
             const payload = await res.json().catch(() => ({}));
@@ -224,7 +227,7 @@ export function App() {
           const isToggle = !!params.toggle;
           if (!path) return;
           const isActuallyRoot = managedRootIdsRef.current.has(path);
-          const root = isActuallyRoot ? path : (rootParam || currentRootId);
+          const root = isActuallyRoot ? path : (rootParam || currentRootIdRef.current || managedRootIds[0]);
           const expandedKey = isActuallyRoot ? path : `${root}:${path}`;
           const apiDir = isActuallyRoot ? "." : path;
           if (isToggle && expandedRef.current.includes(expandedKey)) {
@@ -235,7 +238,7 @@ export function App() {
             setCurrentRootId(path);
             setExpanded((prev) => Array.from(new Set([...prev, path])));
           } else {
-            const parents = getParents(path, root);
+            const parents = getParentKeys(path, root);
             setExpanded((prev) => Array.from(new Set([...prev, ...parents, expandedKey])));
           }
           try {
@@ -251,7 +254,7 @@ export function App() {
         },
       };
     },
-    [currentRootId, managedRootIds, handleSelectSession]
+    [handleSelectSession]
   );
 
   useEffect(() => {
@@ -274,8 +277,6 @@ export function App() {
       } catch {}
     };
     const unsubscribeEvents = sessionService.subscribeEvents((event) => {
-      // 核心修改：交互过程中监听到 session.done 时，只执行 loadSessions 刷新列表状态
-      // 不再主动调用 getSession 去覆盖 currentSessionExchanges
       if (["session.done", "session.created", "session.closed", "session.resumed"].includes(event.type)) {
         loadSessions();
       }

@@ -5,51 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"mindfs/server/internal/skills"
 )
-
-type GetDirConfigInput struct {
-	RootID string
-}
-
-type GetDirConfigOutput struct {
-	Config skills.DirConfig
-}
-
-func (s *Service) GetDirConfig(_ context.Context, in GetDirConfigInput) (GetDirConfigOutput, error) {
-	if err := s.ensureRegistry(); err != nil {
-		return GetDirConfigOutput{}, err
-	}
-	root, err := s.Registry.GetRoot(in.RootID)
-	if err != nil {
-		return GetDirConfigOutput{}, err
-	}
-	cfg, err := skills.LoadDirConfig(root)
-	if err != nil {
-		return GetDirConfigOutput{}, err
-	}
-	return GetDirConfigOutput{Config: cfg}, nil
-}
-
-type SetDirConfigInput struct {
-	RootID string
-	Config skills.DirConfig
-}
-
-func (s *Service) SetDirConfig(_ context.Context, in SetDirConfigInput) error {
-	if err := s.ensureRegistry(); err != nil {
-		return err
-	}
-	root, err := s.Registry.GetRoot(in.RootID)
-	if err != nil {
-		return err
-	}
-	in.Config.UserDescription = strings.TrimSpace(in.Config.UserDescription)
-	in.Config.DefaultAgent = strings.TrimSpace(in.Config.DefaultAgent)
-	return skills.SaveDirConfig(root, in.Config)
-}
 
 type ExecuteSkillInput struct {
 	RootID  string
