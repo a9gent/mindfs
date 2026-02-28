@@ -165,9 +165,6 @@ export function SessionViewer({ session, interactionMode = "main", onToggleMode,
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "transparent" }}>
       <header style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", background: "transparent", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
         <h1 style={{ fontSize: "14px", fontWeight: 600, margin: 0 }}>{displayName}</h1>
-        <div style={{ fontSize: "11px", color: "var(--text-secondary)", display: "flex", gap: "8px", marginLeft: "12px" }}>
-          <span>{session.type || "chat"}</span>
-        </div>
         <div style={{ marginLeft: "auto" }}>
           <button
             type="button"
@@ -176,13 +173,23 @@ export function SessionViewer({ session, interactionMode = "main", onToggleMode,
               border: "1px solid var(--border-color)",
               background: "rgba(0,0,0,0.03)",
               borderRadius: "6px",
-              fontSize: "11px",
-              padding: "4px 8px",
+              padding: "2px 6px",
               cursor: "pointer",
               color: "var(--text-primary)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
             }}
+            title={interactionMode === "main" ? "浮框模式" : "主视图模式"}
+            aria-label={interactionMode === "main" ? "浮框模式" : "主视图模式"}
           >
-            {interactionMode === "main" ? "浮框模式" : "主视图模式"}
+            <img
+              src="/assets/ui/floating-mode.svg"
+              alt=""
+              width={16}
+              height={16}
+              style={{ display: "block" }}
+            />
           </button>
         </div>
       </header>

@@ -87,7 +87,6 @@ export function App() {
   const [currentSessionByRoot, setCurrentSessionByRoot] = useState<Record<string, Session>>({});
   const [sessionExchangesByRootSession, setSessionExchangesByRootSession] = useState<Record<string, any[]>>({});
   const [interactionMode, setInteractionMode] = useState<"main" | "floating">("main");
-  const [rightCollapsed, setRightCollapsed] = useState(false);
   const [isFloatingOpen, setIsFloatingOpen] = useState(false);
   const rootSessionKey = useCallback((rootId: string, sessionKey: string) => `${rootId}::${sessionKey}`, []);
   const applySessionSnapshot = useCallback((rootID: string, session: Session) => {
@@ -767,13 +766,11 @@ export function App() {
             setIsFloatingOpen(true);
           }
         },
-        rightCollapsed,
-        () => setRightCollapsed((prev) => !prev),
         isFloatingOpen,
         setIsFloatingOpen,
         handleAgentResponseAppend
       ),
-    [rootEntries, entriesByPath, expanded, selectedDir, currentRootId, managedRootIds, mainEntries, status, file, sessions, selectedSession, activeSessions, currentSession, currentSessionExchanges, interactionMode, handleToggleInteractionMode, handleSendMessage, rightCollapsed, handleSelectSession, handleOpenBubbleSession, isFloatingOpen, handleAgentResponseAppend]
+    [rootEntries, entriesByPath, expanded, selectedDir, currentRootId, managedRootIds, mainEntries, status, file, sessions, selectedSession, activeSessions, currentSession, currentSessionExchanges, interactionMode, handleToggleInteractionMode, handleSendMessage, handleSelectSession, handleOpenBubbleSession, isFloatingOpen, handleAgentResponseAppend]
   );
 
   const tree = useMemo(() => {

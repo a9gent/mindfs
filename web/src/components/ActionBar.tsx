@@ -137,7 +137,7 @@ export function ActionBar({
     <div
       style={{
         width: "100%",
-        padding: "0 10px 10px",
+        padding: "0",
         display: "flex",
         justifyContent: "center",
         boxSizing: "border-box",

@@ -252,10 +252,11 @@ func buildSessionNameFromMessage(message string) string {
 		return ""
 	}
 	const max = 60
-	if len(oneLine) <= max {
+	runes := []rune(oneLine)
+	if len(runes) <= max {
 		return oneLine
 	}
-	return oneLine[:max] + "..."
+	return string(runes[:max]) + "..."
 }
 
 func getString(payload map[string]any, key string) string {

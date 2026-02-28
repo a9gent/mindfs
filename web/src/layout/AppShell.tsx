@@ -4,8 +4,6 @@ type AppShellProps = {
   sidebar: React.ReactNode;
   main: React.ReactNode;
   rightSidebar?: React.ReactNode;
-  rightCollapsed?: boolean;
-  onToggleRight?: () => void;
   footer: React.ReactNode;
   floating?: React.ReactNode;
 };
@@ -57,7 +55,7 @@ const mainStyle: React.CSSProperties = {
 const footerStyle: React.CSSProperties = {
   gridArea: "footer",
   borderTop: "none",
-  padding: "0 12px 10px",
+  padding: "0 16px 10px",
   display: "flex",
   alignItems: "flex-end",
   justifyContent: "center",
@@ -69,8 +67,6 @@ export function AppShell({
   sidebar,
   main,
   rightSidebar,
-  rightCollapsed = false,
-  onToggleRight,
   footer,
   floating,
 }: AppShellProps) {
@@ -122,7 +118,7 @@ export function AppShell({
           <span style={{ fontWeight: 600, fontSize: "16px" }}>MindFS</span>
           <button
             type="button"
-            onClick={onToggleRight}
+            onClick={() => setMobileNav("sessions")}
             style={{
               padding: "8px",
               border: "none",
@@ -212,7 +208,7 @@ export function AppShell({
 
   // Tablet layout - narrower sidebar
   const sidebarWidth = isTablet ? "200px" : "260px";
-  const rightWidth = rightSidebar ? (rightCollapsed ? "0px" : isTablet ? "240px" : "280px") : "0px";
+  const rightWidth = rightSidebar ? (isTablet ? "240px" : "280px") : "0px";
 
   const shellStyle: React.CSSProperties = {
     display: "grid",
@@ -253,27 +249,6 @@ export function AppShell({
       <aside style={rightStyle}>{rightSidebar}</aside>
       <footer style={footerStyle}>{footer}</footer>
       {floating}
-      {rightSidebar && rightCollapsed ? (
-        <button
-          type="button"
-          onClick={onToggleRight}
-          style={{
-            position: "fixed",
-            right: 12,
-            top: "50%",
-            transform: "translateY(-50%)",
-            padding: "6px 8px",
-            borderRadius: "8px",
-            border: "1px solid var(--border-color)",
-            background: "#fff",
-            fontSize: "12px",
-            cursor: "pointer",
-            boxShadow: "0 6px 16px rgba(15,23,42,0.12)",
-          }}
-        >
-          会话
-        </button>
-      ) : null}
     </div>
   );
 }

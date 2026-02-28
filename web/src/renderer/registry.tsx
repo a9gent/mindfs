@@ -73,8 +73,6 @@ const Shell: React.FC<ComponentProps> = ({ children }) => {
       sidebar={nodes[0] ?? null}
       main={nodes[1] ?? null}
       rightSidebar={nodes[2] ?? null}
-      rightCollapsed={(nodes[2] as any)?.props?.collapsed ?? false}
-      onToggleRight={(nodes[2] as any)?.props?.onToggle ?? undefined}
       footer={nodes[3] ?? null}
       floating={nodes[4] ?? null}
     />
@@ -165,14 +163,7 @@ const ActionBarNode: React.FC<ComponentProps> = ({ element }) => (
   />
 );
 
-const RightSidebarNode: React.FC<ComponentProps> = ({ element, children }) => (
-  <RightSidebar
-    collapsed={(element.props?.collapsed as boolean) ?? false}
-    onToggle={(element.props?.onToggle as any) ?? undefined}
-  >
-    {children}
-  </RightSidebar>
-);
+const RightSidebarNode: React.FC<ComponentProps> = ({ children }) => <RightSidebar>{children}</RightSidebar>;
 
 const SessionListNode: React.FC<ComponentProps> = ({ element }) => (
   <SessionList

@@ -79,8 +79,6 @@ export function buildDefaultTree(
   onToggleInteractionMode?: ((mode: "main" | "floating") => void) | null,
   onSendMessage?: ((message: string, mode: "chat" | "view" | "skill", agent: string) => void) | null,
   onSessionClick?: (() => void) | null,
-  rightCollapsed?: boolean,
-  onToggleRight?: (() => void) | null,
   isFloatingOpen?: boolean,
   onToggleFloating?: (open: boolean) => void,
   onAgentResponse?: (content: string) => void
@@ -263,10 +261,7 @@ export function buildDefaultTree(
   elements.right = {
     key: "right",
     type: "RightSidebar",
-    props: {
-      collapsed: rightCollapsed ?? false,
-      onToggle: onToggleRight ?? undefined,
-    },
+    props: {},
     children: ["session-list"],
   };
 

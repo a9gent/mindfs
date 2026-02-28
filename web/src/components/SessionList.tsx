@@ -42,7 +42,7 @@ export function SessionList({
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
       {sessions.map((session) => (
         <SessionCard key={session.key} session={session} selected={session.key === selectedKey} onSelect={onSelect} onRestore={onRestore} />
       ))}
@@ -61,15 +61,15 @@ function SessionCard({ session, selected, onSelect, onRestore }: { session: Sess
       onClick={() => onSelect?.(session)}
       style={{
         textAlign: "left",
-        padding: "10px 12px",
-        borderRadius: "10px",
+        padding: "7px 10px",
+        borderRadius: "8px",
         border: "1px solid transparent",
         background: selected ? "rgba(59, 130, 246, 0.1)" : "transparent",
         cursor: "pointer",
         width: "100%",
         display: "flex",
         flexDirection: "column",
-        gap: "4px",
+        gap: "2px",
         transition: "all 0.15s ease",
         position: "relative"
       }}
@@ -93,8 +93,8 @@ function SessionCard({ session, selected, onSelect, onRestore }: { session: Sess
       <div style={{ 
         display: "flex", 
         alignItems: "center", 
-        gap: "6px", 
-        fontSize: "11px", 
+        gap: "4px", 
+        fontSize: "10px", 
         color: "var(--text-secondary)",
         width: "100%",
         opacity: 0.8

@@ -71,7 +71,7 @@ func (r *Runtime) getOrCreateClient(opts OpenOptions) *codexsdk.Codex {
 		Transport:         codexsdk.TransportCLI,
 		CodexPathOverride: opts.Command,
 		Env:               opts.Env,
-		Verbose:           true,
+		Verbose:           false,
 	}
 	client := codexsdk.NewCodex(codexOptions)
 	r.clients[opts.AgentName] = client

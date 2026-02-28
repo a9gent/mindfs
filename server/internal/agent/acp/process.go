@@ -4,6 +4,7 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"os/exec"
 	"sync"
@@ -261,6 +262,9 @@ func (p *Process) Initialize(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if raw, err := json.Marshal(resp); err == nil {
+		log.Printf("[agent/acp] initialize.resp.raw agent=%s resp=%s", p.agentLabel(), string(raw))
+	}
 	p.capability = CapabilitySnapshot{
 		PromptSupportsAudio:   resp.AgentCapabilities.PromptCapabilities.Audio,
 		PromptSupportsImage:   resp.AgentCapabilities.PromptCapabilities.Image,
@@ -285,6 +289,9 @@ func (p *Process) NewSession(ctx context.Context, sessionKey, cwd string) error 
 	})
 	if err != nil {
 		return err
+	}
+	if raw, err := json.Marshal(resp); err == nil {
+		log.Printf("[agent/acp] new_session.resp.raw agent=%s session_key=%s resp=%s", p.agentLabel(), sessionKey, string(raw))
 	}
 
 	sess := &sessionState{
