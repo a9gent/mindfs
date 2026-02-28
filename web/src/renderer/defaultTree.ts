@@ -36,19 +36,18 @@ export type FilePayload = {
   }>;
 };
 
-export type SessionSummary = {
+export type SessionItem = {
   key?: string;
   session_key?: string;
   root_id?: string;
   name?: string;
   type?: "chat" | "view" | "skill";
-  status?: "active" | "idle" | "closed";
   agent?: string;
   scope?: string;
   purpose?: string;
-  summary?: string | { title?: string; description?: string };
   closed_at?: string;
   related_files?: Array<{ path: string; name?: string }>;
+  exchanges?: Array<{ role?: string; content?: string; timestamp?: string }>;
 };
 
 export type CurrentSession = {
@@ -56,7 +55,6 @@ export type CurrentSession = {
   root_id?: string;
   name: string;
   type: "chat" | "view" | "skill";
-  status: "active" | "idle" | "closed";
   agent: string;
   exchanges?: any[];
 };
@@ -71,12 +69,14 @@ export function buildDefaultTree(
   mainEntries: FileEntry[],
   status: string,
   file?: FilePayload | null,
-  sessions?: SessionSummary[],
-  selectedSession?: SessionSummary | null,
-  onSelectSession?: ((session: SessionSummary) => void) | null,
+  sessions?: SessionItem[],
+  selectedSession?: SessionItem | null,
+  onSelectSession?: ((session: SessionItem) => void) | null,
   onOpenBubbleSession?: ((session: CurrentSession) => void) | null,
   activeSessions?: CurrentSession[],
   currentSession?: CurrentSession | null,
+  interactionMode?: "main" | "floating",
+  onToggleInteractionMode?: ((mode: "main" | "floating") => void) | null,
   onSendMessage?: ((message: string, mode: "chat" | "view" | "skill", agent: string) => void) | null,
   onSessionClick?: (() => void) | null,
   rightCollapsed?: boolean,
@@ -89,8 +89,7 @@ export function buildDefaultTree(
   const rootKey = "root";
 
   // 1. 核心状态计算
-  const isSelectedSessionActive = currentSession && (selectedSession?.key === currentSession.key || selectedSession?.session_key === currentSession.key);
-  const showSessionInMain = selectedSession && !isSelectedSessionActive;
+  const showSessionInMain = !!selectedSession && interactionMode !== "floating";
   const showAssociation = false; // 占位逻辑
 
   // 2. 基础框架定义
@@ -109,14 +108,14 @@ export function buildDefaultTree(
   };
 
   // 3. 浮窗逻辑
-  if (currentSession && isFloatingOpen) {
+  if (currentSession && isFloatingOpen && interactionMode === "floating") {
     elements["agent-panel"] = {
       key: "agent-panel",
       type: "AgentPanel",
       props: {
         onClose: () => onToggleFloating?.(false),
       },
-      children: ["agent-header", "agent-messages"]
+      children: ["agent-header", "agent-messages", "agent-input"]
     };
 
     elements["agent-header"] = {
@@ -125,6 +124,8 @@ export function buildDefaultTree(
       props: {
         session: currentSession,
         onClose: () => onToggleFloating?.(false),
+        interactionMode: interactionMode ?? "main",
+        onToggleMode: onToggleInteractionMode ?? undefined,
       }
     };
 
@@ -136,6 +137,16 @@ export function buildDefaultTree(
         exchanges: (currentSession as any).exchanges || [],
         onAgentResponse: onAgentResponse || undefined,
       }
+    };
+
+    elements["agent-input"] = {
+      key: "agent-input",
+      type: "AgentInput",
+      props: {
+        onSend: (message: string) => {
+          onSendMessage?.(message, currentSession.type, currentSession.agent);
+        },
+      },
     };
 
     elements["floating-container"].children = ["agent-panel"];
@@ -151,6 +162,7 @@ export function buildDefaultTree(
           index,
           onClick: () => {
             onOpenBubbleSession?.(session);
+            onToggleInteractionMode?.("floating");
             onToggleFloating?.(true);
           },
         },
@@ -221,6 +233,9 @@ export function buildDefaultTree(
       type: "SessionViewer",
       props: { 
         session: selectedSession,
+        interactionMode: interactionMode ?? "main",
+        onToggleMode: onToggleInteractionMode ?? undefined,
+        onAgentResponse: onAgentResponse || undefined,
         root: rootId 
       },
     };
@@ -277,7 +292,18 @@ export function buildDefaultTree(
     type: "ActionBar",
     props: {
       status,
-      currentSession: currentSession ?? null,
+      currentSession: (() => {
+        const selectedKey = selectedSession?.key || selectedSession?.session_key;
+        if (selectedKey && selectedSession?.type && selectedSession?.agent) {
+          return {
+            key: selectedKey,
+            name: selectedSession.name || "",
+            type: selectedSession.type,
+            agent: selectedSession.agent,
+          } as CurrentSession;
+        }
+        return currentSession ?? null;
+      })(),
       onSendMessage: onSendMessage ?? undefined,
       onSessionClick: onSessionClick ?? undefined,
     },

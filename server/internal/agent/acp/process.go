@@ -19,9 +19,10 @@ import (
 // - gemini (via --experimental-acp flag)
 // - codex (via codex-acp wrapper)
 type Process struct {
-	cmd    *exec.Cmd
-	conn   *acp.ClientSideConnection
-	client *mindfsClient
+	agentName string
+	cmd       *exec.Cmd
+	conn      *acp.ClientSideConnection
+	client    *mindfsClient
 
 	mu           sync.RWMutex
 	sessions     map[string]*sessionState // sessionKey -> state
@@ -30,7 +31,6 @@ type Process struct {
 }
 
 type CapabilitySnapshot struct {
-	LoadSession           bool
 	PromptSupportsAudio   bool
 	PromptSupportsImage   bool
 	PromptSupportsContext bool
@@ -77,9 +77,16 @@ type mindfsClient struct {
 	proc *Process
 }
 
+func (p *Process) agentLabel() string {
+	if p == nil || p.agentName == "" {
+		return "unknown"
+	}
+	return p.agentName
+}
+
 func (c *mindfsClient) SessionUpdate(ctx context.Context, params acp.SessionNotification) error {
 	v, _ := json.Marshal(params)
-	log.Printf("[agent/acp] session.update session_id=%s params=%s", params.SessionId, v)
+	log.Printf("[agent/acp] session.update agent=%s session_id=%s params=%s", c.proc.agentLabel(), params.SessionId, v)
 	session := c.proc.getSessionByID(string(params.SessionId))
 	if session == nil {
 		return nil
@@ -97,9 +104,9 @@ func (c *mindfsClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 			if params.Update.AgentMessageChunk != nil && params.Update.AgentMessageChunk.Content.Text != nil {
 				content = params.Update.AgentMessageChunk.Content.Text.Text
 			}
-			log.Printf("[agent/acp] session.update session_id=%s type=%s content=%q", internalUpdate.SessionID, internalUpdate.Type, content)
+			log.Printf("[agent/acp] session.update agent=%s session_id=%s type=%s content=%q", c.proc.agentLabel(), internalUpdate.SessionID, internalUpdate.Type, content)
 		default:
-			log.Printf("[agent/acp] session.update session_id=%s type=%s", internalUpdate.SessionID, internalUpdate.Type)
+			log.Printf("[agent/acp] session.update agent=%s session_id=%s type=%s", c.proc.agentLabel(), internalUpdate.SessionID, internalUpdate.Type)
 		}
 		handler(internalUpdate)
 	}
@@ -108,7 +115,7 @@ func (c *mindfsClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 
 func (c *mindfsClient) RequestPermission(ctx context.Context, params acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
 	v, _ := json.Marshal(params)
-	log.Printf("[agent/acp] request.permission session_id=%s params=%s", params.SessionId, v)
+	log.Printf("[agent/acp] request.permission agent=%s session_id=%s params=%s", c.proc.agentLabel(), params.SessionId, v)
 	// Emit a synthetic tool_call update for permission-gated operations so upper
 	// layers can track tool execution and associate file paths immediately.
 	if session := c.proc.getSessionByID(string(params.SessionId)); session != nil {
@@ -202,9 +209,9 @@ func (c *mindfsClient) KillTerminalCommand(ctx context.Context, params acp.KillT
 }
 
 // Start spawns an agent process with ACP mode.
-func Start(ctx context.Context, command string, args []string, cwd string, env map[string]string) (*Process, error) {
+func Start(ctx context.Context, agentName, command string, args []string, cwd string, env map[string]string) (*Process, error) {
 	start := time.Now()
-	log.Printf("[agent/acp] process.start.begin command=%s args=%v cwd=%s", command, args, cwd)
+	log.Printf("[agent/acp] process.start.begin agent=%s command=%s args=%v cwd=%s", agentName, command, args, cwd)
 	cmd := exec.CommandContext(ctx, command, args...)
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -227,11 +234,12 @@ func Start(ctx context.Context, command string, args []string, cwd string, env m
 	cmd.Stderr = nil
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("[agent/acp] process.start.error command=%s duration_ms=%d err=%v", command, time.Since(start).Milliseconds(), err)
+		log.Printf("[agent/acp] process.start.error agent=%s command=%s duration_ms=%d err=%v", agentName, command, time.Since(start).Milliseconds(), err)
 		return nil, err
 	}
 
 	proc := &Process{
+		agentName:    agentName,
 		cmd:          cmd,
 		sessions:     make(map[string]*sessionState),
 		sessionsByID: make(map[string]*sessionState),
@@ -240,7 +248,7 @@ func Start(ctx context.Context, command string, args []string, cwd string, env m
 
 	// Create ACP connection - coder/acp-go-sdk uses io.Writer and io.Reader directly
 	proc.conn = acp.NewClientSideConnection(proc.client, stdin, stdout)
-	log.Printf("[agent/acp] process.start.done command=%s pid=%d duration_ms=%d", command, cmd.Process.Pid, time.Since(start).Milliseconds())
+	log.Printf("[agent/acp] process.start.done agent=%s command=%s pid=%d duration_ms=%d", agentName, command, cmd.Process.Pid, time.Since(start).Milliseconds())
 
 	return proc, nil
 }
@@ -261,30 +269,29 @@ func (p *Process) Initialize(ctx context.Context) error {
 	})
 
 	if err != nil {
-		log.Printf("[agent/acp] process.initialize.error duration_ms=%d err=%v", time.Since(start).Milliseconds(), err)
+		log.Printf("[agent/acp] process.initialize.error agent=%s duration_ms=%d err=%v", p.agentLabel(), time.Since(start).Milliseconds(), err)
 		return err
 	}
 	p.capability = CapabilitySnapshot{
-		LoadSession:           resp.AgentCapabilities.LoadSession,
 		PromptSupportsAudio:   resp.AgentCapabilities.PromptCapabilities.Audio,
 		PromptSupportsImage:   resp.AgentCapabilities.PromptCapabilities.Image,
 		PromptSupportsContext: resp.AgentCapabilities.PromptCapabilities.EmbeddedContext,
 	}
 	respBytes, _ := resp.MarshalJSON()
-	log.Printf("[agent/acp] %s process.initialize.done duration_ms=%d, init response=%s", p.cmd.Path, time.Since(start).Milliseconds(), string(respBytes))
+	log.Printf("[agent/acp] process.initialize.done agent=%s command=%s duration_ms=%d init_response=%s", p.agentLabel(), p.cmd.Path, time.Since(start).Milliseconds(), string(respBytes))
 	return nil
 }
 
 // NewSession creates a new ACP session for the given MindFS session key.
 func (p *Process) NewSession(ctx context.Context, sessionKey, cwd string) error {
 	start := time.Now()
-	log.Printf("[agent/acp] session.new.begin session_key=%s cwd=%s", sessionKey, cwd)
+	log.Printf("[agent/acp] session.new.begin agent=%s session_key=%s cwd=%s", p.agentLabel(), sessionKey, cwd)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	// Check if session already exists
 	if _, ok := p.sessions[sessionKey]; ok {
-		log.Printf("[agent/acp] session.new.hit session_key=%s duration_ms=%d", sessionKey, time.Since(start).Milliseconds())
+		log.Printf("[agent/acp] session.new.hit agent=%s session_key=%s duration_ms=%d", p.agentLabel(), sessionKey, time.Since(start).Milliseconds())
 		return nil
 	}
 
@@ -293,7 +300,7 @@ func (p *Process) NewSession(ctx context.Context, sessionKey, cwd string) error 
 		McpServers: []acp.McpServer{},
 	})
 	if err != nil {
-		log.Printf("[agent/acp] session.new.error session_key=%s duration_ms=%d err=%v", sessionKey, time.Since(start).Milliseconds(), err)
+		log.Printf("[agent/acp] session.new.error agent=%s session_key=%s duration_ms=%d err=%v", p.agentLabel(), sessionKey, time.Since(start).Milliseconds(), err)
 		return err
 	}
 
@@ -302,7 +309,7 @@ func (p *Process) NewSession(ctx context.Context, sessionKey, cwd string) error 
 	}
 	p.sessions[sessionKey] = sess
 	p.sessionsByID[string(resp.SessionId)] = sess
-	log.Printf("[agent/acp] session.new.done session_key=%s session_id=%s duration_ms=%d", sessionKey, resp.SessionId, time.Since(start).Milliseconds())
+	log.Printf("[agent/acp] session.new.done agent=%s session_key=%s session_id=%s duration_ms=%d", p.agentLabel(), sessionKey, resp.SessionId, time.Since(start).Milliseconds())
 	return nil
 }
 
@@ -320,10 +327,10 @@ func (p *Process) SendMessage(ctx context.Context, sessionKey, content string) e
 	sess := p.getSessionByKey(sessionKey)
 
 	if sess == nil {
-		log.Printf("[agent/acp] send.skip session_key=%s reason=session_not_found", sessionKey)
+		log.Printf("[agent/acp] send.skip agent=%s session_key=%s reason=session_not_found", p.agentLabel(), sessionKey)
 		return nil
 	}
-	log.Printf("[agent/acp] send.begin session_key=%s session_id=%s prompt_chars=%d content=%q", sessionKey, sess.ID, len(content), content)
+	log.Printf("[agent/acp] send.begin agent=%s session_key=%s session_id=%s prompt_chars=%d content=%q", p.agentLabel(), sessionKey, sess.ID, len(content), content)
 
 	_, err := p.conn.Prompt(ctx, acp.PromptRequest{
 		SessionId: sess.ID,
@@ -332,7 +339,7 @@ func (p *Process) SendMessage(ctx context.Context, sessionKey, content string) e
 		},
 	})
 	if err != nil {
-		log.Printf("[agent/acp] send.error session_key=%s session_id=%s err=%v", sessionKey, sess.ID, err)
+		log.Printf("[agent/acp] send.error agent=%s session_key=%s session_id=%s err=%v", p.agentLabel(), sessionKey, sess.ID, err)
 		return err
 	}
 
@@ -343,7 +350,7 @@ func (p *Process) SendMessage(ctx context.Context, sessionKey, content string) e
 			SessionID: string(sess.ID),
 		})
 	}
-	log.Printf("[agent/acp] send.done session_key=%s session_id=%s duration_ms=%d", sessionKey, sess.ID, time.Since(start).Milliseconds())
+	log.Printf("[agent/acp] send.done agent=%s session_key=%s session_id=%s duration_ms=%d", p.agentLabel(), sessionKey, sess.ID, time.Since(start).Milliseconds())
 
 	return nil
 }

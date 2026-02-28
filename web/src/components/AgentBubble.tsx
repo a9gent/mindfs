@@ -8,17 +8,9 @@ type AgentBubbleProps = {
   onClick?: () => void;
 };
 
-const statusColors: Record<string, string> = {
-  active: "#3b82f6",
-  idle: "#f59e0b",
-  closed: "#9ca3af",
-};
-
 export function AgentBubble({ session, index = 0, isStreaming, onClick }: AgentBubbleProps) {
   // 无活跃 Session 时不显示
-  if (!session || session.status === "closed") return null;
-
-  const statusColor = statusColors[session.status] || statusColors.idle;
+  if (!session) return null;
 
   return (
     <button
@@ -67,9 +59,9 @@ export function AgentBubble({ session, index = 0, isStreaming, onClick }: AgentB
             width: "8px",
             height: "8px",
             borderRadius: "50%",
-            background: statusColor,
+            background: "#3b82f6",
             border: "2px solid rgba(255,255,255,0.8)",
-            boxShadow: `0 0 8px ${statusColor}80`
+            boxShadow: "0 0 8px rgba(59,130,246,0.5)"
           }}
         />
       </div>
@@ -99,7 +91,7 @@ export function AgentBubble({ session, index = 0, isStreaming, onClick }: AgentB
             opacity: 0.7
           }}
         >
-          {session.agent}
+          {session.agent || "-"}
           {isStreaming && (
             <span style={{ color: "#3b82f6", display: 'flex', marginLeft: '4px' }}>
               <StreamingDots />

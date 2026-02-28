@@ -1,4 +1,4 @@
-package agent
+package types
 
 import "context"
 
@@ -15,6 +15,12 @@ type Session interface {
 
 	// Close terminates the session (not the process).
 	Close() error
+}
+
+type OpenSessionInput struct {
+	SessionKey string
+	AgentName  string
+	RootPath   string
 }
 
 // EventType defines the type of a session event.
@@ -73,11 +79,13 @@ type ToolCallContentItem struct {
 
 type ToolCall struct {
 	CallID    string                `json:"callId"`
-	Name      string                `json:"name"`
+	Title     string                `json:"title,omitempty"`
 	Status    string                `json:"status"`
 	Kind      ToolKind              `json:"kind"`
 	Content   []ToolCallContentItem `json:"content,omitempty"`
 	Locations []ToolCallLocation    `json:"locations,omitempty"`
+	RawType   string                `json:"rawType,omitempty"`
+	Meta      map[string]any        `json:"meta,omitempty"`
 }
 
 func (tc ToolCall) IsWriteOperation() bool {

@@ -1,74 +1,132 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { sessionService, type StreamEvent, type PermissionRequest } from "../services/session";
+import { useEffect, useMemo, useState } from "react";
+import { sessionService, type ToolCall } from "../services/session";
 
-type UseSessionStreamResult = {
-  chunks: StreamEvent[];
-  isStreaming: boolean;
-  permissionRequest: PermissionRequest | null;
-  respondToPermission: (requestId: string, granted: boolean, always?: boolean) => void;
-  clearChunks: () => void;
+type ExchangeLike = {
+  role?: string;
+  agent?: string;
+  content?: string;
+  timestamp?: string;
+  toolCall?: ToolCall;
 };
 
-export function useSessionStream(sessionKey: string | null): UseSessionStreamResult {
-  const [chunks, setChunks] = useState<StreamEvent[]>([]);
+export type TimelineItem =
+  | { id: string; type: "user_text" | "assistant_text"; content: string; timestamp?: string; agent?: string }
+  | { id: string; type: "thought"; content: string }
+  | { id: string; type: "tool"; toolCall: ToolCall };
+
+type UseSessionStreamResult = {
+  timeline: TimelineItem[];
+  isStreaming: boolean;
+};
+
+function nowID(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeRole(role?: string): string {
+  return (role || "").toLowerCase();
+}
+
+function normalizeToolCallStatus(status?: string): string {
+  const value = (status || "").toLowerCase();
+  if (value === "completed") return "complete";
+  if (value === "pending") return "running";
+  return value || "running";
+}
+
+function normalizeToolCall(input: ToolCall): ToolCall {
+  const raw = input as ToolCall & {
+    toolCallId?: string;
+    tool_call_id?: string;
+  };
+  const callId = raw.callId || raw.toolCallId || raw.tool_call_id || "";
+  return {
+    ...input,
+    callId,
+    status: normalizeToolCallStatus(raw.status),
+  };
+}
+
+function settleRunningTools(items: TimelineItem[]): TimelineItem[] {
+  return items.map((item) => {
+    if (item.type !== "tool") return item;
+    const status = (item.toolCall.status || "").toLowerCase();
+    if (status === "running" || status === "in_progress" || status === "pending") {
+      return {
+        ...item,
+        toolCall: {
+          ...item.toolCall,
+          status: "complete",
+        },
+      };
+    }
+    return item;
+  });
+}
+
+function buildBaseTimeline(exchanges: ExchangeLike[]): TimelineItem[] {
+  const out: TimelineItem[] = [];
+  for (const ex of exchanges) {
+    const role = normalizeRole(ex.role);
+    const content = ex.content || "";
+    if (role === "user") {
+      if (!content) continue;
+      out.push({ id: nowID("user"), type: "user_text", content, timestamp: ex.timestamp, agent: ex.agent });
+      continue;
+    }
+    if (role === "agent" || role === "assistant") {
+      if (!content) continue;
+      out.push({ id: nowID("assistant"), type: "assistant_text", content, timestamp: ex.timestamp, agent: ex.agent });
+      continue;
+    }
+    if (role === "thought") {
+      if (!content) continue;
+      out.push({ id: nowID("thought"), type: "thought", content });
+      continue;
+    }
+    if (role === "tool") {
+      if (!ex.toolCall) continue;
+      out.push({
+        id: ex.toolCall.callId || nowID("tool"),
+        type: "tool",
+        toolCall: normalizeToolCall(ex.toolCall),
+      });
+    }
+  }
+  return out;
+}
+
+export function useSessionStream(
+  sessionKey: string | null,
+  exchanges: ExchangeLike[] = []
+): UseSessionStreamResult {
   const [isStreaming, setIsStreaming] = useState(false);
-  const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null);
-  const unsubscribeRef = useRef<(() => void) | null>(null);
+
+  const baseTimeline = useMemo(() => buildBaseTimeline(exchanges), [exchanges]);
 
   useEffect(() => {
-    if (!sessionKey) {
-      setChunks([]);
-      setIsStreaming(false);
-      setPermissionRequest(null);
-      return;
-    }
+    setIsStreaming(false);
+    if (!sessionKey) return;
 
-    // Subscribe to session events
-    unsubscribeRef.current = sessionService.subscribe(sessionKey, {
+    const unsubscribe = sessionService.subscribe(sessionKey, {
       onStream: (event) => {
-        setIsStreaming(true);
-        // 如果收到的是新消息块，且之前不是在生成状态，或者根据逻辑判断是新回合，则不应在这里盲目清除
-        // 但为了解决消失问题，我们让 chunks 的清理完全受控于调用者或特定起始事件
-        setChunks((prev) => [...prev, event]);
+        if (event.type === "message_done" || event.type === "error") {
+          setIsStreaming(false);
+        } else {
+          setIsStreaming(true);
+        }
       },
-      onDone: () => {
-        setIsStreaming(false);
-      },
-      onError: (error) => {
-        setIsStreaming(false);
-        setChunks((prev) => [...prev, { type: "error", data: { message: error } }]);
-      },
-      onPermissionRequest: (req) => {
-        setPermissionRequest(req);
-      },
+      onDone: () => setIsStreaming(false),
+      onError: () => setIsStreaming(false),
     });
 
     return () => {
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-        unsubscribeRef.current = null;
-      }
+      unsubscribe();
     };
   }, [sessionKey]);
 
-  const respondToPermission = useCallback(
-    (requestId: string, granted: boolean, _always?: boolean) => {
-      if (!sessionKey) return;
-      sessionService.respondToPermission(sessionKey, requestId, granted);
-      setPermissionRequest(null);
-    },
-    [sessionKey]
-  );
-
-  const clearChunks = useCallback(() => {
-    setChunks([]);
-  }, []);
-
   return {
-    chunks,
+    timeline: settleRunningTools(baseTimeline),
     isStreaming,
-    permissionRequest,
-    respondToPermission,
-    clearChunks,
   };
 }

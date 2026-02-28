@@ -12,7 +12,6 @@ const sessionSchema = z.object({
   agent: z.string().optional(),
   scope: z.string().optional(),
   purpose: z.string().optional(),
-  summary: z.string().optional(),
   closed_at: z.string().optional(),
 });
 

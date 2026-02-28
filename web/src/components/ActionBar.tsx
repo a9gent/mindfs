@@ -3,12 +3,12 @@ import { type SessionMode } from "./ModeSelector";
 import { ModeSelector } from "./ModeSelector";
 import { AgentSelector } from "./AgentSelector";
 import { fetchAgents, type AgentStatus } from "../services/agents";
+import { sessionService } from "../services/session";
 
 type SessionInfo = {
   key: string;
   name: string;
   type: "chat" | "view" | "skill";
-  status: "active" | "idle" | "closed";
   agent: string;
 };
 
@@ -44,6 +44,9 @@ export function ActionBar({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isConnected = status === "Connected";
+  const selectedAgentStatus = agents.find((a) => a.name === agent);
+  const isSelectedAgentUnavailable = !!agent && !!selectedAgentStatus && !selectedAgentStatus.available;
+  const canSend = !!input.trim() && !sending && !!agent && isConnected && !isSelectedAgentUnavailable;
 
   useEffect(() => {
     if (currentSession) {
@@ -56,6 +59,16 @@ export function ActionBar({
     fetchAgents()
       .then(setAgents)
       .catch((err) => console.error("Failed to fetch agents:", err));
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = sessionService.subscribeEvents((event) => {
+      if (event.type !== "agent.status.changed") return;
+      fetchAgents(true)
+        .then(setAgents)
+        .catch((err) => console.error("Failed to refresh agents:", err));
+    });
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -76,7 +89,7 @@ export function ActionBar({
 
   const handleSend = useCallback(async () => {
     const trimmedInput = input.trim();
-    if (!trimmedInput || sending || !agent) return;
+    if (!trimmedInput || sending || !agent || !isConnected || isSelectedAgentUnavailable) return;
     
     setSending(true);
     try {
@@ -88,7 +101,7 @@ export function ActionBar({
     } finally {
       setSending(false);
     }
-  }, [input, sending, mode, agent, onSendMessage, resetInput]);
+  }, [input, sending, mode, agent, isConnected, isSelectedAgentUnavailable, onSendMessage, resetInput]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -134,52 +147,59 @@ export function ActionBar({
         style={{
           width: "100%",
           maxWidth: "1000px",
-          background: "rgba(255, 255, 255, 0.4)", // 极淡的背景
-          border: "1px solid rgba(0, 0, 0, 0.08)",
-          borderRadius: "12px",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.04)",
           display: "flex",
-          alignItems: "center",
-          position: "relative",
-          transition: "all 0.2s ease-in-out",
-          minHeight: "44px",
-        }}
-        onFocusCapture={(e) => {
-          e.currentTarget.style.borderColor = "rgba(59,130,246,0.4)";
-          e.currentTarget.style.background = "rgba(255, 255, 255, 0.8)";
-        }}
-        onBlurCapture={(e) => {
-          e.currentTarget.style.borderColor = "rgba(0, 0, 0, 0.08)";
-          e.currentTarget.style.background = "rgba(255, 255, 255, 0.4)";
+          flexDirection: "column",
+          gap: "6px",
         }}
       >
-        <textarea
-          ref={textareaRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onInput={handleInput}
-          placeholder={modePlaceholders[mode]}
-          disabled={sending}
-          rows={1}
+        <div
           style={{
-            width: "100%",
-            border: "none",
-            background: "transparent",
-            fontSize: "15px",
-            color: "var(--text-primary)",
-            outline: "none",
-            resize: "none",
-            padding: isMultiLine ? "12px 14px 36px" : "12px 120px 12px 14px", 
+            background: "rgba(255, 255, 255, 0.4)",
+            border: "1px solid rgba(0, 0, 0, 0.08)",
+            borderRadius: "12px",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.04)",
+            display: "flex",
+            alignItems: "center",
+            position: "relative",
+            transition: "all 0.2s ease-in-out",
             minHeight: "44px",
-            maxHeight: "240px",
-            lineHeight: "20px",
-            boxSizing: "border-box",
-            display: "block",
-            fontFamily: "inherit",
-            transition: "padding 0.15s cubic-bezier(0.4, 0, 0.2, 1)",
           }}
-        />
+          onFocusCapture={(e) => {
+            e.currentTarget.style.borderColor = "rgba(59,130,246,0.4)";
+            e.currentTarget.style.background = "rgba(255, 255, 255, 0.8)";
+          }}
+          onBlurCapture={(e) => {
+            e.currentTarget.style.borderColor = "rgba(0, 0, 0, 0.08)";
+            e.currentTarget.style.background = "rgba(255, 255, 255, 0.4)";
+          }}
+        >
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onInput={handleInput}
+            placeholder={modePlaceholders[mode]}
+            disabled={sending}
+            rows={1}
+            style={{
+              width: "100%",
+              border: "none",
+              background: "transparent",
+              fontSize: "15px",
+              color: "var(--text-primary)",
+              outline: "none",
+              resize: "none",
+              padding: isMultiLine ? "12px 14px 36px" : "12px 120px 12px 14px",
+              minHeight: "44px",
+              maxHeight: "240px",
+              lineHeight: "20px",
+              boxSizing: "border-box",
+              display: "block",
+              fontFamily: "inherit",
+              transition: "padding 0.15s cubic-bezier(0.4, 0, 0.2, 1)",
+            }}
+          />
 
         <div
           style={{
@@ -199,7 +219,7 @@ export function ActionBar({
               onClick={onSessionClick}
               style={{ 
                 width: "8px", height: "8px", borderRadius: "50%", 
-                background: currentSession.status === "active" ? "#3b82f6" : "#f59e0b",
+                background: "#3b82f6",
                 margin: "0 6px",
                 cursor: "pointer",
                 flexShrink: 0
@@ -217,31 +237,34 @@ export function ActionBar({
             agents={agents}
             onAgentChange={setAgent}
             compact={true}
+            warnUnavailable={isSelectedAgentUnavailable}
           />
 
           <button
             type="button"
             onClick={handleSend}
-            disabled={!input.trim() || sending}
+            disabled={!canSend}
+            title={isSelectedAgentUnavailable ? `当前会话的 Agent（${agent}）不可用` : undefined}
             style={{
               width: "28px",
               height: "28px",
               borderRadius: "50%",
               border: "none",
-              background: input.trim() ? "var(--accent-color)" : "transparent",
-              color: input.trim() ? "#fff" : "var(--text-secondary)",
+              background: canSend ? "var(--accent-color)" : "transparent",
+              color: canSend ? "#fff" : "var(--text-secondary)",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              cursor: !input.trim() || sending ? "not-allowed" : "pointer",
+              cursor: canSend ? "pointer" : "not-allowed",
               transition: "all 0.2s",
               fontSize: "14px",
-              opacity: input.trim() ? 1 : 0.3,
+              opacity: canSend ? 1 : 0.3,
               flexShrink: 0
             }}
           >
             {sending ? "..." : "↑"}
           </button>
+        </div>
         </div>
       </div>
     </div>

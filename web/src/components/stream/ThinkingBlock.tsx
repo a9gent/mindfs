@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 type ThinkingBlockProps = {
   content: string;
@@ -7,6 +7,11 @@ type ThinkingBlockProps = {
 
 export function ThinkingBlock({ content, defaultExpanded = false }: ThinkingBlockProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
+  useEffect(() => {
+    if (!defaultExpanded) {
+      setExpanded(false);
+    }
+  }, [defaultExpanded]);
 
   if (!content) return null;
 
@@ -34,13 +39,15 @@ export function ThinkingBlock({ content, defaultExpanded = false }: ThinkingBloc
           fontSize: "12px",
           color: "#8b5cf6",
           fontWeight: 500,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
         }}
       >
         <span style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.2s" }}>
           ▶
         </span>
-        思考过程
-        <span style={{ color: "var(--text-secondary)", fontWeight: 400 }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>思考过程</span>
+        <span style={{ color: "var(--text-secondary)", fontWeight: 400, flexShrink: 0 }}>
           ({content.length} 字符)
         </span>
       </button>

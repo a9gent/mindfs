@@ -2,21 +2,24 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	configpkg "mindfs/server/internal/config"
 )
 
 // Config holds all agent configurations.
 type Config struct {
-	Agents map[string]Definition `json:"agents"`
+	Agents []Definition `json:"agents"`
 }
 
 // Definition defines how to spawn and communicate with an agent.
 type Definition struct {
+	// Name is the logical agent name (e.g. codex/claude/gemini).
+	Name string `json:"name"`
+
 	// Command is the executable name or path.
 	Command string `json:"command"`
 
@@ -33,23 +36,8 @@ type Definition struct {
 	// CwdTemplate is the working directory template ({root} is replaced).
 	CwdTemplate string `json:"cwdTemplate,omitempty"`
 
-	// Transport configuration
-	Transport TransportConfig `json:"transport,omitempty"`
-
 	// ProbeArgs are arguments for availability check.
 	ProbeArgs []string `json:"probeArgs,omitempty"`
-}
-
-// TransportConfig holds protocol-specific timing and filtering settings.
-type TransportConfig struct {
-	// InitTimeout is the maximum time to wait for agent initialization.
-	InitTimeout time.Duration `json:"initTimeout,omitempty"`
-
-	// IdleTimeout is the time without output before considering response complete.
-	IdleTimeout time.Duration `json:"idleTimeout,omitempty"`
-
-	// FilterPatterns are regex patterns for stdout lines to filter out.
-	FilterPatterns []string `json:"filterPatterns,omitempty"`
 }
 
 // LoadConfig loads agent configuration from the given path or default location.
@@ -72,15 +60,16 @@ func LoadConfig(path string) (Config, error) {
 	if err := json.Unmarshal(payload, &cfg); err != nil {
 		return Config{}, err
 	}
-	if cfg.Agents == nil {
-		cfg.Agents = map[string]Definition{}
-	}
-	// Apply defaults
-	for name, def := range cfg.Agents {
-		if def.Protocol == "" {
-			def.Protocol = DefaultProtocol(name)
+	// Apply defaults and validate.
+	for i := range cfg.Agents {
+		name := strings.TrimSpace(cfg.Agents[i].Name)
+		if name == "" {
+			return Config{}, fmt.Errorf("agent name required")
 		}
-		cfg.Agents[name] = def
+		cfg.Agents[i].Name = name
+		if cfg.Agents[i].Protocol == "" {
+			cfg.Agents[i].Protocol = DefaultProtocol(name)
+		}
 	}
 	return cfg, nil
 }
@@ -94,39 +83,37 @@ func defaultConfigPath() (string, error) {
 }
 
 // defaultConfig returns built-in agent definitions.
-// All agents now use ACP protocol via their respective ACP wrappers.
 func defaultConfig() Config {
 	return Config{
-		Agents: map[string]Definition{
-			"claude": {
+		Agents: []Definition{
+			{
+				Name:     "claude",
 				Command:  "claude",
-				Protocol: ProtocolACP,
-				Args:     []string{"--acp"},
-				Transport: TransportConfig{
-					InitTimeout: 30 * time.Second,
-					IdleTimeout: 500 * time.Millisecond,
-				},
+				Protocol: ProtocolClaudeSDK,
 			},
-			"gemini": {
+			{
+				Name:     "gemini",
 				Command:  "gemini",
 				Protocol: ProtocolACP,
 				Args:     []string{"--experimental-acp"},
-				Transport: TransportConfig{
-					InitTimeout: 120 * time.Second, // Gemini needs longer init
-					IdleTimeout: 500 * time.Millisecond,
-				},
 			},
-			"codex": {
+			{
+				Name:     "codex",
 				Command:  "codex",
-				Protocol: ProtocolACP,
-				Args:     []string{"--acp"},
-				Transport: TransportConfig{
-					InitTimeout: 30 * time.Second,
-					IdleTimeout: 500 * time.Millisecond,
-				},
+				Protocol: ProtocolCodexSDK,
 			},
 		},
 	}
+}
+
+// GetAgent returns an agent definition by name.
+func (c Config) GetAgent(name string) (Definition, bool) {
+	for _, a := range c.Agents {
+		if a.Name == name {
+			return a, true
+		}
+	}
+	return Definition{}, false
 }
 
 // BuildArgs constructs the full argument list for spawning.
@@ -144,20 +131,4 @@ func (d Definition) ResolveCwd(rootPath string) string {
 		return rootPath
 	}
 	return strings.ReplaceAll(d.CwdTemplate, "{root}", rootPath)
-}
-
-// GetInitTimeout returns the initialization timeout.
-func (d Definition) GetInitTimeout() time.Duration {
-	if d.Transport.InitTimeout > 0 {
-		return d.Transport.InitTimeout
-	}
-	return 30 * time.Second
-}
-
-// GetIdleTimeout returns the idle timeout for response completion detection.
-func (d Definition) GetIdleTimeout() time.Duration {
-	if d.Transport.IdleTimeout > 0 {
-		return d.Transport.IdleTimeout
-	}
-	return 500 * time.Millisecond
 }

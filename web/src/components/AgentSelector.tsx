@@ -12,6 +12,7 @@ type AgentSelectorProps = {
   agents: AgentStatus[];
   onAgentChange: (agent: string) => void;
   compact?: boolean;
+  warnUnavailable?: boolean;
 };
 
 export function AgentSelector({
@@ -19,6 +20,7 @@ export function AgentSelector({
   agents,
   onAgentChange,
   compact = false,
+  warnUnavailable = false,
 }: AgentSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -48,6 +50,7 @@ export function AgentSelector({
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
+        title={warnUnavailable ? `当前会话的 Agent（${agent}）不可用` : undefined}
         style={{
           display: "flex",
           alignItems: "center",
@@ -60,6 +63,7 @@ export function AgentSelector({
           fontSize: "16px",
           transition: "background 0.2s",
           outline: "none",
+          position: "relative",
         }}
         onMouseEnter={(e) => {
           if (compact) e.currentTarget.style.background = "rgba(0,0,0,0.05)";
@@ -69,6 +73,28 @@ export function AgentSelector({
         }}
       >
         <AgentIcon agentName={agent} style={{ width: "16px", height: "16px" }} />
+        {warnUnavailable && (
+          <span
+            style={{
+              position: "absolute",
+              top: "3px",
+              right: "3px",
+              minWidth: "11px",
+              height: "11px",
+              padding: "0 2px",
+              borderRadius: "50%",
+              background: "#d97706",
+              color: "#fff",
+              fontSize: "9px",
+              lineHeight: "11px",
+              fontWeight: 700,
+              textAlign: "center",
+              boxShadow: "0 0 0 1px rgba(255,255,255,0.95)",
+            }}
+          >
+            !
+          </span>
+        )}
       </button>
 
       {isOpen && (

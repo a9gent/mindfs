@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	agenttypes "mindfs/server/internal/agent/types"
 )
 
 func loadPoolTestConfig(t *testing.T) Config {
@@ -24,7 +26,11 @@ func loadPoolTestConfig(t *testing.T) Config {
 
 func TestPoolGetOrCreateRequiresSessionKey(t *testing.T) {
 	pool := NewPool(loadPoolTestConfig(t))
-	_, err := pool.GetOrCreate(context.Background(), "", "gemini", t.TempDir())
+	_, err := pool.GetOrCreate(context.Background(), agenttypes.OpenSessionInput{
+		SessionKey: "",
+		AgentName:  "gemini",
+		RootPath:   t.TempDir(),
+	})
 	if err == nil || !strings.Contains(err.Error(), "session key required") {
 		t.Fatalf("expected session key required error, got: %v", err)
 	}
@@ -32,7 +38,11 @@ func TestPoolGetOrCreateRequiresSessionKey(t *testing.T) {
 
 func TestPoolGetOrCreateUnknownAgent(t *testing.T) {
 	pool := NewPool(loadPoolTestConfig(t))
-	_, err := pool.GetOrCreate(context.Background(), "s-1", "unknown-agent", t.TempDir())
+	_, err := pool.GetOrCreate(context.Background(), agenttypes.OpenSessionInput{
+		SessionKey: "s-1",
+		AgentName:  "unknown-agent",
+		RootPath:   t.TempDir(),
+	})
 	if err == nil || !strings.Contains(err.Error(), "agent not configured") {
 		t.Fatalf("expected agent not configured error, got: %v", err)
 	}
@@ -40,15 +50,23 @@ func TestPoolGetOrCreateUnknownAgent(t *testing.T) {
 
 func TestPoolGetOrCreateUsesAgentsJSONConfig(t *testing.T) {
 	cfg := loadPoolTestConfig(t)
-	def, ok := cfg.Agents["gemini"]
+	def, ok := cfg.GetAgent("gemini")
 	if !ok {
 		t.Fatalf("expected gemini in test agents.json")
 	}
 	def.Command = "this-command-should-not-exist-for-tests"
-	cfg.Agents["gemini"] = def
+	for i := range cfg.Agents {
+		if cfg.Agents[i].Name == "gemini" {
+			cfg.Agents[i] = def
+		}
+	}
 
 	pool := NewPool(cfg)
-	_, err := pool.GetOrCreate(context.Background(), "s-2", "gemini", t.TempDir())
+	_, err := pool.GetOrCreate(context.Background(), agenttypes.OpenSessionInput{
+		SessionKey: "s-2",
+		AgentName:  "gemini",
+		RootPath:   t.TempDir(),
+	})
 	if err == nil {
 		t.Fatalf("expected start error from non-existent command")
 	}
@@ -74,9 +92,6 @@ func TestPoolCloseAndCloseAll(t *testing.T) {
 	if len(pool.sessions) != 0 {
 		t.Fatalf("expected sessions cleared by CloseAll")
 	}
-	if len(pool.processes) != 0 {
-		t.Fatalf("expected processes cleared by CloseAll")
-	}
 }
 
 func TestPoolConfigReturnsLoadedConfig(t *testing.T) {
@@ -84,7 +99,7 @@ func TestPoolConfigReturnsLoadedConfig(t *testing.T) {
 	pool := NewPool(cfg)
 
 	got := pool.Config()
-	if _, ok := got.Agents["gemini"]; !ok {
+	if _, ok := got.GetAgent("gemini"); !ok {
 		t.Fatalf("expected gemini in pool config")
 	}
 }

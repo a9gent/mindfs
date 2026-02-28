@@ -51,17 +51,6 @@ export async function executeSkill(
   return await response.json();
 }
 
-// Get skill details
-export async function getSkillDetails(skillId: string): Promise<Skill | null> {
-  const response = await fetch(`${API_BASE}/skills/${encodeURIComponent(skillId)}`);
-
-  if (!response.ok) {
-    return null;
-  }
-
-  return await response.json();
-}
-
 // Built-in agent capabilities (static list)
 export function getAgentCapabilities(agent: string): Skill[] {
   const capabilities: Record<string, Skill[]> = {

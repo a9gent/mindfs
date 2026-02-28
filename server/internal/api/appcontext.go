@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"mindfs/server/internal/agent"
-	"mindfs/server/internal/audit"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/router"
 	"mindfs/server/internal/session"
@@ -21,13 +20,13 @@ type RootContext struct {
 
 type AppContext struct {
 	Dirs   *fs.Registry
-	Audit  *audit.WriterPool
 	Agents *agent.Pool
 	Prober *agent.Prober
 
 	mu                  sync.RWMutex
 	roots               map[string]*RootContext // root id -> root context
 	fileChangeListeners []func(fs.FileChangeEvent)
+	streamHub           *StreamHub
 }
 
 func (s *AppContext) GetRootContext(rootID string) (*RootContext, error) {
@@ -102,13 +101,7 @@ func (s *AppContext) GetSessionManager(rootID string) (*session.Manager, error) 
 	if rootCtx.Session != nil {
 		return rootCtx.Session, nil
 	}
-
-	opts := []session.Option{}
-	if s.Audit != nil {
-		logger := audit.NewLogger(s.Audit, rootCtx.Root)
-		opts = append(opts, session.WithAuditLogger(auditLoggerAdapter{logger: logger}))
-	}
-	mgr := session.NewManager(rootCtx.Root, opts...)
+	mgr := session.NewManager(rootCtx.Root)
 	mgr.StartIdleLoop(context.Background())
 	rootCtx.Session = mgr
 
@@ -205,13 +198,11 @@ func (s *AppContext) emitFileChange(change fs.FileChangeEvent) {
 	}
 }
 
-type auditLoggerAdapter struct {
-	logger *audit.Logger
-}
-
-func (a auditLoggerAdapter) LogSession(action, actor, sessionKey, agentName string, details map[string]any) error {
-	if a.logger == nil {
-		return nil
+func (s *AppContext) GetSessionStreamHub() *StreamHub {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streamHub == nil {
+		s.streamHub = NewStreamHub()
 	}
-	return a.logger.LogSession(audit.Action(action), audit.Actor(actor), sessionKey, agentName, details)
+	return s.streamHub
 }

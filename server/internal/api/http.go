@@ -33,7 +33,6 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/file", h.handleFile)
 	r.Get("/api/sessions", h.handleSessions)
 	r.Get("/api/sessions/{key}", h.handleSessionGet)
-	r.Post("/api/sessions", h.handleSessionCreate)
 	r.Post("/api/skills/{id}/execute", h.handleSkillExecute)
 	r.Get("/api/dirs", h.handleDirs)
 	r.Post("/api/dirs", h.handleAddDir)
@@ -80,36 +79,11 @@ func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
+	clientID := strings.TrimSpace(r.URL.Query().Get("client_id"))
+	if h.AppContext != nil {
+		h.AppContext.GetSessionStreamHub().BindSessionClient(key, clientID)
+	}
 	respondJSON(w, http.StatusOK, sessionResponse(out))
-}
-
-func (h *HTTPHandler) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
-	rootID := r.URL.Query().Get("root")
-	var req struct {
-		Key   string `json:"key"`
-		Type  string `json:"type"`
-		Agent string `json:"agent"`
-		Name  string `json:"name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json"))
-		return
-	}
-	uc := h.service()
-	created, err := uc.CreateSession(r.Context(), usecase.CreateSessionInput{
-		RootID: rootID,
-		Input: session.CreateInput{
-			Key:   req.Key,
-			Type:  req.Type,
-			Agent: req.Agent,
-			Name:  req.Name,
-		},
-	})
-	if err != nil {
-		respondError(w, http.StatusBadRequest, err)
-		return
-	}
-	respondJSON(w, http.StatusOK, sessionResponse(created))
 }
 
 func sessionResponse(s *session.Session) map[string]any {
@@ -117,19 +91,16 @@ func sessionResponse(s *session.Session) map[string]any {
 		return map[string]any{}
 	}
 	return map[string]any{
-		"key":              s.Key,
-		"type":             s.Type,
-		"agent":            s.Agent,
-		"agent_session_id": s.AgentSessionID,
-		"name":             s.Name,
-		"status":           s.Status,
-		"summary":          s.Summary,
-		"exchanges":        s.Exchanges,
-		"related_files":    s.RelatedFiles,
-		"generated_view":   s.GeneratedView,
-		"created_at":       s.CreatedAt,
-		"updated_at":       s.UpdatedAt,
-		"closed_at":        s.ClosedAt,
+		"key":            s.Key,
+		"type":           s.Type,
+		"agent":          session.InferAgentFromSession(s),
+		"name":           s.Name,
+		"exchanges":      s.Exchanges,
+		"related_files":  s.RelatedFiles,
+		"generated_view": s.GeneratedView,
+		"created_at":     s.CreatedAt,
+		"updated_at":     s.UpdatedAt,
+		"closed_at":      s.ClosedAt,
 	}
 }
 
@@ -140,10 +111,8 @@ func sessionListResponse(s *session.Session) map[string]any {
 	return map[string]any{
 		"key":        s.Key,
 		"type":       s.Type,
-		"agent":      s.Agent,
+		"agent":      session.InferAgentFromSession(s),
 		"name":       s.Name,
-		"status":     s.Status,
-		"summary":    s.Summary,
 		"created_at": s.CreatedAt,
 		"updated_at": s.UpdatedAt,
 		"closed_at":  s.ClosedAt,

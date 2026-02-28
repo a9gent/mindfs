@@ -3,15 +3,18 @@
     {
       "name": "gemini",
       "command": "gemini",
+      "protocol": "acp",
       "args": ["--experimental-acp"]
     },
     {
       "name": "codex",
-      "command": "codex"
+      "command": "codex",
+      "protocol": "codex-sdk"
     },
     {
       "name": "claude",
-      "command": "claude"
+      "command": "claude",
+      "protocol": "claude-sdk"
     }
   ]
 }

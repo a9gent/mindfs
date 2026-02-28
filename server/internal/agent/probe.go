@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	agenttypes "mindfs/server/internal/agent/types"
 )
 
 type Status struct {
@@ -26,6 +29,7 @@ type Prober struct {
 	mu            sync.RWMutex
 	probeInterval time.Duration
 	stopCh        chan struct{}
+	listeners     []func(Status)
 }
 
 func NewProber(cfg *Config, probeInterval time.Duration) *Prober {
@@ -41,9 +45,9 @@ func NewProber(cfg *Config, probeInterval time.Duration) *Prober {
 	// Seed configured agents so API can return stable list before first probe completes.
 	if cfg != nil {
 		now := time.Now().UTC()
-		for name := range cfg.Agents {
-			p.statuses[name] = Status{
-				Name:      name,
+		for _, def := range cfg.Agents {
+			p.statuses[def.Name] = Status{
+				Name:      def.Name,
 				Available: false,
 				Error:     "probing",
 				LastProbe: now,
@@ -92,13 +96,10 @@ func (p *Prober) ProbeAll(ctx context.Context) []Status {
 	}
 
 	statuses := make([]Status, 0, len(p.cfg.Agents))
-	for name, def := range p.cfg.Agents {
-		status := ProbeAgent(ctx, name, def)
+	for _, def := range p.cfg.Agents {
+		status := ProbeAgent(ctx, def.Name, def)
 		statuses = append(statuses, status)
-
-		p.mu.Lock()
-		p.statuses[name] = status
-		p.mu.Unlock()
+		p.setStatus(status)
 	}
 	return statuses
 }
@@ -109,16 +110,13 @@ func (p *Prober) ProbeOne(ctx context.Context, name string) Status {
 		return Status{Name: name, Available: false, Error: "config not loaded", LastProbe: time.Now().UTC()}
 	}
 
-	def, ok := p.cfg.Agents[name]
+	def, ok := p.cfg.GetAgent(name)
 	if !ok {
 		return Status{Name: name, Available: false, Error: "agent not configured", LastProbe: time.Now().UTC()}
 	}
 
 	status := ProbeAgent(ctx, name, def)
-
-	p.mu.Lock()
-	p.statuses[name] = status
-	p.mu.Unlock()
+	p.setStatus(status)
 
 	return status
 }
@@ -129,14 +127,12 @@ func (p *Prober) ReportFailure(name string, err error) {
 	if err != nil {
 		msg = err.Error()
 	}
-	p.mu.Lock()
-	p.statuses[name] = Status{
+	p.setStatus(Status{
 		Name:      name,
 		Available: false,
 		Error:     msg,
 		LastProbe: time.Now().UTC(),
-	}
-	p.mu.Unlock()
+	})
 }
 
 // ReportSuccess marks an agent as available due to successful runtime interaction.
@@ -147,8 +143,8 @@ func (p *Prober) ReportSuccess(name string) {
 	st.Available = true
 	st.Error = ""
 	st.LastProbe = time.Now().UTC()
-	p.statuses[name] = st
 	p.mu.Unlock()
+	p.setStatus(st)
 }
 
 // GetStatus 获取缓存的 Agent 状态
@@ -165,9 +161,29 @@ func (p *Prober) GetAllStatuses() []Status {
 	defer p.mu.RUnlock()
 
 	statuses := make([]Status, 0, len(p.statuses))
-	for _, status := range p.statuses {
-		statuses = append(statuses, status)
+	seen := make(map[string]struct{}, len(p.statuses))
+
+	if p.cfg != nil {
+		for _, def := range p.cfg.Agents {
+			if st, ok := p.statuses[def.Name]; ok {
+				statuses = append(statuses, st)
+			}
+			seen[def.Name] = struct{}{}
+		}
 	}
+
+	extra := make([]Status, 0)
+	for name, st := range p.statuses {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		extra = append(extra, st)
+	}
+	sort.Slice(extra, func(i, j int) bool {
+		return extra[i].Name < extra[j].Name
+	})
+	statuses = append(statuses, extra...)
+
 	return statuses
 }
 
@@ -191,7 +207,7 @@ func ProbeAgent(ctx context.Context, name string, def Definition) Status {
 		return status
 	}
 
-	probeCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
 	tmpRoot, err := os.MkdirTemp("", "mindfs-agent-probe-*")
@@ -202,14 +218,16 @@ func ProbeAgent(ctx context.Context, name string, def Definition) Status {
 	defer os.RemoveAll(tmpRoot)
 
 	pool := NewPool(Config{
-		Agents: map[string]Definition{
-			name: def,
-		},
+		Agents: []Definition{def},
 	})
 	defer pool.CloseAll()
 
 	sessionKey := "probe-" + time.Now().UTC().Format("20060102-150405")
-	sess, err := pool.GetOrCreate(probeCtx, sessionKey, name, tmpRoot)
+	sess, err := pool.GetOrCreate(probeCtx, agenttypes.OpenSessionInput{
+		SessionKey: sessionKey,
+		AgentName:  name,
+		RootPath:   tmpRoot,
+	})
 	if err != nil {
 		status.Error = err.Error()
 		return status
@@ -228,7 +246,8 @@ func (p *Prober) probeFailedOnly(ctx context.Context) {
 	if p.cfg == nil {
 		return
 	}
-	for name, def := range p.cfg.Agents {
+	for _, def := range p.cfg.Agents {
+		name := def.Name
 		p.mu.RLock()
 		st, ok := p.statuses[name]
 		p.mu.RUnlock()
@@ -236,14 +255,53 @@ func (p *Prober) probeFailedOnly(ctx context.Context) {
 			continue
 		}
 		status := ProbeAgent(ctx, name, def)
-		p.mu.Lock()
-		p.statuses[name] = status
-		p.mu.Unlock()
+		p.setStatus(status)
+	}
+}
+
+// AddListener registers a callback invoked when an agent status changes.
+func (p *Prober) AddListener(listener func(Status)) {
+	if listener == nil {
+		return
+	}
+	p.mu.Lock()
+	p.listeners = append(p.listeners, listener)
+	p.mu.Unlock()
+}
+
+func statusChanged(prev Status, next Status) bool {
+	if prev.Name != next.Name {
+		return true
+	}
+	if prev.Available != next.Available {
+		return true
+	}
+	if prev.Version != next.Version {
+		return true
+	}
+	if prev.Error != next.Error {
+		return true
+	}
+	return false
+}
+
+func (p *Prober) setStatus(status Status) {
+	p.mu.Lock()
+	prev, hadPrev := p.statuses[status.Name]
+	p.statuses[status.Name] = status
+	listeners := append([]func(Status){}, p.listeners...)
+	p.mu.Unlock()
+
+	if hadPrev && !statusChanged(prev, status) {
+		return
+	}
+	for _, listener := range listeners {
+		listener(status)
 	}
 }
 
 // VerifySessionInteraction sends a deterministic ping prompt and verifies the response contains the token.
-func VerifySessionInteraction(ctx context.Context, sess Session) error {
+func VerifySessionInteraction(ctx context.Context, sess agenttypes.Session) error {
 	if sess == nil {
 		return errors.New("session required")
 	}
@@ -256,15 +314,15 @@ func VerifySessionInteraction(ctx context.Context, sess Session) error {
 		doneCh  = make(chan struct{}, 1)
 	)
 
-	sess.OnUpdate(func(ev Event) {
+	sess.OnUpdate(func(ev agenttypes.Event) {
 		switch ev.Type {
-		case EventTypeMessageChunk:
-			if chunk, ok := ev.Data.(MessageChunk); ok {
+		case agenttypes.EventTypeMessageChunk:
+			if chunk, ok := ev.Data.(agenttypes.MessageChunk); ok {
 				mu.Lock()
 				text.WriteString(chunk.Content)
 				mu.Unlock()
 			}
-		case EventTypeMessageDone:
+		case agenttypes.EventTypeMessageDone:
 			mu.Lock()
 			gotDone = true
 			mu.Unlock()

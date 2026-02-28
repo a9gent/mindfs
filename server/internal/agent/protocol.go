@@ -5,12 +5,21 @@ type Protocol string
 
 const (
 	// ProtocolACP is the Agent Client Protocol (JSON-RPC 2.0 over ndJSON).
-	// All agents (Claude, Gemini, Codex) now use ACP via their respective wrappers.
+	// Claude/Gemini default to ACP wrappers.
 	ProtocolACP Protocol = "acp"
+	// ProtocolClaudeSDK uses claude-agent-sdk-go stream-json transport.
+	ProtocolClaudeSDK Protocol = "claude-sdk"
+	// ProtocolCodexSDK uses codex-go-sdk app-server transport.
+	ProtocolCodexSDK Protocol = "codex-sdk"
 )
 
 // DefaultProtocol returns the default protocol for agents.
-// All agents now use ACP.
 func DefaultProtocol(agentName string) Protocol {
+	if agentName == "claude" {
+		return ProtocolClaudeSDK
+	}
+	if agentName == "codex" {
+		return ProtocolCodexSDK
+	}
 	return ProtocolACP
 }

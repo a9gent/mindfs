@@ -12,9 +12,9 @@ let cachedAgents: AgentStatus[] = [];
 let lastFetch = 0;
 const CACHE_TTL = 30000; // 30 seconds
 
-export async function fetchAgents(): Promise<AgentStatus[]> {
+export async function fetchAgents(force = false): Promise<AgentStatus[]> {
   const now = Date.now();
-  if (cachedAgents.length > 0 && now - lastFetch < CACHE_TTL) {
+  if (!force && cachedAgents.length > 0 && now - lastFetch < CACHE_TTL) {
     return cachedAgents;
   }
 

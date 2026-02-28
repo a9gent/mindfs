@@ -8,7 +8,6 @@ import (
 
 	"mindfs/server/internal/agent"
 	"mindfs/server/internal/api"
-	"mindfs/server/internal/audit"
 	"mindfs/server/internal/fs"
 )
 
@@ -20,7 +19,6 @@ func Start(ctx context.Context, addr string) error {
 	}
 	_ = registry.Load()
 
-	auditPool := audit.NewWriterPool()
 	agentConfig, err := agent.LoadConfig("")
 	if err != nil {
 		return err
@@ -31,7 +29,6 @@ func Start(ctx context.Context, addr string) error {
 
 	services := &api.AppContext{
 		Dirs:   registry,
-		Audit:  auditPool,
 		Agents: agentPool,
 		Prober: agentProber,
 	}
@@ -54,7 +51,6 @@ func Start(ctx context.Context, addr string) error {
 		<-ctx.Done()
 		agentProber.Stop()
 		agentPool.CloseAll()
-		auditPool.Close()
 		_ = server.Shutdown(context.Background())
 	}()
 

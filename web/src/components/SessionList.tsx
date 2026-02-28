@@ -1,21 +1,16 @@
 import React from "react";
+import { AgentIcon } from "./AgentIcon";
 
-export type SessionStatus = "active" | "idle" | "closed";
 export type SessionType = "chat" | "view" | "skill";
 
 export type SessionItem = {
   key: string;
   type: SessionType;
-  agent: string;
+  agent?: string;
   name: string;
-  status: SessionStatus;
   created_at: string;
   updated_at: string;
   closed_at?: string;
-  summary?: {
-    title: string;
-    description: string;
-  };
   related_files?: Array<{ path: string }>;
 };
 
@@ -32,12 +27,6 @@ const typeIcons: Record<SessionType, string> = {
   skill: "⚡",
 };
 
-const statusColors: Record<SessionStatus, string> = {
-  active: "#22c55e",
-  idle: "#f59e0b",
-  closed: "#9ca3af",
-};
-
 export function SessionList({
   sessions,
   selectedKey = "",
@@ -52,39 +41,18 @@ export function SessionList({
     );
   }
 
-  const activeSessions = sessions.filter((s) => s.status === "active" || s.status === "idle");
-  const closedSessions = sessions.filter((s) => s.status === "closed");
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-      {activeSessions.length > 0 && (
-        <div>
-          <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.5px" }}>进行中</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            {activeSessions.map((session) => (
-              <SessionCard key={session.key} session={session} selected={session.key === selectedKey} onSelect={onSelect} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {closedSessions.length > 0 && (
-        <div>
-          <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.5px" }}>已结束</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            {closedSessions.map((session) => (
-              <SessionCard key={session.key} session={session} selected={session.key === selectedKey} onSelect={onSelect} onRestore={onRestore} />
-            ))}
-          </div>
-        </div>
-      )}
+    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+      {sessions.map((session) => (
+        <SessionCard key={session.key} session={session} selected={session.key === selectedKey} onSelect={onSelect} onRestore={onRestore} />
+      ))}
     </div>
   );
 }
 
 function SessionCard({ session, selected, onSelect, onRestore }: { session: SessionItem; selected: boolean; onSelect?: (session: SessionItem) => void; onRestore?: (session: SessionItem) => void }) {
-  const isClosed = session.status === "closed";
-  const displayName = session.summary?.title || session.name || `Session ${session.key.slice(0, 8)}`;
+  const isClosed = !!session.closed_at;
+  const displayName = session.name || `Session ${session.key.slice(0, 8)}`;
   const fileCount = session.related_files?.length || 0;
 
   return (
@@ -131,16 +99,8 @@ function SessionCard({ session, selected, onSelect, onRestore }: { session: Sess
         width: "100%",
         opacity: 0.8
       }}>
-        <span style={{ 
-          width: "6px", 
-          height: "6px", 
-          borderRadius: "50%", 
-          background: statusColors[session.status],
-          flexShrink: 0,
-          marginRight: "2px"
-        }} />
         <span>{typeIcons[session.type]}</span>
-        <span style={{ fontWeight: 500 }}>{session.agent}</span>
+        <AgentIcon agentName={session.agent || ""} style={{ width: "12px", height: "12px", flexShrink: 0 }} />
         <span>•</span>
         <span style={{ flexShrink: 0 }}>{formatTime(isClosed && session.closed_at ? session.closed_at : session.updated_at)}</span>
         

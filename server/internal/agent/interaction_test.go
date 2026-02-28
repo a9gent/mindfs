@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	agenttypes "mindfs/server/internal/agent/types"
 )
 
 // TestRealAgentInteraction verifies real end-to-end send/receive flow.
@@ -41,7 +43,11 @@ func TestRealAgentInteraction(t *testing.T) {
 	defer cancel()
 
 	sessionKey := "real-it-" + time.Now().UTC().Format("20060102-150405")
-	sess, err := pool.GetOrCreate(ctx, sessionKey, agentName, t.TempDir())
+	sess, err := pool.GetOrCreate(ctx, agenttypes.OpenSessionInput{
+		SessionKey: sessionKey,
+		AgentName:  agentName,
+		RootPath:   t.TempDir(),
+	})
 	if err != nil {
 		t.Fatalf("GetOrCreate failed: %v", err)
 	}
@@ -53,11 +59,8 @@ func TestRealAgentInteraction(t *testing.T) {
 func selectConfiguredAgent(cfg Config) (string, bool) {
 	want := strings.TrimSpace(os.Getenv("MINDFS_IT_AGENT_NAME"))
 	if want != "" {
-		def, ok := cfg.Agents[want]
+		def, ok := cfg.GetAgent(want)
 		if !ok {
-			return "", false
-		}
-		if def.Protocol != ProtocolACP {
 			return "", false
 		}
 		if _, err := exec.LookPath(def.Command); err != nil {
@@ -67,7 +70,7 @@ func selectConfiguredAgent(cfg Config) (string, bool) {
 	}
 
 	for _, name := range []string{"codex", "claude", "gemini"} {
-		def, ok := cfg.Agents[name]
+		def, ok := cfg.GetAgent(name)
 		if !ok || def.Protocol != ProtocolACP {
 			continue
 		}

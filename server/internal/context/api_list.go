@@ -24,18 +24,6 @@ func LoadAPIList() []APIEndpoint {
 		},
 		{
 			Method:      "POST",
-			Path:        "/api/sessions",
-			Description: "创建 Session",
-			Params: []ParamDef{
-				{Name: "root", Type: "string", Required: true, Description: "管理目录 ID"},
-				{Name: "type", Type: "string", Required: true, Description: "Session 类型: chat/view/skill"},
-				{Name: "agent", Type: "string", Required: true, Description: "Agent 名称: claude/codex/gemini"},
-				{Name: "name", Type: "string", Required: false, Description: "Session 名称"},
-			},
-			Response: "{ session: Session }",
-		},
-		{
-			Method:      "POST",
 			Path:        "/api/sessions/:key/message",
 			Description: "发送消息到 Session",
 			Params: []ParamDef{
@@ -116,43 +104,16 @@ func LoadWSActions() []APIEndpoint {
 		// Session WebSocket
 		{
 			Method:      "WS",
-			Path:        "session.create",
-			Description: "创建 Session",
-			Params: []ParamDef{
-				{Name: "type", Type: "string", Required: true, Description: "Session 类型"},
-				{Name: "agent", Type: "string", Required: true, Description: "Agent 名称"},
-				{Name: "root_id", Type: "string", Required: true, Description: "管理目录 ID"},
-			},
-			Response: "session.created { session_key, name }",
-		},
-		{
-			Method:      "WS",
 			Path:        "session.message",
 			Description: "发送消息",
 			Params: []ParamDef{
-				{Name: "session_key", Type: "string", Required: true, Description: "Session Key"},
+				{Name: "session_key", Type: "string", Required: false, Description: "Session Key，可空（空时后端自动创建）"},
 				{Name: "content", Type: "string", Required: true, Description: "消息内容"},
 				{Name: "context", Type: "ClientContext", Required: false, Description: "客户端上下文"},
+				{Name: "type", Type: "string", Required: true, Description: "会话类型（前端必传）"},
+				{Name: "agent", Type: "string", Required: true, Description: "会话 Agent（前端必传）"},
 			},
 			Response: "session.stream { session_key, event { type, data } } -> session.done { session_key }",
-		},
-		{
-			Method:      "WS",
-			Path:        "session.close",
-			Description: "关闭 Session",
-			Params: []ParamDef{
-				{Name: "session_key", Type: "string", Required: true, Description: "Session Key"},
-			},
-			Response: "session.closed { session_key, summary }",
-		},
-		{
-			Method:      "WS",
-			Path:        "session.resume",
-			Description: "恢复 Session",
-			Params: []ParamDef{
-				{Name: "session_key", Type: "string", Required: true, Description: "Session Key"},
-			},
-			Response: "session.resumed { session_key }",
 		},
 		// File WebSocket (Server -> Client push)
 		{

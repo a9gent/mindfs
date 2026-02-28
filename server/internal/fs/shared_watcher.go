@@ -2,7 +2,8 @@ package fs
 
 import (
 	"context"
-	"io/fs"
+	"errors"
+	iofs "io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -174,7 +175,9 @@ func (sw *SharedFileWatcher) run() {
 					Op:     event.Op.String(),
 					IsDir:  false,
 				})
-				log.Printf("[watcher] stat_failed op=%s path=%s err=%v", event.Op.String(), event.Name, err)
+				if !os.IsNotExist(err) && !errors.Is(err, iofs.ErrNotExist) {
+					log.Printf("[watcher] stat_failed op=%s path=%s err=%v", event.Op.String(), event.Name, err)
+				}
 				continue
 			}
 			if info.IsDir() {
@@ -234,7 +237,7 @@ func (sw *SharedFileWatcher) addWatchRecursive(startRel string) error {
 	if err != nil {
 		return err
 	}
-	return filepath.WalkDir(startAbs, func(entryPath string, d fs.DirEntry, err error) error {
+	return filepath.WalkDir(startAbs, func(entryPath string, d iofs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}

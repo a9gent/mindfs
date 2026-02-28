@@ -9,6 +9,7 @@ import (
 
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/router"
+	"mindfs/server/internal/session"
 )
 
 type ListTreeInput struct {
@@ -135,7 +136,7 @@ func fillFileMetaSessionInfo(ctx context.Context, s *Service, rootID string, met
 			meta[i].SessionName = sess.Name
 		}
 		if meta[i].Agent == "" {
-			meta[i].Agent = sess.Agent
+			meta[i].Agent = session.InferAgentFromSession(sess)
 		}
 	}
 	return meta

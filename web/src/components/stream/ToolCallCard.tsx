@@ -1,23 +1,27 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import type { ToolCallLocation } from "../../services/session";
 
 type ToolCallCardProps = {
-  tool: string;
+  kind?: string;
+  title?: string;
   callId: string;
   status: string;
   result?: string;
+  locations?: ToolCallLocation[];
   defaultExpanded?: boolean;
 };
 
 const toolIcons: Record<string, string> = {
-  Bash: "⌨️",
-  Read: "📖",
-  Write: "✏️",
-  Edit: "📝",
-  Glob: "🔍",
-  Grep: "🔎",
-  Task: "📋",
-  WebFetch: "🌐",
-  WebSearch: "🔍",
+  read: "📖",
+  edit: "📝",
+  delete: "🗑️",
+  move: "📦",
+  search: "🔎",
+  execute: "⌨️",
+  think: "💭",
+  fetch: "🌐",
+  switch_mode: "🔁",
+  other: "🔧",
 };
 
 const statusColors: Record<string, string> = {
@@ -30,24 +34,37 @@ const statusColors: Record<string, string> = {
 };
 
 export function ToolCallCard({
-  tool,
-  callId,
+  kind,
+  title,
+  callId: _callId,
   status,
   result,
+  locations,
   defaultExpanded = false,
 }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const icon = toolIcons[tool] || "🔧";
+  const labelKind = (kind || "").trim();
+  const labelTitle = (title || "").trim();
+  const normalizedKind = labelKind.toLowerCase();
+  const icon = toolIcons[normalizedKind] || toolIcons.other;
+  const label = [labelKind, labelTitle].filter(Boolean).join(" ").trim() || labelKind || labelTitle || "tool";
   const normalizedStatus = (status || "").toLowerCase();
   const isRunning = normalizedStatus === "running" || normalizedStatus === "in_progress";
   const isComplete = normalizedStatus === "complete" || normalizedStatus === "success";
   const isFailed = normalizedStatus === "failed" || normalizedStatus === "error";
+  useEffect(() => {
+    if (!isRunning) {
+      setExpanded(false);
+    }
+  }, [isRunning]);
   
   const statusColor = statusColors[normalizedStatus] || "#9ca3af";
 
   return (
     <div
       style={{
+        width: "100%",
+        minWidth: 0,
         borderRadius: "8px",
         border: "1px solid var(--border-color)",
         background: "#fff",
@@ -61,24 +78,29 @@ export function ToolCallCard({
           width: "100%",
           display: "flex",
           alignItems: "center",
-          gap: "8px",
+          justifyContent: "flex-start",
           padding: "8px 10px",
           background: "none",
           border: "none",
           cursor: "pointer",
           fontSize: "12px",
+          gap: "8px",
+          minWidth: 0,
         }}
       >
-        <span>{icon}</span>
-        <span style={{ fontWeight: 500, color: "var(--text-primary)" }}>
-          {tool}
+        <span style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }}>
+          <span>{icon}</span>
+          <span style={{ fontWeight: 500, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {label}
+          </span>
         </span>
         <span
           style={{
-            marginLeft: "auto",
             display: "flex",
             alignItems: "center",
             gap: "4px",
+            flexShrink: 0,
+            whiteSpace: "nowrap",
           }}
         >
           {isRunning && (
@@ -92,12 +114,15 @@ export function ToolCallCard({
               }}
             />
           )}
-          <span style={{ color: statusColor, fontSize: "11px" }}>
-            {isRunning ? "执行中" : isComplete ? "完成" : isFailed ? "失败" : normalizedStatus}
-          </span>
+          {isFailed && (
+            <span style={{ color: statusColor, fontSize: "12px", lineHeight: 1 }}>
+              ✕
+            </span>
+          )}
         </span>
         <span
           style={{
+            flexShrink: 0,
             transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
             transition: "transform 0.2s",
             color: "var(--text-secondary)",
@@ -107,13 +132,38 @@ export function ToolCallCard({
         </span>
       </button>
 
-      {expanded && result && (
+      {expanded && ((locations && locations.length > 0) || result) && (
         <div
           style={{
             padding: "0 10px 10px",
             borderTop: "1px solid var(--border-color)",
           }}
         >
+          {locations && locations.length > 0 && (
+            <div
+              style={{
+                marginTop: "8px",
+                fontSize: "11px",
+                color: "var(--text-secondary)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "2px",
+                minWidth: 0,
+              }}
+            >
+              {locations.slice(0, 3).map((loc, idx) => (
+                <div
+                  key={`${loc.path}-${loc.line ?? 0}-${idx}`}
+                  style={{ wordBreak: "break-all", whiteSpace: "normal" }}
+                >
+                  {loc.path}
+                  {typeof loc.line === "number" ? `:${loc.line}` : ""}
+                </div>
+              ))}
+              {locations.length > 3 && <div>... +{locations.length - 3} 处</div>}
+            </div>
+          )}
+          {result && (
           <div
             style={{
               marginTop: "8px",
@@ -124,14 +174,15 @@ export function ToolCallCard({
               fontFamily: "monospace",
               lineHeight: 1.4,
               color: "var(--text-secondary)",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
+              whiteSpace: "pre",
               maxHeight: "150px",
-              overflow: "auto",
+              overflowX: "auto",
+              overflowY: "auto",
             }}
           >
             {result}
           </div>
+          )}
         </div>
       )}
 

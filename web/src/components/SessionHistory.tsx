@@ -1,6 +1,5 @@
 import React from "react";
 import type { SessionInfo } from "./AgentFloatingPanel";
-import { StreamMessage, type StreamChunkData } from "./stream";
 
 type Exchange = {
   role: "user" | "agent";
@@ -8,17 +7,8 @@ type Exchange = {
   timestamp?: string;
 };
 
-type SessionSummary = {
-  title: string;
-  description: string;
-  keyActions: string[];
-  outputs: string[];
-  generatedAt: string;
-};
-
 type SessionHistoryProps = {
   session: SessionInfo | null;
-  summary?: SessionSummary | null;
   exchanges?: Exchange[];
   relatedFiles?: { path: string; name: string }[];
   onRestore?: () => void;
@@ -34,7 +24,6 @@ const typeLabels: Record<string, string> = {
 
 export function SessionHistory({
   session,
-  summary,
   exchanges = [],
   relatedFiles = [],
   onRestore,
@@ -71,7 +60,7 @@ export function SessionHistory({
             {session.name || `Session ${session.key.slice(0, 8)}`}
           </div>
           <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-            {typeLabels[session.type]} · {session.agent} · 已关闭
+            {typeLabels[session.type]} · {session.agent || "-"} · 已关闭
           </div>
         </div>
         <button
@@ -117,109 +106,6 @@ export function SessionHistory({
           padding: "20px",
         }}
       >
-        {/* Summary */}
-        {summary && (
-          <div
-            style={{
-              marginBottom: "24px",
-              padding: "16px",
-              background: "rgba(59, 130, 246, 0.05)",
-              borderRadius: "12px",
-              border: "1px solid rgba(59, 130, 246, 0.1)",
-            }}
-          >
-            <div
-              style={{
-                fontSize: "14px",
-                fontWeight: 600,
-                marginBottom: "8px",
-                color: "#3b82f6",
-              }}
-            >
-              摘要
-            </div>
-            <div
-              style={{
-                fontSize: "15px",
-                fontWeight: 500,
-                marginBottom: "8px",
-              }}
-            >
-              {summary.title}
-            </div>
-            <div
-              style={{
-                fontSize: "13px",
-                color: "var(--text-secondary)",
-                lineHeight: 1.6,
-                marginBottom: "12px",
-              }}
-            >
-              {summary.description}
-            </div>
-
-            {summary.keyActions.length > 0 && (
-              <div style={{ marginBottom: "12px" }}>
-                <div
-                  style={{
-                    fontSize: "12px",
-                    fontWeight: 500,
-                    color: "var(--text-secondary)",
-                    marginBottom: "6px",
-                  }}
-                >
-                  关键操作
-                </div>
-                <ul
-                  style={{
-                    margin: 0,
-                    paddingLeft: "20px",
-                    fontSize: "13px",
-                    color: "var(--text-primary)",
-                  }}
-                >
-                  {summary.keyActions.map((action, i) => (
-                    <li key={i} style={{ marginBottom: "4px" }}>
-                      {action}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {summary.outputs.length > 0 && (
-              <div>
-                <div
-                  style={{
-                    fontSize: "12px",
-                    fontWeight: 500,
-                    color: "var(--text-secondary)",
-                    marginBottom: "6px",
-                  }}
-                >
-                  输出文件
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                  {summary.outputs.map((output, i) => (
-                    <span
-                      key={i}
-                      style={{
-                        padding: "4px 8px",
-                        background: "rgba(0,0,0,0.05)",
-                        borderRadius: "4px",
-                        fontSize: "12px",
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      {output}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
         {/* 对话历史 */}
         <div style={{ marginBottom: "24px" }}>
           <div

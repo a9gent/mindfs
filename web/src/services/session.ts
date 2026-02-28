@@ -2,23 +2,14 @@
 
 export type SessionType = "chat" | "view" | "skill";
 
-export type SessionStatus = "active" | "idle" | "closed";
-
 export type Session = {
   key: string;
   type: SessionType;
-  agent: string;
+  agent?: string;
   name: string;
-  status: SessionStatus;
   created_at: string;
   updated_at: string;
   closed_at?: string;
-  summary?: {
-    title: string;
-    description: string;
-    key_actions: string[];
-    outputs: string[];
-  };
   related_files?: Array<{
     path: string;
     action: string;
@@ -44,11 +35,13 @@ export type ToolCallContentItem =
 
 export type ToolCall = {
   callId: string;
-  name: string;
+  title?: string;
   status: string;
   kind: string;
   content?: ToolCallContentItem[];
   locations?: ToolCallLocation[];
+  meta?: Record<string, unknown>;
+  rawType?: string;
 };
 
 export type StreamEvent =
@@ -59,18 +52,10 @@ export type StreamEvent =
   | { type: "message_done"; data?: Record<string, never> }
   | { type: "error"; data: { message: string } };
 
-export type PermissionRequest = {
-  requestId: string;
-  permission: string;
-  resource?: string;
-  action?: string;
-};
-
 type SessionEventHandler = {
   onStream?: (event: StreamEvent) => void;
   onDone?: () => void;
   onError?: (error: string) => void;
-  onPermissionRequest?: (req: PermissionRequest) => void;
 };
 
 type SessionServiceEvent = {
@@ -81,14 +66,26 @@ type SessionServiceEvent = {
 
 class SessionService {
   private ws: WebSocket | null = null;
-  private handlers = new Map<string, SessionEventHandler>();
+  private handlers = new Map<string, Set<SessionEventHandler>>();
+  private pendingStreams = new Map<string, StreamEvent[]>();
   private listeners = new Set<(event: SessionServiceEvent) => void>();
   private reconnectTimer: number | null = null;
   private rootId: string | null = null;
+  private hasConnected = false;
+  private readonly clientId = this.generateClientId();
   private contextCache = new Map<
     string,
     { currentPath: string; selectionKey: string }
   >();
+
+  private generateClientId(): string {
+    return `web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  private buildWSUrl(): string {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.host}/ws?client_id=${encodeURIComponent(this.clientId)}`;
+  }
 
   connect(rootId: string) {
     if (this.ws?.readyState === WebSocket.OPEN && this.rootId === rootId) {
@@ -98,12 +95,16 @@ class SessionService {
     this.rootId = rootId;
     this.disconnect();
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
-    this.ws = new WebSocket(wsUrl);
+    this.ws = new WebSocket(this.buildWSUrl());
 
     this.ws.onopen = () => {
       console.log("[Session] WebSocket connected");
+      if (this.hasConnected) {
+        this.emit({ type: "ws.reconnected" });
+      } else {
+        this.emit({ type: "ws.connected" });
+      }
+      this.hasConnected = true;
     };
 
     this.ws.onmessage = (event) => {
@@ -148,7 +149,7 @@ class SessionService {
   }
 
   private compactContext(
-    sessionKey: string,
+    sessionKey: string | undefined,
     context?: Record<string, unknown>
   ): Record<string, unknown> | undefined {
     if (!context) return undefined;
@@ -165,15 +166,17 @@ class SessionService {
         : undefined;
     const selectionKey = this.buildSelectionKey(selection);
 
-    const prev = this.contextCache.get(sessionKey);
-    if (prev && prev.currentPath === currentPath) {
-      delete next.currentPath;
-      delete next.current_path;
+    if (sessionKey) {
+      const prev = this.contextCache.get(sessionKey);
+      if (prev && prev.currentPath === currentPath) {
+        delete next.currentPath;
+        delete next.current_path;
+      }
+      if (prev && prev.selectionKey === selectionKey) {
+        delete next.selection;
+      }
+      this.contextCache.set(sessionKey, { currentPath, selectionKey });
     }
-    if (prev && prev.selectionKey === selectionKey) {
-      delete next.selection;
-    }
-    this.contextCache.set(sessionKey, { currentPath, selectionKey });
     return next;
   }
 
@@ -195,21 +198,33 @@ class SessionService {
 
     if (!sessionKey) return;
 
-    const handler = this.handlers.get(sessionKey);
-    if (!handler) return;
+    const handlers = this.handlers.get(sessionKey);
+    if ((!handlers || handlers.size === 0) && type === "session.stream") {
+      const event = payload.event as StreamEvent;
+      if (event) {
+        const queued = this.pendingStreams.get(sessionKey) || [];
+        queued.push(event);
+        this.pendingStreams.set(sessionKey, queued);
+      }
+      return;
+    }
+    if (!handlers || handlers.size === 0) return;
 
     switch (type) {
       case "session.stream":
-        handler.onStream?.(payload.event as StreamEvent);
+        for (const handler of handlers) {
+          handler.onStream?.(payload.event as StreamEvent);
+        }
         break;
       case "session.done":
-        handler.onDone?.();
+        for (const handler of handlers) {
+          handler.onDone?.();
+        }
         break;
       case "session.error":
-        handler.onError?.(msg.error?.message || "Unknown error");
-        break;
-      case "permission.request":
-        handler.onPermissionRequest?.(payload as PermissionRequest);
+        for (const handler of handlers) {
+          handler.onError?.(msg.error?.message || "Unknown error");
+        }
         break;
     }
   }
@@ -228,44 +243,37 @@ class SessionService {
   }
 
   subscribe(sessionKey: string, handler: SessionEventHandler) {
-    this.handlers.set(sessionKey, handler);
-    return () => {
-      this.handlers.delete(sessionKey);
-    };
-  }
-
-  async createSession(
-    rootId: string,
-    type: SessionType,
-    agent: string,
-    name?: string
-  ): Promise<Session | null> {
-    try {
-      const sessionName = typeof name === "string" ? name.trim() : "";
-      const res = await fetch(`/api/sessions?root=${encodeURIComponent(rootId)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type,
-          agent,
-          name: sessionName || undefined,
-        }),
-      });
-      if (!res.ok) {
-        throw new Error("Failed to create session");
-      }
-      const data = await res.json();
-      return data as Session;
-    } catch (err) {
-      console.error("[Session] Failed to create session:", err);
-      return null;
+    let set = this.handlers.get(sessionKey);
+    if (!set) {
+      set = new Set<SessionEventHandler>();
+      this.handlers.set(sessionKey, set);
     }
+    set.add(handler);
+
+    const queued = this.pendingStreams.get(sessionKey);
+    if (queued && queued.length > 0) {
+      for (const event of queued) {
+        handler.onStream?.(event);
+      }
+      this.pendingStreams.delete(sessionKey);
+    }
+
+    return () => {
+      const current = this.handlers.get(sessionKey);
+      if (!current) return;
+      current.delete(handler);
+      if (current.size === 0) {
+        this.handlers.delete(sessionKey);
+      }
+    };
   }
 
   async sendMessage(
     rootId: string,
-    sessionKey: string,
+    sessionKey: string | undefined,
     content: string,
+    type: SessionType,
+    agent: string,
     context?: Record<string, unknown>
   ): Promise<boolean> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -278,32 +286,11 @@ class SessionService {
       type: "session.message",
       payload: {
         root_id: rootId,
-        session_key: sessionKey,
+        session_key: sessionKey || undefined,
         content,
+        type,
+        agent,
         context: this.compactContext(sessionKey, context),
-      },
-    };
-
-    this.ws.send(JSON.stringify(msg));
-    return true;
-  }
-
-  async respondToPermission(
-    sessionKey: string,
-    requestId: string,
-    granted: boolean
-  ): Promise<boolean> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return false;
-    }
-
-    const msg = {
-      id: `perm-${Date.now()}`,
-      type: "permission.response",
-      payload: {
-        session_key: sessionKey,
-        request_id: requestId,
-        granted,
       },
     };
 
@@ -329,8 +316,12 @@ class SessionService {
 
   async getSession(rootId: string, sessionKey: string): Promise<Session | null> {
     try {
+      const params = new URLSearchParams({
+        root: rootId,
+        client_id: this.clientId,
+      });
       const res = await fetch(
-        `/api/sessions/${encodeURIComponent(sessionKey)}?root=${encodeURIComponent(rootId)}`
+        `/api/sessions/${encodeURIComponent(sessionKey)}?${params.toString()}`
       );
       if (!res.ok) {
         throw new Error("Failed to get session");

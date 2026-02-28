@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"mindfs/server/internal/agent"
+	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/api/usecase"
 	ctxbuilder "mindfs/server/internal/context"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/session"
+
+	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
@@ -22,57 +25,13 @@ const sessionMessageTimeout = 10 * time.Minute
 // WSHandler manages JSON-RPC over WebSocket.
 type WSHandler struct {
 	AppContext *AppContext
-	TaskQueue  *agent.TaskQueue
-	connMu     sync.RWMutex
-	conns      map[*websocket.Conn]bool
 	fileOnce   sync.Once
+	proberOnce sync.Once
 }
 
 type StreamEvent struct {
 	Type string `json:"type"`
 	Data any    `json:"data,omitempty"`
-}
-
-// InitTaskListener sets up the task update listener for broadcasting.
-func (h *WSHandler) InitTaskListener() {
-	if h.TaskQueue == nil {
-		return
-	}
-	h.TaskQueue.AddListener(func(update agent.TaskUpdate) {
-		h.broadcastTaskUpdate(update)
-	})
-}
-
-// broadcastTaskUpdate sends task update to all connected clients.
-func (h *WSHandler) broadcastTaskUpdate(update agent.TaskUpdate) {
-	resp := WSResponse{
-		Type: "task.update",
-		Payload: map[string]any{
-			"task_id":  update.TaskID,
-			"status":   string(update.Status),
-			"progress": update.Progress,
-			"message":  update.Message,
-			"error":    update.Error,
-		},
-	}
-	h.broadcastWS(resp)
-}
-
-// addConn registers a connection for broadcasting.
-func (h *WSHandler) addConn(conn *websocket.Conn) {
-	h.connMu.Lock()
-	if h.conns == nil {
-		h.conns = make(map[*websocket.Conn]bool)
-	}
-	h.conns[conn] = true
-	h.connMu.Unlock()
-}
-
-// removeConn unregisters a connection.
-func (h *WSHandler) removeConn(conn *websocket.Conn) {
-	h.connMu.Lock()
-	delete(h.conns, conn)
-	h.connMu.Unlock()
 }
 
 // ServeHTTP upgrades the connection and processes JSON-RPC messages.
@@ -82,13 +41,27 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.AppContext.AddFileChangeListener(h.broadcastFileChange)
 		}
 	})
+	h.proberOnce.Do(func() {
+		if h.AppContext != nil && h.AppContext.GetProber() != nil {
+			h.AppContext.GetProber().AddListener(h.broadcastAgentStatusChange)
+		}
+	})
+	clientID := strings.TrimSpace(r.URL.Query().Get("client_id"))
+	if clientID == "" {
+		http.Error(w, "client_id required", http.StatusBadRequest)
+		return
+	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
-	h.addConn(conn)
+	if h.AppContext != nil {
+		h.AppContext.GetSessionStreamHub().RegisterClient(clientID, conn)
+	}
 	defer func() {
-		h.removeConn(conn)
+		if h.AppContext != nil {
+			h.AppContext.GetSessionStreamHub().UnregisterClient(clientID, conn)
+		}
 		conn.Close()
 	}()
 
@@ -102,7 +75,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.sendWSError(conn, "", "invalid_request", "invalid request")
 			continue
 		}
-		h.handleWSRequest(r.Context(), conn, req)
+		h.handleWSRequest(r.Context(), conn, clientID, req)
 	}
 }
 
@@ -119,186 +92,104 @@ func (h *WSHandler) broadcastFileChange(change fs.FileChangeEvent) {
 	h.broadcastWS(resp)
 }
 
-func (h *WSHandler) snapshotConns() []*websocket.Conn {
-	h.connMu.RLock()
-	defer h.connMu.RUnlock()
-	conns := make([]*websocket.Conn, 0, len(h.conns))
-	for conn := range h.conns {
-		conns = append(conns, conn)
+func (h *WSHandler) broadcastAgentStatusChange(status agent.Status) {
+	resp := WSResponse{
+		Type: "agent.status.changed",
+		Payload: map[string]any{
+			"name":       status.Name,
+			"available":  status.Available,
+			"version":    status.Version,
+			"error":      status.Error,
+			"last_probe": status.LastProbe,
+		},
 	}
-	return conns
+	h.broadcastWS(resp)
 }
 
 func (h *WSHandler) broadcastWS(resp WSResponse) {
-	conns := h.snapshotConns()
-	for _, conn := range conns {
-		_ = conn.WriteJSON(resp)
+	if h.AppContext == nil {
+		return
 	}
+	h.AppContext.GetSessionStreamHub().BroadcastAll(resp)
 }
 
-func (h *WSHandler) handleWSRequest(ctx context.Context, conn *websocket.Conn, req WSRequest) {
+func (h *WSHandler) handleWSRequest(ctx context.Context, conn *websocket.Conn, clientID string, req WSRequest) {
 	switch req.Type {
-	case "session.create":
-		h.handleSessionCreate(ctx, conn, req)
 	case "session.message":
-		h.handleSessionMessage(ctx, conn, req)
-	case "session.resume":
-		h.handleSessionResume(ctx, conn, req)
-	case "session.close":
-		h.handleSessionClose(ctx, conn, req)
-	case "task.list":
-		h.handleTaskList(ctx, conn, req)
-	case "task.get":
-		h.handleTaskGet(ctx, conn, req)
+		h.handleSessionMessage(ctx, conn, clientID, req)
 	default:
 		h.sendWSError(conn, req.ID, "method_not_found", "method not found")
 	}
 }
 
-func (h *WSHandler) handleSessionCreate(ctx context.Context, conn *websocket.Conn, req WSRequest) {
-	rootID := getString(req.Payload, "root_id")
-	input := session.CreateInput{
-		Key:   getString(req.Payload, "key"),
-		Type:  getString(req.Payload, "type"),
-		Agent: getString(req.Payload, "agent"),
-		Name:  getString(req.Payload, "name"),
-	}
-	uc := &usecase.Service{Registry: h.AppContext}
-	created, err := uc.CreateSession(ctx, usecase.CreateSessionInput{
-		RootID: rootID,
-		Input:  input,
-	})
-	if err != nil {
-		h.sendWSError(conn, req.ID, "session.create_failed", err.Error())
-		return
-	}
-
-	h.sendWS(conn, WSResponse{
-		ID:   req.ID,
-		Type: "session.created",
-		Payload: map[string]any{
-			"session_key": created.Key,
-			"name":        created.Name,
-		},
-	})
-}
-
-func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Conn, req WSRequest) {
+func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Conn, clientID string, req WSRequest) {
 	rootID := getString(req.Payload, "root_id")
 	key := getString(req.Payload, "session_key")
 	content := getString(req.Payload, "content")
-	if key == "" || content == "" {
-		h.sendWSError(conn, req.ID, "invalid_request", "session_key and content required")
+	sessionType := getString(req.Payload, "type")
+	agentName := getString(req.Payload, "agent")
+	if content == "" || sessionType == "" || agentName == "" {
+		h.sendWSError(conn, req.ID, "invalid_request", "content, type and agent required")
 		return
 	}
 
 	uc := &usecase.Service{Registry: h.AppContext}
+	if key == "" {
+		sessionName := buildSessionNameFromMessage(content)
+		created, err := uc.CreateSession(ctx, usecase.CreateSessionInput{
+			RootID: rootID,
+			Input: session.CreateInput{
+				Type:  sessionType,
+				Agent: agentName,
+				Name:  sessionName,
+			},
+		})
+		if err != nil {
+			h.sendWSError(conn, req.ID, "session.create_failed", err.Error())
+			return
+		}
+		key = created.Key
+	}
+	if h.AppContext != nil {
+		h.AppContext.GetSessionStreamHub().BindSessionClient(key, clientID)
+	}
 	clientCtx := parseClientContext(req.Payload, rootID)
+	streamHub := h.AppContext.GetSessionStreamHub()
 	parentCtx := context.Background()
 	if agentPool := h.AppContext.GetAgentPool(); agentPool != nil {
 		parentCtx = agentPool.Context()
 	}
 	msgCtx, cancel := context.WithTimeout(parentCtx, sessionMessageTimeout)
 	defer cancel()
+
 	err := uc.SendMessage(msgCtx, usecase.SendMessageInput{
 		RootID:    rootID,
 		Key:       key,
+		Agent:     agentName,
 		Content:   content,
 		ClientCtx: clientCtx,
-		OnUpdate: func(update agent.Event) {
+		OnUpdate: func(update agenttypes.Event) {
 			event := updateToEvent(update)
 			if event == nil {
 				return
 			}
-			h.sendWS(conn, WSResponse{
-				Type: "session.stream",
-				Payload: map[string]any{
-					"session_key": key,
-					"event":       event,
-				},
-			})
+			streamHub.BroadcastSessionStream(key, event)
 		},
 	})
 	if err != nil {
-		h.sendWSError(conn, req.ID, "agent.timeout", err.Error())
-		return
+		errorMessage := normalizeAgentErrorMessage(err)
+		event := &StreamEvent{
+			Type: "error",
+			Data: map[string]string{"message": errorMessage},
+		}
+		streamHub.BroadcastSessionStream(key, event)
 	}
 
-	h.sendWS(conn, WSResponse{
-		ID:   req.ID,
-		Type: "session.done",
-		Payload: map[string]any{
-			"session_key": key,
-		},
-	})
-}
-
-func (h *WSHandler) handleSessionResume(ctx context.Context, conn *websocket.Conn, req WSRequest) {
-	rootID := getString(req.Payload, "root_id")
-	key := getString(req.Payload, "session_key")
-	if key == "" {
-		h.sendWSError(conn, req.ID, "invalid_request", "session_key required")
-		return
-	}
-
-	uc := &usecase.Service{Registry: h.AppContext}
-	resumed, err := uc.ResumeSession(ctx, usecase.ResumeSessionInput{
-		RootID: rootID,
-		Key:    key,
-	})
-	if err != nil {
-		h.sendWSError(conn, req.ID, "session.resume_failed", err.Error())
-		return
-	}
-
-	h.sendWS(conn, WSResponse{
-		ID:   req.ID,
-		Type: "session.resumed",
-		Payload: map[string]any{
-			"session_key": resumed.Key,
-			"status":      resumed.Status,
-		},
-	})
-}
-
-func (h *WSHandler) handleSessionClose(ctx context.Context, conn *websocket.Conn, req WSRequest) {
-	rootID := getString(req.Payload, "root_id")
-	key := getString(req.Payload, "session_key")
-	if key == "" {
-		h.sendWSError(conn, req.ID, "invalid_request", "session_key required")
-		return
-	}
-
-	uc := &usecase.Service{Registry: h.AppContext}
-	closed, err := uc.CloseSession(ctx, usecase.CloseSessionInput{
-		RootID: rootID,
-		Key:    key,
-	})
-	if err != nil {
-		h.sendWSError(conn, req.ID, "session.not_found", err.Error())
-		return
-	}
-
-	if agentPool := h.AppContext.GetAgentPool(); agentPool != nil {
-		agentPool.Close(closed.Key)
-	}
-
-	h.sendWS(conn, WSResponse{
-		ID:   req.ID,
-		Type: "session.closed",
-		Payload: map[string]any{
-			"session_key": closed.Key,
-			"summary":     closed.Summary,
-		},
-	})
-}
-
-func (h *WSHandler) sendWS(conn *websocket.Conn, resp WSResponse) {
-	_ = conn.WriteJSON(resp)
+	streamHub.BroadcastSessionDone(key, req.ID)
 }
 
 func (h *WSHandler) sendWSError(conn *websocket.Conn, id, code, message string) {
-	_ = conn.WriteJSON(WSResponse{
+	resp := WSResponse{
 		ID:   id,
 		Type: "session.error",
 		Error: &WSResponseError{
@@ -306,31 +197,65 @@ func (h *WSHandler) sendWSError(conn *websocket.Conn, id, code, message string) 
 			Message: message,
 		},
 		Payload: map[string]any{},
-	})
+	}
+	if h.AppContext != nil {
+		_ = h.AppContext.GetSessionStreamHub().WriteJSON(conn, resp)
+		return
+	}
+	_ = conn.WriteJSON(resp)
 }
 
-func updateToEvent(update agent.Event) *StreamEvent {
+func updateToEvent(update agenttypes.Event) *StreamEvent {
 	switch update.Type {
-	case agent.EventTypeMessageChunk:
-		if chunk, ok := update.Data.(agent.MessageChunk); ok {
+	case agenttypes.EventTypeMessageChunk:
+		if chunk, ok := update.Data.(agenttypes.MessageChunk); ok {
 			return &StreamEvent{Type: "message_chunk", Data: chunk}
 		}
-	case agent.EventTypeThoughtChunk:
-		if chunk, ok := update.Data.(agent.ThoughtChunk); ok {
+	case agenttypes.EventTypeThoughtChunk:
+		if chunk, ok := update.Data.(agenttypes.ThoughtChunk); ok {
 			return &StreamEvent{Type: "thought_chunk", Data: chunk}
 		}
-	case agent.EventTypeToolCall:
-		if tc, ok := update.Data.(agent.ToolCall); ok {
+	case agenttypes.EventTypeToolCall:
+		if tc, ok := update.Data.(agenttypes.ToolCall); ok {
 			return &StreamEvent{Type: "tool_call", Data: tc}
 		}
-	case agent.EventTypeToolUpdate:
-		if tu, ok := update.Data.(agent.ToolCall); ok {
+	case agenttypes.EventTypeToolUpdate:
+		if tu, ok := update.Data.(agenttypes.ToolCall); ok {
 			return &StreamEvent{Type: "tool_call_update", Data: tu}
 		}
-	case agent.EventTypeMessageDone:
+	case agenttypes.EventTypeMessageDone:
 		return &StreamEvent{Type: "message_done"}
 	}
 	return nil
+}
+
+func normalizeAgentErrorMessage(err error) string {
+	if err == nil {
+		return "Unknown error"
+	}
+	raw := strings.TrimSpace(err.Error())
+	if raw == "" {
+		return "Unknown error"
+	}
+	var payload struct {
+		Message string `json:"message"`
+	}
+	if strings.HasPrefix(raw, "{") && json.Unmarshal([]byte(raw), &payload) == nil && strings.TrimSpace(payload.Message) != "" {
+		return strings.TrimSpace(payload.Message)
+	}
+	return raw
+}
+
+func buildSessionNameFromMessage(message string) string {
+	oneLine := strings.Join(strings.Fields(strings.TrimSpace(message)), " ")
+	if oneLine == "" {
+		return ""
+	}
+	const max = 60
+	if len(oneLine) <= max {
+		return oneLine
+	}
+	return oneLine[:max] + "..."
 }
 
 func getString(payload map[string]any, key string) string {
@@ -365,92 +290,4 @@ func parseClientContext(payload map[string]any, rootID string) ctxbuilder.Client
 		ctx.CurrentRoot = rootID
 	}
 	return ctx
-}
-
-func (h *WSHandler) handleTaskList(ctx context.Context, conn *websocket.Conn, req WSRequest) {
-	if h.TaskQueue == nil {
-		h.sendWS(conn, WSResponse{
-			ID:   req.ID,
-			Type: "task.list",
-			Payload: map[string]any{
-				"tasks": []any{},
-			},
-		})
-		return
-	}
-
-	sessionKey := getString(req.Payload, "session_key")
-	var tasks []*agent.Task
-	if sessionKey != "" {
-		tasks = h.TaskQueue.ListBySession(sessionKey)
-	} else {
-		tasks = h.TaskQueue.List()
-	}
-
-	taskList := make([]map[string]any, 0, len(tasks))
-	for _, t := range tasks {
-		taskList = append(taskList, taskToMap(t))
-	}
-
-	h.sendWS(conn, WSResponse{
-		ID:   req.ID,
-		Type: "task.list",
-		Payload: map[string]any{
-			"tasks": taskList,
-		},
-	})
-}
-
-func (h *WSHandler) handleTaskGet(ctx context.Context, conn *websocket.Conn, req WSRequest) {
-	if h.TaskQueue == nil {
-		h.sendWSError(conn, req.ID, "task.not_found", "task queue not configured")
-		return
-	}
-
-	taskID := getString(req.Payload, "task_id")
-	if taskID == "" {
-		h.sendWSError(conn, req.ID, "invalid_request", "task_id required")
-		return
-	}
-
-	task := h.TaskQueue.Get(taskID)
-	if task == nil {
-		h.sendWSError(conn, req.ID, "task.not_found", "task not found")
-		return
-	}
-
-	h.sendWS(conn, WSResponse{
-		ID:   req.ID,
-		Type: "task.get",
-		Payload: map[string]any{
-			"task": taskToMap(task),
-		},
-	})
-}
-
-func taskToMap(t *agent.Task) map[string]any {
-	m := map[string]any{
-		"id":          t.ID,
-		"session_key": t.SessionKey,
-		"type":        t.Type,
-		"status":      string(t.Status),
-		"progress":    t.Progress,
-		"created_at":  t.CreatedAt,
-	}
-	if t.Message != "" {
-		m["message"] = t.Message
-	}
-	if t.Error != "" {
-		m["error"] = t.Error
-	}
-	if t.StartedAt != nil {
-		m["started_at"] = *t.StartedAt
-	}
-	if t.CompletedAt != nil {
-		m["completed_at"] = *t.CompletedAt
-	}
-	if len(t.Metadata) > 0 {
-		m["metadata"] = t.Metadata
-	}
-	return m
 }
