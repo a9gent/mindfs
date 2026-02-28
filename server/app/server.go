@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"time"
 
@@ -17,7 +16,9 @@ func Start(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
-	_ = registry.Load()
+	if err := registry.Load(); err != nil {
+		return err
+	}
 
 	agentConfig, err := agent.LoadConfig("")
 	if err != nil {
@@ -51,9 +52,8 @@ func Start(ctx context.Context, addr string) error {
 		<-ctx.Done()
 		agentProber.Stop()
 		agentPool.CloseAll()
-		_ = server.Shutdown(context.Background())
+		server.Shutdown(context.Background())
 	}()
 
-	log.Printf("[server] listening addr=%s", addr)
 	return server.ListenAndServe()
 }

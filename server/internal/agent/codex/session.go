@@ -67,9 +67,6 @@ func (r *Runtime) getOrCreateClient(opts OpenOptions) *codexsdk.Codex {
 	if client, ok := r.clients[opts.AgentName]; ok {
 		return client
 	}
-	if len(opts.Args) > 0 {
-		log.Printf("[agent/codex] cli transport ignores args; agent=%s args=%v", opts.AgentName, opts.Args)
-	}
 	codexOptions := codexsdk.CodexOptions{
 		Transport:         codexsdk.TransportCLI,
 		CodexPathOverride: opts.Command,

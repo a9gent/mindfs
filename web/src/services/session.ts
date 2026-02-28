@@ -98,7 +98,6 @@ class SessionService {
     this.ws = new WebSocket(this.buildWSUrl());
 
     this.ws.onopen = () => {
-      console.log("[Session] WebSocket connected");
       if (this.hasConnected) {
         this.emit({ type: "ws.reconnected" });
       } else {
@@ -117,7 +116,6 @@ class SessionService {
     };
 
     this.ws.onclose = () => {
-      console.log("[Session] WebSocket closed");
       this.scheduleReconnect();
     };
 

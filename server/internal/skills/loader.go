@@ -48,7 +48,7 @@ func LoadSkill(root fs.RootInfo, skillID string) (LoadedSkill, error) {
 
 	var manifest SkillManifest
 	if payload, err := root.ReadMetaFile(manifestPath); err == nil {
-		_ = json.Unmarshal(payload, &manifest)
+		json.Unmarshal(payload, &manifest)
 	}
 	var cfg SkillRuntimeConfig
 	payload, err := root.ReadMetaFile(configPath)

@@ -9,7 +9,7 @@ import (
 func respondJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	json.NewEncoder(w).Encode(v)
 }
 
 func respondError(w http.ResponseWriter, status int, err error) {

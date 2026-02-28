@@ -4,7 +4,6 @@ package acp
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"os/exec"
 	"sync"
@@ -85,8 +84,6 @@ func (p *Process) agentLabel() string {
 }
 
 func (c *mindfsClient) SessionUpdate(ctx context.Context, params acp.SessionNotification) error {
-	v, _ := json.Marshal(params)
-	log.Printf("[agent/acp] session.update agent=%s session_id=%s params=%s", c.proc.agentLabel(), params.SessionId, v)
 	session := c.proc.getSessionByID(string(params.SessionId))
 	if session == nil {
 		return nil
@@ -114,8 +111,6 @@ func (c *mindfsClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 }
 
 func (c *mindfsClient) RequestPermission(ctx context.Context, params acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
-	v, _ := json.Marshal(params)
-	log.Printf("[agent/acp] request.permission agent=%s session_id=%s params=%s", c.proc.agentLabel(), params.SessionId, v)
 	// Emit a synthetic tool_call update for permission-gated operations so upper
 	// layers can track tool execution and associate file paths immediately.
 	if session := c.proc.getSessionByID(string(params.SessionId)); session != nil {
@@ -210,8 +205,6 @@ func (c *mindfsClient) KillTerminalCommand(ctx context.Context, params acp.KillT
 
 // Start spawns an agent process with ACP mode.
 func Start(ctx context.Context, agentName, command string, args []string, cwd string, env map[string]string) (*Process, error) {
-	start := time.Now()
-	log.Printf("[agent/acp] process.start.begin agent=%s command=%s args=%v cwd=%s", agentName, command, args, cwd)
 	cmd := exec.CommandContext(ctx, command, args...)
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -234,7 +227,6 @@ func Start(ctx context.Context, agentName, command string, args []string, cwd st
 	cmd.Stderr = nil
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("[agent/acp] process.start.error agent=%s command=%s duration_ms=%d err=%v", agentName, command, time.Since(start).Milliseconds(), err)
 		return nil, err
 	}
 
@@ -248,14 +240,12 @@ func Start(ctx context.Context, agentName, command string, args []string, cwd st
 
 	// Create ACP connection - coder/acp-go-sdk uses io.Writer and io.Reader directly
 	proc.conn = acp.NewClientSideConnection(proc.client, stdin, stdout)
-	log.Printf("[agent/acp] process.start.done agent=%s command=%s pid=%d duration_ms=%d", agentName, command, cmd.Process.Pid, time.Since(start).Milliseconds())
 
 	return proc, nil
 }
 
 // Initialize performs ACP handshake.
 func (p *Process) Initialize(ctx context.Context) error {
-	start := time.Now()
 	// Send initialize request
 	resp, err := p.conn.Initialize(ctx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersionNumber,
@@ -269,7 +259,6 @@ func (p *Process) Initialize(ctx context.Context) error {
 	})
 
 	if err != nil {
-		log.Printf("[agent/acp] process.initialize.error agent=%s duration_ms=%d err=%v", p.agentLabel(), time.Since(start).Milliseconds(), err)
 		return err
 	}
 	p.capability = CapabilitySnapshot{
@@ -277,21 +266,16 @@ func (p *Process) Initialize(ctx context.Context) error {
 		PromptSupportsImage:   resp.AgentCapabilities.PromptCapabilities.Image,
 		PromptSupportsContext: resp.AgentCapabilities.PromptCapabilities.EmbeddedContext,
 	}
-	respBytes, _ := resp.MarshalJSON()
-	log.Printf("[agent/acp] process.initialize.done agent=%s command=%s duration_ms=%d init_response=%s", p.agentLabel(), p.cmd.Path, time.Since(start).Milliseconds(), string(respBytes))
 	return nil
 }
 
 // NewSession creates a new ACP session for the given MindFS session key.
 func (p *Process) NewSession(ctx context.Context, sessionKey, cwd string) error {
-	start := time.Now()
-	log.Printf("[agent/acp] session.new.begin agent=%s session_key=%s cwd=%s", p.agentLabel(), sessionKey, cwd)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	// Check if session already exists
 	if _, ok := p.sessions[sessionKey]; ok {
-		log.Printf("[agent/acp] session.new.hit agent=%s session_key=%s duration_ms=%d", p.agentLabel(), sessionKey, time.Since(start).Milliseconds())
 		return nil
 	}
 
@@ -300,7 +284,6 @@ func (p *Process) NewSession(ctx context.Context, sessionKey, cwd string) error 
 		McpServers: []acp.McpServer{},
 	})
 	if err != nil {
-		log.Printf("[agent/acp] session.new.error agent=%s session_key=%s duration_ms=%d err=%v", p.agentLabel(), sessionKey, time.Since(start).Milliseconds(), err)
 		return err
 	}
 
@@ -309,7 +292,6 @@ func (p *Process) NewSession(ctx context.Context, sessionKey, cwd string) error 
 	}
 	p.sessions[sessionKey] = sess
 	p.sessionsByID[string(resp.SessionId)] = sess
-	log.Printf("[agent/acp] session.new.done agent=%s session_key=%s session_id=%s duration_ms=%d", p.agentLabel(), sessionKey, resp.SessionId, time.Since(start).Milliseconds())
 	return nil
 }
 
@@ -327,7 +309,6 @@ func (p *Process) SendMessage(ctx context.Context, sessionKey, content string) e
 	sess := p.getSessionByKey(sessionKey)
 
 	if sess == nil {
-		log.Printf("[agent/acp] send.skip agent=%s session_key=%s reason=session_not_found", p.agentLabel(), sessionKey)
 		return nil
 	}
 	log.Printf("[agent/acp] send.begin agent=%s session_key=%s session_id=%s prompt_chars=%d content=%q", p.agentLabel(), sessionKey, sess.ID, len(content), content)
@@ -370,7 +351,7 @@ func (p *Process) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.cmd != nil && p.cmd.Process != nil {
-		_ = p.cmd.Process.Kill()
+		p.cmd.Process.Kill()
 	}
 	return nil
 }

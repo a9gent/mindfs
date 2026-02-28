@@ -60,7 +60,7 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 	}
 	stream, err := client.Stream(ctx)
 	if err != nil {
-		_ = client.Close()
+		client.Close()
 		return nil, err
 	}
 
@@ -164,7 +164,6 @@ func (s *session) consumeMessages() {
 	s.pendingThinking.Reset()
 	for msg := range s.stream.Messages() {
 		s.updateSessionID(msg)
-		s.logRawMessage(msg)
 
 		switch m := msg.(type) {
 		case claudeagent.PartialAssistantMessage:
@@ -185,15 +184,6 @@ func (s *session) consumeMessages() {
 	}
 
 	s.failPendingTurns(errors.New("claude stream ended"))
-}
-
-func (s *session) logRawMessage(msg any) {
-	raw, err := json.Marshal(msg)
-	if err != nil {
-		log.Printf("[agent/claude] output.raw session=%s session_id=%s msg_type=%T marshal_err=%v msg=%+v", s.sessionKey, s.SessionID(), msg, err, msg)
-		return
-	}
-	log.Printf("[agent/claude] output.raw session=%s session_id=%s msg_type=%T msg=%s", s.sessionKey, s.SessionID(), msg, string(raw))
 }
 
 func (s *session) handlePartialAssistantMessage(rawEvent json.RawMessage) {

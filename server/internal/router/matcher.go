@@ -74,8 +74,8 @@ func matchDoubleStarGlob(path, pattern string) bool {
 
 	if len(parts) == 1 {
 		// No ** in pattern
-		matched, _ := filepath.Match(pattern, path)
-		return matched
+		matched, err := filepath.Match(pattern, path)
+		return err == nil && matched
 	}
 
 	// Handle patterns like "**/*.md"
@@ -88,12 +88,18 @@ func matchDoubleStarGlob(path, pattern string) bool {
 		// Remove leading /
 		suffix = strings.TrimPrefix(suffix, "/")
 		// Check if path ends with suffix pattern
-		matched, _ := filepath.Match(suffix, filepath.Base(path))
+		matched, err := filepath.Match(suffix, filepath.Base(path))
+		if err != nil {
+			return false
+		}
 		if matched {
 			return true
 		}
 		// Also try matching the full path
-		matched, _ = filepath.Match("*"+suffix, path)
+		matched, err = filepath.Match("*"+suffix, path)
+		if err != nil {
+			return false
+		}
 		return matched
 	}
 
@@ -114,8 +120,8 @@ func matchDoubleStarGlob(path, pattern string) bool {
 				pathWithoutPrefix = strings.TrimPrefix(path, prefix)
 				pathWithoutPrefix = strings.TrimPrefix(pathWithoutPrefix, "/")
 			}
-			matched, _ := filepath.Match(suffix, filepath.Base(pathWithoutPrefix))
-			return matched
+			matched, err := filepath.Match(suffix, filepath.Base(pathWithoutPrefix))
+			return err == nil && matched
 		}
 
 		return true

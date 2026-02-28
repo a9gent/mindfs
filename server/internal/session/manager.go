@@ -320,7 +320,7 @@ func (m *Manager) StartIdleLoop(ctx context.Context) {
 			for {
 				select {
 				case <-ticker.C:
-					_, _, _ = m.CheckIdle(ctx, m.idleFor, m.closeFor)
+					m.CheckIdle(ctx, m.idleFor, m.closeFor)
 				case <-ctx.Done():
 					return
 				}
@@ -425,7 +425,7 @@ ORDER BY updated_at DESC`)
 		}
 		keys = append(keys, key)
 	}
-	_ = rows.Close()
+	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -559,7 +559,7 @@ func (m *Manager) ensureSessionMetaDBUnsafe() (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(sessionTableSchema); err != nil {
-		_ = db.Close()
+		db.Close()
 		return nil, err
 	}
 	m.db = db

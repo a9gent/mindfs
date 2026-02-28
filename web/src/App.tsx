@@ -482,8 +482,6 @@ export function App() {
       const key = session?.key || session?.session_key;
       const targetRoot = (session?.root_id as string | undefined) || currentRootIdRef.current;
       
-      console.log("[handleSelectSession] Navigating:", { key, targetRoot });
-      
       if (!targetRoot || !key) {
         console.error("[handleSelectSession] Failed: context missing.");
         return;
@@ -797,7 +795,6 @@ export function App() {
 
       return {
         select_session: async (params: Record<string, unknown>) => {
-          console.log("[Action:select_session] Invoked with:", params);
           if (params.key) {
             handleSelectSession({ key: params.key, root_id: params.root });
           }

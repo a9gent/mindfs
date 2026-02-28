@@ -2,9 +2,7 @@ package fs
 
 import (
 	"context"
-	"errors"
 	iofs "io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,7 +54,8 @@ func NewSharedFileWatcher(root RootInfo, sessions SessionFileRecorder) (*SharedF
 		done:          make(chan struct{}),
 	}
 	if err := sw.addWatchRecursive("."); err != nil {
-		_ = w.Close()
+		if closeErr := w.Close(); closeErr != nil {
+		}
 		return nil, err
 	}
 	go sw.run()
@@ -80,8 +79,7 @@ func (sw *SharedFileWatcher) UnregisterSession(sessionKey string) {
 	}
 }
 
-func (sw *SharedFileWatcher) MarkSessionActive(sessionKey string) {
-	_ = sessionKey
+func (sw *SharedFileWatcher) MarkSessionActive(_ string) {
 }
 
 func (sw *SharedFileWatcher) RecordPendingWrite(sessionKey, filePath string) {
@@ -109,8 +107,8 @@ func (sw *SharedFileWatcher) RecordSessionFile(sessionKey, filePath string) {
 	if len(relPath) >= len(".mindfs") && relPath[:len(".mindfs")] == ".mindfs" {
 		return
 	}
-	_ = sw.sessionStore.RecordOutputFile(context.Background(), sessionKey, relPath)
-	_ = sw.root.UpdateFileMeta(relPath, sessionKey, "agent")
+	sw.sessionStore.RecordOutputFile(context.Background(), sessionKey, relPath)
+	sw.root.UpdateFileMeta(relPath, sessionKey, "agent")
 }
 
 func (sw *SharedFileWatcher) SetOnFileChange(handler func(FileChangeEvent)) {
@@ -135,7 +133,7 @@ func (sw *SharedFileWatcher) Close() {
 		close(sw.done)
 	}
 	sw.mu.Unlock()
-	_ = sw.watcher.Close()
+	sw.watcher.Close()
 }
 
 func (sw *SharedFileWatcher) run() {
@@ -151,10 +149,8 @@ func (sw *SharedFileWatcher) run() {
 			if sw.shouldIgnore(event.Name) {
 				continue
 			}
-			log.Printf("[watcher] event op=%s path=%s", event.Op.String(), event.Name)
 			rel, err := sw.root.NormalizePath(event.Name)
 			if err != nil {
-				log.Printf("[watcher] normalize_failed op=%s path=%s err=%v", event.Op.String(), event.Name, err)
 				continue
 			}
 			if event.Op&fsnotify.Remove != 0 {
@@ -175,9 +171,6 @@ func (sw *SharedFileWatcher) run() {
 					Op:     event.Op.String(),
 					IsDir:  false,
 				})
-				if !os.IsNotExist(err) && !errors.Is(err, iofs.ErrNotExist) {
-					log.Printf("[watcher] stat_failed op=%s path=%s err=%v", event.Op.String(), event.Name, err)
-				}
 				continue
 			}
 			if info.IsDir() {
@@ -187,8 +180,7 @@ func (sw *SharedFileWatcher) run() {
 					Op:     event.Op.String(),
 					IsDir:  true,
 				})
-				_ = sw.addWatchRecursive(rel)
-				log.Printf("[watcher] dir_event op=%s rel=%s action=watch_recursive", event.Op.String(), rel)
+				sw.addWatchRecursive(rel)
 				continue
 			}
 			sw.emitFileChange(FileChangeEvent{
@@ -198,7 +190,6 @@ func (sw *SharedFileWatcher) run() {
 				IsDir:  false,
 			})
 			sessionKey := sw.resolveSessionKey(rel)
-			log.Printf("[watcher] file_event op=%s rel=%s session=%s", event.Op.String(), rel, sessionKey)
 			if sessionKey == "" {
 				continue
 			}
@@ -248,7 +239,7 @@ func (sw *SharedFileWatcher) addWatchRecursive(startRel string) error {
 			return nil
 		}
 		if d.IsDir() {
-			_ = sw.watcher.Add(entryPath)
+			sw.watcher.Add(entryPath)
 		}
 		return nil
 	})

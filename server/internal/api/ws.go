@@ -199,10 +199,10 @@ func (h *WSHandler) sendWSError(conn *websocket.Conn, id, code, message string) 
 		Payload: map[string]any{},
 	}
 	if h.AppContext != nil {
-		_ = h.AppContext.GetSessionStreamHub().WriteJSON(conn, resp)
+		h.AppContext.GetSessionStreamHub().WriteJSON(conn, resp)
 		return
 	}
-	_ = conn.WriteJSON(resp)
+	conn.WriteJSON(resp)
 }
 
 func updateToEvent(update agenttypes.Event) *StreamEvent {

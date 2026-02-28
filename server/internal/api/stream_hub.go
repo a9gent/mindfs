@@ -105,7 +105,7 @@ func (h *StreamHub) BroadcastAll(resp WSResponse) {
 	}
 	h.mu.RUnlock()
 	for _, conn := range conns {
-		_ = h.WriteJSON(conn, resp)
+		h.WriteJSON(conn, resp)
 	}
 }
 
@@ -118,7 +118,7 @@ func (h *StreamHub) BroadcastSessionStream(sessionKey string, event *StreamEvent
 		if conn == nil {
 			continue
 		}
-		_ = h.WriteJSON(conn, WSResponse{
+		h.WriteJSON(conn, WSResponse{
 			Type: "session.stream",
 			Payload: map[string]any{
 				"session_key": sessionKey,
@@ -134,7 +134,7 @@ func (h *StreamHub) BroadcastSessionDone(sessionKey, requestID string) {
 		if conn == nil {
 			continue
 		}
-		_ = h.WriteJSON(conn, WSResponse{
+		h.WriteJSON(conn, WSResponse{
 			ID:   requestID,
 			Type: "session.done",
 			Payload: map[string]any{

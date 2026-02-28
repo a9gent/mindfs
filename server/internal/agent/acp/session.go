@@ -3,9 +3,7 @@ package acp
 import (
 	"context"
 	"errors"
-	"log"
 	"sync"
-	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 	types "mindfs/server/internal/agent/types"
@@ -43,12 +41,9 @@ func (r *Runtime) OpenSession(_ context.Context, opts OpenOptions) (types.Sessio
 		return nil, err
 	}
 
-	newSessionStart := time.Now()
 	if err := proc.NewSession(r.processCtx, opts.SessionKey, opts.RootPath); err != nil {
-		log.Printf("[agent/acp] new_session.error session=%s agent=%s duration_ms=%d err=%v", opts.SessionKey, opts.AgentName, time.Since(newSessionStart).Milliseconds(), err)
 		return nil, err
 	}
-	log.Printf("[agent/acp] new_session.ok session=%s agent=%s duration_ms=%d", opts.SessionKey, opts.AgentName, time.Since(newSessionStart).Milliseconds())
 	return &session{proc: proc, sessionKey: opts.SessionKey}, nil
 }
 
@@ -61,7 +56,7 @@ func (r *Runtime) CloseSession(sessionKey string) {
 func (r *Runtime) CloseAll() {
 	procs := r.listProcessesAndReset()
 	for _, proc := range procs {
-		_ = proc.Close()
+		proc.Close()
 	}
 }
 
@@ -94,26 +89,20 @@ func (r *Runtime) getOrCreateProcess(opts OpenOptions) (*Process, error) {
 	}
 	r.mu.Unlock()
 
-	procStart := time.Now()
 	proc, err := Start(r.processCtx, opts.AgentName, opts.Command, opts.Args, opts.Cwd, opts.Env)
 	if err != nil {
-		log.Printf("[agent/acp] start_process.error session=%s agent=%s duration_ms=%d err=%v", opts.SessionKey, opts.AgentName, time.Since(procStart).Milliseconds(), err)
 		return nil, err
 	}
-	log.Printf("[agent/acp] start_process.ok session=%s agent=%s duration_ms=%d", opts.SessionKey, opts.AgentName, time.Since(procStart).Milliseconds())
 
-	initStart := time.Now()
 	if err := proc.Initialize(r.processCtx); err != nil {
-		_ = proc.Close()
-		log.Printf("[agent/acp] initialize.error session=%s agent=%s duration_ms=%d err=%v", opts.SessionKey, opts.AgentName, time.Since(initStart).Milliseconds(), err)
+		proc.Close()
 		return nil, err
 	}
-	log.Printf("[agent/acp] initialize.ok session=%s agent=%s duration_ms=%d", opts.SessionKey, opts.AgentName, time.Since(initStart).Milliseconds())
 
 	r.mu.Lock()
 	if existing, ok := r.processes[opts.AgentName]; ok {
 		r.mu.Unlock()
-		_ = proc.Close()
+		proc.Close()
 		return existing, nil
 	}
 	r.processes[opts.AgentName] = proc

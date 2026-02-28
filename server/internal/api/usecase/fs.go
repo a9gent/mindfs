@@ -234,5 +234,8 @@ func (s *Service) ensureFileWatcher(rootID string) {
 	if err != nil || manager == nil {
 		return
 	}
-	_, _ = s.Registry.GetFileWatcher(rootID, manager)
+	watcher, err := s.Registry.GetFileWatcher(rootID, manager)
+	if err != nil || watcher == nil {
+		return
+	}
 }

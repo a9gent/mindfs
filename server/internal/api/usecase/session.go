@@ -2,11 +2,9 @@ package usecase
 
 import (
 	"context"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"mindfs/server/internal/agent"
 	agenttypes "mindfs/server/internal/agent/types"
@@ -149,7 +147,6 @@ func prependSwitchHint(in BuildPromptInput, prompt string) string {
 	if linesToRead <= 0 {
 		return prompt
 	}
-	log.Printf("[session/send] context_hint apply session=%s agent=%s total=%d last=%d read_lines=%d", in.Session.Key, currentAgent, total, last, linesToRead)
 	logPath := in.Manager.ExchangeLogPath(in.Session.Key)
 	readHint := buildSwitchReadHint(logPath, linesToRead)
 	return readHint + prompt
@@ -257,53 +254,37 @@ func (s *Service) ensureAgentSession(
 }
 
 func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
-	start := time.Now()
-	log.Printf("[session/send] begin root=%s session=%s content_chars=%d", in.RootID, in.Key, len(in.Content))
 	if err := s.ensureRegistry(); err != nil {
 		return err
 	}
 	sendLock := getSessionSendLock(in.Key)
 	sendLock.Lock()
 	defer sendLock.Unlock()
-	t0 := time.Now()
 	manager, err := s.Registry.GetSessionManager(in.RootID)
 	if err != nil {
 		return err
 	}
-	log.Printf("[session/send] get_manager session=%s duration_ms=%d", in.Key, time.Since(t0).Milliseconds())
-	t1 := time.Now()
 	current, err := manager.Get(ctx, in.Key)
 	if err != nil {
 		return err
 	}
-	log.Printf("[session/send] load_session_before session=%s duration_ms=%d", in.Key, time.Since(t1).Milliseconds())
 	isInitial := len(current.Exchanges) == 0
 	agentPool := s.Registry.GetAgentPool()
 	if agentPool == nil {
 		return nil
 	}
-	t4 := time.Now()
-	watcher, watcherErr := s.Registry.GetFileWatcher(in.RootID, manager)
-	if watcherErr != nil {
-		log.Printf("[watcher] root=%s session=%s get_failed err=%v", in.RootID, current.Key, watcherErr)
-	}
+	watcher, _ := s.Registry.GetFileWatcher(in.RootID, manager)
 	if watcher != nil {
 		watcher.RegisterSession(current.Key)
 		watcher.MarkSessionActive(current.Key)
-	} else {
-		log.Printf("[watcher] root=%s session=%s unavailable", in.RootID, current.Key)
 	}
-	log.Printf("[session/send] prepare_watcher session=%s duration_ms=%d", in.Key, time.Since(t4).Milliseconds())
 	root := manager.Root()
 	rootAbs, _ := root.RootDir()
-	t5 := time.Now()
 	sess, err := s.ensureAgentSession(ctx, agentPool, current, in.Agent, rootAbs)
 	if err != nil {
 		return err
 	}
-	log.Printf("[session/send] get_or_create_agent_session session=%s agent=%s duration_ms=%d", in.Key, in.Agent, time.Since(t5).Milliseconds())
 
-	t6 := time.Now()
 	prompt := s.BuildPrompt(BuildPromptInput{
 		Session:       current,
 		Manager:       manager,
@@ -312,7 +293,6 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		ClientContext: in.ClientCtx,
 		IsInitial:     isInitial,
 	})
-	log.Printf("[session/send] build_prompt session=%s prompt_chars=%d duration_ms=%d", in.Key, len(prompt), time.Since(t6).Milliseconds())
 	var responseText string
 	sess.OnUpdate(func(update agenttypes.Event) {
 		if update.Type == agenttypes.EventTypeToolCall {
@@ -337,14 +317,10 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 			in.OnUpdate(update)
 		}
 	})
-	t7 := time.Now()
 	sendErr := sess.SendMessage(ctx, prompt)
-	log.Printf("[session/send] agent_send_message_done session=%s duration_ms=%d", in.Key, time.Since(t7).Milliseconds())
-	t8 := time.Now()
 	if err := manager.AddExchangeForAgent(ctx, current, "user", in.Content, in.Agent); err != nil {
 		return err
 	}
-	log.Printf("[session/send] append_user_exchange session=%s duration_ms=%d", in.Key, time.Since(t8).Milliseconds())
 	if sendErr != nil {
 		if prober := s.Registry.GetProber(); prober != nil {
 			prober.ReportFailure(in.Agent, sendErr)
@@ -354,14 +330,11 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	if prober := s.Registry.GetProber(); prober != nil {
 		prober.ReportSuccess(in.Agent)
 	}
-	t9 := time.Now()
 	err = s.appendAgentReply(ctx, manager, current, in.Agent, responseText)
-	log.Printf("[session/send] append_agent_reply session=%s duration_ms=%d", in.Key, time.Since(t9).Milliseconds())
 	if err != nil {
 		return err
 	}
 
-	_ = manager.UpdateAgentState(ctx, current, in.Agent, contextLineCount(current.Exchanges))
-	log.Printf("[session/send] done root=%s session=%s total_ms=%d", in.RootID, in.Key, time.Since(start).Milliseconds())
+	manager.UpdateAgentState(ctx, current, in.Agent, contextLineCount(current.Exchanges))
 	return nil
 }

@@ -3,9 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
-	"log"
 	"sync"
-	"time"
 
 	"mindfs/server/internal/agent/acp"
 	"mindfs/server/internal/agent/claude"
@@ -51,14 +49,11 @@ func (p *Pool) GetOrCreate(ctx context.Context, in agenttypes.OpenSessionInput) 
 	if in.SessionKey == "" {
 		return nil, errors.New("session key required")
 	}
-	start := time.Now()
-	log.Printf("[agent/pool] get_or_create.begin session=%s agent=%s", in.SessionKey, in.AgentName)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if entry, ok := p.sessions[in.SessionKey]; ok {
-		log.Printf("[agent/pool] get_or_create.hit session=%s agent=%s duration_ms=%d", in.SessionKey, in.AgentName, time.Since(start).Milliseconds())
 		return entry.session, nil
 	}
 
@@ -82,7 +77,6 @@ func (p *Pool) GetOrCreate(ctx context.Context, in agenttypes.OpenSessionInput) 
 		protocol:   protocol,
 		session:    sess,
 	}
-	log.Printf("[agent/pool] get_or_create.done session=%s agent=%s total_ms=%d", in.SessionKey, in.AgentName, time.Since(start).Milliseconds())
 	return sess, nil
 }
 
@@ -145,7 +139,7 @@ func (p *Pool) Close(sessionKey string) {
 		return
 	}
 	if entry.session != nil {
-		_ = entry.session.Close()
+		entry.session.Close()
 	}
 	if entry.protocol == ProtocolACP {
 		p.acp.CloseSession(sessionKey)
