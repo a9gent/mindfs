@@ -60,21 +60,22 @@ export function MarkdownViewer({ content }: { content: string }) {
                return (
                  <pre
                     style={{
-                      background: "rgba(255,255,255,0.4)", // 更通透
-                      backdropFilter: "blur(10px)",
+                      background: "rgba(0,0,0,0.04)", 
                       padding: "16px", 
-                      borderRadius: "12px", 
+                      borderRadius: "10px", 
                       overflow: "auto",
-                      border: "1px solid rgba(0,0,0,0.06)",
+                      border: "1px solid var(--border-color)",
                       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
                       fontSize: "13px",
                       margin: "1.5em 0",
-                      boxShadow: "0 4px 12px rgba(0,0,0,0.03)"
+                      lineHeight: "1.6",
+                      boxShadow: "none" // 强制移除阴影
                     }}
                  >
                    <code 
                       className={className} 
                       dangerouslySetInnerHTML={{ __html: html }}
+                      style={{ textShadow: "none" }} // 强制移除文字阴影
                       {...props} 
                    />
                  </pre>
@@ -85,12 +86,12 @@ export function MarkdownViewer({ content }: { content: string }) {
               <code
                 className={className}
                 style={{
-                  background: "#f1f5f9",
-                  padding: "2px 6px",
-                  borderRadius: "6px",
-                  color: "#0f172a",
+                  background: "rgba(0,0,0,0.05)",
+                  padding: "2px 4px",
+                  borderRadius: "4px",
+                  color: "inherit",
                   fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-                  fontSize: "12px",
+                  fontSize: "0.9em",
                 }}
                 {...props}
               >

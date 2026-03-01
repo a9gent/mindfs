@@ -47,19 +47,34 @@ const ChevronRight = ({ isOpen }: { isOpen: boolean }) => (
 
 const getFileIcon = (filename: string) => {
   const ext = filename.split('.').pop()?.toLowerCase();
-  const iconStyle = { minWidth: 16 };
-  if (['js', 'ts', 'jsx', 'tsx'].includes(ext!)) return <span style={{...iconStyle, color: '#f7df1e'}}>JS</span>;
-  if (['py'].includes(ext!)) return <span style={{...iconStyle, color: '#3776ab'}}>Py</span>;
-  if (['go'].includes(ext!)) return <span style={{...iconStyle, color: '#00add8'}}>Go</span>;
-  if (['html', 'css'].includes(ext!)) return <span style={{...iconStyle, color: '#e34f26'}}>网页</span>;
-  if (['md'].includes(ext!)) return <span style={{...iconStyle, color: '#64748b'}}>M↓</span>;
-  if (['pdf'].includes(ext!)) return <span style={{...iconStyle, color: '#ef4444'}}>PDF</span>;
-  if (['txt'].includes(ext!)) return <span style={{...iconStyle, color: '#94a3b8'}}>TXT</span>;
-  if (['png', 'jpg', 'jpeg', 'gif', 'svg'].includes(ext!)) return <span style={{...iconStyle, color: '#ec4899'}}>图</span>;
+  
+  // 核心文件类型使用极简 SVG
+  if (['js', 'ts', 'jsx', 'tsx', 'go', 'py', 'java', 'c', 'cpp'].includes(ext!)) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
+        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+        <polyline points="14 2 14 8 20 8"/>
+      </svg>
+    );
+  }
+  if (['md', 'txt'].includes(ext!)) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.6 }}>
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+      </svg>
+    );
+  }
+  if (['png', 'jpg', 'jpeg', 'gif', 'svg'].includes(ext!)) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7 }}>
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+      </svg>
+    );
+  }
+  
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={iconStyle}>
-      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
-      <polyline points="14 2 14 8 20 8" />
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.5 }}>
+      <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/>
     </svg>
   );
 };
@@ -111,7 +126,7 @@ export function FileTree({
               onClick={() => entry.is_dir ? onToggleDir?.(entry, entryRoot) : onSelectFile?.(entry, entryRoot)}
               style={{
                 border: "none",
-                background: isSelected ? "rgba(59, 130, 246, 0.1)" : "transparent",
+                background: isSelected ? "var(--selection-bg)" : "transparent",
                 cursor: "pointer",
                 padding: "6px 8px",
                 paddingLeft: 8 + depth * 16,
@@ -127,15 +142,11 @@ export function FileTree({
                 fontWeight: isSelected ? 600 : 400,
                 outline: "none",
               }}
-              onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = "rgba(0,0,0,0.03)"; }}
+              onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = "rgba(0,0,0,0.04)"; }}
               onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
             >
               <div style={{ width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                 {entry.is_dir ? <ChevronRight isOpen={isOpen} /> : (
-                   <div style={{ fontSize: '10px', fontWeight: 700, opacity: 0.8 }}>
-                     {getFileIcon(entry.name)}
-                   </div>
-                 )}
+                 {entry.is_dir ? <ChevronRight isOpen={isOpen} /> : getFileIcon(entry.name)}
               </div>
               <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1, marginLeft: "4px" }}>
                 {entry.name}

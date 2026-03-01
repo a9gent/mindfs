@@ -36,31 +36,34 @@ const sidebarStyle: React.CSSProperties = {
   gridArea: "sidebar",
   borderRight: "1px solid var(--border-color)",
   overflow: "auto",
-  background: "rgba(255,255,255,0.6)",
-  backdropFilter: "blur(12px)",
+  background: "var(--sidebar-bg)",
   display: "flex",
   flexDirection: "column",
+  position: "relative",
+  zIndex: 10,
 };
 
 const mainStyle: React.CSSProperties = {
   gridArea: "main",
-  overflow: "hidden", // 禁用全局滚动，由内部组件控制
+  overflow: "hidden",
   padding: "0",
-  background: "transparent",
+  background: "var(--content-bg)", // 统一主视图背景
   display: "flex",
   flexDirection: "column",
-  minHeight: 0, // 关键：允许 flex 子项在高度溢出时收缩
+  minHeight: 0,
+  position: "relative",
+  zIndex: 1,
 };
 
 const footerStyle: React.CSSProperties = {
   gridArea: "footer",
   borderTop: "none",
-  padding: "0 16px 10px",
+  padding: "0", // 移除内边距，由内部组件控制对齐
   display: "flex",
   alignItems: "flex-end",
   justifyContent: "center",
-  background: "transparent",
-  zIndex: 110, // 提到最高，防止被浮窗遮罩遮挡
+  background: "var(--content-bg)", // 与主视图保持同色
+  zIndex: 100,
 };
 
 export function AppShell({
@@ -71,12 +74,7 @@ export function AppShell({
   floating,
 }: AppShellProps) {
   const { isMobile, isTablet } = useResponsive();
-  const [mobileNav, setMobileNav] = useState<"files" | "main" | "sessions">("main");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  const toggleSidebar = useCallback(() => {
-    setSidebarOpen((prev) => !prev);
-  }, []);
+  const [mobileNav, setMobileNav] = useState<"files" | "main">("main");
 
   // Mobile layout
   if (isMobile) {
@@ -90,57 +88,15 @@ export function AppShell({
           position: "relative",
         }}
       >
-        {/* Mobile header */}
-        <header
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "12px 16px",
-            borderBottom: "1px solid var(--border-color)",
-            background: "rgba(255,255,255,0.9)",
-            backdropFilter: "blur(12px)",
-          }}
-        >
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            style={{
-              padding: "8px",
-              border: "none",
-              background: "transparent",
-              fontSize: "20px",
-              cursor: "pointer",
-            }}
-          >
-            ☰
-          </button>
-          <span style={{ fontWeight: 600, fontSize: "16px" }}>MindFS</span>
-          <button
-            type="button"
-            onClick={() => setMobileNav("sessions")}
-            style={{
-              padding: "8px",
-              border: "none",
-              background: "transparent",
-              fontSize: "20px",
-              cursor: "pointer",
-            }}
-          >
-            💬
-          </button>
-        </header>
-
         {/* Mobile content */}
-        <div style={{ flex: 1, overflow: "auto", position: "relative" }}>
+        <div style={{ flex: 1, overflow: "auto", position: "relative", display: "flex", flexDirection: "column" }}>
           {mobileNav === "files" && sidebar}
           {mobileNav === "main" && main}
-          {mobileNav === "sessions" && rightSidebar}
           {floating}
         </div>
 
         {/* Mobile footer with action bar */}
-        <div style={{ borderTop: "1px solid var(--border-color)" }}>{footer}</div>
+        <div style={{ borderTop: "none" }}>{footer}</div>
 
         {/* Mobile bottom navigation */}
         <nav
@@ -148,6 +104,7 @@ export function AppShell({
             display: "flex",
             borderTop: "1px solid var(--border-color)",
             background: "rgba(255,255,255,0.95)",
+            paddingBottom: "env(safe-area-inset-bottom)",
           }}
         >
           <MobileNavButton
@@ -162,46 +119,7 @@ export function AppShell({
             active={mobileNav === "main"}
             onClick={() => setMobileNav("main")}
           />
-          <MobileNavButton
-            icon="💬"
-            label="Sessions"
-            active={mobileNav === "sessions"}
-            onClick={() => setMobileNav("sessions")}
-          />
         </nav>
-
-        {/* Mobile sidebar overlay */}
-        {sidebarOpen && (
-          <div
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: 1000,
-              display: "flex",
-            }}
-          >
-            <div
-              style={{
-                position: "absolute",
-                inset: 0,
-                background: "rgba(0,0,0,0.3)",
-              }}
-              onClick={toggleSidebar}
-            />
-            <div
-              style={{
-                position: "relative",
-                width: "280px",
-                maxWidth: "80vw",
-                background: "#fff",
-                boxShadow: "4px 0 24px rgba(0,0,0,0.1)",
-                overflow: "auto",
-              }}
-            >
-              {sidebar}
-            </div>
-          </div>
-        )}
       </div>
     );
   }
@@ -216,16 +134,17 @@ export function AppShell({
     gridTemplateRows: "1fr auto",
     gridTemplateAreas: `"sidebar main right" "sidebar footer right"`,
     height: "100vh",
-    background: "linear-gradient(120deg, #fdfbfb 0%, #ebedee 100%)",
+    background: "var(--bg-gradient-start, #f3f4f6)",
     color: "var(--text-primary)",
     position: "relative",
+    overflow: "hidden",
   };
 
   const rightStyle: React.CSSProperties = {
     gridArea: "right",
     borderLeft: "1px solid var(--border-color)",
     overflow: "auto",
-    background: "rgba(255,255,255,0.6)",
+    background: "var(--sidebar-bg)",
     backdropFilter: "blur(12px)",
     display: rightSidebar ? "flex" : "none",
     flexDirection: "column",
@@ -234,17 +153,6 @@ export function AppShell({
   return (
     <div style={shellStyle}>
       <aside style={sidebarStyle}>{sidebar}</aside>
-      
-      {/* 统一的中央列容器 */}
-      <div style={{ 
-        gridArea: "main / main / footer / main", // 跨越 main 到 footer 的 grid 区域
-        background: "rgba(255, 255, 255, 0.8)",
-        backdropFilter: "blur(20px)",
-        zIndex: 0,
-        pointerEvents: "none", // 仅作为背景，不拦截事件
-        borderRight: "1px solid var(--border-color)",
-      }} />
-
       <main style={mainStyle}>{main}</main>
       <aside style={rightStyle}>{rightSidebar}</aside>
       <footer style={footerStyle}>{footer}</footer>

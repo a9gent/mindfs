@@ -157,11 +157,11 @@ export function FileViewer({ file, onSessionClick, onPathClick }: FileViewerProp
       <div style={{ flex: 1, overflow: "auto", position: "relative" }}>
         <div style={{ minWidth: "100%", minHeight: "100%", display: "inline-block", background: "transparent" }}>
           {file.mime?.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].includes(ext.toLowerCase()) ? (
-            <div style={{ padding: "24px" }}><ImageViewer path={file.path} root={file.root} /></div>
+            <div style={{ padding: "24px 16px" }}><ImageViewer path={file.path} root={file.root} /></div>
           ) : file.encoding === "binary" ? (
-            <div style={{ padding: "24px" }}><BinaryViewer /></div>
+            <div style={{ padding: "24px 16px" }}><BinaryViewer /></div>
           ) : ext === ".md" || ext === ".markdown" ? (
-            <div style={{ padding: "24px 40px" }}><MarkdownViewer content={file.content} /></div>
+            <div style={{ padding: "24px 16px" }}><MarkdownViewer content={file.content} /></div>
           ) : (
             <CodeViewer content={file.content} ext={ext} />
           )}

@@ -1,17 +1,73 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { JSONUIProvider } from "@json-render/react";
 import { Renderer } from "./renderer/Renderer";
-import {
-  buildDefaultTree,
-  type FileEntry,
-  type FilePayload,
-  type SessionItem,
-  type UITree,
-} from "./renderer/defaultTree";
 import { registry } from "./renderer/registry";
-import { mergeViewIntoShell } from "./renderer/merge";
 import { sessionService, type Session } from "./services/session";
 import { buildClientContext } from "./services/context";
+
+// 直接导入标准组件，不再通过 json-render 驱动
+import { AppShell } from "./layout/AppShell";
+import { FileTree } from "./components/FileTree";
+import { FileViewer } from "./components/FileViewer";
+import { SessionViewer } from "./components/SessionViewer";
+import { DefaultListView } from "./components/DefaultListView";
+import { SessionList } from "./components/SessionList";
+import { ActionBar } from "./components/ActionBar";
+import { BottomSheet } from "./components/BottomSheet";
+
+// 类型定义保留
+export type FileEntry = {
+  name: string;
+  path: string;
+  is_dir: boolean;
+};
+
+export type UIElement = {
+  key: string;
+  type: string;
+  props?: Record<string, unknown>;
+  children?: string[];
+};
+
+export type UITree = {
+  root: string;
+  elements: Record<string, UIElement>;
+};
+
+export type FilePayload = {
+  name: string;
+  path: string;
+  content: string;
+  encoding: string;
+  truncated: boolean;
+  size: number;
+  ext?: string;
+  mime?: string;
+  root?: string;
+  file_meta?: Array<{
+    source_session: string;
+    session_name?: string;
+    agent?: string;
+    created_at?: string;
+    updated_at?: string;
+    created_by?: string;
+  }>;
+};
+
+export type SessionItem = {
+  key?: string;
+  session_key?: string;
+  root_id?: string;
+  name?: string;
+  type?: "chat" | "view" | "skill";
+  agent?: string;
+  scope?: string;
+  purpose?: string;
+  closed_at?: string;
+  related_files?: Array<{ path: string; name?: string }>;
+  exchanges?: Array<{ role?: string; content?: string; timestamp?: string }>;
+  pending?: boolean;
+};
 
 type ManagedDir = {
   id: string;
@@ -51,6 +107,18 @@ type PendingSend = {
   timestamp: string;
 };
 
+// Hook for responsive detection
+function useResponsive() {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const checkSize = () => setIsMobile(window.innerWidth < 768);
+    checkSize();
+    window.addEventListener("resize", checkSize);
+    return () => window.removeEventListener("resize", checkSize);
+  }, []);
+  return { isMobile };
+}
+
 export function App() {
   const [rootEntries, setRootEntries] = useState<FileEntry[]>([]);
   const [entriesByPath, setEntriesByPath] = useState<Record<string, FileEntry[]>>({});
@@ -82,12 +150,15 @@ export function App() {
   const [sessionsByRoot, setSessionsByRoot] = useState<Record<string, any[]>>({});
   const [sessionsReady, setSessionsReady] = useState(false);
   const [selectedSession, setSelectedSession] = useState<SessionItem | null>(null);
+  const [activeBoundSessionKey, setActiveBoundSessionKey] = useState<string | null>(null);
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
   const [currentSessionExchanges, setCurrentSessionExchanges] = useState<any[]>([]);
   const [currentSessionByRoot, setCurrentSessionByRoot] = useState<Record<string, Session>>({});
   const [sessionExchangesByRootSession, setSessionExchangesByRootSession] = useState<Record<string, any[]>>({});
   const [interactionMode, setInteractionMode] = useState<"main" | "floating">("main");
+  const [agentsVersion, setAgentsVersion] = useState(0);
   const [isFloatingOpen, setIsFloatingOpen] = useState(false);
+  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
   const rootSessionKey = useCallback((rootId: string, sessionKey: string) => `${rootId}::${sessionKey}`, []);
   const applySessionSnapshot = useCallback((rootID: string, session: Session) => {
     const exchangeKey = rootSessionKey(rootID, session.key);
@@ -425,17 +496,147 @@ export function App() {
     return { file: null, viewRoutes: [] };
   }, []);
   useEffect(() => {
-    if (interactionMode === "floating" && isFloatingOpen) return;
     if (!currentRootId) return;
-    const session = currentSessionByRoot[currentRootId];
-    if (!session) {
-      setCurrentSession(null);
-      setCurrentSessionExchanges([]);
-      return;
-    }
-    setCurrentSession(session);
-    setCurrentSessionExchanges(sessionExchangesByRootSession[rootSessionKey(currentRootId, session.key)] || []);
-  }, [currentRootId, currentSessionByRoot, sessionExchangesByRootSession, rootSessionKey, interactionMode, isFloatingOpen]);
+    sessionService.connect(currentRootId);
+    let cancelled = false;
+
+    const loadSessions = async (rootID: string) => {
+      try {
+        const res = await fetch(`/api/sessions?root=${encodeURIComponent(rootID)}`);
+        const payload = await res.json();
+        if (!cancelled) {
+          const next = Array.isArray(payload) ? payload : [];
+          if (rootID === currentRootIdRef.current) {
+            setSessions(next);
+          }
+          setSessionsByRoot((prev) => ({ ...prev, [rootID]: next }));
+        }
+      } catch {}
+    };
+
+    const handleSessionStream = (payload: Record<string, unknown>) => {
+      const streamKey = typeof payload.session_key === "string" ? payload.session_key : "";
+      const activeRoot = currentRootIdRef.current;
+      if (!streamKey || !activeRoot) return;
+
+      const cacheKey = rootSessionKey(activeRoot, streamKey);
+      let pending = pendingBySessionRef.current[cacheKey] || (pendingDraftRef.current?.rootId === activeRoot ? pendingDraftRef.current : null);
+      
+      if (pending) {
+        seedCurrentSessionFromPending(activeRoot, streamKey, pending);
+        // 自动绑定：如果当前没有绑定的会话，或者正在收到流，则锁定它
+        if (!activeBoundSessionKey) {
+          setActiveBoundSessionKey(streamKey);
+        }
+      }
+
+      const event = (payload.event || null) as any;
+      if (!event?.type) return;
+
+      if (event.type === "message_chunk") {
+        appendAgentChunkForSession(activeRoot, streamKey, event.data?.content || "");
+      } else if (event.type === "thought_chunk") {
+        appendThoughtChunkForSession(activeRoot, streamKey, event.data?.content || "");
+      } else if (event.type === "tool_call") {
+        appendToolCallForSession(activeRoot, streamKey, event.data || {}, false);
+      } else if (event.type === "tool_call_update") {
+        appendToolCallForSession(activeRoot, streamKey, event.data || {}, true);
+      }
+    };
+
+    const handleSessionDone = (payload: Record<string, unknown>) => {
+      const doneKey = typeof payload.session_key === "string" ? payload.session_key : "";
+      if (doneKey && currentRootIdRef.current) {
+        loadSessions(currentRootIdRef.current);
+      }
+    };
+
+    const refreshCurrentFile = async (rootID: string, path: string) => {
+      try {
+        const query = new URLSearchParams({ path, root: rootID });
+        const res = await fetch(`/api/file?${query.toString()}`);
+        const payload = await res.json().catch(() => ({}));
+        if (res.ok) {
+          const next = normalizeFileResponse(payload);
+          if (next.file) setFile(next.file);
+        }
+      } catch {}
+    };
+
+    const refreshCurrentDir = async (rootID: string, dir: string) => {
+      const apiDir = managedRootIdsRef.current.has(dir) ? "." : dir;
+      try {
+        const res = await fetch(`/api/tree?root=${encodeURIComponent(rootID)}&dir=${encodeURIComponent(apiDir)}`);
+        const payload = await res.json().catch(() => ({}));
+        if (res.ok) {
+          const parsed = normalizeTreeResponse(payload);
+          const cacheKey = `${rootID}:${apiDir}`;
+          setEntriesByPath((prev) => ({ ...prev, [cacheKey]: parsed.entries }));
+          if (dir === selectedDirRef.current) {
+            setMainEntries(parsed.entries);
+          }
+        }
+      } catch {}
+    };
+
+    const isPathInDir = (path: string, dir: string, rootID: string): boolean => {
+      if (!path) return false;
+      if (managedRootIdsRef.current.has(dir) || dir === rootID || dir === "." || dir === "") return true;
+      return path === dir || path.startsWith(`${dir}/`);
+    };
+
+    const handleFileChange = (payload: Record<string, unknown>) => {
+      const eventRoot = typeof payload.root_id === "string" ? payload.root_id : "";
+      const eventPath = typeof payload.path === "string" ? payload.path : "";
+      if (eventRoot !== currentRootIdRef.current) return;
+
+      const activeFile = fileRef.current;
+      if (activeFile?.path && activeFile.path === eventPath) {
+        refreshCurrentFile(eventRoot, activeFile.path);
+      }
+
+      const activeDir = selectedDirRef.current;
+      if (activeDir && isPathInDir(eventPath, activeDir, eventRoot)) {
+        refreshCurrentDir(eventRoot, activeDir);
+      }
+    };
+
+    const unsubscribeEvents = sessionService.subscribeEvents((event) => {
+      const payload = (event.payload || {}) as Record<string, unknown>;
+      switch (event.type) {
+        case "session.stream": handleSessionStream(payload); break;
+        case "session.done": handleSessionDone(payload); break;
+        case "agent.status.changed": setAgentsVersion(v => v + 1); break;
+        case "file.changed": handleFileChange(payload); break;
+      }
+    });
+
+    loadSessions(currentRootId);
+    return () => { cancelled = true; unsubscribeEvents(); sessionService.disconnect(); };
+  }, [currentRootId, rootSessionKey, seedCurrentSessionFromPending, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, activeBoundSessionKey]);
+
+  useEffect(() => {
+    if (managedRootIds.length === 0) return;
+    setSessionsReady(false);
+    let cancelled = false;
+    const loadAllRoots = async () => {
+      await Promise.all(
+        managedRootIds.map(async (rootID) => {
+          try {
+            const res = await fetch(`/api/sessions?root=${encodeURIComponent(rootID)}`);
+            const payload = await res.json();
+            if (cancelled) return;
+            const next = Array.isArray(payload) ? payload : [];
+            setSessionsByRoot((prev) => ({ ...prev, [rootID]: next }));
+            if (rootID === currentRootIdRef.current) setSessions(next);
+          } catch {}
+        })
+      );
+      if (!cancelled) setSessionsReady(true);
+    };
+    loadAllRoots();
+    return () => { cancelled = true; };
+  }, [managedRootIds, currentRootId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -550,38 +751,32 @@ export function App() {
     async (message: string, mode: "chat" | "view" | "skill", agent: string) => {
       const activeRoot = currentRootIdRef.current;
       if (!activeRoot) return;
-      const keepFloating = interactionMode === "floating";
 
-      const selected = selectedSessionRef.current;
-      const selectedKey = selected?.key || selected?.session_key;
-      const canReuseSelected = typeof selectedKey === "string" && selectedKey !== "" && !selectedKey.startsWith("pending-");
-
+      // 优先锁定已绑定的 Session
+      let sendSessionKey = activeBoundSessionKey;
       let session: Session | null = null;
-      let sendSessionKey: string | undefined;
-      if (canReuseSelected && selectedKey) {
-        const cacheKey = rootSessionKey(activeRoot, selectedKey);
-        session = sessionCacheRef.current[cacheKey] || ({ ...(selected as any), key: selectedKey } as Session);
-        sendSessionKey = selectedKey;
+
+      if (sendSessionKey) {
+        const cacheKey = rootSessionKey(activeRoot, sendSessionKey);
+        session = sessionCacheRef.current[cacheKey];
+      } else {
+        // 状态2：待绑定（已选中但未发过消息）
+        const selected = selectedSessionRef.current;
+        const selectedKey = selected?.key || selected?.session_key;
+        if (selectedKey && !selectedKey.startsWith("pending-")) {
+          sendSessionKey = selectedKey;
+          const cacheKey = rootSessionKey(activeRoot, sendSessionKey);
+          session = sessionCacheRef.current[cacheKey] || ({ ...selected, key: selectedKey } as Session);
+        }
       }
 
       let effectiveMode: "chat" | "view" | "skill" = mode;
       let effectiveAgent = agent;
-      if (sendSessionKey && session && session.key && !session.key.startsWith("pending-")) {
-        const useMode = (session.type as "chat" | "view" | "skill" | undefined) || mode;
-        const useAgent = agent || session.agent || "";
-        effectiveMode = useMode;
-        effectiveAgent = useAgent;
-        session = { ...session, type: useMode, agent: useAgent } as Session;
-        setCurrentSession(session);
-        setCurrentSessionExchanges(sessionExchangesByRootSession[rootSessionKey(activeRoot, session.key)] || []);
-        setCurrentSessionByRoot((prev) => ({ ...prev, [activeRoot]: session as Session }));
-        setSelectedSession((prev) => {
-          const prevKey = prev?.key || prev?.session_key;
-          if (prevKey === session?.key) {
-            return { ...(prev as any), pending: true } as SessionItem;
-          }
-          return { ...(session as unknown as SessionItem), pending: true } as SessionItem;
-        });
+
+      if (sendSessionKey && session) {
+        effectiveMode = (session.type as any) || mode;
+        effectiveAgent = agent || session.agent || "";
+        setActiveBoundSessionKey(sendSessionKey); // 正式绑定
       } else {
         sendSessionKey = undefined;
         const tempKey = `pending-${Date.now()}`;
@@ -589,25 +784,25 @@ export function App() {
           key: tempKey,
           type: mode,
           agent,
-          name: "",
+          name: "新会话",
           pending: true,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         } as any;
         session = tempSession as Session;
-        setCurrentSession(tempSession);
-        setCurrentSessionByRoot((prev) => ({ ...prev, [activeRoot]: tempSession as Session }));
-        setCurrentSessionExchanges([]);
-        setSelectedSession(tempSession);
       }
-      
-      if (keepFloating) {
-        setInteractionMode("floating");
+
+      // 自动弹屉逻辑 (场景 B：主视图被占用或不是当前绑定会话时)
+      const isBoundSessionInMain = !!selectedSessionRef.current && selectedSessionRef.current.key === sendSessionKey && interactionModeRef.current !== "floating";
+      if (!isBoundSessionInMain) {
         setIsFloatingOpen(true);
-      } else {
-        setInteractionMode("main");
-        setIsFloatingOpen(false);
+        // 如果是移动端且当前不在文件列表，切到主视图显示抽屉
+        if (window.innerWidth < 768) {
+          setInteractionMode("floating");
+        }
       }
+
+      setCurrentSession(session);
       setFile(null);
       const nowISO = new Date().toISOString();
       const pendingSend: PendingSend = {
@@ -700,83 +895,14 @@ export function App() {
     setCurrentSessionExchanges((prev) => [...prev, newAgentExchange]);
   }, [currentSession, rootSessionKey]);
 
-  const handleOpenBubbleSession = useCallback((session: any) => {
-    if (!session?.key) return;
-    const rootID = session.root_id as string | undefined;
-    if (!rootID) return;
-    const exchangeKey = rootSessionKey(rootID, session.key);
-    const exchanges = sessionExchangesByRootSession[exchangeKey] || [];
-    const full = { ...session, exchanges };
-    // Floating panel is an overlay shortcut and should not affect main view selection.
-    setCurrentSession(full);
-    setCurrentSessionExchanges(exchanges);
-    setInteractionMode("floating");
-    setIsFloatingOpen(true);
-  }, [sessionExchangesByRootSession, rootSessionKey]);
-
   const handleToggleInteractionMode = useCallback((mode: "main" | "floating") => {
     setInteractionMode(mode);
     if (mode === "floating") {
-      if (currentSession) {
-        setIsFloatingOpen(true);
-      }
+      setIsFloatingOpen(true);
       return;
     }
     setIsFloatingOpen(false);
-  }, [currentSession]);
-
-  const activeSessions = useMemo(() => {
-    const list: any[] = [];
-    Object.entries(sessionsByRoot).forEach(([rootID, rootSessions]) => {
-      (rootSessions || []).forEach((s: any) => {
-        if (!s || s.closed_at || !s.key) return;
-        const key = rootSessionKey(rootID, s.key);
-        const exchanges = sessionExchangesByRootSession[key] || [];
-        if (exchanges.length === 0) return;
-        list.push({ ...s, root_id: rootID, exchanges });
-      });
-    });
-    return list;
-  }, [sessionsByRoot, sessionExchangesByRootSession, rootSessionKey]);
-
-  const shellTree = useMemo(
-    () =>
-      buildDefaultTree(
-        rootEntries,
-        entriesByPath,
-        expanded,
-        selectedDir,
-        currentRootId,
-        managedRootIds,
-        mainEntries,
-        status,
-        file,
-        sessions,
-        selectedSession,
-        handleSelectSession,
-        handleOpenBubbleSession,
-        sessionsReady ? activeSessions : [],
-        currentSession ? { ...currentSession, exchanges: currentSessionExchanges } : null,
-        interactionMode,
-        handleToggleInteractionMode,
-        handleSendMessage,
-        () => {
-          setInteractionMode("floating");
-          if (currentSession) {
-            setIsFloatingOpen(true);
-          }
-        },
-        isFloatingOpen,
-        setIsFloatingOpen,
-        handleAgentResponseAppend
-      ),
-    [rootEntries, entriesByPath, expanded, selectedDir, currentRootId, managedRootIds, mainEntries, status, file, sessions, selectedSession, activeSessions, currentSession, currentSessionExchanges, interactionMode, handleToggleInteractionMode, handleSendMessage, handleSelectSession, handleOpenBubbleSession, isFloatingOpen, handleAgentResponseAppend]
-  );
-
-  const tree = useMemo(() => {
-    const showSessionInMain = !!selectedSession && interactionMode !== "floating";
-    return showSessionInMain || file ? shellTree : mergeViewIntoShell(shellTree, viewTree);
-  }, [shellTree, viewTree, selectedSession, interactionMode, file]);
+  }, []);
 
   const actionHandlers = useMemo(
     () => {
@@ -800,7 +926,7 @@ export function App() {
           const path = params.path as string | undefined;
           const rootParam = params.root as string | undefined;
           if (!path) return;
-          const root = rootParam || currentRootIdRef.current || managedRootIds[0] || "";
+          const root = rootParam || currentRootIdRef.current || managedRootIdsRef.current.values().next().value || "";
           if (!root) return;
 
           const parents = getParentKeys(path, root);
@@ -812,9 +938,7 @@ export function App() {
             const payload = await res.json().catch(() => ({}));
             if (res.ok) {
               const next = normalizeFileResponse(payload);
-              if (next.file) {
-                setFile(next.file);
-              }
+              if (next.file) setFile(next.file);
               setViewTree(pickViewTree(next.viewRoutes));
               setSelectedSession(null);
             }
@@ -825,14 +949,17 @@ export function App() {
           const rootParam = params.root as string | undefined;
           const isToggle = !!params.toggle;
           if (!path) return;
+          
           const isActuallyRoot = managedRootIdsRef.current.has(path);
-          const root = isActuallyRoot ? path : (rootParam || currentRootIdRef.current || managedRootIds[0]);
+          const root = isActuallyRoot ? path : (rootParam || currentRootIdRef.current || Array.from(managedRootIdsRef.current)[0]);
           const expandedKey = isActuallyRoot ? path : `${root}:${path}`;
           const apiDir = isActuallyRoot ? "." : path;
+          
           if (isToggle && expandedRef.current.includes(expandedKey)) {
             setExpanded((prev) => prev.filter(k => k !== expandedKey));
             return;
           }
+          
           if (isActuallyRoot) {
             setCurrentRootId(path);
             setExpanded((prev) => Array.from(new Set([...prev, path])));
@@ -840,8 +967,9 @@ export function App() {
             const parents = getParentKeys(path, root);
             setExpanded((prev) => Array.from(new Set([...prev, ...parents, expandedKey])));
           }
+          
           try {
-            const res = await fetch(`/api/tree?root=${encodeURIComponent(root)}&dir=${encodeURIComponent(apiDir)}`);
+            const res = await fetch(`/api/tree?root=${encodeURIComponent(root || "")}&dir=${encodeURIComponent(apiDir)}`);
             const payload = await res.json();
             const parsed = normalizeTreeResponse(payload);
             const cacheKey = `${root}:${apiDir}`;
@@ -858,269 +986,168 @@ export function App() {
     [handleSelectSession, normalizeFileResponse, normalizeTreeResponse, pickViewTree]
   );
 
-  useEffect(() => {
-    if (!currentRootId) return;
-    sessionService.connect(currentRootId);
-    let cancelled = false;
-    const loadSessions = async (rootID: string) => {
-      try {
-        const res = await fetch(`/api/sessions?root=${encodeURIComponent(rootID)}`);
-        const payload = await res.json();
-        if (!cancelled) {
-          const next = Array.isArray(payload) ? payload : [];
-          if (rootID === currentRootIdRef.current) {
-            setSessions(next);
-          }
-          setSessionsByRoot((prev) => ({ ...prev, [rootID]: next }));
-        }
-      } catch {}
-    };
+  const handleNewSession = useCallback(() => {
+    setSelectedSession(null);
+    setActiveBoundSessionKey(null); // 核心：重置绑定态
+    setCurrentSession(null);
+    setCurrentSessionExchanges([]);
+    setViewTree(null);
+    setInteractionMode("main");
+    setIsFloatingOpen(false);
+  }, []);
 
-    const refreshCurrentFile = async (rootID: string, path: string) => {
-      try {
-        const query = new URLSearchParams({ path, root: rootID });
-        const res = await fetch(`/api/file?${query.toString()}`);
-        const payload = await res.json().catch(() => ({}));
-        if (!res.ok || cancelled) {
-          if (cancelled) return;
-          setFile(null);
-          const activeDir = selectedDirRef.current;
-          if (activeDir) {
-            await refreshCurrentDir(rootID, activeDir);
-          } else {
-            await refreshCurrentDir(rootID, rootID);
-          }
-          return;
-        }
-        const next = normalizeFileResponse(payload);
-        if (!next.file) {
-          setFile(null);
-          return;
-        }
-        setFile(next.file);
-        setViewTree(pickViewTree(next.viewRoutes));
-      } catch {}
-    };
-
-    const refreshCurrentDir = async (rootID: string, dir: string) => {
-      const apiDir = managedRootIdsRef.current.has(dir) ? "." : dir;
-      try {
-        const res = await fetch(`/api/tree?root=${encodeURIComponent(rootID)}&dir=${encodeURIComponent(apiDir)}`);
-        const payload = await res.json().catch(() => ({}));
-        if (!res.ok || cancelled) {
-          if (cancelled) return;
-          if (apiDir === ".") return;
-          const normalized = dir.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/\/+$/, "");
-          const parentDir = normalized.includes("/") ? normalized.slice(0, normalized.lastIndexOf("/")) : rootID;
-          if (parentDir && parentDir !== dir) {
-            setSelectedDir(parentDir);
-            await refreshCurrentDir(rootID, parentDir);
-          }
-          return;
-        }
-        const parsed = normalizeTreeResponse(payload);
-        const cacheKey = `${rootID}:${apiDir}`;
-        setEntriesByPath((prev) => ({ ...prev, [cacheKey]: parsed.entries }));
-        setMainEntries(parsed.entries);
-        setSelectedDir(dir);
-        setViewTree(pickViewTree(parsed.viewRoutes));
-      } catch {}
-    };
-
-    const isPathInDir = (path: string, dir: string, rootID: string): boolean => {
-      if (!path) return false;
-      if (managedRootIdsRef.current.has(dir) || dir === rootID || dir === "." || dir === "") {
-        return true;
-      }
-      return path === dir || path.startsWith(`${dir}/`);
-    };
-
-    const handleReconnect = () => {
-      const rootID = currentRootIdRef.current;
-      if (!rootID) {
-        return;
-      }
-      loadSessions(rootID);
-      const selected = selectedSessionRef.current;
-      const sessionKey = selected?.key || selected?.session_key;
-      if (!sessionKey) {
-        return;
-      }
-      if (typeof sessionKey === "string" && sessionKey.startsWith("pending-")) {
-        return;
-      }
-      void (async () => {
-        const full = await sessionService.getSession(rootID, sessionKey);
-        if (!full || cancelled || full.closed_at) {
-          return;
-        }
-        const fullWithPending = { ...(full as any), pending: false } as Session;
-        if (interactionModeRef.current !== "floating") {
-          openSessionInMain(rootID, fullWithPending);
-        }
-      })();
-    };
-
-    const handleSessionStream = (payload: Record<string, unknown>) => {
-      const streamKey = typeof payload.session_key === "string" ? payload.session_key : "";
-      const activeRoot = currentRootIdRef.current;
-      if (!streamKey || !activeRoot) {
-        return;
-      }
-      const event = (payload.event || null) as { type?: string; data?: Record<string, unknown> } | null;
-      const cacheKey = rootSessionKey(activeRoot, streamKey);
-      let pending = pendingBySessionRef.current[cacheKey];
-      if (!pending) {
-        const draft = pendingDraftRef.current;
-        if (draft && draft.rootId === activeRoot) {
-          pending = draft;
-          pendingBySessionRef.current[cacheKey] = draft;
-          pendingDraftRef.current = null;
-        }
-      }
-      setFile(null);
-      setSelectedSession((prev) => {
-        const prevKey = prev?.key || prev?.session_key;
-        if (prevKey === streamKey) {
-          return { ...(prev as any), pending: true } as SessionItem;
-        }
-        const isPendingPlaceholder = typeof prevKey === "string" && prevKey.startsWith("pending-");
-        if (!isPendingPlaceholder || !pending) {
-          return prev;
-        }
-        const seedExchanges = [{ role: "user", content: pending.message, timestamp: pending.timestamp } as Exchange];
-        return {
-          key: streamKey,
-          root_id: activeRoot,
-          type: pending?.mode,
-          agent: pending?.agent,
-          pending: true,
-          exchanges: seedExchanges,
-        } as SessionItem;
-      });
-      if (pending) {
-        seedCurrentSessionFromPending(activeRoot, streamKey, pending);
-      }
-      if (!event || !event.type) {
-        return;
-      }
-      if (event.type === "message_chunk") {
-        const content = typeof event.data?.content === "string" ? event.data.content : "";
-        if (content) {
-          appendAgentChunkForSession(activeRoot, streamKey, content, pending?.agent);
-        }
-        return;
-      }
-      if (event.type === "thought_chunk") {
-        const content = typeof event.data?.content === "string" ? event.data.content : "";
-        if (content) {
-          appendThoughtChunkForSession(activeRoot, streamKey, content);
-        }
-        return;
-      }
-      if (event.type === "tool_call") {
-        appendToolCallForSession(activeRoot, streamKey, (event.data || {}) as Record<string, unknown>, false);
-        return;
-      }
-      if (event.type === "tool_call_update") {
-        appendToolCallForSession(activeRoot, streamKey, (event.data || {}) as Record<string, unknown>, true);
-        return;
-      }
-      if (event.type === "error") {
-        delete pendingBySessionRef.current[cacheKey];
-        setSelectedPendingByKey(streamKey, false);
-        return;
-      }
-      if (event.type === "message_done") {
-        return;
-      }
-    };
-
-    const handleSessionDone = (payload: Record<string, unknown>) => {
-      const doneKey = typeof payload.session_key === "string" ? payload.session_key : "";
-      const activeRoot = currentRootIdRef.current;
-      if (activeRoot) {
-        loadSessions(activeRoot);
-      }
-      if (!doneKey || !activeRoot) {
-        return;
-      }
-      delete pendingBySessionRef.current[rootSessionKey(activeRoot, doneKey)];
-      setSelectedPendingByKey(doneKey, false);
-    };
-
-    const handleFileChange = (payload: Record<string, unknown>) => {
-      const eventRoot = typeof payload.root_id === "string" ? payload.root_id : "";
-      const eventPath = typeof payload.path === "string" ? payload.path : "";
-      if (!eventRoot || eventRoot !== currentRootIdRef.current) {
-        return;
-      }
-      const activeFile = fileRef.current;
-      if (activeFile?.path && activeFile.path === eventPath) {
-        refreshCurrentFile(eventRoot, activeFile.path);
-        return;
-      }
-      const activeDir = selectedDirRef.current;
-      if (activeDir && isPathInDir(eventPath, activeDir, eventRoot)) {
-        refreshCurrentDir(eventRoot, activeDir);
-      }
-    };
-
-    const unsubscribeEvents = sessionService.subscribeEvents((event) => {
-      const payload = (event.payload || {}) as Record<string, unknown>;
-      switch (event.type) {
-        case "ws.reconnected":
-          handleReconnect();
-          return;
-        case "session.stream":
-          handleSessionStream(payload);
-          return;
-        case "session.done":
-          handleSessionDone(payload);
-          return;
-        case "file.changed":
-          handleFileChange(payload);
-          return;
-        default:
-          return;
-      }
-    });
-    loadSessions(currentRootId);
-    return () => { cancelled = true; unsubscribeEvents(); sessionService.disconnect(); };
-  }, [currentRootId, normalizeFileResponse, normalizeTreeResponse, pickViewTree, openSessionInMain, seedCurrentSessionFromPending, setSelectedPendingByKey, rootSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession]);
-
-  useEffect(() => {
-    if (managedRootIds.length === 0) return;
-    setSessionsReady(false);
-    let cancelled = false;
-    const loadAllRoots = async () => {
-      await Promise.all(
-        managedRootIds.map(async (rootID) => {
-          try {
-            const res = await fetch(`/api/sessions?root=${encodeURIComponent(rootID)}`);
-            const payload = await res.json();
-            if (cancelled) return;
-            const next = Array.isArray(payload) ? payload : [];
-            setSessionsByRoot((prev) => ({ ...prev, [rootID]: next }));
-            if (rootID === currentRootIdRef.current) {
-              setSessions(next);
-            }
-          } catch {}
-        })
-      );
-      if (!cancelled) {
-        setSessionsReady(true);
-      }
-    };
-    loadAllRoots();
-    return () => {
-      cancelled = true;
-    };
-  }, [managedRootIds]);
+  const showSessionInMain = !!selectedSession && interactionMode !== "floating";
+  const { isMobile } = useResponsive();
 
   return (
-    <JSONUIProvider registry={registry} initialData={{}} actionHandlers={actionHandlers}>
-      <Renderer tree={tree} registry={registry} />
-    </JSONUIProvider>
+    <AppShell
+      sidebar={
+        <FileTree
+          entries={rootEntries}
+          childrenByPath={entriesByPath}
+          expanded={expanded}
+          selectedDir={showSessionInMain || file ? null : selectedDir}
+          selectedPath={file?.path}
+          rootId={currentRootId}
+          managedRoots={managedRootIds}
+          onSelectFile={(entry, root) => actionHandlers.open({ path: entry.path, root })}
+          onToggleDir={(entry, root) => actionHandlers.open_dir({ path: entry.path, root, toggle: true })}
+        />
+      }
+      rightSidebar={
+        isRightSidebarOpen ? (
+          <SessionList
+            sessions={sessions ?? []}
+            selectedKey={selectedSession?.key ?? selectedSession?.session_key ?? ""}
+            onSelect={handleSelectSession}
+          />
+        ) : undefined
+      }
+      main={
+        showSessionInMain ? (
+          <SessionViewer
+            session={selectedSession}
+            interactionMode={interactionMode}
+            onToggleMode={handleToggleInteractionMode}
+            onAgentResponse={handleAgentResponseAppend}
+            onFileClick={(path) => actionHandlers.open({ path, root: currentRootId })}
+          />
+        ) : file ? (
+          <FileViewer
+            file={file}
+            onSessionClick={(sessionKey) => handleSelectSession({ key: sessionKey, root_id: currentRootId })}
+            onPathClick={(path) => actionHandlers.open_dir({ path, root: currentRootId })}
+          />
+        ) : viewTree ? (
+          <JSONUIProvider registry={registry} initialData={{}} actionHandlers={actionHandlers}>
+            <Renderer tree={viewTree} registry={registry} />
+          </JSONUIProvider>
+        ) : (
+          <DefaultListView
+            path={selectedDir ?? ""}
+            entries={mainEntries}
+            onItemClick={(entry) => {
+              if (entry.is_dir) {
+                actionHandlers.open_dir({ path: entry.path, root: currentRootId });
+              } else {
+                actionHandlers.open({ path: entry.path, root: currentRootId });
+              }
+            }}
+            onPathClick={(path) => actionHandlers.open_dir({ path, root: currentRootId })}
+          />
+        )
+      }
+      footer={
+        <ActionBar
+          status={status}
+          agentsVersion={agentsVersion}
+          currentSession={(() => {
+            // 核心逻辑：如果主视图在看文件，且没有“强绑定”正在进行的会话，蓝点应为初始态
+            if (file && !activeBoundSessionKey) {
+              return null; // 初始态：空心/灰色
+            }
+
+            const selectedKey = selectedSession?.key || selectedSession?.session_key;
+            if (selectedKey && selectedSession?.type && selectedSession?.agent) {
+              const isBound = activeBoundSessionKey === selectedKey;
+              return {
+                key: selectedKey,
+                name: selectedSession.name || "",
+                type: selectedSession.type,
+                agent: selectedSession.agent,
+                pending: !isBound, // 如果已强绑定，则不再是待绑定态（即显示为高亮蓝）
+              };
+            }
+
+            // 如果有强绑定会话，但主视图没选中它（例如正在看另一个只读 Session）
+            if (activeBoundSessionKey && currentSession) {
+              return {
+                key: currentSession.key,
+                name: currentSession.name || "",
+                type: currentSession.type,
+                agent: currentSession.agent,
+                pending: false, // 已绑定态：高亮蓝
+              };
+            }
+
+            return null; // 初始态
+          })()}
+          onSendMessage={handleSendMessage}
+          onNewSession={handleNewSession}
+          onSessionClick={() => {
+            if (isMobile) {
+              setIsFloatingOpen(!isFloatingOpen);
+            } else {
+              setIsRightSidebarOpen(!isRightSidebarOpen);
+            }
+          }}
+          isSessionInMain={showSessionInMain}
+        />
+      }
+      floating={
+        isMobile ? (
+          <BottomSheet
+            isOpen={isFloatingOpen}
+            onClose={() => setIsFloatingOpen(false)}
+            title={currentSession?.name || "AI Assistant"}
+            onFullScreen={currentSession ? () => {
+              openSessionInMain(currentRootIdRef.current!, currentSession);
+              setIsFloatingOpen(false);
+            } : undefined}
+          >
+            {currentSession ? (
+              <SessionViewer
+                session={currentSession}
+                interactionMode="floating"
+                onToggleMode={() => {
+                  openSessionInMain(currentRootIdRef.current!, currentSession);
+                  setIsFloatingOpen(false);
+                }}
+                onAgentResponse={handleAgentResponseAppend}
+                onFileClick={(path) => {
+                  actionHandlers.open({ path, root: currentRootId });
+                  setIsFloatingOpen(false);
+                }}
+              />
+            ) : (
+              <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--text-secondary)" }}>
+                <div style={{ fontSize: "40px", marginBottom: "16px" }}>💬</div>
+                <p>点击蓝点或发送消息开始聊天</p>
+                <div style={{ marginTop: "20px", textAlign: "left" }}>
+                  <SessionList
+                    sessions={sessions ?? []}
+                    selectedKey=""
+                    onSelect={(s) => {
+                      handleSelectSession(s);
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </BottomSheet>
+        ) : null
+      }
+    />
   );
 }
+

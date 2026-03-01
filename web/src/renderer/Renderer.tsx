@@ -1,7 +1,7 @@
 import React from "react";
 import { Renderer as JsonRenderer } from "@json-render/react";
 import { registry } from "./registry";
-import type { UITree } from "./defaultTree";
+import type { UITree } from "../App";
 
 type RendererProps = {
   tree: UITree;

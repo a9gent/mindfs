@@ -84,7 +84,7 @@ export function DefaultListView({ path = "", entries, onItemClick, onPathClick }
         </div>
       </header>
 
-      <div style={{ flex: 1, overflow: "auto", padding: "32px 40px" }}>
+      <div style={{ flex: 1, overflow: "auto", padding: "24px 16px" }}>
         <div
           style={{
             display: "grid",
@@ -127,27 +127,30 @@ export function DefaultListView({ path = "", entries, onItemClick, onPathClick }
                   width: "40px",
                   height: "40px",
                   borderRadius: "10px",
-                  background: entry.is_dir ? "rgba(59, 130, 246, 0.1)" : "rgba(0, 0, 0, 0.03)",
-                  color: entry.is_dir ? "#3b82f6" : "#64748b",
+                  background: entry.is_dir ? "rgba(37, 99, 235, 0.08)" : "rgba(100, 116, 139, 0.08)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  fontSize: "20px",
                 }}
               >
-                {entry.is_dir ? "📁" : "📄"}
+                {entry.is_dir ? (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2z"/></svg>
+                ) : (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+                )}
               </div>
               
               <div style={{ minWidth: 0 }}>
                 <div
                   style={{
-                    fontWeight: 600,
+                    fontWeight: 500,
                     fontSize: "14px",
-                    marginBottom: "4px",
+                    marginBottom: "2px",
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
-                    color: "var(--text-primary)"
+                    color: "var(--text-primary)",
+                    letterSpacing: "-0.01em"
                   }}
                 >
                   {entry.name}
@@ -159,7 +162,8 @@ export function DefaultListView({ path = "", entries, onItemClick, onPathClick }
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
-                    opacity: 0.7
+                    opacity: 0.6,
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
                   }}
                 >
                   {entry.path}

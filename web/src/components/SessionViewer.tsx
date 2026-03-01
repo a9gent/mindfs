@@ -196,16 +196,15 @@ export function SessionViewer({ session, interactionMode = "main", onToggleMode,
 
       {/* 滚动容器 */}
       <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", position: "relative" }}>
-        {/* 关键：使用 minWidth/minHeight 确保滚动条正常显示且背景铺满 */}
         <div style={{ 
           width: "100%",
           minHeight: "100%", 
           display: "block", 
-          padding: "20px 16px", 
+          padding: "24px 16px", 
           boxSizing: "border-box",
           overflowX: "hidden",
         }}>
-          <div style={{ maxWidth: "1000px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "12px" }}>
+          <div style={{ width: "100%", margin: "0", display: "flex", flexDirection: "column", gap: "16px" }}>
             {timeline.map((item, idx) => renderTimelineItem(item, idx))}
             {(isAwaiting || isStreaming) && (
               <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--text-secondary)" }}>
