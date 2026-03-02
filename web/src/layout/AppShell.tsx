@@ -5,7 +5,7 @@ type AppShellProps = {
   main: React.ReactNode;
   rightSidebar?: React.ReactNode;
   footer: React.ReactNode;
-  floating?: React.ReactNode;
+  drawer?: React.ReactNode;
 };
 
 const MOBILE_BREAKPOINT = 768;
@@ -77,7 +77,7 @@ export function AppShell({
   main,
   rightSidebar,
   footer,
-  floating,
+  drawer,
   leftOpen = true,
   rightOpen = true,
   onCloseLeft,
@@ -142,8 +142,8 @@ export function AppShell({
 
       <main style={mainStyle}>
         {main}
-        {/* 将悬浮层放入主视图内部，确保绝对定位时能精准对齐主视图宽度 */}
-        {floating}
+        {/* 将抽屉层放入主视图内部，确保绝对定位时能精准对齐主视图宽度 */}
+        {drawer}
       </main>
 
       <aside style={isMobile ? mobileSidebarStyle('right') : rightStyle}>

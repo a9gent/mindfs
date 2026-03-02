@@ -67,7 +67,7 @@ export function ToolCallCard({
         minWidth: 0,
         borderRadius: "8px",
         border: "1px solid var(--border-color)",
-        background: "#fff",
+        background: "var(--content-bg)",
         overflow: "hidden",
       }}
     >
@@ -126,9 +126,13 @@ export function ToolCallCard({
             transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
             transition: "transform 0.2s",
             color: "var(--text-secondary)",
+            display: "inline-flex",
+            alignItems: "center",
           }}
         >
-          ▶
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
         </span>
       </button>
 

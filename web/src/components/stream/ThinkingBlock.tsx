@@ -19,8 +19,8 @@ export function ThinkingBlock({ content, defaultExpanded = false }: ThinkingBloc
     <div
       style={{
         borderRadius: "8px",
-        border: "1px solid rgba(139, 92, 246, 0.2)",
-        background: "rgba(139, 92, 246, 0.05)",
+        border: "1px solid var(--border-color)",
+        background: "var(--content-bg)",
         overflow: "hidden",
       }}
     >
@@ -32,6 +32,7 @@ export function ThinkingBlock({ content, defaultExpanded = false }: ThinkingBloc
           display: "flex",
           alignItems: "center",
           gap: "6px",
+          justifyContent: "space-between",
           padding: "8px 10px",
           background: "none",
           border: "none",
@@ -43,12 +44,25 @@ export function ThinkingBlock({ content, defaultExpanded = false }: ThinkingBloc
           overflow: "hidden",
         }}
       >
-        <span style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.2s" }}>
-          ▶
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", minWidth: 0, flex: 1 }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>思考过程</span>
+          <span style={{ color: "var(--text-secondary)", fontWeight: 400, flexShrink: 0 }}>
+            ({content.length} 字符)
+          </span>
         </span>
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>思考过程</span>
-        <span style={{ color: "var(--text-secondary)", fontWeight: 400, flexShrink: 0 }}>
-          ({content.length} 字符)
+        <span
+          style={{
+            flexShrink: 0,
+            transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
+            transition: "transform 0.2s",
+            color: "var(--text-secondary)",
+            display: "inline-flex",
+            alignItems: "center",
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
         </span>
       </button>
 

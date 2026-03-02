@@ -126,12 +126,12 @@ export function MainViewErrorBoundary({ children }: { children: ReactNode }): JS
   );
 }
 
-export function FloatingPanelErrorBoundary({ children }: { children: ReactNode }): JSX.Element {
+export function DrawerPanelErrorBoundary({ children }: { children: ReactNode }): JSX.Element {
   return (
     <ErrorBoundary
-      name="浮框"
+      name="抽屉"
       onError={(error) => {
-        console.error("[FloatingPanel Error]", error);
+        console.error("[DrawerPanel Error]", error);
       }}
     >
       {children}

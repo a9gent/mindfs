@@ -61,9 +61,18 @@ export function ActionBar({
   const DRAG_THRESHOLD = -40;
   const [sending, setSending] = useState(false);
   const [isMultiLine, setIsMultiLine] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const [isDark, setIsDark] = useState(window.matchMedia("(prefers-color-scheme: dark)").matches);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { isMobile } = useResponsive();
   const isConnected = status === "Connected";
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (e: MediaQueryListEvent) => setIsDark(e.matches);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
 
   // 恢复原始 1: Session 同步逻辑
   useEffect(() => {
@@ -166,10 +175,16 @@ export function ActionBar({
       <div style={{ width: "100%", maxWidth: "1000px", display: "flex", flexDirection: "column", gap: isMobile ? "0" : "6px" }}>
         <div
           style={{
-            background: isMobile ? "#fff" : "rgba(255, 255, 255, 0.5)",
-            border: "1px solid rgba(0, 0, 0, 0.15)",
+            background: isMobile ? "#fff" : (isDark ? "rgba(15, 23, 42, 0.95)" : "rgba(255, 255, 255, 0.5)"),
+            border: isFocused
+              ? "1px solid var(--accent-color)"
+              : (isDark ? "1px solid rgba(255, 255, 255, 0.1)" : "1px solid rgba(0, 0, 0, 0.15)"),
             borderRadius: isMobile ? "0" : "12px",
-            boxShadow: isMobile ? "none" : "0 4px 12px rgba(0,0,0,0.02)",
+            boxShadow: isMobile
+              ? "none"
+              : (isFocused
+                  ? (isDark ? "0 0 0 3px rgba(59, 130, 246, 0.2)" : "0 4px 24px rgba(37, 99, 235, 0.1)")
+                  : "0 4px 12px rgba(0,0,0,0.02)"),
             display: "flex",
             alignItems: "center",
             position: "relative",
@@ -177,26 +192,8 @@ export function ActionBar({
             minHeight: "44px",
             backdropFilter: isMobile ? "none" : "blur(8px)",
           }}
-          ref={(el) => {
-            if (el && !isMobile) {
-              const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-              if (isDark) { el.style.background = "rgba(15, 23, 42, 0.95)"; el.style.borderColor = "rgba(255, 255, 255, 0.1)"; }
-            }
-          }}
-          onFocusCapture={(e) => {
-            if (!isMobile) {
-              const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-              e.currentTarget.style.borderColor = "var(--accent-color)";
-              e.currentTarget.style.boxShadow = isDark ? "0 0 0 3px rgba(59, 130, 246, 0.2)" : "0 4px 24px rgba(37, 99, 235, 0.1)";
-            }
-          }}
-          onBlurCapture={(e) => {
-            if (!isMobile) {
-              const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-              e.currentTarget.style.borderColor = isDark ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.15)";
-              e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.02)";
-            }
-          }}
+          onFocusCapture={() => setIsFocused(true)}
+          onBlurCapture={() => setIsFocused(false)}
         >
           <textarea
             ref={textareaRef}
@@ -228,31 +225,41 @@ export function ActionBar({
 
           <div style={{ position: "absolute", right: "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
             {/* 滑动蓝点 */}
-            <div 
-              onMouseDown={handleDragStart} onTouchStart={handleDragStart}
+            <div
+              onMouseDown={handleDragStart}
+              onTouchStart={handleDragStart}
               onClick={() => {
                 if (Math.abs(dragX) < 5) {
                   onSessionClick?.();
                 }
               }}
-              style={{ 
-                width: "10px", 
-                height: "10px", 
-                borderRadius: "50%", 
-                background: !currentSession ? "transparent" : (currentSession.pending ? "#3b82f6" : "#2563eb"),
-                border: !currentSession ? "2px solid #9ca3af" : "none",
-                boxShadow: (currentSession && !currentSession.pending) ? "0 0 8px rgba(37, 99, 235, 0.6)" : "none",
-                margin: "0 8px",
+              style={{
+                width: "28px",
+                height: "28px",
+                margin: "0 4px",
                 cursor: "pointer",
                 transform: `translateX(${dragX}px)`,
                 transition: isDragging ? "none" : "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
                 position: "relative",
                 zIndex: 10,
                 opacity: 1,
-              }} 
-
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                touchAction: "none",
+              }}
               title="左滑新建会话"
             >
+              <div
+                style={{
+                  width: "10px",
+                  height: "10px",
+                  borderRadius: "50%",
+                  background: !currentSession ? "transparent" : (currentSession.pending ? "#3b82f6" : "#2563eb"),
+                  border: !currentSession ? "2px solid #9ca3af" : "none",
+                  boxShadow: (currentSession && !currentSession.pending) ? "0 0 8px rgba(37, 99, 235, 0.6)" : "none",
+                }}
+              />
               {isDragging && dragX < -10 && (
                 <div style={{ position: "absolute", right: "100%", top: "50%", transform: "translateY(-50%)", marginRight: "8px", fontSize: "10px", fontWeight: 600, color: dragX <= DRAG_THRESHOLD ? "var(--accent-color)" : "#9ca3af", whiteSpace: "nowrap", opacity: Math.min(1, Math.abs(dragX) / 20), pointerEvents: "none" }}>
                   {dragX <= DRAG_THRESHOLD ? "松开新建" : "左滑新建"}

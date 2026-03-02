@@ -46,21 +46,24 @@ export function App() {
   const fileRef = useRef<FilePayload | null>(null);
   const selectedSessionRef = useRef<SessionItem | null>(null);
   const currentSessionRef = useRef<Session | null>(null);
-  const interactionModeRef = useRef<"main" | "floating">("main");
+  const interactionModeRef = useRef<"main" | "drawer">("main");
   const pendingDraftRef = useRef<PendingSend | null>(null);
   const pendingBySessionRef = useRef<Record<string, PendingSend>>({});
   const sessionCacheRef = useRef<Record<string, Session>>({});
   const loadedSessionRef = useRef<Record<string, boolean>>({});
   const loadingSessionRef = useRef<Record<string, Promise<Session | null>>>({});
+  const boundSessionByRootRef = useRef<Record<string, string | null>>({});
+  const drawerSessionByRootRef = useRef<Record<string, Session | null>>({});
+  const drawerOpenByRootRef = useRef<Record<string, boolean>>({});
   
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionItem | null>(null);
   const [activeBoundSessionKey, setActiveBoundSessionKey] = useState<string | null>(null);
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
   const [cacheVersion, setCacheVersion] = useState(0);
-  const [interactionMode, setInteractionMode] = useState<"main" | "floating">("main");
+  const [interactionMode, setInteractionMode] = useState<"main" | "drawer">("main");
   const [agentsVersion, setAgentsVersion] = useState(0);
-  const [isFloatingOpen, setIsFloatingOpen] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const { isMobile } = useResponsive();
   const [isLeftOpen, setIsLeftOpen] = useState(!isMobile);
   const [isRightOpen, setIsRightOpen] = useState(!isMobile);
@@ -83,6 +86,37 @@ export function App() {
   useEffect(() => { selectedSessionRef.current = selectedSession; }, [selectedSession]);
   useEffect(() => { currentSessionRef.current = currentSession; }, [currentSession]);
   useEffect(() => { interactionModeRef.current = interactionMode; }, [interactionMode]);
+  useEffect(() => {
+    const rootID = currentRootId;
+    if (!rootID) return;
+    setActiveBoundSessionKey(boundSessionByRootRef.current[rootID] || null);
+    setCurrentSession(drawerSessionByRootRef.current[rootID] || null);
+    setIsDrawerOpen(!!drawerOpenByRootRef.current[rootID]);
+  }, [currentRootId]);
+
+  const setBoundSessionForRoot = useCallback((rootID: string | null | undefined, key: string | null) => {
+    if (!rootID) return;
+    boundSessionByRootRef.current[rootID] = key;
+    if (currentRootIdRef.current === rootID) {
+      setActiveBoundSessionKey(key);
+    }
+  }, []);
+
+  const setDrawerSessionForRoot = useCallback((rootID: string | null | undefined, session: Session | null) => {
+    if (!rootID) return;
+    drawerSessionByRootRef.current[rootID] = session;
+    if (currentRootIdRef.current === rootID) {
+      setCurrentSession(session);
+    }
+  }, []);
+
+  const setDrawerOpenForRoot = useCallback((rootID: string | null | undefined, open: boolean) => {
+    if (!rootID) return;
+    drawerOpenByRootRef.current[rootID] = open;
+    if (currentRootIdRef.current === rootID) {
+      setIsDrawerOpen(open);
+    }
+  }, []);
 
   const rootSessionKey = useCallback((rootId: string, sessionKey: string) => `${rootId}::${sessionKey}`, []);
   const bumpCacheVersion = useCallback(() => setCacheVersion((v) => v + 1), []);
@@ -249,13 +283,15 @@ export function App() {
     if (!targetRoot || !key) return;
     setSelectedSession(session);
     setInteractionMode("main");
-    setIsFloatingOpen(false);
+    setDrawerOpenForRoot(targetRoot, false);
     if (isMobile) setIsRightOpen(false);
     const cacheKey = rootSessionKey(targetRoot, key);
     const applySession = (fullSession: Session) => {
       sessionCacheRef.current[cacheKey] = fullSession;
       loadedSessionRef.current[cacheKey] = true;
-      if (activeBoundSessionKey === key) setCurrentSession(fullSession);
+      if ((boundSessionByRootRef.current[targetRoot] || null) === key) {
+        setDrawerSessionForRoot(targetRoot, fullSession);
+      }
       bumpCacheVersion();
     };
     const cached = sessionCacheRef.current[cacheKey];
@@ -285,7 +321,7 @@ export function App() {
         applySession(fullSession);
       }
     } catch (err) {}
-  }, [activeBoundSessionKey, isMobile, rootSessionKey, bumpCacheVersion]);
+  }, [isMobile, rootSessionKey, bumpCacheVersion, setDrawerOpenForRoot, setDrawerSessionForRoot]);
 
   const handleSendMessage = useCallback(async (message: string, mode: "chat" | "view" | "skill", agent: string) => {
     const activeRoot = currentRootIdRef.current;
@@ -306,12 +342,9 @@ export function App() {
     if (sendSessionKey && session) {
       effectiveMode = (session.type as any) || mode;
       effectiveAgent = agent || session.agent || "";
-      setActiveBoundSessionKey(sendSessionKey);
+      setBoundSessionForRoot(activeRoot, sendSessionKey);
       setSelectedPendingByKey(sendSessionKey, true);
-      setCurrentSession((prev) => {
-        if (!prev || prev.key !== sendSessionKey) return prev;
-        return { ...(prev as any), pending: true } as Session;
-      });
+      setDrawerSessionForRoot(activeRoot, { ...(session as any), pending: true } as Session);
     } else {
       sendSessionKey = undefined;
       const tempKey = `pending-${Date.now()}`;
@@ -332,30 +365,36 @@ export function App() {
     } else {
       pendingDraftRef.current = { rootId: activeRoot, mode: effectiveMode, agent: effectiveAgent, message, timestamp: now };
     }
-    const isBoundInMain = !!selectedSessionRef.current && selectedSessionRef.current.key === sendSessionKey && interactionModeRef.current !== "floating";
-    if (!isBoundInMain) { setInteractionMode("floating"); setIsFloatingOpen(true); }
-    setCurrentSession({ ...(session as any), pending: true } as Session);
+    const isBoundInMain = !!selectedSessionRef.current && selectedSessionRef.current.key === sendSessionKey && interactionModeRef.current !== "drawer";
+    if (!isBoundInMain) { setInteractionMode("drawer"); setDrawerOpenForRoot(activeRoot, true); }
+    setDrawerSessionForRoot(activeRoot, { ...(session as any), pending: true } as Session);
     setFile(null);
     const context = buildClientContext({ currentRoot: activeRoot, currentPath: fileRef.current?.path ?? selectedDirRef.current ?? undefined });
     const sent = await sessionService.sendMessage(activeRoot, sendSessionKey, message, effectiveMode, effectiveAgent, context);
     if (!sent && sendSessionKey) {
       setSelectedPendingByKey(sendSessionKey, false);
-      setCurrentSession((prev) => {
-        if (!prev || prev.key !== sendSessionKey) return prev;
-        return { ...(prev as any), pending: false } as Session;
-      });
+      const latest = drawerSessionByRootRef.current[activeRoot];
+      if (latest && latest.key === sendSessionKey) {
+        setDrawerSessionForRoot(activeRoot, { ...(latest as any), pending: false } as Session);
+      }
     }
-  }, [activeBoundSessionKey, rootSessionKey, setSelectedPendingByKey, bumpCacheVersion]);
+  }, [activeBoundSessionKey, rootSessionKey, setSelectedPendingByKey, bumpCacheVersion, setBoundSessionForRoot, setDrawerOpenForRoot, setDrawerSessionForRoot]);
 
   const handleNewSession = useCallback(() => {
-    setSelectedSession(null); setActiveBoundSessionKey(null); setCurrentSession(null);
-    setViewTree(null); setInteractionMode("main"); setIsFloatingOpen(false);
-  }, []);
+    const rootID = currentRootIdRef.current;
+    setSelectedSession(null);
+    setBoundSessionForRoot(rootID, null);
+    setDrawerSessionForRoot(rootID, null);
+    setViewTree(null); setInteractionMode("main"); setDrawerOpenForRoot(rootID, false);
+  }, [setBoundSessionForRoot, setDrawerOpenForRoot, setDrawerSessionForRoot]);
 
   const actionHandlers = useMemo(() => ({
     open: async (params: any) => {
       const path = params.path, root = params.root || currentRootIdRef.current;
       if (!path || !root) return;
+      if (currentRootIdRef.current !== root) {
+        setCurrentRootId(root);
+      }
       try {
         const res = await fetch(`/api/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`);
         const payload = await res.json();
@@ -363,7 +402,7 @@ export function App() {
         if (next.file) setFile(next.file);
         setViewTree(pickViewTree(next.viewRoutes));
         setSelectedSession(null);
-        setIsFloatingOpen(false);
+        setDrawerOpenForRoot(root, false);
         if (isMobile) setIsLeftOpen(false);
       } catch {}
     },
@@ -372,6 +411,9 @@ export function App() {
       if (!path || !rootParam) return;
       const isActuallyRoot = managedRootIdsRef.current.has(path);
       const root = isActuallyRoot ? path : rootParam;
+      if (currentRootIdRef.current !== root) {
+        setCurrentRootId(root);
+      }
       const expandedKey = isActuallyRoot ? path : `${root}:${path}`;
       const apiDir = isActuallyRoot ? "." : path;
       if (isToggle && expandedRef.current.includes(expandedKey)) { setExpanded((prev) => prev.filter(k => k !== expandedKey)); return; }
@@ -382,11 +424,11 @@ export function App() {
         const parsed = normalizeTreeResponse(payload);
         setEntriesByPath((prev) => ({ ...prev, [`${root}:${apiDir}`]: parsed.entries }));
         setMainEntries(parsed.entries); setSelectedDir(path); setViewTree(pickViewTree(parsed.viewRoutes)); setFile(null); setSelectedSession(null);
-        setIsFloatingOpen(false);
+        setDrawerOpenForRoot(root, false);
         if (isMobile) setIsLeftOpen(false);
       } catch {}
     }
-  }), [isMobile, normalizeFileResponse, normalizeTreeResponse, pickViewTree]);
+  }), [isMobile, normalizeFileResponse, normalizeTreeResponse, pickViewTree, setDrawerOpenForRoot]);
 
   useEffect(() => {
     if (!currentRootId) return;
@@ -406,7 +448,7 @@ export function App() {
       let pending = pendingBySessionRef.current[ck];
       if (!pending) { const draft = pendingDraftRef.current; if (draft && draft.rootId === activeRoot) { pending = draft; pendingBySessionRef.current[ck] = draft; pendingDraftRef.current = null; } }
       if (!activeBoundSessionKey) {
-        setActiveBoundSessionKey(streamKey);
+        setBoundSessionForRoot(activeRoot, streamKey);
         if (pending) {
           const userEx = { role: "user", content: pending.message, timestamp: pending.timestamp };
           const cached = sessionCacheRef.current[ck] || ({
@@ -435,17 +477,17 @@ export function App() {
       else if (event.type === "message_done") {
         delete pendingBySessionRef.current[ck];
         setSelectedPendingByKey(streamKey, false);
-        setCurrentSession((prev) => {
-          if (!prev || prev.key !== streamKey) return prev;
-          return { ...(prev as any), pending: false } as Session;
-        });
+        const latest = drawerSessionByRootRef.current[activeRoot];
+        if (latest && latest.key === streamKey) {
+          setDrawerSessionForRoot(activeRoot, { ...(latest as any), pending: false } as Session);
+        }
       } else if (event.type === "error") {
         delete pendingBySessionRef.current[ck];
         setSelectedPendingByKey(streamKey, false);
-        setCurrentSession((prev) => {
-          if (!prev || prev.key !== streamKey) return prev;
-          return { ...(prev as any), pending: false } as Session;
-        });
+        const latest = drawerSessionByRootRef.current[activeRoot];
+        if (latest && latest.key === streamKey) {
+          setDrawerSessionForRoot(activeRoot, { ...(latest as any), pending: false } as Session);
+        }
       }
     };
     const dirname = (path: string): string => {
@@ -492,7 +534,7 @@ export function App() {
     });
     loadSessions(currentRootId);
     return () => { cancelled = true; unsubscribeEvents(); sessionService.disconnect(); setStatus("Disconnected"); };
-  }, [currentRootId, activeBoundSessionKey, rootSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey]);
+  }, [currentRootId, activeBoundSessionKey, rootSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot]);
 
   useEffect(() => {
     let cancelled = false;
@@ -510,6 +552,12 @@ export function App() {
     return () => { cancelled = true; };
   }, [actionHandlers]);
 
+  const selectedRoot = (selectedSession?.root_id as string | undefined) || currentRootId || "";
+  const selectedInCurrentRoot = !!selectedSession && !!currentRootId && selectedRoot === currentRootId;
+  const actionBarSession = activeBoundSessionKey
+    ? ({ ...currentSession, pending: false } as any)
+    : (selectedInCurrentRoot ? ({ ...selectedSession, pending: true } as any) : null);
+
   return (
     <AppShell
       leftOpen={isLeftOpen} rightOpen={isRightOpen}
@@ -523,7 +571,7 @@ export function App() {
             <button onClick={() => setIsRightOpen(!isRightOpen)} style={{ pointerEvents: "auto", background: "var(--content-bg)", border: "1px solid var(--border-color)", borderRadius: "8px", width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: isRightOpen && !isMobile ? 0 : 1 }}>🕒</button>
           </div>
           <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-            {selectedSession && interactionMode !== "floating" ? (
+            {selectedSession && interactionMode !== "drawer" ? (
               <SessionViewer session={getSessionSnapshot(selectedSession.root_id || currentRootId, selectedSession)} />
             ) : file ? (
               <FileViewer
@@ -551,15 +599,16 @@ export function App() {
           </div>
         </div>
       }
-      footer={<ActionBar status={status} agentsVersion={agentsVersion} currentSession={activeBoundSessionKey ? { ...currentSession, pending: false } as any : (selectedSession ? { ...selectedSession, pending: true } as any : null)} onSendMessage={handleSendMessage} onNewSession={handleNewSession} onSessionClick={() => {
+      footer={<ActionBar status={status} agentsVersion={agentsVersion} currentSession={actionBarSession} onSendMessage={handleSendMessage} onNewSession={handleNewSession} onSessionClick={() => {
+        const rootID = currentRootIdRef.current;
         if (!activeBoundSessionKey) return;
         const selectedKey = selectedSession?.key || selectedSession?.session_key;
-        const isBoundSessionInMain = selectedKey === activeBoundSessionKey && interactionMode !== "floating";
+        const isBoundSessionInMain = selectedKey === activeBoundSessionKey && interactionMode !== "drawer";
         if (isBoundSessionInMain) return;
-        setInteractionMode("floating");
-        setIsFloatingOpen((prev) => !prev);
+        setInteractionMode("drawer");
+        setDrawerOpenForRoot(rootID, !(drawerOpenByRootRef.current[rootID || ""] || false));
       }} />}
-      floating={<BottomSheet isOpen={isFloatingOpen} onClose={() => setIsFloatingOpen(false)} onFullScreen={() => { handleSelectSession(currentSession); setIsFloatingOpen(false); }}>{currentSession ? <SessionViewer session={getSessionSnapshot(currentRootId, currentSession)} interactionMode="floating" /> : <div style={{ padding: "40px", textAlign: "center" }}>点击蓝点或发消息开始</div>}</BottomSheet>}
+      drawer={<BottomSheet isOpen={isDrawerOpen} onClose={() => setDrawerOpenForRoot(currentRootIdRef.current, false)} onExpand={() => { handleSelectSession(currentSession); setDrawerOpenForRoot(currentRootIdRef.current, false); }}>{currentSession ? <SessionViewer session={getSessionSnapshot(currentRootId, currentSession)} interactionMode="drawer" /> : <div style={{ padding: "40px", textAlign: "center" }}>点击蓝点或发消息开始</div>}</BottomSheet>}
     />
   );
 }

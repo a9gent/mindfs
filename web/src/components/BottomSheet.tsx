@@ -5,7 +5,7 @@ type BottomSheetProps = {
   onClose: () => void;
   children: React.ReactNode;
   footer?: React.ReactNode;
-  onFullScreen?: () => void;
+  onExpand?: () => void;
 };
 
 export function BottomSheet({
@@ -13,10 +13,11 @@ export function BottomSheet({
   onClose,
   children,
   footer,
-  onFullScreen,
+  onExpand,
 }: BottomSheetProps) {
   const [isAnimating, setIsAnimating] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -68,11 +69,12 @@ export function BottomSheet({
         onClick={onClose}
       />
 
-      {/* Sheet / Floating Panel */}
+      {/* Drawer Panel */}
       <div
         style={{
-          background: window.matchMedia("(prefers-color-scheme: dark)").matches ? "#111827" : "#ffffff",
+          background: isDark ? "#111827" : "#ffffff",
           boxShadow: "0 -4px 24px rgba(0,0,0,0.08)",
+          borderTop: "1px solid rgba(148, 163, 184, 0.22)",
           zIndex: 1001,
           display: "flex",
           flexDirection: "column",
@@ -88,11 +90,11 @@ export function BottomSheet({
         {/* Handle Area (Compressed) */}
         <div 
           style={{ 
-            width: "100%", height: "12px", display: "flex", justifyContent: "center", alignItems: "center", cursor: "ns-resize", flexShrink: 0 
+            width: "100%", height: "8px", display: "flex", justifyContent: "center", alignItems: "center", cursor: "ns-resize", flexShrink: 0,
           }}
-          onClick={onFullScreen}
+          onClick={onExpand}
         >
-          <div style={{ width: "32px", height: "3px", background: "rgba(0,0,0,0.1)", borderRadius: "2px" }} />
+          <div style={{ width: "64px", height: "3px", background: isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.28)", borderRadius: "999px" }} />
         </div>
 
         {/* Content */}

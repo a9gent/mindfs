@@ -28,7 +28,7 @@ type SessionItem = {
 
 type SessionViewerProps = {
   session: SessionItem | null;
-  interactionMode?: "main" | "floating";
+  interactionMode?: "main" | "drawer";
   onFileClick?: (path: string) => void;
 };
 
@@ -161,7 +161,7 @@ export function SessionViewer({ session, interactionMode = "main", onFileClick }
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "transparent" }}>
-      {interactionMode === "floating" ? null : (
+      {interactionMode === "drawer" ? null : (
         <header style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", background: "transparent", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
           <h1 style={{ fontSize: "14px", fontWeight: 600, margin: 0 }}>{displayName}</h1>
         </header>
