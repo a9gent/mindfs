@@ -29,8 +29,6 @@ type SessionItem = {
 type SessionViewerProps = {
   session: SessionItem | null;
   interactionMode?: "main" | "floating";
-  onToggleMode?: (mode: "main" | "floating") => void;
-  onAgentResponse?: (content: string) => void;
   onFileClick?: (path: string) => void;
 };
 
@@ -75,7 +73,7 @@ const formatToolCallResult = (toolCall: Partial<ToolCall>): string => {
   return "";
 };
 
-export function SessionViewer({ session, interactionMode = "main", onToggleMode, onAgentResponse: _onAgentResponse, onFileClick }: SessionViewerProps) {
+export function SessionViewer({ session, interactionMode = "main", onFileClick }: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const sessionKey = session?.key || session?.session_key || null;
@@ -166,33 +164,6 @@ export function SessionViewer({ session, interactionMode = "main", onToggleMode,
       {interactionMode === "floating" ? null : (
         <header style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", background: "transparent", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
           <h1 style={{ fontSize: "14px", fontWeight: 600, margin: 0 }}>{displayName}</h1>
-          <div style={{ marginLeft: "auto" }}>
-            <button
-              type="button"
-              onClick={() => onToggleMode?.("floating")}
-              style={{
-                border: "1px solid var(--border-color)",
-                background: "rgba(0,0,0,0.03)",
-                borderRadius: "6px",
-                padding: "2px 6px",
-                cursor: "pointer",
-                color: "var(--text-primary)",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-              title="浮框模式"
-              aria-label="浮框模式"
-            >
-              <img
-                src="/assets/ui/floating-mode.svg"
-                alt=""
-                width={16}
-                height={16}
-                style={{ display: "block" }}
-              />
-            </button>
-          </div>
         </header>
       )}
 

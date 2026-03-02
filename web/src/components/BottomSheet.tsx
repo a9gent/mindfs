@@ -3,7 +3,6 @@ import React, { useEffect, useState } from "react";
 type BottomSheetProps = {
   isOpen: boolean;
   onClose: () => void;
-  title?: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
   onFullScreen?: () => void;
@@ -12,7 +11,6 @@ type BottomSheetProps = {
 export function BottomSheet({
   isOpen,
   onClose,
-  title,
   children,
   footer,
   onFullScreen,

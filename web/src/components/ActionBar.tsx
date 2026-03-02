@@ -15,13 +15,10 @@ type SessionInfo = {
 type ActionBarProps = {
   status?: string;
   agentsVersion?: number;
-  rootId?: string | null;
   currentSession?: SessionInfo | null;
-  selectedFileName?: string | null;
   onSendMessage?: (message: string, mode: SessionMode, agent: string) => void;
   onNewSession?: () => void;
   onSessionClick?: () => void;
-  isSessionInMain?: boolean;
 };
 
 const modePlaceholders: Record<SessionMode, string> = {
@@ -31,33 +28,28 @@ const modePlaceholders: Record<SessionMode, string> = {
 };
 
 const MOBILE_BREAKPOINT = 768;
-const TABLET_BREAKPOINT = 1024;
 
 function useResponsive() {
   const [isMobile, setIsMobile] = useState(false);
-  const [isTablet, setIsTablet] = useState(false);
   useEffect(() => {
     const checkSize = () => {
       const width = window.innerWidth;
       setIsMobile(width < MOBILE_BREAKPOINT);
-      setIsTablet(width >= MOBILE_BREAKPOINT && width < TABLET_BREAKPOINT);
     };
     checkSize();
     window.addEventListener("resize", checkSize);
     return () => window.removeEventListener("resize", checkSize);
   }, []);
-  return { isMobile, isTablet };
+  return { isMobile };
 }
 
 export function ActionBar({
   status = "Disconnected",
   agentsVersion = 0,
-  rootId,
   currentSession,
   onSendMessage,
   onNewSession,
   onSessionClick,
-  isSessionInMain = false,
 }: ActionBarProps) {
   const [mode, setMode] = useState<SessionMode>("chat");
   const [agent, setAgent] = useState("");

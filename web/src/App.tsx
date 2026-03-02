@@ -27,18 +27,16 @@ type PendingSend = { rootId: string; mode: "chat" | "view" | "skill"; agent: str
 // Hook for responsive detection
 function useResponsive() {
   const [isMobile, setIsMobile] = useState(false);
-  const [isTablet, setIsTablet] = useState(false);
   useEffect(() => {
     const checkSize = () => {
       const width = window.innerWidth;
       setIsMobile(width < 768);
-      setIsTablet(width >= 768 && width < 1024);
     };
     checkSize();
     window.addEventListener("resize", checkSize);
     return () => window.removeEventListener("resize", checkSize);
   }, []);
-  return { isMobile, isTablet };
+  return { isMobile };
 }
 
 export function App() {
@@ -56,12 +54,10 @@ export function App() {
   const loadingSessionRef = useRef<Record<string, Promise<Session | null>>>({});
   
   const [sessions, setSessions] = useState<SessionItem[]>([]);
-  const [sessionsByRoot, setSessionsByRoot] = useState<Record<string, SessionItem[]>>({});
   const [selectedSession, setSelectedSession] = useState<SessionItem | null>(null);
   const [activeBoundSessionKey, setActiveBoundSessionKey] = useState<string | null>(null);
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
-  const [currentSessionExchanges, setCurrentSessionExchanges] = useState<Exchange[]>([]);
-  const [sessionExchangesByRootSession, setSessionExchangesByRootSession] = useState<Record<string, Exchange[]>>({});
+  const [cacheVersion, setCacheVersion] = useState(0);
   const [interactionMode, setInteractionMode] = useState<"main" | "floating">("main");
   const [agentsVersion, setAgentsVersion] = useState(0);
   const [isFloatingOpen, setIsFloatingOpen] = useState(false);
@@ -89,6 +85,17 @@ export function App() {
   useEffect(() => { interactionModeRef.current = interactionMode; }, [interactionMode]);
 
   const rootSessionKey = useCallback((rootId: string, sessionKey: string) => `${rootId}::${sessionKey}`, []);
+  const bumpCacheVersion = useCallback(() => setCacheVersion((v) => v + 1), []);
+  const getSessionSnapshot = useCallback((rootId: string | null | undefined, session: Session | SessionItem | null | undefined) => {
+    if (!rootId || !session) return null;
+    const key = (session as any).key || (session as any).session_key;
+    if (!key) return null;
+    const ck = rootSessionKey(rootId, key);
+    const cached = sessionCacheRef.current[ck];
+    const fallbackExchanges = Array.isArray((session as any).exchanges) ? ((session as any).exchanges as Exchange[]) : [];
+    const exchanges = Array.isArray((cached as any)?.exchanges) ? (((cached as any).exchanges as Exchange[]) || []) : fallbackExchanges;
+    return { ...(session as any), ...(cached as any), key, exchanges } as any;
+  }, [rootSessionKey, cacheVersion]);
 
   const setSelectedPendingByKey = useCallback((sessionKey: string, pending: boolean) => {
     setSelectedSession((prev) => {
@@ -125,18 +132,25 @@ export function App() {
       list.push({ role: "agent", agent: resolvedAgent, content, timestamp: now });
       return list;
     };
-    setSessionExchangesByRootSession((prev) => {
-      const nextList = updateList(prev[cacheKey] || []);
-      const cached = sessionCacheRef.current[cacheKey];
-      if (cached) {
-        sessionCacheRef.current[cacheKey] = { ...(cached as any), exchanges: nextList } as Session;
-      }
-      return { ...prev, [cacheKey]: nextList };
-    });
-    if (currentRootIdRef.current === rootID && (currentSessionRef.current?.key === sessionKey || selectedSessionRef.current?.key === sessionKey)) {
-      setCurrentSessionExchanges((prev) => updateList(prev));
-    }
-  }, [rootSessionKey, resolveAgentForSession]);
+    const cached = sessionCacheRef.current[cacheKey];
+    const base = cached || ({
+      key: sessionKey,
+      type: "chat",
+      agent: resolvedAgent,
+      name: "",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      exchanges: [],
+    } as any);
+    const nextList = updateList((((base as any).exchanges || []) as Exchange[]));
+    sessionCacheRef.current[cacheKey] = {
+      ...(base as any),
+      agent: (base as any).agent || resolvedAgent,
+      exchanges: nextList,
+      updated_at: new Date().toISOString(),
+    } as Session;
+    bumpCacheVersion();
+  }, [rootSessionKey, resolveAgentForSession, bumpCacheVersion]);
 
   const appendThoughtChunkForSession = useCallback((rootID: string, sessionKey: string, content: string) => {
     if (!content) return;
@@ -152,18 +166,24 @@ export function App() {
       list.push({ role: "thought", content, timestamp: now });
       return list;
     };
-    setSessionExchangesByRootSession((prev) => {
-      const nextList = updateList(prev[cacheKey] || []);
-      const cached = sessionCacheRef.current[cacheKey];
-      if (cached) {
-        sessionCacheRef.current[cacheKey] = { ...(cached as any), exchanges: nextList } as Session;
-      }
-      return { ...prev, [cacheKey]: nextList };
-    });
-    if (currentRootIdRef.current === rootID && (currentSessionRef.current?.key === sessionKey || selectedSessionRef.current?.key === sessionKey)) {
-      setCurrentSessionExchanges((prev) => updateList(prev));
-    }
-  }, [rootSessionKey]);
+    const cached = sessionCacheRef.current[cacheKey];
+    const base = cached || ({
+      key: sessionKey,
+      type: "chat",
+      agent: "",
+      name: "",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      exchanges: [],
+    } as any);
+    const nextList = updateList((((base as any).exchanges || []) as Exchange[]));
+    sessionCacheRef.current[cacheKey] = {
+      ...(base as any),
+      exchanges: nextList,
+      updated_at: new Date().toISOString(),
+    } as Session;
+    bumpCacheVersion();
+  }, [rootSessionKey, bumpCacheVersion]);
 
   const appendToolCallForSession = useCallback((rootID: string, sessionKey: string, toolCall: any, update: boolean) => {
     if (!toolCall) return;
@@ -189,18 +209,24 @@ export function App() {
       list.push({ role: "tool", content: "", timestamp: now, toolCall });
       return list;
     };
-    setSessionExchangesByRootSession((prev) => {
-      const nextList = updateList(prev[cacheKey] || []);
-      const cached = sessionCacheRef.current[cacheKey];
-      if (cached) {
-        sessionCacheRef.current[cacheKey] = { ...(cached as any), exchanges: nextList } as Session;
-      }
-      return { ...prev, [cacheKey]: nextList };
-    });
-    if (currentRootIdRef.current === rootID && (currentSessionRef.current?.key === sessionKey || selectedSessionRef.current?.key === sessionKey)) {
-      setCurrentSessionExchanges((prev) => updateList(prev));
-    }
-  }, [rootSessionKey]);
+    const cached = sessionCacheRef.current[cacheKey];
+    const base = cached || ({
+      key: sessionKey,
+      type: "chat",
+      agent: "",
+      name: "",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      exchanges: [],
+    } as any);
+    const nextList = updateList((((base as any).exchanges || []) as Exchange[]));
+    sessionCacheRef.current[cacheKey] = {
+      ...(base as any),
+      exchanges: nextList,
+      updated_at: new Date().toISOString(),
+    } as Session;
+    bumpCacheVersion();
+  }, [rootSessionKey, bumpCacheVersion]);
 
   const normalizeFileResponse = useCallback((payload: any) => {
     if (payload && payload.file) return { file: payload.file as FilePayload, viewRoutes: (payload.view_routes || []) as any[] };
@@ -229,12 +255,8 @@ export function App() {
     const applySession = (fullSession: Session) => {
       sessionCacheRef.current[cacheKey] = fullSession;
       loadedSessionRef.current[cacheKey] = true;
-      const exchanges = (fullSession as any).exchanges || [];
-      setSessionExchangesByRootSession(prev => ({ ...prev, [cacheKey]: exchanges }));
-      if (selectedSessionRef.current?.key === key || selectedSessionRef.current?.session_key === key) {
-        setCurrentSessionExchanges(exchanges);
-        if (activeBoundSessionKey === key) setCurrentSession(fullSession);
-      }
+      if (activeBoundSessionKey === key) setCurrentSession(fullSession);
+      bumpCacheVersion();
     };
     const cached = sessionCacheRef.current[cacheKey];
     if (cached) {
@@ -263,7 +285,7 @@ export function App() {
         applySession(fullSession);
       }
     } catch (err) {}
-  }, [activeBoundSessionKey, isMobile, rootSessionKey]);
+  }, [activeBoundSessionKey, isMobile, rootSessionKey, bumpCacheVersion]);
 
   const handleSendMessage = useCallback(async (message: string, mode: "chat" | "view" | "skill", agent: string) => {
     const activeRoot = currentRootIdRef.current;
@@ -299,15 +321,14 @@ export function App() {
     const userEx: Exchange = { role: "user", content: message, timestamp: now };
     if (sendSessionKey) {
       const ck = rootSessionKey(activeRoot, sendSessionKey);
-      setSessionExchangesByRootSession(prev => {
-        const nextList = [...(prev[ck] || []), userEx];
-        const cached = sessionCacheRef.current[ck];
-        if (cached) {
-          sessionCacheRef.current[ck] = { ...(cached as any), exchanges: nextList } as Session;
-        }
-        return { ...prev, [ck]: nextList };
-      });
-      if (selectedSessionRef.current?.key === sendSessionKey) setCurrentSessionExchanges(prev => [...prev, userEx]);
+      const cached = sessionCacheRef.current[ck] || ({ ...(session as any) } as Session);
+      const prevExchanges = Array.isArray((cached as any).exchanges) ? ((cached as any).exchanges as Exchange[]) : [];
+      sessionCacheRef.current[ck] = {
+        ...(cached as any),
+        exchanges: [...prevExchanges, userEx],
+        updated_at: now,
+      } as Session;
+      bumpCacheVersion();
     } else {
       pendingDraftRef.current = { rootId: activeRoot, mode: effectiveMode, agent: effectiveAgent, message, timestamp: now };
     }
@@ -324,11 +345,11 @@ export function App() {
         return { ...(prev as any), pending: false } as Session;
       });
     }
-  }, [activeBoundSessionKey, rootSessionKey, setSelectedPendingByKey]);
+  }, [activeBoundSessionKey, rootSessionKey, setSelectedPendingByKey, bumpCacheVersion]);
 
   const handleNewSession = useCallback(() => {
     setSelectedSession(null); setActiveBoundSessionKey(null); setCurrentSession(null);
-    setCurrentSessionExchanges([]); setViewTree(null); setInteractionMode("main"); setIsFloatingOpen(false);
+    setViewTree(null); setInteractionMode("main"); setIsFloatingOpen(false);
   }, []);
 
   const actionHandlers = useMemo(() => ({
@@ -359,7 +380,6 @@ export function App() {
         const res = await fetch(`/api/tree?root=${encodeURIComponent(root)}&dir=${encodeURIComponent(apiDir)}`);
         const payload = await res.json();
         const parsed = normalizeTreeResponse(payload);
-        if (isActuallyRoot) setRootEntries(parsed.entries);
         setEntriesByPath((prev) => ({ ...prev, [`${root}:${apiDir}`]: parsed.entries }));
         setMainEntries(parsed.entries); setSelectedDir(path); setViewTree(pickViewTree(parsed.viewRoutes)); setFile(null); setSelectedSession(null);
         setIsFloatingOpen(false);
@@ -376,7 +396,7 @@ export function App() {
       try {
         const res = await fetch(`/api/sessions?root=${encodeURIComponent(rootID)}`);
         const payload = await res.json();
-        if (!cancelled) { const next = Array.isArray(payload) ? payload : []; setSessions(next); setSessionsByRoot(prev => ({ ...prev, [rootID]: next })); }
+        if (!cancelled) { const next = Array.isArray(payload) ? payload : []; setSessions(next); }
       } catch {}
     };
     const handleSessionStream = (payload: any) => {
@@ -389,8 +409,22 @@ export function App() {
         setActiveBoundSessionKey(streamKey);
         if (pending) {
           const userEx = { role: "user", content: pending.message, timestamp: pending.timestamp };
-          setSessionExchangesByRootSession(prev => ({ ...prev, [ck]: [userEx] }));
-          if (selectedSessionRef.current?.key === streamKey) setCurrentSessionExchanges([userEx]);
+          const cached = sessionCacheRef.current[ck] || ({
+            key: streamKey,
+            type: pending.mode,
+            agent: pending.agent,
+            name: "",
+            created_at: pending.timestamp,
+            updated_at: pending.timestamp,
+            exchanges: [],
+          } as any);
+          const prevExchanges = Array.isArray((cached as any).exchanges) ? ((cached as any).exchanges as Exchange[]) : [];
+          sessionCacheRef.current[ck] = {
+            ...(cached as any),
+            exchanges: prevExchanges.length > 0 ? prevExchanges : [userEx],
+            updated_at: new Date().toISOString(),
+          } as Session;
+          bumpCacheVersion();
         }
       }
       const event = payload.event; if (!event?.type) return;
@@ -414,11 +448,45 @@ export function App() {
         });
       }
     };
+    const dirname = (path: string): string => {
+      const clean = (path || "").replace(/^\/+|\/+$/g, "");
+      if (!clean || clean === ".") return ".";
+      const idx = clean.lastIndexOf("/");
+      return idx <= 0 ? "." : clean.slice(0, idx);
+    };
+    const currentDirAPI = (rootID: string): string => {
+      const selected = selectedDirRef.current;
+      if (!selected || selected === rootID) return ".";
+      return selected;
+    };
+    const refreshDir = async (rootID: string, dirPath: string, syncMain: boolean) => {
+      try {
+        const res = await fetch(`/api/tree?root=${encodeURIComponent(rootID)}&dir=${encodeURIComponent(dirPath)}`);
+        if (!res.ok) return;
+        const payload = await res.json();
+        const parsed = normalizeTreeResponse(payload);
+        if (cancelled) return;
+        setEntriesByPath((prev) => ({ ...prev, [`${rootID}:${dirPath}`]: parsed.entries }));
+        if (syncMain) {
+          setMainEntries(parsed.entries);
+        }
+      } catch {}
+    };
+    const handleFileChanged = (payload: any) => {
+      const rootID = typeof payload?.root_id === "string" ? payload.root_id : "";
+      const changedPath = typeof payload?.path === "string" ? payload.path : "";
+      if (!rootID || !changedPath) return;
+      const parentDir = dirname(changedPath);
+      const currentDir = currentDirAPI(rootID);
+      const syncMain = rootID === currentRootIdRef.current && parentDir === currentDir;
+      void refreshDir(rootID, parentDir, syncMain);
+    };
     const unsubscribeEvents = sessionService.subscribeEvents((event) => {
       const payload = (event.payload || {}) as any;
       switch (event.type) {
         case "session.stream": handleSessionStream(payload); break;
         case "session.done": loadSessions(currentRootIdRef.current!); break;
+        case "file.changed": handleFileChanged(payload); break;
         case "agent.status.changed": setAgentsVersion(v => v + 1); break;
       }
     });
@@ -432,6 +500,11 @@ export function App() {
       if (cancelled || !dirs.length) return;
       const ids = dirs.map((d: any) => d.id);
       managedRootIdsRef.current = new Set(ids); setManagedRootIds(ids);
+      setRootEntries(ids.map((id: string) => ({
+        name: id.split("/").filter(Boolean).pop() || id,
+        path: id,
+        is_dir: true,
+      })));
       const first = ids[0]; setCurrentRootId(first); actionHandlers.open_dir({ path: first, root: first });
     });
     return () => { cancelled = true; };
@@ -451,11 +524,29 @@ export function App() {
           </div>
           <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             {selectedSession && interactionMode !== "floating" ? (
-              <SessionViewer session={{ ...selectedSession, exchanges: sessionExchangesByRootSession[rootSessionKey(selectedSession.root_id || currentRootId!, selectedSession.key || selectedSession.session_key)] || (selectedSession as any).exchanges || [] }} onAgentResponse={appendAgentChunkForSession} />
+              <SessionViewer session={getSessionSnapshot(selectedSession.root_id || currentRootId, selectedSession)} />
             ) : file ? (
-              <FileViewer file={file} onSessionClick={handleSelectSession} />
+              <FileViewer
+                file={file}
+                onSessionClick={handleSelectSession}
+                onPathClick={(path) => {
+                  const root = file.root || currentRootIdRef.current;
+                  if (!root) return;
+                  actionHandlers.open_dir({ path: path === "." ? root : path, root });
+                }}
+              />
             ) : (
-              <DefaultListView path={selectedDir || ""} entries={mainEntries} onItemClick={(e) => e.is_dir ? actionHandlers.open_dir({path: e.path}) : actionHandlers.open({path: e.path})} />
+              <DefaultListView
+                root={currentRootId || undefined}
+                path={selectedDir || ""}
+                entries={mainEntries}
+                onItemClick={(e) => e.is_dir ? actionHandlers.open_dir({ path: e.path }) : actionHandlers.open({ path: e.path })}
+                onPathClick={(path) => {
+                  const root = currentRootIdRef.current;
+                  if (!root) return;
+                  actionHandlers.open_dir({ path: path === "." ? root : path, root });
+                }}
+              />
             )}
           </div>
         </div>
@@ -467,8 +558,8 @@ export function App() {
         if (isBoundSessionInMain) return;
         setInteractionMode("floating");
         setIsFloatingOpen((prev) => !prev);
-      }} isSessionInMain={!!selectedSession && interactionMode !== "floating" && selectedSession.key === activeBoundSessionKey} />}
-      floating={<BottomSheet isOpen={isFloatingOpen} onClose={() => setIsFloatingOpen(false)} title={currentSession?.name} onFullScreen={() => { handleSelectSession(currentSession); setIsFloatingOpen(false); }}>{currentSession ? <SessionViewer session={{ ...currentSession, exchanges: sessionExchangesByRootSession[rootSessionKey(currentRootId!, currentSession.key)] || currentSessionExchanges || [] }} interactionMode="floating" onAgentResponse={appendAgentChunkForSession} /> : <div style={{ padding: "40px", textAlign: "center" }}>点击蓝点或发消息开始</div>}</BottomSheet>}
+      }} />}
+      floating={<BottomSheet isOpen={isFloatingOpen} onClose={() => setIsFloatingOpen(false)} onFullScreen={() => { handleSelectSession(currentSession); setIsFloatingOpen(false); }}>{currentSession ? <SessionViewer session={getSessionSnapshot(currentRootId, currentSession)} interactionMode="floating" /> : <div style={{ padding: "40px", textAlign: "center" }}>点击蓝点或发消息开始</div>}</BottomSheet>}
     />
   );
 }

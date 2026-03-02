@@ -36,12 +36,25 @@ type FileViewerProps = {
   onPathClick?: (path: string) => void;
 };
 
-function Breadcrumbs({ path, onPathClick }: { path: string; onPathClick?: (path: string) => void }) {
+function Breadcrumbs({ root, path, onPathClick }: { root?: string; path: string; onPathClick?: (path: string) => void }) {
   const parts = path.split('/').filter(Boolean);
   const getPathAt = (index: number) => parts.slice(0, index + 1).join('/');
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', color: 'var(--text-secondary)', overflow: 'hidden', whiteSpace: 'nowrap', flexShrink: 1, justifyContent: 'flex-start' }}>
+      {root && (
+        <>
+          <span
+            onClick={() => onPathClick?.(".")}
+            style={{ fontWeight: 500, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }}
+            onMouseEnter={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}
+          >
+            {root}
+          </span>
+          {parts.length > 0 && <span style={{ opacity: 0.4, fontSize: '10px', flexShrink: 0 }}>❯</span>}
+        </>
+      )}
       {parts.map((part, index) => (
         <React.Fragment key={index}>
           <span 
@@ -92,7 +105,7 @@ export function FileViewer({ file, onSessionClick, onPathClick }: FileViewerProp
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "transparent" }}>
       <header style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "10px", background: "transparent", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", overflow: "hidden", flex: 1, minWidth: 0 }}>
-          <Breadcrumbs path={file.path} onPathClick={onPathClick} />
+          <Breadcrumbs root={file.root} path={file.path} onPathClick={onPathClick} />
           
           {relatedSessions.length > 0 && (
             <div style={{ 
