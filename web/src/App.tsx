@@ -192,6 +192,7 @@ export function App() {
   const interactionModeRef = useRef<"main" | "drawer">("main");
   const pendingDraftRef = useRef<PendingSend | null>(null);
   const pendingBySessionRef = useRef<Record<string, PendingSend>>({});
+  const cancelRequestedBySessionRef = useRef<Record<string, boolean>>({});
   const sessionCacheRef = useRef<Record<string, Session>>({});
   const loadedSessionRef = useRef<Record<string, boolean>>({});
   const loadingSessionRef = useRef<Record<string, Promise<Session | null>>>({});
@@ -429,6 +430,28 @@ export function App() {
     bumpCacheVersion();
   }, [rootSessionKey, bumpCacheVersion]);
 
+  const rollbackInFlightReplyForSession = useCallback((rootID: string, sessionKey: string) => {
+    const cacheKey = rootSessionKey(rootID, sessionKey);
+    const cached = sessionCacheRef.current[cacheKey];
+    if (!cached) return;
+    const exchanges = Array.isArray((cached as any).exchanges) ? [ ...(((cached as any).exchanges as Exchange[]) || []) ] : [];
+    let lastUserIndex = -1;
+    for (let i = exchanges.length - 1; i >= 0; i--) {
+      if (exchanges[i]?.role === "user") {
+        lastUserIndex = i;
+        break;
+      }
+    }
+    if (lastUserIndex < 0) return;
+    const nextExchanges = exchanges.slice(0, lastUserIndex + 1);
+    sessionCacheRef.current[cacheKey] = {
+      ...(cached as any),
+      exchanges: nextExchanges,
+      updated_at: new Date().toISOString(),
+    } as Session;
+    bumpCacheVersion();
+  }, [rootSessionKey, bumpCacheVersion]);
+
   const normalizeFileResponse = useCallback((payload: any) => {
     if (payload && payload.file) return { file: payload.file as FilePayload };
     return { file: null };
@@ -550,6 +573,17 @@ export function App() {
       }
     }
   }, [activeBoundSessionKey, rootSessionKey, setSelectedPendingByKey, bumpCacheVersion, setBoundSessionForRoot, setDrawerOpenForRoot, setDrawerSessionForRoot]);
+
+  const handleCancelCurrentTurn = useCallback(async (sessionKey: string) => {
+    const activeRoot = currentRootIdRef.current;
+    if (!activeRoot || !sessionKey) return;
+    const cacheKey = rootSessionKey(activeRoot, sessionKey);
+    cancelRequestedBySessionRef.current[cacheKey] = true;
+    const sent = await sessionService.cancelMessage(activeRoot, sessionKey);
+    if (!sent) {
+      delete cancelRequestedBySessionRef.current[cacheKey];
+    }
+  }, [rootSessionKey]);
 
   const handleNewSession = useCallback(() => {
     const rootID = currentRootIdRef.current;
@@ -810,9 +844,16 @@ export function App() {
     };
     const handleSessionStreamDone = (rootID: string, sessionKey: string) => {
       const cacheKey = rootSessionKey(rootID, sessionKey);
+      const wasCanceled = !!cancelRequestedBySessionRef.current[cacheKey];
+      if (wasCanceled) {
+        rollbackInFlightReplyForSession(rootID, sessionKey);
+        delete cancelRequestedBySessionRef.current[cacheKey];
+      }
       delete pendingBySessionRef.current[cacheKey];
       setSelectedPendingByKey(sessionKey, false);
-      const latest = drawerSessionByRootRef.current[rootID];
+      const latest = wasCanceled
+        ? sessionCacheRef.current[cacheKey]
+        : drawerSessionByRootRef.current[rootID];
       if (latest && latest.key === sessionKey) {
         setDrawerSessionForRoot(rootID, { ...(latest as any), pending: false } as Session);
       }
@@ -933,14 +974,19 @@ export function App() {
       const payload = (event.payload || {}) as any;
       switch (event.type) {
         case "session.stream": handleSessionStream(payload); break;
-        case "session.done": loadSessions(currentRootIdRef.current!); break;
+        case "session.done":
+          if (typeof payload?.session_key === "string" && currentRootIdRef.current) {
+            handleSessionStreamDone(currentRootIdRef.current, payload.session_key);
+          }
+          loadSessions(currentRootIdRef.current!);
+          break;
         case "file.changed": handleFileChanged(payload); break;
         case "agent.status.changed": setAgentsVersion(v => v + 1); break;
       }
     });
     loadSessions(currentRootId);
     return () => { cancelled = true; unsubscribeEvents(); sessionService.disconnect(); setStatus("Disconnected"); };
-  }, [currentRootId, rootSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot]);
+  }, [currentRootId, rootSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, rollbackInFlightReplyForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot]);
 
   useEffect(() => {
     if (!currentRootId) return;
@@ -1259,7 +1305,7 @@ export function App() {
           </div>
         </div>
       }
-      footer={<ActionBar status={status} agentsVersion={agentsVersion} currentSession={actionBarSession} onSendMessage={handleSendMessage} onNewSession={handleNewSession} onToggleLeftSidebar={() => setIsLeftOpen((v) => !v)} onToggleRightSidebar={() => setIsRightOpen((v) => !v)} onSessionClick={() => {
+      footer={<ActionBar status={status} agentsVersion={agentsVersion} currentSession={actionBarSession} onSendMessage={handleSendMessage} onCancelCurrentTurn={handleCancelCurrentTurn} onNewSession={handleNewSession} onToggleLeftSidebar={() => setIsLeftOpen((v) => !v)} onToggleRightSidebar={() => setIsRightOpen((v) => !v)} onSessionClick={() => {
         const rootID = currentRootIdRef.current;
         if (!activeBoundSessionKey) return;
         const selectedKey = selectedSession?.key || selectedSession?.session_key;

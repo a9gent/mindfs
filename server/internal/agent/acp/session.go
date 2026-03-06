@@ -119,6 +119,10 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 	return s.proc.SendMessage(ctx, s.sessionKey, content)
 }
 
+func (s *session) CancelCurrentTurn() error {
+	return s.proc.CancelCurrentTurn(s.sessionKey)
+}
+
 func (s *session) OnUpdate(onUpdate func(types.Event)) {
 	s.proc.SetOnUpdate(s.sessionKey, func(update SessionUpdate) {
 		if onUpdate != nil {

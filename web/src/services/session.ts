@@ -215,6 +215,7 @@ class SessionService {
         }
         break;
       case "session.done":
+        console.log("[session.done]", { sessionKey, requestId: msg.id });
         for (const handler of handlers) {
           handler.onDone?.();
         }
@@ -292,6 +293,29 @@ class SessionService {
       },
     };
 
+    this.ws.send(JSON.stringify(msg));
+    return true;
+  }
+
+  async cancelMessage(rootId: string, sessionKey: string): Promise<boolean> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.error("[Session] WebSocket not connected");
+      return false;
+    }
+    if (!rootId || !sessionKey) {
+      return false;
+    }
+
+    const msg = {
+      id: `cancel-${Date.now()}`,
+      type: "session.cancel",
+      payload: {
+        root_id: rootId,
+        session_key: sessionKey,
+      },
+    };
+
+    console.log("[session.cancel.send]", { rootId, sessionKey, requestId: msg.id });
     this.ws.send(JSON.stringify(msg));
     return true;
   }

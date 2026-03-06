@@ -1,11 +1,18 @@
 package types
 
-import "context"
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+)
 
 // Session is the interface for all agent sessions.
 type Session interface {
 	// SendMessage sends a message to the current session.
 	SendMessage(ctx context.Context, content string) error
+
+	// CancelCurrentTurn cancels the in-flight turn, if any.
+	CancelCurrentTurn() error
 
 	// OnUpdate registers a callback for streaming updates.
 	OnUpdate(onUpdate func(Event))
@@ -105,4 +112,39 @@ func (tc ToolCall) GetAffectedPaths() []string {
 		}
 	}
 	return paths
+}
+
+type TurnCanceler struct {
+	mu     sync.RWMutex
+	cancel context.CancelFunc
+	turnID uint64
+}
+
+func (t *TurnCanceler) Begin(parent context.Context) (context.Context, uint64) {
+	turnCtx, cancel := context.WithCancel(parent)
+	turnID := atomic.AddUint64(&t.turnID, 1)
+
+	t.mu.Lock()
+	t.cancel = cancel
+	t.turnID = turnID
+	t.mu.Unlock()
+
+	return turnCtx, turnID
+}
+
+func (t *TurnCanceler) Cancel() {
+	t.mu.RLock()
+	cancel := t.cancel
+	t.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (t *TurnCanceler) End(turnID uint64) {
+	t.mu.Lock()
+	if t.turnID == turnID {
+		t.cancel = nil
+	}
+	t.mu.Unlock()
 }

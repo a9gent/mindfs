@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -165,12 +166,24 @@ type SendMessageInput struct {
 	OnUpdate  func(agenttypes.Event)
 }
 
+type CancelSessionTurnInput struct {
+	RootID string
+	Key    string
+}
+
 const switchContextTailLines = 20
 
 var (
 	sessionSendLocksMu sync.Mutex
 	sessionSendLocks   = make(map[string]*sync.Mutex)
+	activeTurnsMu      sync.Mutex
+	activeTurns        = make(map[string]*activeTurnState)
 )
+
+type activeTurnState struct {
+	cancel  context.CancelFunc
+	session agenttypes.Session
+}
 
 func getSessionSendLock(sessionKey string) *sync.Mutex {
 	sessionSendLocksMu.Lock()
@@ -181,6 +194,46 @@ func getSessionSendLock(sessionKey string) *sync.Mutex {
 		sessionSendLocks[sessionKey] = lock
 	}
 	return lock
+}
+
+func activeTurnKey(rootID, sessionKey string) string {
+	return rootID + "::" + sessionKey
+}
+
+func registerActiveTurn(rootID, sessionKey string, cancel context.CancelFunc) {
+	if strings.TrimSpace(rootID) == "" || strings.TrimSpace(sessionKey) == "" || cancel == nil {
+		return
+	}
+	activeTurnsMu.Lock()
+	activeTurns[activeTurnKey(rootID, sessionKey)] = &activeTurnState{cancel: cancel}
+	activeTurnsMu.Unlock()
+}
+
+func setActiveTurnSession(rootID, sessionKey string, sess agenttypes.Session) {
+	if strings.TrimSpace(rootID) == "" || strings.TrimSpace(sessionKey) == "" || sess == nil {
+		return
+	}
+	activeTurnsMu.Lock()
+	state := activeTurns[activeTurnKey(rootID, sessionKey)]
+	if state != nil {
+		state.session = sess
+	}
+	activeTurnsMu.Unlock()
+}
+
+func unregisterActiveTurn(rootID, sessionKey string) {
+	if strings.TrimSpace(rootID) == "" || strings.TrimSpace(sessionKey) == "" {
+		return
+	}
+	activeTurnsMu.Lock()
+	delete(activeTurns, activeTurnKey(rootID, sessionKey))
+	activeTurnsMu.Unlock()
+}
+
+func getActiveTurn(rootID, sessionKey string) *activeTurnState {
+	activeTurnsMu.Lock()
+	defer activeTurnsMu.Unlock()
+	return activeTurns[activeTurnKey(rootID, sessionKey)]
 }
 
 func agentPoolSessionKey(sessionKey, agentName string) string {
@@ -214,6 +267,21 @@ func buildSwitchReadHint(exchangeLogPath string, lines int) string {
 		"Execution order: read history first, then compose the final answer.\n" +
 		"Note: do not send any natural-language response before finishing the required history reads. Start reading immediately via tools/commands.\n" +
 		"Only if reading fails, output a brief error and stop.\n\n"
+}
+
+func isCanceledTurnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	value := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(value, "context canceled") ||
+		strings.Contains(value, "context cancelled") ||
+		strings.Contains(value, "turn canceled") ||
+		strings.Contains(value, "turn cancelled") ||
+		strings.Contains(value, "cancelled")
 }
 
 func contextLineCount(exchanges []session.Exchange) int {
@@ -441,6 +509,9 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	if err := s.ensureRegistry(); err != nil {
 		return err
 	}
+	turnCtx, turnCancel := context.WithCancel(ctx)
+	registerActiveTurn(in.RootID, in.Key, turnCancel)
+	defer unregisterActiveTurn(in.RootID, in.Key)
 	sendLock := getSessionSendLock(in.Key)
 	sendLock.Lock()
 	defer sendLock.Unlock()
@@ -464,10 +535,11 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	}
 	root := manager.Root()
 	rootAbs, _ := root.RootDir()
-	sess, err := s.ensureAgentSession(ctx, agentPool, current, in.Agent, rootAbs)
+	sess, err := s.ensureAgentSession(turnCtx, agentPool, current, in.Agent, rootAbs)
 	if err != nil {
 		return err
 	}
+	setActiveTurnSession(in.RootID, current.Key, sess)
 
 	prompt := s.BuildPrompt(BuildPromptInput{
 		Session:       current,
@@ -501,11 +573,14 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 			in.OnUpdate(update)
 		}
 	})
-	sendErr := sess.SendMessage(ctx, prompt)
+	sendErr := sess.SendMessage(turnCtx, prompt)
 	if err := manager.AddExchangeForAgent(ctx, current, "user", in.Content, in.Agent); err != nil {
 		return err
 	}
 	if sendErr != nil {
+		if isCanceledTurnError(sendErr) {
+			return nil
+		}
 		if prober := s.Registry.GetProber(); prober != nil {
 			prober.ReportFailure(in.Agent, sendErr)
 		}
@@ -520,5 +595,28 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	}
 
 	manager.UpdateAgentState(ctx, current, in.Agent, contextLineCount(current.Exchanges))
+	return nil
+}
+
+func (s *Service) CancelSessionTurn(ctx context.Context, in CancelSessionTurnInput) error {
+	if err := s.ensureRegistry(); err != nil {
+		return err
+	}
+	manager, err := s.Registry.GetSessionManager(in.RootID)
+	if err != nil {
+		return err
+	}
+	current, err := manager.Get(ctx, in.Key)
+	if err != nil {
+		return err
+	}
+	active := getActiveTurn(in.RootID, current.Key)
+	if active == nil {
+		return nil
+	}
+	active.cancel()
+	if active.session != nil {
+		return active.session.CancelCurrentTurn()
+	}
 	return nil
 }

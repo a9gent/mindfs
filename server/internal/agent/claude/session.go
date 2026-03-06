@@ -90,6 +90,7 @@ type session struct {
 	turns  []chan error
 
 	closeOnce sync.Once
+	turn      types.TurnCanceler
 
 	sawDelta        bool
 	pendingText     strings.Builder
@@ -103,11 +104,13 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 	if s.stream == nil {
 		return errors.New("claude session not initialized")
 	}
+	turnCtx, turnID := s.turn.Begin(ctx)
+	defer s.turn.End(turnID)
 	log.Printf("[agent/claude] input session=%s session_id=%s chars=%d content=%q", s.sessionKey, s.SessionID(), len(content), preview(content))
 
 	waiter := make(chan error, 1)
 	s.enqueueTurn(waiter)
-	if err := s.stream.Send(ctx, content); err != nil {
+	if err := s.stream.Send(turnCtx, content); err != nil {
 		s.dequeueTurn(waiter)
 		log.Printf("[agent/claude] send.error session=%s session_id=%s err=%v", s.sessionKey, s.SessionID(), err)
 		return err
@@ -119,10 +122,10 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 			log.Printf("[agent/claude] send.error session=%s session_id=%s err=%v", s.sessionKey, s.SessionID(), err)
 		}
 		return err
-	case <-ctx.Done():
+	case <-turnCtx.Done():
 		s.dequeueTurn(waiter)
-		log.Printf("[agent/claude] send.error session=%s session_id=%s err=%v", s.sessionKey, s.SessionID(), ctx.Err())
-		return ctx.Err()
+		log.Printf("[agent/claude] send.error session=%s session_id=%s err=%v", s.sessionKey, s.SessionID(), turnCtx.Err())
+		return turnCtx.Err()
 	}
 }
 
@@ -136,6 +139,18 @@ func (s *session) SessionID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.sessionID
+}
+
+func (s *session) CancelCurrentTurn() error {
+	if s.stream == nil {
+		s.turn.Cancel()
+		return nil
+	}
+	if err := s.stream.Interrupt(context.Background()); err == nil {
+		return nil
+	}
+	s.turn.Cancel()
+	return nil
 }
 
 func (s *session) Close() error {

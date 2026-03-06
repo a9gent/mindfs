@@ -343,6 +343,16 @@ func (p *Process) SendMessage(ctx context.Context, sessionKey, content string) e
 	return nil
 }
 
+func (p *Process) CancelCurrentTurn(sessionKey string) error {
+	sess := p.getSessionByKey(sessionKey)
+	if sess == nil {
+		return nil
+	}
+	return p.conn.Cancel(context.Background(), acp.CancelNotification{
+		SessionId: sess.ID,
+	})
+}
+
 // CloseSession removes a session from the process.
 func (p *Process) CloseSession(sessionKey string) {
 	p.mu.Lock()

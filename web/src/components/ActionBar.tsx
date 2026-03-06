@@ -17,6 +17,7 @@ type ActionBarProps = {
   agentsVersion?: number;
   currentSession?: SessionInfo | null;
   onSendMessage?: (message: string, mode: SessionMode, agent: string) => void;
+  onCancelCurrentTurn?: (sessionKey: string) => void;
   onNewSession?: () => void;
   onSessionClick?: () => void;
   onToggleLeftSidebar?: () => void;
@@ -50,6 +51,7 @@ export function ActionBar({
   agentsVersion = 0,
   currentSession,
   onSendMessage,
+  onCancelCurrentTurn,
   onNewSession,
   onSessionClick,
   onToggleLeftSidebar,
@@ -64,10 +66,12 @@ export function ActionBar({
   const dragStartRef = useRef(0);
   const DRAG_THRESHOLD = -40;
   const [sending, setSending] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [isMultiLine, setIsMultiLine] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [isDark, setIsDark] = useState(window.matchMedia("(prefers-color-scheme: dark)").matches);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isComposingRef = useRef(false);
   const { isMobile } = useResponsive();
   const isConnected = status === "Connected";
 
@@ -91,6 +95,12 @@ export function ActionBar({
       setAgent(currentSession.agent);
     }
   }, [currentSession]);
+
+  useEffect(() => {
+    if (!currentSession?.pending) {
+      setCancelling(false);
+    }
+  }, [currentSession?.pending]);
 
   // 恢复原始 2: 初始 Agent 加载逻辑
   useEffect(() => {
@@ -124,7 +134,22 @@ export function ActionBar({
     }
   }, [input, isConnected, sending, agent, mode, onSendMessage]);
 
+  const handleCancel = useCallback(async () => {
+    const sessionKey = currentSession?.key;
+    if (!sessionKey || cancelling) return;
+    setCancelling(true);
+    try {
+      await onCancelCurrentTurn?.(sessionKey);
+    } finally {
+      // Reset is driven by currentSession.pending turning false.
+    }
+  }, [currentSession?.key, cancelling, onCancelCurrentTurn]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number; };
+    if (isComposingRef.current || nativeEvent.isComposing || nativeEvent.keyCode === 229) {
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey && !isMobile) {
       e.preventDefault();
       void handleSend();
@@ -182,6 +207,7 @@ export function ActionBar({
   const canSend = input.trim() && isConnected && !sending && agent && !isSelectedAgentUnavailable;
   const hasBoundSession = !!currentSession;
   const isBoundPending = !!currentSession?.pending;
+  const showCancel = isBoundPending && !!currentSession?.key;
 
   return (
     <div style={{ width: "100%", padding: isMobile ? "0" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
@@ -226,6 +252,12 @@ export function ActionBar({
             ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onCompositionStart={() => {
+              isComposingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              isComposingRef.current = false;
+            }}
             onKeyDown={handleKeyDown}
             onInput={handleInput}
             placeholder={modePlaceholders[mode]}
@@ -324,11 +356,15 @@ export function ActionBar({
             <AgentSelector agent={agent} agents={agents} onAgentChange={setAgent} compact={true} warnUnavailable={isSelectedAgentUnavailable} />
 
             <button
-              type="button" onClick={handleSend} disabled={!canSend}
-              style={{ width: "28px", height: "28px", borderRadius: "8px", border: "none", background: canSend ? "var(--accent-color)" : "transparent", color: canSend ? "#fff" : "var(--text-secondary)", display: "flex", alignItems: "center", justifyContent: "center", cursor: canSend ? "pointer" : "not-allowed", transition: "all 0.2s", opacity: canSend ? 1 : 0.3 }}
+              type="button"
+              onClick={showCancel ? handleCancel : handleSend}
+              disabled={showCancel ? cancelling : !canSend}
+              style={{ width: "28px", height: "28px", borderRadius: "8px", border: "none", background: showCancel ? "rgba(239,68,68,0.14)" : (canSend ? "var(--accent-color)" : "transparent"), color: showCancel ? "#ef4444" : (canSend ? "#fff" : "var(--text-secondary)"), display: "flex", alignItems: "center", justifyContent: "center", cursor: showCancel ? (cancelling ? "wait" : "pointer") : (canSend ? "pointer" : "not-allowed"), transition: "all 0.2s", opacity: showCancel ? 1 : (canSend ? 1 : 0.3) }}
             >
-              {sending ? (
+              {sending || cancelling ? (
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'spin 1s linear infinite' }}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+              ) : showCancel ? (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2.5" /></svg>
               ) : (
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
               )}

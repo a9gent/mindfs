@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -115,7 +116,9 @@ func (h *WSHandler) broadcastWS(resp WSResponse) {
 func (h *WSHandler) handleWSRequest(ctx context.Context, conn *websocket.Conn, clientID string, req WSRequest) {
 	switch req.Type {
 	case "session.message":
-		h.handleSessionMessage(ctx, conn, clientID, req)
+		go h.handleSessionMessage(ctx, conn, clientID, req)
+	case "session.cancel":
+		h.handleSessionCancel(ctx, conn, clientID, req)
 	default:
 		h.sendWSError(conn, req.ID, "method_not_found", "method not found")
 	}
@@ -184,7 +187,26 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 		streamHub.BroadcastSessionStream(key, event)
 	}
 
+	log.Printf("[ws] session.done root=%s session=%s request=%s", rootID, key, req.ID)
 	streamHub.BroadcastSessionDone(key, req.ID)
+}
+
+func (h *WSHandler) handleSessionCancel(ctx context.Context, conn *websocket.Conn, _ string, req WSRequest) {
+	rootID := getString(req.Payload, "root_id")
+	key := getString(req.Payload, "session_key")
+	if rootID == "" || key == "" {
+		h.sendWSError(conn, req.ID, "invalid_request", "root_id and session_key required")
+		return
+	}
+	log.Printf("[ws] session.cancel root=%s session=%s request=%s", rootID, key, req.ID)
+
+	uc := &usecase.Service{Registry: h.AppContext}
+	if err := uc.CancelSessionTurn(ctx, usecase.CancelSessionTurnInput{
+		RootID: rootID,
+		Key:    key,
+	}); err != nil {
+		h.sendWSError(conn, req.ID, "session.cancel_failed", err.Error())
+	}
 }
 
 func (h *WSHandler) sendWSError(conn *websocket.Conn, id, code, message string) {

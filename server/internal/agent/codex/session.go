@@ -85,14 +85,17 @@ type session struct {
 
 	mu       sync.RWMutex
 	onUpdate func(types.Event)
+	turn     types.TurnCanceler
 }
 
 func (s *session) SendMessage(ctx context.Context, content string) error {
 	if s == nil || s.thread == nil {
 		return errors.New("codex session not initialized")
 	}
+	turnCtx, turnID := s.turn.Begin(ctx)
+	defer s.turn.End(turnID)
 	log.Printf("[agent/codex] input session=%s thread_id=%s chars=%d content=%q", s.sessionKey, s.SessionID(), len(content), preview(content))
-	streamed, err := s.thread.RunStreamed(content, codexsdk.TurnOptions{Context: ctx})
+	streamed, err := s.thread.RunStreamed(content, codexsdk.TurnOptions{Context: turnCtx})
 	if err != nil {
 		log.Printf("[agent/codex] send.error session=%s thread_id=%s err=%v", s.sessionKey, s.SessionID(), err)
 		return err
@@ -184,6 +187,11 @@ func (s *session) OnUpdate(onUpdate func(types.Event)) {
 	s.mu.Lock()
 	s.onUpdate = onUpdate
 	s.mu.Unlock()
+}
+
+func (s *session) CancelCurrentTurn() error {
+	s.turn.Cancel()
+	return nil
 }
 
 func (s *session) SessionID() string {
