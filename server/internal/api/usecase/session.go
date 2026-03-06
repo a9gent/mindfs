@@ -125,7 +125,7 @@ func (s *Service) BuildPrompt(in BuildPromptInput) string {
 	}
 	prompt := buildUserPrompt(in.Message, clientCtx)
 	if strings.TrimSpace(clientCtx.PluginCatalog) != "" {
-		prompt = buildPluginPrompt(clientCtx.PluginCatalog, in.Message)
+		prompt = buildPluginPrompt(clientCtx.PluginCatalog, in.Message, in.IsInitial)
 	}
 	return prependSwitchHint(in, prompt)
 }
@@ -243,7 +243,39 @@ func buildUserPrompt(message string, clientCtx ClientContext) string {
 	return "[USER_INPUT]\n" + strings.Join(lines, "\n")
 }
 
-func buildPluginPrompt(catalogPrompt, userMessage string) string {
+func buildPluginPrompt(catalogPrompt, userMessage string, isInitial bool) string {
+	if isInitial {
+		return buildPluginPromptInitial(catalogPrompt, userMessage)
+	}
+	return buildPluginPromptFollowup(userMessage)
+}
+
+func buildPluginPromptFollowup(userMessage string) string {
+	systemPrompt := strings.TrimSpace(strings.Join([]string{
+		"You are still in view-plugin development mode.",
+		"Continue editing/refining the plugin under .mindfs/plugins/.",
+		"",
+		"Follow these strict constraints:",
+		"- If the user explicitly asks to generate/update plugin code, output JS code only (no markdown fences, no explanation text).",
+		"- If the user asks analysis/design/review questions, answer normally and do not output plugin code unless requested.",
+		"- Use CommonJS: module.exports = { name, match, fileLoadMode, theme, process(file) { return { data?, tree } } }.",
+		"- fileLoadMode must be \"incremental\" or \"full\".",
+		"- theme is required with all keys: overlayBg, surfaceBg, surfaceBgElevated, text, textMuted, border, primary, primaryText, radius, shadow, focusRing, danger, warning, success.",
+		"- Do not modify framework CSS/TS code.",
+		"- Do not output global CSS overrides.",
+		"- For dynamic interactions, use action \"navigate\" with params { path?, cursor?, query? }.",
+	}, "\n"))
+
+	return strings.Join([]string{
+		"[SYSTEM_PROMPT]",
+		systemPrompt,
+		"",
+		"[USER_PROMPT]",
+		userMessage,
+	}, "\n")
+}
+
+func buildPluginPromptInitial(catalogPrompt, userMessage string) string {
 	systemPrompt := strings.TrimSpace(strings.Join([]string{
 		"You are in view-plugin development mode.",
 		"The user will describe requirements. Generate a view plugin and write it under .mindfs/plugins/.",
@@ -302,14 +334,14 @@ func buildPluginPrompt(catalogPrompt, userMessage string) string {
 		"- For wide tables/code blocks on mobile, provide horizontal scrolling or condensed fallback",
 		"- Avoid fixed-width layouts that overflow small screens",
 		"",
-		"## Example Plugin (CSV Viewer)",
+		"## Example Plugin (TXT Novel Reader)",
 		"module.exports = {",
-		"  name: \"CSV Viewer\",",
-		"  match: { ext: \".csv\" },",
+		"  name: \"TXT Novel Reader\",",
+		"  match: { ext: \".txt\" },",
 		"  fileLoadMode: \"full\",",
 		"  theme: {",
-		"    overlayBg: \"rgba(0,0,0,0.56)\",",
-		"    surfaceBg: \"#ffffff\",",
+		"    overlayBg: \"rgba(2,6,23,0.62)\",",
+		"    surfaceBg: \"#f8fafc\",",
 		"    surfaceBgElevated: \"#ffffff\",",
 		"    text: \"#0f172a\",",
 		"    textMuted: \"#475569\",",
@@ -317,31 +349,48 @@ func buildPluginPrompt(catalogPrompt, userMessage string) string {
 		"    primary: \"#2563eb\",",
 		"    primaryText: \"#ffffff\",",
 		"    radius: \"10px\",",
-		"    shadow: \"0 10px 30px rgba(2,6,23,.18)\",",
+		"    shadow: \"0 16px 40px rgba(2,6,23,.22)\",",
 		"    focusRing: \"rgba(37,99,235,.4)\",",
 		"    danger: \"#dc2626\",",
 		"    warning: \"#d97706\",",
 		"    success: \"#16a34a\"",
 		"  },",
 		"  process(file) {",
-		"    const page = Math.max(1, parseInt(file.query.page || \"1\", 10) || 1);",
-		"    const lines = file.content.split('\\n').filter(Boolean);",
-		"    const headers = (lines[0] || \"\").split(',').map(s => s.trim());",
-		"    const allRows = lines.slice(1).map(line => line.split(',').map(s => s.trim()));",
-		"    const pageSize = 100;",
-		"    const rows = allRows.slice((page - 1) * pageSize, page * pageSize);",
+		"    const content = typeof file.content === \"string\" ? file.content.replace(/\\r\\n?/g, \"\\n\") : \"\";",
+		"    const query = file.query || {};",
+		"    const lines = content.split(\"\\n\");",
+		"    const chapterTitles = lines.filter((line) => /^\\s*第.+[章节回卷篇部]/.test(line.trim()));",
+		"    const chapters = chapterTitles.length ? chapterTitles.map((title) => ({ title: title.trim(), text: content })) : [{ title: file.name ? String(file.name).replace(/\\.txt$/i, \"\") : \"正文\", text: content }];",
+		"    const total = Math.max(1, chapters.length);",
+		"    const chapterIdx = Math.min(Math.max(1, parseInt(query.chapter || \"1\", 10) || 1), total) - 1;",
+		"    const current = chapters[chapterIdx] || { title: \"正文\", text: content };",
+		"    const paragraphs = (current.text || \"\").split(\"\\n\").map(s => s.trim()).filter(Boolean).slice(0, 500);",
+		"    const tocValue = String(query.toc || \"0\");",
+		"    const showToc = tocValue !== \"0\";",
+		"    const nextTocValue = String((parseInt(tocValue, 10) || 0) + 1);",
 		"    return {",
-		"      data: { headers, rowCount: allRows.length, page },",
+		"      data: { ui: { tocOpen: showToc } },",
 		"      tree: {",
 		"        root: \"root\",",
 		"        elements: {",
-		"          root: { type: \"Stack\", children: [\"table\", \"next\"] },",
-		"          table: { type: \"Table\", props: { columns: headers, rows }, children: [] },",
-		"          next: {",
-		"            type: \"Button\",",
-		"            props: { label: \"Next Page\" },",
-		"            on: { press: { action: \"navigate\", params: { query: { page: page + 1 } } } }",
-		"          }",
+		"          root: { type: \"Stack\", props: { direction: \"vertical\", gap: \"sm\" }, children: [\"header\", \"nav-top\", \"content-card\", \"nav-bottom\", \"toc-dialog\"] },",
+		"          header: { type: \"Stack\", props: { direction: \"horizontal\", gap: \"sm\", justify: \"between\", align: \"center\" }, children: [\"title\"] },",
+		"          title: { type: \"Heading\", props: { text: current.title, level: \"h4\" }, children: [] },",
+		"          \"nav-top\": { type: \"Stack\", props: { direction: \"horizontal\", gap: \"sm\", justify: \"between\" }, children: [\"prev-t\", \"toc-t\", \"next-t\"] },",
+		"          \"nav-bottom\": { type: \"Stack\", props: { direction: \"horizontal\", gap: \"sm\", justify: \"between\" }, children: [\"prev-b\", \"toc-b\", \"next-b\"] },",
+		"          \"prev-t\": { type: \"Button\", props: { label: \"上一章\", disabled: chapterIdx <= 0 }, on: { press: { action: \"navigate\", params: { query: { chapter: chapterIdx, toc: \"0\" } } } } },",
+		"          \"toc-t\": { type: \"Button\", props: { label: \"目录\" }, on: { press: { action: \"navigate\", params: { query: { toc: nextTocValue } } } } },",
+		"          \"next-t\": { type: \"Button\", props: { label: \"下一章\", disabled: chapterIdx >= total - 1 }, on: { press: { action: \"navigate\", params: { query: { chapter: chapterIdx + 2, toc: \"0\" } } } } },",
+		"          \"prev-b\": { type: \"Button\", props: { label: \"上一章\", disabled: chapterIdx <= 0 }, on: { press: { action: \"navigate\", params: { query: { chapter: chapterIdx, toc: \"0\" } } } } },",
+		"          \"toc-b\": { type: \"Button\", props: { label: \"目录\" }, on: { press: { action: \"navigate\", params: { query: { toc: nextTocValue } } } } },",
+		"          \"next-b\": { type: \"Button\", props: { label: \"下一章\", disabled: chapterIdx >= total - 1 }, on: { press: { action: \"navigate\", params: { query: { chapter: chapterIdx + 2, toc: \"0\" } } } } },",
+		"          \"content-card\": { type: \"Card\", props: { title: null, description: null, maxWidth: \"full\" }, children: [\"para-stack\"] },",
+		"          \"para-stack\": { type: \"Stack\", props: { direction: \"vertical\", gap: \"sm\" }, children: paragraphs.map((_, i) => `p-${i}`) },",
+		"          ...Object.fromEntries(paragraphs.map((line, i) => [`p-${i}`, { type: \"Text\", props: { text: line, variant: \"body\" }, children: [] }])),",
+		"          \"toc-dialog\": { type: \"Dialog\", props: { title: \"章节目录\", openPath: \"/ui/tocOpen\" }, children: [\"toc-list\", \"toc-close\"] },",
+		"          \"toc-list\": { type: \"Stack\", props: { direction: \"vertical\", gap: \"sm\" }, children: chapters.slice(0, 16).map((_, i) => `c-${i}`) },",
+		"          ...Object.fromEntries(chapters.slice(0, 16).map((ch, i) => [`c-${i}`, { type: \"Button\", props: { label: `${i + 1}. ${ch.title}`, variant: i === chapterIdx ? \"primary\" : \"secondary\" }, on: { press: { action: \"navigate\", params: { query: { chapter: i + 1, toc: \"0\" } } } }, children: [] }])),",
+		"          \"toc-close\": { type: \"Button\", props: { label: \"关闭\", variant: \"secondary\" }, on: { press: { action: \"navigate\", params: { query: { toc: \"0\" } } } }, children: [] }",
 		"        }",
 		"      }",
 		"    };",

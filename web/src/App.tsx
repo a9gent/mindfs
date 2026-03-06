@@ -150,6 +150,22 @@ function buildMatchInputFromPath(path: string, query: Record<string, string>): P
   };
 }
 
+function normalizePath(value: string): string {
+  return String(value || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+}
+
+function parentDirsOfFile(path: string): string[] {
+  const normalized = normalizePath(path);
+  if (!normalized) return [];
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.length <= 1) return [];
+  const dirs: string[] = [];
+  for (let i = 1; i < parts.length; i++) {
+    dirs.push(parts.slice(0, i).join("/"));
+  }
+  return dirs;
+}
+
 // Hook for responsive detection
 function useResponsive() {
   const [isMobile, setIsMobile] = useState(false);
@@ -510,6 +526,11 @@ export function App() {
       bumpCacheVersion();
     } else {
       pendingDraftRef.current = { rootId: activeRoot, mode: effectiveMode, agent: effectiveAgent, message, timestamp: now };
+      session = {
+        ...(session as any),
+        exchanges: [userEx],
+        updated_at: now,
+      } as Session;
     }
     const isBoundInMain = !!selectedSessionRef.current && selectedSessionRef.current.key === sendSessionKey && interactionModeRef.current !== "drawer";
     if (!isBoundInMain) { setInteractionMode("drawer"); setDrawerOpenForRoot(activeRoot, true); }
@@ -564,6 +585,29 @@ export function App() {
       setPluginQuery(nextPluginQuery);
       replaceURLState({ root, file: path, cursor, pluginQuery: nextPluginQuery });
       persistPluginQuery(String(root), String(path), nextPluginQuery);
+
+      const expandAndLoadTreeForFile = async () => {
+        const dirs = parentDirsOfFile(String(path));
+        setExpanded((prev) => {
+          const next = new Set(prev);
+          next.add(String(root));
+          dirs.forEach((dir) => next.add(`${root}:${dir}`));
+          return Array.from(next);
+        });
+        const toLoad = [".", ...dirs];
+        for (const dir of toLoad) {
+          try {
+            const res = await fetch(`/api/tree?root=${encodeURIComponent(String(root))}&dir=${encodeURIComponent(dir)}`);
+            if (!res.ok) continue;
+            const payload = await res.json();
+            const parsed = normalizeTreeResponse(payload);
+            setEntriesByPath((prev) => ({ ...prev, [`${root}:${dir}`]: parsed.entries }));
+          } catch {
+          }
+        }
+      };
+
+      void expandAndLoadTreeForFile();
       try {
         const fetchFileWithMode = async (mode: "full" | "incremental", timeoutMs?: number) => {
           const queryParams = new URLSearchParams({
@@ -780,7 +824,8 @@ export function App() {
       const ck = rootSessionKey(activeRoot, streamKey);
       let pending = pendingBySessionRef.current[ck];
       if (!pending) { const draft = pendingDraftRef.current; if (draft && draft.rootId === activeRoot) { pending = draft; pendingBySessionRef.current[ck] = draft; pendingDraftRef.current = null; } }
-      if (!activeBoundSessionKey) {
+      const boundKey = boundSessionByRootRef.current[activeRoot] || null;
+      if (!boundKey || (typeof boundKey === "string" && boundKey.startsWith("pending-"))) {
         setBoundSessionForRoot(activeRoot, streamKey);
         if (pending) {
           const userEx = { role: "user", content: pending.message, timestamp: pending.timestamp };
@@ -801,21 +846,49 @@ export function App() {
           } as Session;
           bumpCacheVersion();
         }
+        const seeded = sessionCacheRef.current[ck];
+        if (seeded) {
+          setDrawerSessionForRoot(activeRoot, { ...(seeded as any), pending: true } as Session);
+        }
       }
       const event = payload.event;
       if (!event?.type) return;
       switch (event.type) {
         case "message_chunk":
           appendAgentChunkForSession(activeRoot, streamKey, event.data?.content || "", pending?.agent);
+          {
+            const latest = sessionCacheRef.current[ck];
+            if (latest) {
+              setDrawerSessionForRoot(activeRoot, { ...(latest as any), pending: true } as Session);
+            }
+          }
           break;
         case "thought_chunk":
           appendThoughtChunkForSession(activeRoot, streamKey, event.data?.content || "");
+          {
+            const latest = sessionCacheRef.current[ck];
+            if (latest) {
+              setDrawerSessionForRoot(activeRoot, { ...(latest as any), pending: true } as Session);
+            }
+          }
           break;
         case "tool_call":
           appendToolCallForSession(activeRoot, streamKey, event.data || {}, false);
+          {
+            const latest = sessionCacheRef.current[ck];
+            if (latest) {
+              setDrawerSessionForRoot(activeRoot, { ...(latest as any), pending: true } as Session);
+            }
+          }
           break;
         case "tool_call_update":
           appendToolCallForSession(activeRoot, streamKey, event.data || {}, true);
+          {
+            const latest = sessionCacheRef.current[ck];
+            if (latest) {
+              setDrawerSessionForRoot(activeRoot, { ...(latest as any), pending: true } as Session);
+            }
+          }
           break;
         case "message_done":
         case "error":
@@ -867,7 +940,7 @@ export function App() {
     });
     loadSessions(currentRootId);
     return () => { cancelled = true; unsubscribeEvents(); sessionService.disconnect(); setStatus("Disconnected"); };
-  }, [currentRootId, activeBoundSessionKey, rootSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot]);
+  }, [currentRootId, rootSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot]);
 
   useEffect(() => {
     if (!currentRootId) return;

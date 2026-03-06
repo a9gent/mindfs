@@ -110,14 +110,15 @@ export function ActionBar({
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || !isConnected || sending || !agent) return;
+    const payload = input.trim();
+    setInput("");
+    setIsMultiLine(false);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "44px";
+    }
     setSending(true);
     try {
-      await onSendMessage?.(input.trim(), mode, agent);
-      setInput("");
-      setIsMultiLine(false);
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "44px";
-      }
+      await onSendMessage?.(payload, mode, agent);
     } finally {
       setSending(false);
     }
