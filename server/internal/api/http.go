@@ -43,8 +43,6 @@ func (h *HTTPHandler) Routes() http.Handler {
 	// Agent status API
 	r.Get("/api/agents", h.handleAgentsList)
 
-	r.Post("/api/view/preference", h.handleViewPreference)
-
 	return r
 }
 
@@ -91,16 +89,15 @@ func sessionResponse(s *session.Session) map[string]any {
 		return map[string]any{}
 	}
 	return map[string]any{
-		"key":            s.Key,
-		"type":           s.Type,
-		"agent":          session.InferAgentFromSession(s),
-		"name":           s.Name,
-		"exchanges":      s.Exchanges,
-		"related_files":  s.RelatedFiles,
-		"generated_view": s.GeneratedView,
-		"created_at":     s.CreatedAt,
-		"updated_at":     s.UpdatedAt,
-		"closed_at":      s.ClosedAt,
+		"key":           s.Key,
+		"type":          s.Type,
+		"agent":         session.InferAgentFromSession(s),
+		"name":          s.Name,
+		"exchanges":     s.Exchanges,
+		"related_files": s.RelatedFiles,
+		"created_at":    s.CreatedAt,
+		"updated_at":    s.UpdatedAt,
+		"closed_at":     s.ClosedAt,
 	}
 }
 
@@ -117,28 +114,6 @@ func sessionListResponse(s *session.Session) map[string]any {
 		"updated_at": s.UpdatedAt,
 		"closed_at":  s.ClosedAt,
 	}
-}
-
-func (h *HTTPHandler) handleViewPreference(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		RootID  string `json:"root_id"`
-		Path    string `json:"path"`
-		RouteID string `json:"route_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json"))
-		return
-	}
-	uc := h.service()
-	if err := uc.SetViewPreference(r.Context(), usecase.SetViewPreferenceInput{
-		RootID:  req.RootID,
-		Path:    req.Path,
-		RouteID: req.RouteID,
-	}); err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *HTTPHandler) handleSkillExecute(w http.ResponseWriter, r *http.Request) {
@@ -199,8 +174,7 @@ func (h *HTTPHandler) handleTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{
-		"entries":     out.Entries,
-		"view_routes": out.ViewRoutes,
+		"entries": out.Entries,
 	})
 }
 
@@ -210,6 +184,19 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("path required"))
+		return
+	}
+	cursor, err := parseNonNegativeInt64Query(r, "cursor")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("cursor must be a non-negative integer"))
+		return
+	}
+	readMode := strings.TrimSpace(r.URL.Query().Get("read"))
+	if readMode == "" {
+		readMode = "incremental"
+	}
+	if readMode != "incremental" && readMode != "full" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("read must be incremental or full"))
 		return
 	}
 	raw := r.URL.Query().Get("raw")
@@ -238,15 +225,28 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 		RootID:   rootID,
 		Path:     path,
 		MaxBytes: 128 * 1024,
+		Cursor:   cursor,
+		ReadMode: readMode,
 	})
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{
-		"file":        out.File,
-		"view_routes": out.ViewRoutes,
+		"file": out.File,
 	})
+}
+
+func parseNonNegativeInt64Query(r *http.Request, key string) (int64, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
+		return 0, errInvalidRequest(key + " must be non-negative")
+	}
+	return value, nil
 }
 
 func (h *HTTPHandler) handleDirs(w http.ResponseWriter, _ *http.Request) {

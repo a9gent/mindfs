@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { JSONUIProvider } from "@json-render/react";
+import { getViewModeSystemPrompt } from "./renderer/viewCatalog";
 import { Renderer } from "./renderer/Renderer";
-import { registry } from "./renderer/registry";
 import { sessionService, type Session } from "./services/session";
 import { buildClientContext } from "./services/context";
+import { PluginManager, loadAllPlugins, type PluginInput } from "./plugins/manager";
 
 // 直接导入标准组件
 import { AppShell } from "./layout/AppShell";
@@ -17,12 +17,107 @@ import { BottomSheet } from "./components/BottomSheet";
 
 // 类型定义
 export type FileEntry = { name: string; path: string; is_dir: boolean; };
-export type UIElement = { key: string; type: string; props?: Record<string, unknown>; children?: string[]; };
-export type UITree = { root: string; elements: Record<string, UIElement>; };
-export type FilePayload = { name: string; path: string; content: string; encoding: string; truncated: boolean; size: number; ext?: string; mime?: string; root?: string; file_meta?: any[]; };
-export type SessionItem = { key?: string; session_key?: string; root_id?: string; name?: string; type?: "chat" | "view" | "skill"; agent?: string; scope?: string; purpose?: string; closed_at?: string; related_files?: Array<{ path: string; name?: string }>; exchanges?: Array<{ role?: string; content?: string; timestamp?: string }>; pending?: boolean; };
+export type FilePayload = { name: string; path: string; content: string; encoding: string; truncated: boolean; next_cursor?: number; size: number; ext?: string; mime?: string; root?: string; file_meta?: any[]; };
+type SessionMode = "chat" | "plugin" | "skill";
+export type SessionItem = { key?: string; session_key?: string; root_id?: string; name?: string; type?: SessionMode; agent?: string; scope?: string; purpose?: string; closed_at?: string; related_files?: Array<{ path: string; name?: string }>; exchanges?: Array<{ role?: string; content?: string; timestamp?: string }>; pending?: boolean; };
 type Exchange = { role: string; agent?: string; content?: string; timestamp?: string; toolCall?: any; };
-type PendingSend = { rootId: string; mode: "chat" | "view" | "skill"; agent: string; message: string; timestamp: string; };
+type PendingSend = { rootId: string; mode: SessionMode; agent: string; message: string; timestamp: string; };
+type URLState = { root: string; file: string; cursor: number; pluginQuery: Record<string, string> };
+
+function normalizeMode(mode: SessionMode | undefined): SessionMode {
+  if (mode === "plugin" || mode === "skill") return mode;
+  return "chat";
+}
+
+function parsePluginQuery(search: string): Record<string, string> {
+  const params = new URLSearchParams(search);
+  const query: Record<string, string> = {};
+  params.forEach((value, key) => {
+    if (key.startsWith("vp_")) {
+      query[key.slice("vp_".length)] = value;
+    }
+  });
+  return query;
+}
+
+function parseCursor(value: string | null): number {
+  if (!value) return 0;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return parsed;
+}
+
+function normalizeCursor(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return parsed;
+}
+
+function readURLState(): URLState {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    root: params.get("root") || "",
+    file: params.get("file") || "",
+    cursor: parseCursor(params.get("cursor")),
+    pluginQuery: parsePluginQuery(window.location.search),
+  };
+}
+
+function buildURLSearch(next: URLState): string {
+  const params = new URLSearchParams();
+  if (next.root) params.set("root", next.root);
+  if (next.file) params.set("file", next.file);
+  if (next.cursor > 0) params.set("cursor", String(next.cursor));
+  Object.entries(next.pluginQuery).forEach(([key, value]) => {
+    if (!key) return;
+    params.set(`vp_${key}`, String(value));
+  });
+  const encoded = params.toString();
+  return encoded ? `?${encoded}` : "";
+}
+
+function toPluginInput(file: FilePayload, query: Record<string, string>): PluginInput {
+  return {
+    name: file.name,
+    path: file.path,
+    content: file.content,
+    ext: file.ext || "",
+    mime: file.mime || "",
+    size: typeof file.size === "number" ? file.size : 0,
+    truncated: !!file.truncated,
+    next_cursor: typeof file.next_cursor === "number" ? file.next_cursor : undefined,
+    query,
+  };
+}
+
+function inferReadModeFromPlugin(plugin: any): "incremental" | "full" {
+  if (!plugin) return "incremental";
+  if (plugin?.fileLoadMode === "full") return "full";
+  if (plugin?.fileLoadMode === "incremental") return "incremental";
+  return "incremental";
+}
+
+function buildMatchInputFromPath(path: string, query: Record<string, string>): PluginInput {
+  const normalized = (path || "").replace(/\\/g, "/");
+  const name = normalized.split("/").pop() || normalized;
+  const dot = name.lastIndexOf(".");
+  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : "";
+  return {
+    name,
+    path: normalized,
+    content: "",
+    ext,
+    mime: "",
+    size: 0,
+    truncated: false,
+    query,
+  };
+}
 
 // Hook for responsive detection
 function useResponsive() {
@@ -40,6 +135,7 @@ function useResponsive() {
 }
 
 export function App() {
+  const pluginManagerRef = useRef<PluginManager>(new PluginManager());
   const managedRootIdsRef = useRef<Set<string>>(new Set());
   const expandedRef = useRef<string[]>([]);
   const selectedDirRef = useRef<string | null>(null);
@@ -55,6 +151,9 @@ export function App() {
   const boundSessionByRootRef = useRef<Record<string, string | null>>({});
   const drawerSessionByRootRef = useRef<Record<string, Session | null>>({});
   const drawerOpenByRootRef = useRef<Record<string, boolean>>({});
+  const fileCursorRef = useRef<number>(0);
+  const lastPluginResetFileKeyRef = useRef<string>("");
+  const pluginBypassRef = useRef<boolean>(false);
   
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionItem | null>(null);
@@ -77,12 +176,27 @@ export function App() {
   const [mainEntries, setMainEntries] = useState<FileEntry[]>([]);
   const [status, setStatus] = useState("Disconnected");
   const [file, setFile] = useState<FilePayload | null>(null);
-  const [viewTree, setViewTree] = useState<UITree | null>(null);
+  const [pluginVersion, setPluginVersion] = useState(0);
+  const [pluginLoading, setPluginLoading] = useState(false);
+  const [pluginBypass, setPluginBypass] = useState(false);
+  const [pluginQuery, setPluginQuery] = useState<Record<string, string>>(() => readURLState().pluginQuery);
 
   useEffect(() => { currentRootIdRef.current = currentRootId; }, [currentRootId]);
   useEffect(() => { expandedRef.current = expanded; }, [expanded]);
   useEffect(() => { selectedDirRef.current = selectedDir; }, [selectedDir]);
   useEffect(() => { fileRef.current = file; }, [file]);
+  useEffect(() => {
+    if (!file?.path || !currentRootId) return;
+    const nextKey = `${currentRootId}:${file.path}`;
+    if (lastPluginResetFileKeyRef.current !== nextKey) {
+      pluginBypassRef.current = false;
+    setPluginBypass(false);
+      lastPluginResetFileKeyRef.current = nextKey;
+    }
+  }, [file?.path, currentRootId]);
+  useEffect(() => {
+    pluginBypassRef.current = pluginBypass;
+  }, [pluginBypass]);
   useEffect(() => { selectedSessionRef.current = selectedSession; }, [selectedSession]);
   useEffect(() => { currentSessionRef.current = currentSession; }, [currentSession]);
   useEffect(() => { interactionModeRef.current = interactionMode; }, [interactionMode]);
@@ -116,6 +230,12 @@ export function App() {
     if (currentRootIdRef.current === rootID) {
       setIsDrawerOpen(open);
     }
+  }, []);
+
+  const replaceURLState = useCallback((next: URLState) => {
+    const search = buildURLSearch(next);
+    const target = `${window.location.pathname}${search}`;
+    window.history.replaceState(null, "", target);
   }, []);
 
   const rootSessionKey = useCallback((rootId: string, sessionKey: string) => `${rootId}::${sessionKey}`, []);
@@ -263,18 +383,13 @@ export function App() {
   }, [rootSessionKey, bumpCacheVersion]);
 
   const normalizeFileResponse = useCallback((payload: any) => {
-    if (payload && payload.file) return { file: payload.file as FilePayload, viewRoutes: (payload.view_routes || []) as any[] };
-    return { file: null, viewRoutes: [] };
+    if (payload && payload.file) return { file: payload.file as FilePayload };
+    return { file: null };
   }, []);
 
   const normalizeTreeResponse = useCallback((payload: any) => {
-    if (payload && payload.entries) return { entries: payload.entries as FileEntry[], viewRoutes: (payload.view_routes || []) as any[] };
-    return { entries: [], viewRoutes: [] };
-  }, []);
-
-  const pickViewTree = useCallback((routes: any[]): UITree | null => {
-    if (!routes || routes.length === 0) return null;
-    return routes[0].tree as UITree;
+    if (payload && payload.entries) return { entries: payload.entries as FileEntry[] };
+    return { entries: [] };
   }, []);
 
   const handleSelectSession = useCallback(async (session: any) => {
@@ -323,7 +438,7 @@ export function App() {
     } catch (err) {}
   }, [isMobile, rootSessionKey, bumpCacheVersion, setDrawerOpenForRoot, setDrawerSessionForRoot]);
 
-  const handleSendMessage = useCallback(async (message: string, mode: "chat" | "view" | "skill", agent: string) => {
+  const handleSendMessage = useCallback(async (message: string, mode: SessionMode, agent: string) => {
     const activeRoot = currentRootIdRef.current;
     if (!activeRoot) return;
     let sendSessionKey = activeBoundSessionKey;
@@ -340,7 +455,7 @@ export function App() {
     }
     let effectiveMode = mode, effectiveAgent = agent;
     if (sendSessionKey && session) {
-      effectiveMode = (session.type as any) || mode;
+      effectiveMode = normalizeMode(session.type as any);
       effectiveAgent = agent || session.agent || "";
       setBoundSessionForRoot(activeRoot, sendSessionKey);
       setSelectedPendingByKey(sendSessionKey, true);
@@ -369,7 +484,11 @@ export function App() {
     if (!isBoundInMain) { setInteractionMode("drawer"); setDrawerOpenForRoot(activeRoot, true); }
     setDrawerSessionForRoot(activeRoot, { ...(session as any), pending: true } as Session);
     setFile(null);
-    const context = buildClientContext({ currentRoot: activeRoot, currentPath: fileRef.current?.path ?? selectedDirRef.current ?? undefined });
+    const context = buildClientContext({
+      currentRoot: activeRoot,
+      currentPath: fileRef.current?.path ?? selectedDirRef.current ?? undefined,
+      pluginCatalog: effectiveMode === "plugin" ? getViewModeSystemPrompt() : undefined,
+    });
     const sent = await sessionService.sendMessage(activeRoot, sendSessionKey, message, effectiveMode, effectiveAgent, context);
     if (!sent && sendSessionKey) {
       setSelectedPendingByKey(sendSessionKey, false);
@@ -385,26 +504,107 @@ export function App() {
     setSelectedSession(null);
     setBoundSessionForRoot(rootID, null);
     setDrawerSessionForRoot(rootID, null);
-    setViewTree(null); setInteractionMode("main"); setDrawerOpenForRoot(rootID, false);
+    setInteractionMode("main"); setDrawerOpenForRoot(rootID, false);
   }, [setBoundSessionForRoot, setDrawerOpenForRoot, setDrawerSessionForRoot]);
 
   const actionHandlers = useMemo(() => ({
     open: async (params: any) => {
       const path = params.path, root = params.root || currentRootIdRef.current;
       if (!path || !root) return;
+      const currentFilePath = fileRef.current?.path || "";
+      const currentFileRoot = fileRef.current?.root || currentRootIdRef.current || "";
+      const isFileSwitch = currentFilePath !== String(path) || currentFileRoot !== String(root);
+      if (isFileSwitch) {
+        pluginBypassRef.current = false;
+        setPluginBypass(false);
+      }
+      // Tear down previous renderer state first to avoid stale plugin overlay blocking UI.
+      setFile(null);
       if (currentRootIdRef.current !== root) {
         setCurrentRootId(root);
       }
+      const requestedCursor = normalizeCursor(params.cursor);
+      const cursor = requestedCursor === null ? 0 : requestedCursor;
+      const preserveQuery = !!params.preservePluginQuery;
+      const nextPluginQuery = preserveQuery ? parsePluginQuery(window.location.search) : {};
+      setPluginQuery(nextPluginQuery);
+      replaceURLState({ root, file: path, cursor, pluginQuery: nextPluginQuery });
       try {
-        const res = await fetch(`/api/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`);
+        const fetchFileWithMode = async (mode: "full" | "incremental", timeoutMs?: number) => {
+          const queryParams = new URLSearchParams({
+            root: String(root),
+            path: String(path),
+            read: mode,
+          });
+          if (cursor > 0) {
+            queryParams.set("cursor", String(cursor));
+          }
+          const url = `/api/file?${queryParams.toString()}`;
+          if (!timeoutMs || timeoutMs <= 0) {
+            return fetch(url);
+          }
+          const controller = new AbortController();
+          const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            return await fetch(url, { signal: controller.signal });
+          } finally {
+            window.clearTimeout(timer);
+          }
+        };
+
+        let readMode: "incremental" | "full" = params.readMode === "full" ? "full" : "incremental";
+        if (params.readMode !== "full" && params.readMode !== "incremental") {
+          const currentFilePath = fileRef.current?.path || "";
+          const currentFileRoot = (fileRef.current?.root || currentRootIdRef.current || "");
+          const targetPath = String(path);
+          const targetRoot = String(root);
+          const sameFileReload =
+            pluginBypassRef.current &&
+            currentFilePath === targetPath &&
+            currentFileRoot === targetRoot;
+
+          if (sameFileReload) {
+            readMode = "incremental";
+          } else {
+          try {
+            const plugin = pluginManagerRef.current.match(root, buildMatchInputFromPath(path, nextPluginQuery));
+            readMode = inferReadModeFromPlugin(plugin);
+          } catch {
+            readMode = "incremental";
+          }
+          }
+        }
+        let res: Response;
+        try {
+          // full-mode read can be heavy; keep UI responsive by fast fallback.
+          res = await fetchFileWithMode(readMode, readMode === "full" ? 1500 : undefined);
+        } catch (err) {
+          if (readMode === "full") {
+            res = await fetchFileWithMode("incremental");
+            readMode = "incremental";
+          } else {
+            throw err;
+          }
+        }
+        if (!res.ok && readMode === "full") {
+          res = await fetchFileWithMode("incremental");
+          readMode = "incremental";
+        }
+        if (!res.ok) {
+          throw new Error(`open file failed: status=${res.status}`);
+        }
         const payload = await res.json();
         const next = normalizeFileResponse(payload);
-        if (next.file) setFile(next.file);
-        setViewTree(pickViewTree(next.viewRoutes));
+        if (next.file) {
+          setFile(next.file);
+        }
+        fileCursorRef.current = cursor;
         setSelectedSession(null);
         setDrawerOpenForRoot(root, false);
         if (isMobile) setIsLeftOpen(false);
-      } catch {}
+      } catch (err) {
+        console.error("[file.open] failed", { root, path, cursor, err });
+      }
     },
     open_dir: async (params: any) => {
       const path = params.path, rootParam = params.root || currentRootIdRef.current, isToggle = !!params.toggle;
@@ -418,17 +618,102 @@ export function App() {
       const apiDir = isActuallyRoot ? "." : path;
       if (isToggle && expandedRef.current.includes(expandedKey)) { setExpanded((prev) => prev.filter(k => k !== expandedKey)); return; }
       if (isActuallyRoot) { setCurrentRootId(path); setExpanded((prev) => Array.from(new Set([...prev, path]))); } else { setExpanded((prev) => Array.from(new Set([...prev, expandedKey]))); }
+      const preserveQuery = !!params.preservePluginQuery;
+      const nextPluginQuery = preserveQuery ? parsePluginQuery(window.location.search) : {};
+      setPluginQuery(nextPluginQuery);
+      replaceURLState({ root, file: "", cursor: 0, pluginQuery: nextPluginQuery });
       try {
         const res = await fetch(`/api/tree?root=${encodeURIComponent(root)}&dir=${encodeURIComponent(apiDir)}`);
         const payload = await res.json();
         const parsed = normalizeTreeResponse(payload);
         setEntriesByPath((prev) => ({ ...prev, [`${root}:${apiDir}`]: parsed.entries }));
-        setMainEntries(parsed.entries); setSelectedDir(path); setViewTree(pickViewTree(parsed.viewRoutes)); setFile(null); setSelectedSession(null);
+        setMainEntries(parsed.entries); setSelectedDir(path); setFile(null); setSelectedSession(null);
+        fileCursorRef.current = 0;
         setDrawerOpenForRoot(root, false);
         if (isMobile) setIsLeftOpen(false);
       } catch {}
     }
-  }), [isMobile, normalizeFileResponse, normalizeTreeResponse, pickViewTree, setDrawerOpenForRoot]);
+  }), [isMobile, normalizeFileResponse, normalizeTreeResponse, setDrawerOpenForRoot, replaceURLState]);
+
+  const pluginHandlers = useMemo(
+    () => ({
+      open: async (params: Record<string, unknown>) => {
+        await actionHandlers.open(params);
+      },
+      open_dir: async (params: Record<string, unknown>) => {
+        await actionHandlers.open_dir(params);
+      },
+      select_session: async (params: Record<string, unknown>) => {
+        const key = typeof params?.key === "string" ? params.key : "";
+        if (!key) return;
+        const root = currentRootIdRef.current;
+        if (!root) return;
+        const matched = sessions.find((item) => (item.key || item.session_key) === key);
+        if (matched) {
+          await handleSelectSession(matched);
+          return;
+        }
+        await handleSelectSession({ key, session_key: key, root_id: root });
+      },
+      navigate: async (params: Record<string, unknown>) => {
+        const current = readURLState();
+        const nextRoot = current.root || currentRootIdRef.current || "";
+        const nextPath = typeof params?.path === "string" ? params.path : current.file;
+        const explicitCursor = normalizeCursor(params?.cursor);
+        const rawQuery =
+          params?.query && typeof params.query === "object" && !Array.isArray(params.query)
+            ? (params.query as Record<string, unknown>)
+            : null;
+
+        const nextPluginQuery: Record<string, string> = { ...current.pluginQuery };
+        if (rawQuery) {
+          Object.entries(rawQuery).forEach(([key, value]) => {
+            if (!key) return;
+            nextPluginQuery[key] = String(value);
+          });
+        }
+
+        let nextCursor = current.cursor;
+        if (explicitCursor !== null) {
+          nextCursor = explicitCursor;
+        } else if (typeof params?.path === "string" && params.path !== current.file) {
+          nextCursor = 0;
+        }
+        if (!nextPath) {
+          nextCursor = 0;
+        }
+
+        const nextState: URLState = {
+          root: nextRoot || "",
+          file: nextPath || "",
+          cursor: nextCursor,
+          pluginQuery: nextPluginQuery,
+        };
+        replaceURLState(nextState);
+
+        const rootChanged = (nextState.root || "") !== (currentRootIdRef.current || "");
+        const fileChanged = (nextState.file || "") !== (fileRef.current?.path || "");
+        const pluginChanged = JSON.stringify(nextState.pluginQuery) !== JSON.stringify(current.pluginQuery);
+
+        if (pluginChanged) {
+          setPluginQuery(nextState.pluginQuery);
+        }
+
+        if (!nextState.file) {
+          if (nextState.root) {
+            await actionHandlers.open_dir({ path: nextState.root, root: nextState.root, preservePluginQuery: true });
+          }
+          return;
+        }
+
+        const cursorChanged = nextState.cursor !== fileCursorRef.current;
+        if (rootChanged || fileChanged || cursorChanged) {
+          await actionHandlers.open({ path: nextState.file, root: nextState.root, cursor: nextState.cursor, preservePluginQuery: true });
+        }
+      },
+    }),
+    [actionHandlers, sessions, handleSelectSession, replaceURLState],
+  );
 
   useEffect(() => {
     if (!currentRootId) return;
@@ -441,6 +726,16 @@ export function App() {
         if (!cancelled) { const next = Array.isArray(payload) ? payload : []; setSessions(next); }
       } catch {}
     };
+    const handleSessionStreamDone = (rootID: string, sessionKey: string) => {
+      const cacheKey = rootSessionKey(rootID, sessionKey);
+      delete pendingBySessionRef.current[cacheKey];
+      setSelectedPendingByKey(sessionKey, false);
+      const latest = drawerSessionByRootRef.current[rootID];
+      if (latest && latest.key === sessionKey) {
+        setDrawerSessionForRoot(rootID, { ...(latest as any), pending: false } as Session);
+      }
+    };
+
     const handleSessionStream = (payload: any) => {
       const streamKey = payload.session_key, activeRoot = currentRootIdRef.current;
       if (!streamKey || !activeRoot) return;
@@ -469,25 +764,25 @@ export function App() {
           bumpCacheVersion();
         }
       }
-      const event = payload.event; if (!event?.type) return;
-      if (event.type === "message_chunk") appendAgentChunkForSession(activeRoot, streamKey, event.data?.content || "", pending?.agent);
-      else if (event.type === "thought_chunk") appendThoughtChunkForSession(activeRoot, streamKey, event.data?.content || "");
-      else if (event.type === "tool_call") appendToolCallForSession(activeRoot, streamKey, event.data || {}, false);
-      else if (event.type === "tool_call_update") appendToolCallForSession(activeRoot, streamKey, event.data || {}, true);
-      else if (event.type === "message_done") {
-        delete pendingBySessionRef.current[ck];
-        setSelectedPendingByKey(streamKey, false);
-        const latest = drawerSessionByRootRef.current[activeRoot];
-        if (latest && latest.key === streamKey) {
-          setDrawerSessionForRoot(activeRoot, { ...(latest as any), pending: false } as Session);
-        }
-      } else if (event.type === "error") {
-        delete pendingBySessionRef.current[ck];
-        setSelectedPendingByKey(streamKey, false);
-        const latest = drawerSessionByRootRef.current[activeRoot];
-        if (latest && latest.key === streamKey) {
-          setDrawerSessionForRoot(activeRoot, { ...(latest as any), pending: false } as Session);
-        }
+      const event = payload.event;
+      if (!event?.type) return;
+      switch (event.type) {
+        case "message_chunk":
+          appendAgentChunkForSession(activeRoot, streamKey, event.data?.content || "", pending?.agent);
+          break;
+        case "thought_chunk":
+          appendThoughtChunkForSession(activeRoot, streamKey, event.data?.content || "");
+          break;
+        case "tool_call":
+          appendToolCallForSession(activeRoot, streamKey, event.data || {}, false);
+          break;
+        case "tool_call_update":
+          appendToolCallForSession(activeRoot, streamKey, event.data || {}, true);
+          break;
+        case "message_done":
+        case "error":
+          handleSessionStreamDone(activeRoot, streamKey);
+          break;
       }
     };
     const dirname = (path: string): string => {
@@ -537,6 +832,29 @@ export function App() {
   }, [currentRootId, activeBoundSessionKey, rootSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot]);
 
   useEffect(() => {
+    if (!currentRootId) return;
+    let cancelled = false;
+    setPluginLoading(true);
+    loadAllPlugins(currentRootId)
+      .then((plugins) => {
+        if (cancelled) return;
+        pluginManagerRef.current.set(currentRootId, plugins);
+        setPluginVersion((v) => v + 1);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        pluginManagerRef.current.clear(currentRootId);
+        setPluginVersion((v) => v + 1);
+      })
+      .finally(() => {
+        if (!cancelled) setPluginLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentRootId]);
+
+  useEffect(() => {
     let cancelled = false;
     fetch("/api/dirs").then(r => r.json()).then(dirs => {
       if (cancelled || !dirs.length) return;
@@ -547,16 +865,170 @@ export function App() {
         path: id,
         is_dir: true,
       })));
-      const first = ids[0]; setCurrentRootId(first); actionHandlers.open_dir({ path: first, root: first });
+      const urlState = readURLState();
+      const preferredRoot = urlState.root && ids.includes(urlState.root) ? urlState.root : ids[0];
+      setCurrentRootId(preferredRoot);
+      setPluginQuery(urlState.pluginQuery);
+      if (urlState.file) {
+        actionHandlers.open({ path: urlState.file, root: preferredRoot, cursor: urlState.cursor, preservePluginQuery: true });
+      } else {
+        actionHandlers.open_dir({ path: preferredRoot, root: preferredRoot, preservePluginQuery: true });
+      }
     });
     return () => { cancelled = true; };
   }, [actionHandlers]);
 
+  useEffect(() => {
+    function handlePopState() {
+      const state = readURLState();
+      if (state.root) {
+        setCurrentRootId(state.root);
+      }
+      setPluginQuery(state.pluginQuery);
+      if (!state.root) {
+        return;
+      }
+      if (state.file) {
+        const currentPath = fileRef.current?.path || "";
+        const currentRoot = currentRootIdRef.current || "";
+        const currentCursor = fileCursorRef.current;
+        if (state.file !== currentPath || state.root !== currentRoot || state.cursor !== currentCursor) {
+          actionHandlers.open({ path: state.file, root: state.root, cursor: state.cursor, preservePluginQuery: true });
+        }
+        return;
+      }
+      if (fileRef.current) {
+        actionHandlers.open_dir({ path: state.root, root: state.root, preservePluginQuery: true });
+      }
+    }
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [actionHandlers]);
+
   const selectedRoot = (selectedSession?.root_id as string | undefined) || currentRootId || "";
   const selectedInCurrentRoot = !!selectedSession && !!currentRootId && selectedRoot === currentRootId;
+  const selectedKey = selectedSession?.key || selectedSession?.session_key || "";
+  const boundFromSelected = selectedInCurrentRoot && selectedKey === activeBoundSessionKey
+    ? ({ ...selectedSession, pending: false } as any)
+    : null;
+  const boundFromCache = activeBoundSessionKey && currentRootId
+    ? (sessionCacheRef.current[rootSessionKey(currentRootId, activeBoundSessionKey)] as any)
+    : null;
   const actionBarSession = activeBoundSessionKey
-    ? (currentSession as any)
+    ? ((currentSession as any) || boundFromCache || boundFromSelected)
     : (selectedInCurrentRoot ? ({ ...selectedSession, pending: false } as any) : null);
+
+  const matchedPlugin = useMemo(() => {
+    if (!currentRootId || !file) return null;
+    const input = toPluginInput(file, pluginQuery);
+    return pluginManagerRef.current.match(currentRootId, input);
+  }, [currentRootId, file, pluginVersion, pluginQuery]);
+
+  const pluginRender = useMemo(() => {
+    if (!file || pluginBypass || !matchedPlugin) return null;
+    const input = toPluginInput(file, pluginQuery);
+    try {
+      const output = pluginManagerRef.current.run(matchedPlugin, input);
+      return { plugin: matchedPlugin, output, error: "" };
+    } catch (err: any) {
+      return { plugin: matchedPlugin, output: null, error: String(err?.message || err || "plugin process failed") };
+    }
+  }, [file, pluginBypass, matchedPlugin, pluginQuery]);
+
+  const pluginRendererKey = `${currentRootId || ""}:${file?.path || ""}:${fileCursorRef.current}:${JSON.stringify(pluginQuery)}`;
+  const pluginThemeVars = useMemo(() => {
+    const theme = pluginRender?.plugin?.theme;
+    if (!theme) return null;
+    return {
+      "--vp-overlay-bg": theme.overlayBg,
+      "--vp-surface-bg": theme.surfaceBg,
+      "--vp-surface-bg-elevated": theme.surfaceBgElevated,
+      "--vp-text": theme.text,
+      "--vp-text-muted": theme.textMuted,
+      "--vp-border": theme.border,
+      "--vp-primary": theme.primary,
+      "--vp-primary-text": theme.primaryText,
+      "--vp-radius": theme.radius,
+      "--vp-shadow": theme.shadow,
+      "--vp-focus-ring": theme.focusRing,
+      "--vp-danger": theme.danger,
+      "--vp-warning": theme.warning,
+      "--vp-success": theme.success,
+    } as React.CSSProperties;
+  }, [pluginRender]);
+
+  useEffect(() => {
+    const body = document.body;
+    if (!pluginThemeVars || pluginBypass || !pluginRender?.output) {
+      body.removeAttribute("data-plugin-theme");
+      body.style.removeProperty("--vp-overlay-bg");
+      body.style.removeProperty("--vp-surface-bg");
+      body.style.removeProperty("--vp-surface-bg-elevated");
+      body.style.removeProperty("--vp-text");
+      body.style.removeProperty("--vp-text-muted");
+      body.style.removeProperty("--vp-border");
+      body.style.removeProperty("--vp-primary");
+      body.style.removeProperty("--vp-primary-text");
+      body.style.removeProperty("--vp-radius");
+      body.style.removeProperty("--vp-shadow");
+      body.style.removeProperty("--vp-focus-ring");
+      body.style.removeProperty("--vp-danger");
+      body.style.removeProperty("--vp-warning");
+      body.style.removeProperty("--vp-success");
+      return;
+    }
+    body.setAttribute("data-plugin-theme", "1");
+    Object.entries(pluginThemeVars).forEach(([key, value]) => {
+      body.style.setProperty(key, String(value));
+    });
+    return () => {
+      body.removeAttribute("data-plugin-theme");
+      body.style.removeProperty("--vp-overlay-bg");
+      body.style.removeProperty("--vp-surface-bg");
+      body.style.removeProperty("--vp-surface-bg-elevated");
+      body.style.removeProperty("--vp-text");
+      body.style.removeProperty("--vp-text-muted");
+      body.style.removeProperty("--vp-border");
+      body.style.removeProperty("--vp-primary");
+      body.style.removeProperty("--vp-primary-text");
+      body.style.removeProperty("--vp-radius");
+      body.style.removeProperty("--vp-shadow");
+      body.style.removeProperty("--vp-focus-ring");
+      body.style.removeProperty("--vp-danger");
+      body.style.removeProperty("--vp-warning");
+      body.style.removeProperty("--vp-success");
+    };
+  }, [pluginThemeVars, pluginBypass, pluginRender]);
+
+  const switchToRawFileView = useCallback(async () => {
+    if (!file) return;
+    const root = file.root || currentRootIdRef.current;
+    if (!root) return;
+    pluginBypassRef.current = true;
+    setPluginBypass(true);
+    await actionHandlers.open({
+      path: file.path,
+      root,
+      cursor: fileCursorRef.current || 0,
+      readMode: "incremental",
+      preservePluginQuery: true,
+    });
+  }, [file, actionHandlers]);
+
+  const switchToPluginView = useCallback(async () => {
+    if (!file) return;
+    const root = file.root || currentRootIdRef.current;
+    if (!root) return;
+    pluginBypassRef.current = false;
+    setPluginBypass(false);
+    await actionHandlers.open({
+      path: file.path,
+      root,
+      cursor: fileCursorRef.current || 0,
+      preservePluginQuery: true,
+    });
+  }, [file, actionHandlers]);
 
   return (
     <AppShell
@@ -581,32 +1053,85 @@ export function App() {
                 }}
               />
             ) : file ? (
-              <FileViewer
-                file={file}
-                onSessionClick={(sessionKey) => {
-                  if (!sessionKey) return;
-                  const root = file.root || currentRootIdRef.current;
-                  if (!root) return;
-                  const matched = sessions.find((item) => {
-                    const key = item.key || item.session_key;
-                    return key === sessionKey;
-                  });
-                  if (matched) {
-                    handleSelectSession(matched);
-                    return;
-                  }
-                  handleSelectSession({
-                    key: sessionKey,
-                    session_key: sessionKey,
-                    root_id: root,
-                  });
-                }}
-                onPathClick={(path) => {
-                  const root = file.root || currentRootIdRef.current;
-                  if (!root) return;
-                  actionHandlers.open_dir({ path: path === "." ? root : path, root });
-                }}
-              />
+              pluginRender && pluginRender.output ? (
+                <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+                  <div style={{ height: "36px", borderBottom: "1px solid var(--border-color)", padding: "0 12px", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "var(--text-secondary)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span>🧩</span>
+                      <span>{pluginRender.plugin.name}</span>
+                      {pluginLoading ? <span style={{ opacity: 0.7 }}>加载中...</span> : null}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { void switchToRawFileView(); }}
+                      style={{ border: "1px solid var(--border-color)", background: "transparent", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontSize: 12, color: "var(--text-secondary)" }}
+                    >
+                      原始文件
+                    </button>
+                  </div>
+                  <div className="plugin-shadcn-sandbox" style={{ ...pluginThemeVars, flex: 1, overflow: "auto", padding: 12 }}>
+                    <Renderer
+                      key={pluginRendererKey}
+                      tree={pluginRender.output.tree as any}
+                      initialState={(pluginRender.output.data || {}) as Record<string, unknown>}
+                      handlers={pluginHandlers}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+                  {pluginBypass && matchedPlugin ? (
+                    <div style={{ borderBottom: "1px solid var(--border-color)", padding: "8px 12px", fontSize: 12, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span>已切换为原始文件视图（插件：{matchedPlugin.name}）</span>
+                      <button
+                        type="button"
+                        onClick={() => { void switchToPluginView(); }}
+                        style={{ border: "1px solid var(--border-color)", background: "transparent", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontSize: 12, color: "var(--text-secondary)" }}
+                      >
+                        使用插件
+                      </button>
+                    </div>
+                  ) : null}
+                  {pluginRender && pluginRender.error ? (
+                    <div style={{ borderBottom: "1px solid var(--border-color)", padding: "8px 12px", fontSize: 12, color: "#d97706", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span>插件 {pluginRender.plugin.name} 执行失败，已回退原始视图</span>
+                      <button
+                        type="button"
+                        onClick={() => setPluginBypass(true)}
+                        style={{ border: "1px solid var(--border-color)", background: "transparent", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontSize: 12, color: "var(--text-secondary)" }}
+                      >
+                        忽略插件
+                      </button>
+                    </div>
+                  ) : null}
+                  <FileViewer
+                    file={file}
+                    onSessionClick={(sessionKey) => {
+                      if (!sessionKey) return;
+                      const root = file.root || currentRootIdRef.current;
+                      if (!root) return;
+                      const matched = sessions.find((item) => {
+                        const key = item.key || item.session_key;
+                        return key === sessionKey;
+                      });
+                      if (matched) {
+                        handleSelectSession(matched);
+                        return;
+                      }
+                      handleSelectSession({
+                        key: sessionKey,
+                        session_key: sessionKey,
+                        root_id: root,
+                      });
+                    }}
+                    onPathClick={(path) => {
+                      const root = file.root || currentRootIdRef.current;
+                      if (!root) return;
+                      actionHandlers.open_dir({ path: path === "." ? root : path, root });
+                    }}
+                  />
+                </div>
+              )
             ) : (
               <DefaultListView
                 root={currentRootId || undefined}

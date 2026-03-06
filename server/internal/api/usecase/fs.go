@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"mindfs/server/internal/fs"
-	"mindfs/server/internal/router"
 	"mindfs/server/internal/session"
 )
 
@@ -18,8 +17,7 @@ type ListTreeInput struct {
 }
 
 type ListTreeOutput struct {
-	Entries    []fs.Entry
-	ViewRoutes []router.ResolvedView
+	Entries []fs.Entry
 }
 
 type OpenFileRawInput struct {
@@ -53,8 +51,7 @@ func (s *Service) ListTree(_ context.Context, in ListTreeInput) (ListTreeOutput,
 	if err != nil {
 		return ListTreeOutput{}, err
 	}
-	routes := s.listViewRoutes(in.RootID, dir)
-	return ListTreeOutput{Entries: entries, ViewRoutes: routes}, nil
+	return ListTreeOutput{Entries: entries}, nil
 }
 
 func (s *Service) OpenFileRaw(_ context.Context, in OpenFileRawInput) (OpenFileRawOutput, error) {
@@ -79,11 +76,12 @@ type ReadFileInput struct {
 	RootID   string
 	Path     string
 	MaxBytes int64
+	Cursor   int64
+	ReadMode string
 }
 
 type ReadFileOutput struct {
-	File       fs.ReadResult
-	ViewRoutes []router.ResolvedView
+	File fs.ReadResult
 }
 
 func (s *Service) ReadFile(ctx context.Context, in ReadFileInput) (ReadFileOutput, error) {
@@ -98,7 +96,7 @@ func (s *Service) ReadFile(ctx context.Context, in ReadFileInput) (ReadFileOutpu
 	if in.Path == "" {
 		return ReadFileOutput{}, errors.New("path required")
 	}
-	result, err := root.ReadFile(in.Path, in.MaxBytes)
+	result, err := root.ReadFile(in.Path, in.MaxBytes, in.Cursor, in.ReadMode)
 	if err != nil {
 		return ReadFileOutput{}, err
 	}
@@ -109,8 +107,7 @@ func (s *Service) ReadFile(ctx context.Context, in ReadFileInput) (ReadFileOutpu
 	meta = fillFileMetaSessionInfo(ctx, s, in.RootID, meta)
 	result.Root = root.ID
 	result.FileMeta = meta
-	routes := s.listViewRoutes(in.RootID, in.Path)
-	return ReadFileOutput{File: result, ViewRoutes: routes}, nil
+	return ReadFileOutput{File: result}, nil
 }
 
 func fillFileMetaSessionInfo(ctx context.Context, s *Service, rootID string, meta []fs.FileMetaEntry) []fs.FileMetaEntry {
@@ -212,18 +209,6 @@ func (s *Service) AddManagedDir(_ context.Context, in AddManagedDirInput) (AddMa
 		return AddManagedDirOutput{}, err
 	}
 	return AddManagedDirOutput{Dir: dir}, nil
-}
-
-func (s *Service) listViewRoutes(rootID, path string) []router.ResolvedView {
-	vm, err := s.Registry.GetViewManager(rootID)
-	if err != nil || vm == nil {
-		return nil
-	}
-	routes, err := vm.Routes(path)
-	if err != nil {
-		return nil
-	}
-	return routes
 }
 
 func (s *Service) ensureFileWatcher(rootID string) {

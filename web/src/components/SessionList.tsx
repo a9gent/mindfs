@@ -1,7 +1,7 @@
 import React from "react";
 import { AgentIcon } from "./AgentIcon";
 
-export type SessionType = "chat" | "view" | "skill";
+export type SessionType = "chat" | "plugin" | "skill";
 
 export type SessionItem = {
   key: string;
@@ -23,7 +23,7 @@ type SessionListProps = {
 
 const typeIcons: Record<SessionType, string> = {
   chat: "💬",
-  view: "🎨",
+  plugin: "🧩",
   skill: "⚡",
 };
 

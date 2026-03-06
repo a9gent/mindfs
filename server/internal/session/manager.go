@@ -23,17 +23,16 @@ const (
 	sessionDBPath    = "sessions/session-list.db"
 	exchangeFileTpl  = "sessions/%s.jsonl"
 	selectSessionSQL = `
-SELECT key, type, name, related_files_json, generated_view, created_at, updated_at, closed_at
+SELECT key, type, name, related_files_json, created_at, updated_at, closed_at
 FROM sessions`
 	upsertSessionMetaSQL = `
 INSERT INTO sessions (
-	key, type, name, related_files_json, generated_view, created_at, updated_at, closed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	key, type, name, related_files_json, created_at, updated_at, closed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(key) DO UPDATE SET
 	type = excluded.type,
 	name = excluded.name,
 	related_files_json = excluded.related_files_json,
-	generated_view = excluded.generated_view,
 	created_at = excluded.created_at,
 	updated_at = excluded.updated_at,
 	closed_at = excluded.closed_at`
@@ -43,7 +42,6 @@ CREATE TABLE IF NOT EXISTS sessions (
 	type TEXT NOT NULL,
 	name TEXT NOT NULL,
 	related_files_json TEXT NOT NULL,
-	generated_view TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL,
 	closed_at TEXT
@@ -583,7 +581,6 @@ func sessionMetaUpsertArgs(session *Session) ([]any, error) {
 		session.Type,
 		session.Name,
 		string(relatedFilesJSON),
-		session.GeneratedView,
 		session.CreatedAt.UTC().Format(time.RFC3339Nano),
 		session.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		closedAt,
@@ -600,7 +597,6 @@ func scanSessionMetaRow(scanner rowScanner) (*Session, error) {
 		typ              string
 		name             string
 		relatedFilesJSON string
-		generatedView    string
 		createdAtRaw     string
 		updatedAtRaw     string
 		closedAtRaw      sql.NullString
@@ -610,7 +606,6 @@ func scanSessionMetaRow(scanner rowScanner) (*Session, error) {
 		&typ,
 		&name,
 		&relatedFilesJSON,
-		&generatedView,
 		&createdAtRaw,
 		&updatedAtRaw,
 		&closedAtRaw,
@@ -618,12 +613,11 @@ func scanSessionMetaRow(scanner rowScanner) (*Session, error) {
 		return nil, err
 	}
 	session := &Session{
-		Key:           key,
-		Type:          typ,
-		Name:          name,
-		GeneratedView: generatedView,
-		Exchanges:     []Exchange{},
-		RelatedFiles:  []RelatedFile{},
+		Key:          key,
+		Type:         typ,
+		Name:         name,
+		Exchanges:    []Exchange{},
+		RelatedFiles: []RelatedFile{},
 	}
 	if strings.TrimSpace(relatedFilesJSON) != "" {
 		if err := json.Unmarshal([]byte(relatedFilesJSON), &session.RelatedFiles); err != nil {

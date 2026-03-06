@@ -7,7 +7,7 @@ import { fetchAgents, type AgentStatus } from "../services/agents";
 type SessionInfo = {
   key: string;
   name: string;
-  type: "chat" | "view" | "skill";
+  type: "chat" | "plugin" | "skill";
   agent: string;
   pending?: boolean;
 };
@@ -25,7 +25,7 @@ type ActionBarProps = {
 
 const modePlaceholders: Record<SessionMode, string> = {
   chat: "问点什么...",
-  view: "描述视图...",
+  plugin: "描述视图插件...",
   skill: "执行技能...",
 };
 
@@ -81,7 +81,13 @@ export function ActionBar({
   // 恢复原始 1: Session 同步逻辑
   useEffect(() => {
     if (currentSession) {
-      setMode(currentSession.type as SessionMode);
+      const nextMode =
+        currentSession.type === "plugin"
+          ? "plugin"
+          : currentSession.type === "skill"
+          ? "skill"
+          : "chat";
+      setMode(nextMode);
       setAgent(currentSession.agent);
     }
   }, [currentSession]);

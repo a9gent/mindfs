@@ -11,7 +11,6 @@ import (
 	"mindfs/server/internal/agent"
 	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/api/usecase"
-	ctxbuilder "mindfs/server/internal/context"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/session"
 
@@ -271,8 +270,8 @@ func getString(payload map[string]any, key string) string {
 	return ""
 }
 
-func parseClientContext(payload map[string]any, rootID string) ctxbuilder.ClientContext {
-	ctx := ctxbuilder.ClientContext{CurrentRoot: rootID}
+func parseClientContext(payload map[string]any, rootID string) usecase.ClientContext {
+	ctx := usecase.ClientContext{CurrentRoot: rootID}
 	if payload == nil {
 		return ctx
 	}

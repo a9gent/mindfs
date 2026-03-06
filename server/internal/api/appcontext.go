@@ -7,13 +7,11 @@ import (
 
 	"mindfs/server/internal/agent"
 	"mindfs/server/internal/fs"
-	"mindfs/server/internal/router"
 	"mindfs/server/internal/session"
 )
 
 type RootContext struct {
 	Root    fs.RootInfo
-	View    *router.ViewManager
 	Session *session.Manager
 	Watcher *fs.SharedFileWatcher
 }
@@ -70,24 +68,6 @@ func (s *AppContext) GetRoot(rootID string) (fs.RootInfo, error) {
 		return fs.RootInfo{}, err
 	}
 	return rootCtx.Root, nil
-}
-
-func (s *AppContext) GetViewManager(rootID string) (*router.ViewManager, error) {
-	rootCtx, err := s.GetRootContext(rootID)
-	if err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if rootCtx.View != nil {
-		return rootCtx.View, nil
-	}
-	vm, err := router.NewViewManager(rootCtx.Root)
-	if err != nil {
-		return nil, err
-	}
-	rootCtx.View = vm
-	return vm, nil
 }
 
 func (s *AppContext) GetSessionManager(rootID string) (*session.Manager, error) {

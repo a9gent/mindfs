@@ -8,9 +8,22 @@ import (
 
 	"mindfs/server/internal/agent"
 	agenttypes "mindfs/server/internal/agent/types"
-	ctxbuilder "mindfs/server/internal/context"
 	"mindfs/server/internal/session"
 )
+
+type ClientContext struct {
+	CurrentRoot   string     `json:"current_root"`
+	CurrentPath   string     `json:"current_path,omitempty"`
+	PluginCatalog string     `json:"plugin_catalog,omitempty"`
+	Selection     *Selection `json:"selection,omitempty"`
+}
+
+type Selection struct {
+	FilePath string `json:"file_path"`
+	Start    int    `json:"start"`
+	End      int    `json:"end"`
+	Text     string `json:"text"`
+}
 
 type ListSessionsInput struct {
 	RootID string
@@ -98,38 +111,22 @@ type BuildPromptInput struct {
 	Manager       *session.Manager
 	Agent         string
 	Message       string
-	ClientContext ctxbuilder.ClientContext
+	ClientContext ClientContext
 	IsInitial     bool
 }
 
 func (s *Service) BuildPrompt(in BuildPromptInput) string {
-	prompt := ""
+	clientCtx := in.ClientContext
 	if !in.IsInitial {
-		prompt = ctxbuilder.BuildUserPrompt(in.Message, ctxbuilder.ClientContext{
-			Selection: in.ClientContext.Selection,
-		})
-		return prependSwitchHint(in, prompt)
+		clientCtx = ClientContext{
+			PluginCatalog: in.ClientContext.PluginCatalog,
+			Selection:     in.ClientContext.Selection,
+		}
 	}
-	if in.Session == nil || in.Manager == nil {
-		prompt = ctxbuilder.BuildUserPrompt(in.Message, in.ClientContext)
-		return prependSwitchHint(in, prompt)
+	prompt := buildUserPrompt(in.Message, clientCtx)
+	if strings.TrimSpace(clientCtx.PluginCatalog) != "" {
+		prompt = buildPluginPrompt(clientCtx.PluginCatalog, in.Message)
 	}
-	serverCtx, err := ctxbuilder.BuildServerContext(
-		in.Session.Type,
-		in.Manager.Root(),
-		in.ClientContext.CurrentView,
-	)
-	if err != nil {
-		prompt = ctxbuilder.BuildUserPrompt(in.Message, in.ClientContext)
-		return prependSwitchHint(in, prompt)
-	}
-	serverPrompt := ctxbuilder.BuildServerPrompt(in.Session.Type, serverCtx)
-	userPrompt := ctxbuilder.BuildUserPrompt(in.Message, in.ClientContext)
-	if serverPrompt == "" {
-		prompt = userPrompt
-		return prependSwitchHint(in, prompt)
-	}
-	prompt = serverPrompt + "\n\n" + userPrompt
 	return prependSwitchHint(in, prompt)
 }
 
@@ -153,10 +150,7 @@ func prependSwitchHint(in BuildPromptInput, prompt string) string {
 }
 
 func (s *Service) appendAgentReply(ctx context.Context, manager *session.Manager, sess *session.Session, agent, content string) error {
-	if content == "" {
-		return nil
-	}
-	if manager == nil {
+	if content == "" || manager == nil {
 		return nil
 	}
 	return manager.AddExchangeForAgent(ctx, sess, "agent", content, agent)
@@ -167,7 +161,7 @@ type SendMessageInput struct {
 	Key       string
 	Agent     string
 	Content   string
-	ClientCtx ctxbuilder.ClientContext
+	ClientCtx ClientContext
 	OnUpdate  func(agenttypes.Event)
 }
 
@@ -202,14 +196,14 @@ func agentPoolSessionKey(sessionKey, agentName string) string {
 }
 
 func calculateSwitchReadLines(total, lastCtxSeq int) int {
-	lines := total - lastCtxSeq
-	if lines < 0 {
+	delta := total - lastCtxSeq
+	if delta < 0 {
 		return 0
 	}
-	if lines > switchContextTailLines {
+	if delta > switchContextTailLines {
 		return switchContextTailLines
 	}
-	return lines
+	return delta
 }
 
 func buildSwitchReadHint(exchangeLogPath string, lines int) string {
@@ -224,6 +218,147 @@ func buildSwitchReadHint(exchangeLogPath string, lines int) string {
 
 func contextLineCount(exchanges []session.Exchange) int {
 	return len(exchanges)
+}
+
+func buildUserPrompt(message string, clientCtx ClientContext) string {
+	lines := []string{strings.TrimSpace(message)}
+	if clientCtx.CurrentPath != "" || clientCtx.Selection != nil {
+		lines = append(lines, "[USER_SELECTION]")
+
+		selectedPath := clientCtx.CurrentPath
+		if selectedPath == "" && clientCtx.Selection != nil {
+			selectedPath = clientCtx.Selection.FilePath
+		}
+		if selectedPath != "" {
+			lines = append(lines, "文件: "+selectedPath)
+		}
+
+		if clientCtx.Selection != nil && (clientCtx.Selection.Start > 0 || clientCtx.Selection.End > 0) {
+			lines = append(lines, "范围: "+strconv.Itoa(clientCtx.Selection.Start)+"-"+strconv.Itoa(clientCtx.Selection.End))
+		}
+		if clientCtx.Selection != nil {
+			lines = append(lines, "选中内容: "+clientCtx.Selection.Text)
+		}
+	}
+	return "[USER_INPUT]\n" + strings.Join(lines, "\n")
+}
+
+func buildPluginPrompt(catalogPrompt, userMessage string) string {
+	systemPrompt := strings.TrimSpace(strings.Join([]string{
+		"You are in view-plugin development mode.",
+		"The user will describe requirements. Generate a view plugin and write it under .mindfs/plugins/.",
+		"",
+		"## Plugin Spec",
+		"- Use CommonJS: module.exports = { name, match, fileLoadMode, theme, process(file) { return { data?, tree } } }",
+		"- fileLoadMode: \"incremental\" | \"full\".",
+		"- fileLoadMode controls how file content is loaded before process(file).",
+		"- Use \"full\" for views that need global understanding of the file (chapter TOC, CSV table pagination/sort/filter, whole-document search).",
+		"- Use \"incremental\" only for very large plain-text streaming/append-like views where byte-window loading is acceptable.",
+		"- In \"full\" mode, plugin should treat input as whole-file content and should not rely on cursor.",
+		"- If interaction is query-based pagination (page/pageSize), prefer \"full\" and update only query.",
+		"- theme is required and must include all keys:",
+		"  overlayBg, surfaceBg, surfaceBgElevated, text, textMuted, border,",
+		"  primary, primaryText, radius, shadow, focusRing, danger, warning, success.",
+		"- Do not modify framework CSS/TS code.",
+		"- Do not output global CSS overrides.",
+		"- Style customization must be done via theme tokens only.",
+		"- file input: { name, path, content, ext, mime, size, truncated, next_cursor, query }",
+		"- query comes from URL plugin params. Plugin reads file.query.<key> directly.",
+		"- query is for business state only; do NOT store cursor in query.",
+		"- Plugin must treat query as plain keys and must NOT depend on URL encoding details.",
+		"- process must be a pure function (no external IO/state).",
+		"- event bindings must use top-level `on` field, not inside `props`.",
+		"- filename should be lowercase kebab-case, e.g. txt-novel.js",
+		"",
+		"## Match Rule",
+		"- ext: \".txt\" or \".csv,.tsv\"",
+		"- path: \"novels/**/*.txt\"",
+		"- mime: \"text/*\"",
+		"- name: \"README*\"",
+		"- any/all for OR/AND composition",
+		"",
+		"## Output Requirement",
+		"- Use available file-write tool(s) to write plugin file to .mindfs/plugins/<name>.js",
+		"- tree must be valid UITree: root points to an existing element id",
+		"- For dynamic interactions (pagination/sort/filter), use action: \"navigate\"",
+		"- navigate params: { path?, cursor?, query? }",
+		"- path: target file path (relative path under current root).",
+		"- cursor: byte cursor used when re-reading the file.",
+		"- query: plugin state map; after navigate, plugin reads it from file.query.",
+		"- navigate usage examples:",
+		"  - Change query only: { action: \"navigate\", params: { query: { page: 2 } } }",
+		"  - Change cursor only: { action: \"navigate\", params: { cursor: 131072 } }",
+		"  - Change both: { action: \"navigate\", params: { path: \"a.txt\", cursor: 0, query: { chapter: 1 } } }",
+		"  - Incremental next chunk: read next cursor from file.next_cursor, then set navigate.params.cursor to that value.",
+		"  - Example: { action: \"navigate\", params: { cursor: file.next_cursor } }",
+		"- Plugin should always read current plugin state from file.query.",
+		"- Return only JS plugin code. No markdown fences. No explanation text.",
+		"",
+		"## Responsive Breakpoints (required)",
+		"- mobile: width < 768",
+		"- tablet: 768 <= width < 1024",
+		"- desktop: width >= 1024",
+		"- Prefer single-column, tighter spacing, and larger touch targets on mobile",
+		"- For wide tables/code blocks on mobile, provide horizontal scrolling or condensed fallback",
+		"- Avoid fixed-width layouts that overflow small screens",
+		"",
+		"## Example Plugin (CSV Viewer)",
+		"module.exports = {",
+		"  name: \"CSV Viewer\",",
+		"  match: { ext: \".csv\" },",
+		"  fileLoadMode: \"full\",",
+		"  theme: {",
+		"    overlayBg: \"rgba(0,0,0,0.56)\",",
+		"    surfaceBg: \"#ffffff\",",
+		"    surfaceBgElevated: \"#ffffff\",",
+		"    text: \"#0f172a\",",
+		"    textMuted: \"#475569\",",
+		"    border: \"rgba(15,23,42,0.12)\",",
+		"    primary: \"#2563eb\",",
+		"    primaryText: \"#ffffff\",",
+		"    radius: \"10px\",",
+		"    shadow: \"0 10px 30px rgba(2,6,23,.18)\",",
+		"    focusRing: \"rgba(37,99,235,.4)\",",
+		"    danger: \"#dc2626\",",
+		"    warning: \"#d97706\",",
+		"    success: \"#16a34a\"",
+		"  },",
+		"  process(file) {",
+		"    const page = Math.max(1, parseInt(file.query.page || \"1\", 10) || 1);",
+		"    const lines = file.content.split('\\n').filter(Boolean);",
+		"    const headers = (lines[0] || \"\").split(',').map(s => s.trim());",
+		"    const allRows = lines.slice(1).map(line => line.split(',').map(s => s.trim()));",
+		"    const pageSize = 100;",
+		"    const rows = allRows.slice((page - 1) * pageSize, page * pageSize);",
+		"    return {",
+		"      data: { headers, rowCount: allRows.length, page },",
+		"      tree: {",
+		"        root: \"root\",",
+		"        elements: {",
+		"          root: { type: \"Stack\", children: [\"table\", \"next\"] },",
+		"          table: { type: \"Table\", props: { columns: headers, rows }, children: [] },",
+		"          next: {",
+		"            type: \"Button\",",
+		"            props: { label: \"Next Page\" },",
+		"            on: { press: { action: \"navigate\", params: { query: { page: page + 1 } } } }",
+		"          }",
+		"        }",
+		"      }",
+		"    };",
+		"  }",
+		"};",
+		"",
+		"## Available Components Catalog",
+		catalogPrompt,
+	}, "\n"))
+
+	return strings.Join([]string{
+		"[SYSTEM_PROMPT]",
+		systemPrompt,
+		"",
+		"[USER_PROMPT]",
+		userMessage,
+	}, "\n")
 }
 
 func (s *Service) ensureAgentSession(

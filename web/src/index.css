@@ -1,3 +1,7 @@
+@import "tailwindcss/theme.css";
+@import "tailwindcss/utilities.css";
+@source "../node_modules/@json-render/shadcn/dist/index.js";
+
 :root {
   --bg-gradient-start: #f3f4f6;
   --bg-gradient-end: #e5e7eb;
@@ -52,6 +56,69 @@ body {
 #root {
   height: 100vh;
   width: 100vw;
+}
+
+.plugin-shadcn-sandbox {
+  --vp-overlay-bg: rgba(0, 0, 0, 0.56);
+  --vp-surface-bg: #ffffff;
+  --vp-surface-bg-elevated: #ffffff;
+  --vp-text: var(--text-primary);
+  --vp-text-muted: var(--text-secondary);
+  --vp-border: var(--border-color);
+  --vp-primary: var(--accent-color);
+  --vp-primary-text: #ffffff;
+  --vp-radius: 10px;
+  --vp-shadow: 0 10px 30px rgba(2, 6, 23, 0.18);
+  --vp-focus-ring: color-mix(in srgb, var(--accent-color) 60%, transparent);
+  --vp-danger: #dc2626;
+  --vp-warning: #d97706;
+  --vp-success: #16a34a;
+
+  --background: var(--vp-surface-bg);
+  --foreground: var(--vp-text);
+  --card: var(--vp-surface-bg);
+  --card-foreground: var(--vp-text);
+  --popover: var(--vp-surface-bg-elevated);
+  --popover-foreground: var(--vp-text);
+  --primary: var(--vp-primary);
+  --primary-foreground: var(--vp-primary-text);
+  --secondary: color-mix(in srgb, var(--vp-surface-bg) 86%, #64748b 14%);
+  --secondary-foreground: var(--vp-text);
+  --muted: color-mix(in srgb, var(--vp-surface-bg) 78%, #64748b 22%);
+  --muted-foreground: var(--vp-text-muted);
+  --accent: color-mix(in srgb, var(--vp-primary) 12%, transparent);
+  --accent-foreground: var(--vp-text);
+  --destructive: var(--vp-danger);
+  --destructive-foreground: #ffffff;
+  --border: var(--vp-border);
+  --input: var(--vp-border);
+  --ring: var(--vp-focus-ring);
+  border-radius: var(--vp-radius);
+}
+
+@media (prefers-color-scheme: dark) {
+  .plugin-shadcn-sandbox {
+    --vp-surface-bg: #0b1220;
+    --vp-surface-bg-elevated: #0f172a;
+    --vp-text: #e2e8f0;
+    --vp-text-muted: #94a3b8;
+    --vp-border: rgba(148, 163, 184, 0.24);
+    --vp-shadow: 0 14px 32px rgba(0, 0, 0, 0.5);
+  }
+}
+
+body[data-plugin-theme="1"] [data-slot="dialog-overlay"] {
+  background: var(--vp-overlay-bg) !important;
+}
+
+body[data-plugin-theme="1"] [data-slot="dialog-content"] {
+  background: var(--vp-surface-bg-elevated) !important;
+  color: var(--vp-text) !important;
+  border: 1px solid var(--vp-border) !important;
+  border-radius: var(--vp-radius) !important;
+  box-shadow: var(--vp-shadow) !important;
+  opacity: 1 !important;
+  backdrop-filter: none !important;
 }
 
 /* Scrollbar styling */

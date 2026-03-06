@@ -5,14 +5,12 @@ import (
 
 	"mindfs/server/internal/agent"
 	"mindfs/server/internal/fs"
-	"mindfs/server/internal/router"
 	"mindfs/server/internal/session"
 )
 
 type Registry interface {
 	GetRoot(rootID string) (fs.RootInfo, error)
 	GetSessionManager(rootID string) (*session.Manager, error)
-	GetViewManager(rootID string) (*router.ViewManager, error)
 	UpsertRoot(path string) (fs.RootInfo, error)
 	ListRoots() []fs.RootInfo
 	GetAgentPool() *agent.Pool

@@ -1,6 +1,6 @@
 // Session service for managing agent sessions
 
-export type SessionType = "chat" | "view" | "skill";
+export type SessionType = "chat" | "plugin" | "skill";
 
 export type Session = {
   key: string;

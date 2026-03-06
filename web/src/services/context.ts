@@ -1,30 +1,24 @@
 export type ClientContext = {
   current_root: string;
   current_path?: string;
+  plugin_catalog?: string;
   selection?: {
     file_path: string;
     start: number;
     end: number;
     text: string;
   };
-  current_view?: {
-    rule_id: string;
-    version: string;
-  };
 };
 
 type ContextInput = {
   currentRoot: string;
   currentPath?: string | null;
+  pluginCatalog?: string | null;
   selection?: {
     filePath: string;
     start: number;
     end: number;
     text: string;
-  } | null;
-  currentView?: {
-    ruleId: string;
-    version: string;
   } | null;
 };
 
@@ -35,18 +29,15 @@ export function buildClientContext(input: ContextInput): ClientContext {
   if (input.currentPath) {
     ctx.current_path = input.currentPath;
   }
+  if (input.pluginCatalog) {
+    ctx.plugin_catalog = input.pluginCatalog;
+  }
   if (input.selection) {
     ctx.selection = {
       file_path: input.selection.filePath,
       start: input.selection.start,
       end: input.selection.end,
       text: input.selection.text,
-    };
-  }
-  if (input.currentView) {
-    ctx.current_view = {
-      rule_id: input.currentView.ruleId,
-      version: input.currentView.version,
     };
   }
   return ctx;

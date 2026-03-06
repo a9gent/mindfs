@@ -12,16 +12,15 @@ const (
 )
 
 type Session struct {
-	Key           string         `json:"key"`
-	Type          string         `json:"type"`
-	AgentCtxSeq   map[string]int `json:"agent_ctx_seq,omitempty"`
-	Name          string         `json:"name"`
-	Exchanges     []Exchange     `json:"exchanges"`
-	RelatedFiles  []RelatedFile  `json:"related_files"`
-	GeneratedView string         `json:"generated_view,omitempty"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	ClosedAt      *time.Time     `json:"closed_at,omitempty"`
+	Key          string         `json:"key"`
+	Type         string         `json:"type"`
+	AgentCtxSeq  map[string]int `json:"agent_ctx_seq,omitempty"`
+	Name         string         `json:"name"`
+	Exchanges    []Exchange     `json:"exchanges"`
+	RelatedFiles []RelatedFile  `json:"related_files"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	ClosedAt     *time.Time     `json:"closed_at,omitempty"`
 }
 
 type Exchange struct {

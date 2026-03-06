@@ -2,6 +2,7 @@
 .claude/
 .mindfs/
 .specify/
+.gemini/
 .DS_Store
 Thumbs.db
 *.tmp
