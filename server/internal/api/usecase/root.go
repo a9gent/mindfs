@@ -15,6 +15,7 @@ type Registry interface {
 	ListRoots() []fs.RootInfo
 	GetAgentPool() *agent.Pool
 	GetProber() *agent.Prober
+	GetCandidateRegistry() *CandidateRegistry
 	GetFileWatcher(rootID string, manager *session.Manager) (*fs.SharedFileWatcher, error)
 	ReleaseFileWatcher(rootID, sessionKey string)
 }

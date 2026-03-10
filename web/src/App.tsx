@@ -1206,7 +1206,7 @@ export function App() {
             <button onClick={() => setIsRightOpen(!isRightOpen)} style={{ pointerEvents: "auto", background: "var(--content-bg)", border: "1px solid var(--border-color)", borderRadius: "8px", width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: isRightOpen && !isMobile ? 0 : 1 }}>🕒</button>
           </div>}
           <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-            {selectedSession && interactionMode !== "drawer" ? (
+            {selectedSession ? (
               <SessionViewer
                 session={getSessionSnapshot(selectedSession.root_id || currentRootId, selectedSession)}
                 onFileClick={(path) => {
@@ -1311,7 +1311,7 @@ export function App() {
           </div>
         </div>
       }
-      footer={<ActionBar status={status} agentsVersion={agentsVersion} currentSession={actionBarSession} onSendMessage={handleSendMessage} onCancelCurrentTurn={handleCancelCurrentTurn} onNewSession={handleNewSession} onToggleLeftSidebar={() => setIsLeftOpen((v) => !v)} onToggleRightSidebar={() => setIsRightOpen((v) => !v)} onSessionClick={() => {
+      footer={<ActionBar status={status} agentsVersion={agentsVersion} currentRootId={currentRootId} currentSession={actionBarSession} onSendMessage={handleSendMessage} onCancelCurrentTurn={handleCancelCurrentTurn} onNewSession={handleNewSession} onToggleLeftSidebar={() => setIsLeftOpen((v) => !v)} onToggleRightSidebar={() => setIsRightOpen((v) => !v)} onSessionClick={() => {
         const rootID = currentRootIdRef.current;
         if (!activeBoundSessionKey) return;
         const selectedKey = selectedSession?.key || selectedSession?.session_key;

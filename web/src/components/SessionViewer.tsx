@@ -5,6 +5,7 @@ import { useSessionStream, type TimelineItem } from "../hooks/useSessionStream";
 import { ThinkingBlock } from "./stream/ThinkingBlock";
 import { ToolCallCard } from "./stream/ToolCallCard";
 import { AgentIcon } from "./AgentIcon";
+import { InlineTokenText } from "./InlineTokenText";
 import type { ToolCall } from "../services/session";
 
 type RelatedFile = {
@@ -145,7 +146,9 @@ export function SessionViewer({ session, interactionMode = "main", onFileClick }
       <div key={idx} style={{ alignSelf: isUser ? "flex-end" : "flex-start", width: isUser ? "auto" : "100%", maxWidth: isUser ? "80%" : "100%", position: "relative", display: 'flex', flexDirection: 'column' }}>
         {isUser ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-            <div style={{ padding: "10px 16px", borderRadius: "18px 18px 4px 18px", background: "var(--accent-color)", color: "#fff", fontSize: "14px", lineHeight: "1.5", boxShadow: "0 4px 12px rgba(59,130,246,0.15)" }}>{item.content || ""}</div>
+            <div style={{ padding: "10px 16px", borderRadius: "18px 18px 4px 18px", background: "rgba(148,163,184,0.14)", color: "var(--text-primary)", fontSize: "14px", lineHeight: "1.5", boxShadow: "none", whiteSpace: "pre-wrap" }}>
+              <InlineTokenText content={item.content || ""} isDark={false} variant="inverse" />
+            </div>
             <span style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5 }}>{time}</span>
           </div>
         ) : (

@@ -1,5 +1,6 @@
 import React from "react";
 import type { SessionInfo } from "./AgentFloatingPanel";
+import { InlineTokenText } from "./InlineTokenText";
 
 type Exchange = {
   role: "user" | "agent";
@@ -142,8 +143,8 @@ export function SessionHistory({
                   style={{
                     padding: "12px 16px",
                     borderRadius: ex.role === "user" ? "12px 12px 12px 4px" : "12px 12px 4px 12px",
-                    background: ex.role === "user" ? "#3b82f6" : "rgba(0,0,0,0.05)",
-                    color: ex.role === "user" ? "#fff" : "var(--text-primary)",
+                    background: ex.role === "user" ? "rgba(148,163,184,0.14)" : "rgba(0,0,0,0.05)",
+                    color: "var(--text-primary)",
                     fontSize: "13px",
                     lineHeight: 1.6,
                     whiteSpace: "pre-wrap",
@@ -151,7 +152,11 @@ export function SessionHistory({
                     alignSelf: ex.role === "user" ? "flex-start" : "flex-start",
                   }}
                 >
-                  {ex.content}
+                  {ex.role === "user" ? (
+                    <InlineTokenText content={ex.content} variant="inverse" />
+                  ) : (
+                    ex.content
+                  )}
                 </div>
               </div>
             ))}

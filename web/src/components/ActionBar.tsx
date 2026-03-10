@@ -1,8 +1,12 @@
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { type SessionMode } from "./ModeSelector";
 import { ModeSelector } from "./ModeSelector";
 import { AgentSelector } from "./AgentSelector";
 import { fetchAgents, type AgentStatus } from "../services/agents";
+import { fetchCandidates, type CandidateItem } from "../services/candidates";
+import TokenEditor, {
+  type TokenEditorHandle,
+} from "./editor/TokenEditor";
 
 type SessionInfo = {
   key: string;
@@ -15,6 +19,7 @@ type SessionInfo = {
 type ActionBarProps = {
   status?: string;
   agentsVersion?: number;
+  currentRootId?: string | null;
   currentSession?: SessionInfo | null;
   onSendMessage?: (message: string, mode: SessionMode, agent: string) => void;
   onCancelCurrentTurn?: (sessionKey: string) => void;
@@ -36,8 +41,7 @@ function useResponsive() {
   const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
     const checkSize = () => {
-      const width = window.innerWidth;
-      setIsMobile(width < MOBILE_BREAKPOINT);
+      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
     };
     checkSize();
     window.addEventListener("resize", checkSize);
@@ -49,6 +53,7 @@ function useResponsive() {
 export function ActionBar({
   status = "Disconnected",
   agentsVersion = 0,
+  currentRootId,
   currentSession,
   onSendMessage,
   onCancelCurrentTurn,
@@ -60,20 +65,24 @@ export function ActionBar({
   const [mode, setMode] = useState<SessionMode>("chat");
   const [agent, setAgent] = useState("");
   const [agents, setAgents] = useState<AgentStatus[]>([]);
-  const [input, setInput] = useState("");
+  const [serializedInput, setSerializedInput] = useState("");
+  const [activeToken, setActiveToken] = useState<{ type: "file" | "skill"; query: string } | null>(null);
   const [dragX, setDragX] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef(0);
-  const DRAG_THRESHOLD = -40;
   const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [isMultiLine, setIsMultiLine] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [isDark, setIsDark] = useState(window.matchMedia("(prefers-color-scheme: dark)").matches);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [candidates, setCandidates] = useState<CandidateItem[]>([]);
+  const [activeCandidateIndex, setActiveCandidateIndex] = useState(0);
+  const dragStartRef = useRef(0);
+  const editorRef = useRef<TokenEditorHandle>(null);
+  const candidateAbortRef = useRef<AbortController | null>(null);
   const isComposingRef = useRef(false);
   const { isMobile } = useResponsive();
   const isConnected = status === "Connected";
+  const DRAG_THRESHOLD = -40;
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -82,7 +91,6 @@ export function ActionBar({
     return () => media.removeEventListener("change", onChange);
   }, []);
 
-  // 恢复原始 1: Session 同步逻辑
   useEffect(() => {
     if (currentSession) {
       const nextMode =
@@ -102,37 +110,97 @@ export function ActionBar({
     }
   }, [currentSession?.pending]);
 
-  // 恢复原始 2: 初始 Agent 加载逻辑
   useEffect(() => {
-    fetchAgents(true) // 强制穿透缓存
+    fetchAgents(true)
       .then(setAgents)
       .catch((err) => console.error("Failed to fetch agents:", err));
   }, [agentsVersion]);
 
-  // 恢复原始 3: 默认 Agent 选中逻辑
   useEffect(() => {
     if (currentSession || agents.length === 0) return;
-    const exists = agents.some((a) => a.name === agent);
-    if (exists) return;
+    if (agents.some((a) => a.name === agent)) return;
     const preferred = agents.find((a) => a.available) ?? agents[0];
-    if (preferred) setAgent(preferred.name);
+    if (preferred) {
+      setAgent(preferred.name);
+    }
   }, [agent, agents, currentSession]);
 
-  const handleSend = useCallback(async () => {
-    if (!input.trim() || !isConnected || sending || !agent) return;
-    const payload = input.trim();
-    setInput("");
-    setIsMultiLine(false);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "44px";
+  useEffect(() => () => candidateAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!activeToken || !currentRootId || (activeToken.type === "skill" && !agent)) {
+      candidateAbortRef.current?.abort();
+      setCandidates([]);
+      setActiveCandidateIndex(0);
+      return;
     }
+    const controller = new AbortController();
+    candidateAbortRef.current?.abort();
+    candidateAbortRef.current = controller;
+    fetchCandidates({
+      rootId: currentRootId,
+      type: activeToken.type,
+      query: activeToken.query,
+      agent: activeToken.type === "skill" ? agent : undefined,
+      signal: controller.signal,
+    })
+      .then((items) => {
+        setCandidates(items);
+        setActiveCandidateIndex(0);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        console.error("Failed to fetch candidates:", err);
+        setCandidates([]);
+        setActiveCandidateIndex(0);
+      });
+    return () => controller.abort();
+  }, [activeToken, currentRootId, agent]);
+
+  const syncEditorHeight = useCallback(() => {
+    const height = editorRef.current?.getHeight() || 44;
+    setIsMultiLine(height > 50);
+  }, []);
+
+  const handleEditorChange = useCallback((payload: {
+    serializedText: string;
+    activeToken: { type: "file" | "skill"; query: string } | null;
+  }) => {
+    setSerializedInput(payload.serializedText);
+    setActiveToken(payload.activeToken);
+    if (payload.serializedText.length === 0) {
+      setIsMultiLine(false);
+      return;
+    }
+    requestAnimationFrame(syncEditorHeight);
+  }, [syncEditorHeight]);
+
+  const applyCandidate = useCallback((candidate: CandidateItem) => {
+    if (!activeToken) return;
+    setCandidates([]);
+    setActiveCandidateIndex(0);
+    editorRef.current?.insertCandidate(candidate.type, candidate.name);
+    editorRef.current?.focus();
+    syncEditorHeight();
+  }, [activeToken, syncEditorHeight]);
+
+  const handleSend = useCallback(async () => {
+    const payload = serializedInput.trim();
+    if (!payload || !isConnected || sending || !agent) return;
+    editorRef.current?.clear();
+    setSerializedInput("");
+    setActiveToken(null);
+    setCandidates([]);
+    setActiveCandidateIndex(0);
+    setIsMultiLine(false);
     setSending(true);
     try {
       await onSendMessage?.(payload, mode, agent);
     } finally {
       setSending(false);
+      requestAnimationFrame(() => editorRef.current?.focus());
     }
-  }, [input, isConnected, sending, agent, mode, onSendMessage]);
+  }, [serializedInput, isConnected, sending, agent, onSendMessage, mode]);
 
   const handleCancel = useCallback(async () => {
     const sessionKey = currentSession?.key;
@@ -141,38 +209,64 @@ export function ActionBar({
     try {
       await onCancelCurrentTurn?.(sessionKey);
     } finally {
-      // Reset is driven by currentSession.pending turning false.
+      // Reset is driven by currentSession.pending.
     }
   }, [currentSession?.key, cancelling, onCancelCurrentTurn]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number; };
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
     if (isComposingRef.current || nativeEvent.isComposing || nativeEvent.keyCode === 229) {
       return;
     }
-    if (e.key === "Enter" && !e.shiftKey && !isMobile) {
-      e.preventDefault();
-      void handleSend();
+    if (candidates.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActiveCandidateIndex((prev) => (prev + 1) % candidates.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActiveCandidateIndex((prev) => (prev - 1 + candidates.length) % candidates.length);
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        applyCandidate(candidates[activeCandidateIndex] || candidates[0]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setCandidates([]);
+        setActiveCandidateIndex(0);
+        return;
+      }
     }
-  };
+  }, [candidates, activeCandidateIndex, applyCandidate]);
 
-  const handleInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
-    const target = e.currentTarget;
-    const val = target.value;
-    if (!val) {
-      target.style.height = "44px";
-      setIsMultiLine(false);
-      return;
+  const handleEditorEnter = useCallback((event: KeyboardEvent | null) => {
+    if (isComposingRef.current) {
+      return false;
     }
-    target.style.height = "44px";
-    const sh = target.scrollHeight;
-    setIsMultiLine(sh > 50);
-    const newHeight = Math.min(Math.max(sh, 44), 240);
-    target.style.height = `${newHeight}px`;
-  };
+    if (event?.shiftKey) {
+      return false;
+    }
+    if (candidates.length > 0) {
+      event?.preventDefault();
+      event?.stopPropagation();
+      applyCandidate(candidates[activeCandidateIndex] || candidates[0]);
+      return true;
+    }
+    if (!isMobile) {
+      event?.preventDefault();
+      event?.stopPropagation();
+      void handleSend();
+      return true;
+    }
+    return false;
+  }, [candidates, activeCandidateIndex, applyCandidate, handleSend, isMobile]);
 
   const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
-    const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
+    const clientX = "touches" in e ? e.touches[0].clientX : e.clientX;
     dragStartRef.current = clientX;
     setIsDragging(true);
   };
@@ -185,30 +279,31 @@ export function ActionBar({
   }, [isDragging, dragX, onNewSession]);
 
   useEffect(() => {
-    if (isDragging) {
-      const move = (e: MouseEvent | TouchEvent) => {
-        const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX;
-        setDragX(Math.min(0, clientX - dragStartRef.current));
-      };
-      window.addEventListener('mousemove', move);
-      window.addEventListener('mouseup', handleDragEnd);
-      window.addEventListener('touchmove', move);
-      window.addEventListener('touchend', handleDragEnd);
-      return () => {
-        window.removeEventListener('mousemove', move);
-        window.removeEventListener('mouseup', handleDragEnd);
-        window.removeEventListener('touchmove', move);
-        window.removeEventListener('touchend', handleDragEnd);
-      };
-    }
+    if (!isDragging) return;
+    const move = (e: MouseEvent | TouchEvent) => {
+      const clientX = "touches" in e ? e.touches[0].clientX : e.clientX;
+      setDragX(Math.min(0, clientX - dragStartRef.current));
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", handleDragEnd);
+    window.addEventListener("touchmove", move);
+    window.addEventListener("touchend", handleDragEnd);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", handleDragEnd);
+      window.removeEventListener("touchmove", move);
+      window.removeEventListener("touchend", handleDragEnd);
+    };
   }, [isDragging, handleDragEnd]);
 
   const isSelectedAgentUnavailable = agents.length > 0 ? agents.find((a) => a.name === agent)?.available === false : false;
-  const canSend = input.trim() && isConnected && !sending && agent && !isSelectedAgentUnavailable;
+  const canSend = !!serializedInput.trim() && isConnected && !sending && !!agent && !isSelectedAgentUnavailable;
   const hasBoundSession = !!currentSession;
-  const isBoundPending = !!currentSession?.pending;
-  const showCancel = isBoundPending && !!currentSession?.key;
+  const showCancel = !!currentSession?.pending && !!currentSession?.key;
   const isModeLocked = !!currentSession;
+  const editorRightInset = isMultiLine ? 14 : isMobile ? 96 : 120;
+  const editorBottomInset = isMultiLine ? 44 : 12;
+  const editorMinHeight = 44;
 
   return (
     <div style={{ width: "100%", padding: isMobile ? "0" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
@@ -227,6 +322,7 @@ export function ActionBar({
               </svg>
             </button>
           ) : null}
+
           <div
             style={{
               background: isMobile ? "#fff" : (isDark ? "rgba(15, 23, 42, 0.95)" : "rgba(255, 255, 255, 0.5)"),
@@ -243,122 +339,156 @@ export function ActionBar({
               alignItems: "center",
               position: "relative",
               transition: isDragging ? "none" : "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
-              minHeight: "44px",
+              minHeight: `${editorMinHeight}px`,
               backdropFilter: isMobile ? "none" : "blur(8px)",
             }}
-            onFocusCapture={() => setIsFocused(true)}
-            onBlurCapture={() => setIsFocused(false)}
           >
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onCompositionStart={() => {
-              isComposingRef.current = true;
-            }}
-            onCompositionEnd={() => {
-              isComposingRef.current = false;
-            }}
-            onKeyDown={handleKeyDown}
-            onInput={handleInput}
-            placeholder={modePlaceholders[mode]}
-            disabled={sending}
-            rows={1}
-            style={{
-              width: "100%",
-              border: "none",
-              background: "transparent",
-              fontSize: "15px",
-              color: "var(--text-primary)",
-              outline: "none",
-              resize: "none",
-              padding: isMultiLine ? "12px 14px 36px" : (isMobile ? "12px 96px 12px 14px" : "12px 120px 12px 14px"),
-              minHeight: "44px",
-              maxHeight: "240px",
-              lineHeight: "20px",
-              boxSizing: "border-box",
-              display: "block",
-              fontFamily: "inherit",
-              transition: "padding 0.15s cubic-bezier(0.4, 0, 0.2, 1)",
-            }}
-          />
+            <TokenEditor
+              ref={editorRef}
+              placeholder={modePlaceholders[mode]}
+              disabled={sending}
+              isDark={isDark}
+              rightInset={editorRightInset}
+              bottomInset={editorBottomInset}
+              onChange={handleEditorChange}
+              onFocusChange={setIsFocused}
+              onKeyDown={handleKeyDown}
+              onEnter={handleEditorEnter}
+              onCompositionStart={() => {
+                isComposingRef.current = true;
+              }}
+              onCompositionEnd={() => {
+                isComposingRef.current = false;
+              }}
+            />
 
-          <div style={{ position: "absolute", right: isMobile ? "4px" : "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: isMobile ? "0px" : "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
-            {/* 滑动蓝点 */}
-            <div
-              onMouseDown={handleDragStart}
-              onTouchStart={handleDragStart}
-              onClick={() => {
-                if (Math.abs(dragX) < 5) {
-                  onSessionClick?.();
-                }
-              }}
-              style={{
-                width: "28px",
-                height: "28px",
-                margin: isMobile ? "0 1px" : "0 4px",
-                cursor: "pointer",
-                transform: `translateX(${dragX}px)`,
-                transition: isDragging ? "none" : "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
-                position: "relative",
-                zIndex: 10,
-                opacity: 1,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                touchAction: "none",
-              }}
-              title="左滑新建会话"
-            >
-              {!hasBoundSession && (
-                <div
-                  style={{
-                    width: "12px",
-                    height: "12px",
-                    borderRadius: "50%",
-                    background: "transparent",
-                    border: "2px solid #94a3b8",
-                  }}
-                />
-              )}
-              {hasBoundSession && (
-                <div
-                  style={{
-                    width: "12px",
-                    height: "12px",
-                    borderRadius: "50%",
-                    background: "transparent",
-                    border: "2px solid #2563eb",
-                    boxShadow: "0 0 0 1px rgba(37,99,235,0.08)",
-                  }}
-                />
-              )}
-              {isDragging && dragX < -10 && (
-                <div style={{ position: "absolute", right: "100%", top: "50%", transform: "translateY(-50%)", marginRight: "8px", fontSize: "10px", fontWeight: 600, color: dragX <= DRAG_THRESHOLD ? "var(--accent-color)" : "#9ca3af", whiteSpace: "nowrap", opacity: Math.min(1, Math.abs(dragX) / 20), pointerEvents: "none" }}>
-                  {dragX <= DRAG_THRESHOLD ? "松开新建" : "左滑新建"}
-                </div>
-              )}
+            {activeToken && candidates.length > 0 ? (
+              <div
+                style={{
+                  position: "absolute",
+                  left: "8px",
+                  right: "8px",
+                  bottom: "calc(100% + 8px)",
+                  background: isDark ? "rgba(15, 23, 42, 0.98)" : "#fff",
+                  border: isDark ? "1px solid rgba(255,255,255,0.1)" : "1px solid var(--border-color)",
+                  borderRadius: "12px",
+                  boxShadow: "0 12px 32px rgba(0,0,0,0.16)",
+                  overflow: "hidden",
+                  zIndex: 20,
+                }}
+              >
+                {candidates.map((candidate, index) => (
+                  <div
+                    key={`${candidate.type}:${candidate.name}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      window.setTimeout(() => applyCandidate(candidate), 0);
+                    }}
+                    role="option"
+                    aria-selected={index === activeCandidateIndex}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-start",
+                      gap: "2px",
+                      width: "100%",
+                      padding: "10px 12px",
+                      border: "none",
+                      borderTop: index === 0 ? "none" : (isDark ? "1px solid rgba(255,255,255,0.06)" : "1px solid rgba(15,23,42,0.06)"),
+                      background: index === activeCandidateIndex
+                        ? (isDark ? "rgba(59,130,246,0.16)" : "rgba(59,130,246,0.08)")
+                        : "transparent",
+                      color: "var(--text-primary)",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span style={{ fontSize: "13px", fontWeight: 500 }}>
+                      {candidate.type === "file" ? `@${candidate.name}` : `/${candidate.name}`}
+                    </span>
+                    {candidate.description ? (
+                      <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{candidate.description}</span>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            <div style={{ position: "absolute", right: isMobile ? "4px" : "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: isMobile ? "0px" : "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
+              <div
+                onMouseDown={handleDragStart}
+                onTouchStart={handleDragStart}
+                onClick={() => {
+                  if (Math.abs(dragX) < 5) {
+                    onSessionClick?.();
+                  }
+                }}
+                style={{
+                  width: "28px",
+                  height: "28px",
+                  margin: isMobile ? "0 1px" : "0 4px",
+                  cursor: "pointer",
+                  transform: `translateX(${dragX}px)`,
+                  transition: isDragging ? "none" : "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+                  position: "relative",
+                  zIndex: 10,
+                  opacity: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  touchAction: "none",
+                }}
+                title="左滑新建会话"
+              >
+                {!hasBoundSession ? (
+                  <div
+                    style={{
+                      width: "12px",
+                      height: "12px",
+                      borderRadius: "50%",
+                      background: "transparent",
+                      border: "2px solid #94a3b8",
+                    }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      width: "12px",
+                      height: "12px",
+                      borderRadius: "50%",
+                      background: "transparent",
+                      border: "2px solid #2563eb",
+                      boxShadow: "0 0 0 1px rgba(37,99,235,0.08)",
+                    }}
+                  />
+                )}
+                {isDragging && dragX < -10 ? (
+                  <div style={{ position: "absolute", right: "100%", top: "50%", transform: "translateY(-50%)", marginRight: "8px", fontSize: "10px", fontWeight: 600, color: dragX <= DRAG_THRESHOLD ? "var(--accent-color)" : "#9ca3af", whiteSpace: "nowrap", opacity: Math.min(1, Math.abs(dragX) / 20), pointerEvents: "none" }}>
+                    {dragX <= DRAG_THRESHOLD ? "松开新建" : "左滑新建"}
+                  </div>
+                ) : null}
+              </div>
+
+              <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} />
+              <AgentSelector agent={agent} agents={agents} onAgentChange={setAgent} compact={true} warnUnavailable={isSelectedAgentUnavailable} />
+
+              <button
+                type="button"
+                onClick={showCancel ? handleCancel : handleSend}
+                disabled={showCancel ? cancelling : !canSend}
+                style={{ width: "28px", height: "28px", borderRadius: "8px", border: "none", background: showCancel ? "rgba(239,68,68,0.14)" : (canSend ? "var(--accent-color)" : "transparent"), color: showCancel ? "#ef4444" : (canSend ? "#fff" : "var(--text-secondary)"), display: "flex", alignItems: "center", justifyContent: "center", cursor: showCancel ? (cancelling ? "wait" : "pointer") : (canSend ? "pointer" : "not-allowed"), transition: "all 0.2s", opacity: showCancel ? 1 : (canSend ? 1 : 0.3) }}
+              >
+                {sending || cancelling ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                ) : showCancel ? (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2.5" /></svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                )}
+              </button>
             </div>
-
-            <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} />
-            <AgentSelector agent={agent} agents={agents} onAgentChange={setAgent} compact={true} warnUnavailable={isSelectedAgentUnavailable} />
-
-            <button
-              type="button"
-              onClick={showCancel ? handleCancel : handleSend}
-              disabled={showCancel ? cancelling : !canSend}
-              style={{ width: "28px", height: "28px", borderRadius: "8px", border: "none", background: showCancel ? "rgba(239,68,68,0.14)" : (canSend ? "var(--accent-color)" : "transparent"), color: showCancel ? "#ef4444" : (canSend ? "#fff" : "var(--text-secondary)"), display: "flex", alignItems: "center", justifyContent: "center", cursor: showCancel ? (cancelling ? "wait" : "pointer") : (canSend ? "pointer" : "not-allowed"), transition: "all 0.2s", opacity: showCancel ? 1 : (canSend ? 1 : 0.3) }}
-            >
-              {sending || cancelling ? (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'spin 1s linear infinite' }}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-              ) : showCancel ? (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2.5" /></svg>
-              ) : (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
-              )}
-            </button>
           </div>
-          </div>
+
           {isMobile ? (
             <button
               type="button"

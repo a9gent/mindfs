@@ -215,7 +215,6 @@ class SessionService {
         }
         break;
       case "session.done":
-        console.log("[session.done]", { sessionKey, requestId: msg.id });
         for (const handler of handlers) {
           handler.onDone?.();
         }
@@ -315,7 +314,6 @@ class SessionService {
       },
     };
 
-    console.log("[session.cancel.send]", { rootId, sessionKey, requestId: msg.id });
     this.ws.send(JSON.stringify(msg));
     return true;
   }

@@ -29,6 +29,8 @@
 - **[11-agent-interaction-ui.md](./11-agent-interaction-ui.md)** - Agent 交互浮框、流式输出渲染、权限对话框
 - **[12-view-renderer.md](./12-view-renderer.md)** - 视图渲染系统、组件 Catalog、Registry、动态组件加载
 - **[13-frontend-services.md](./13-frontend-services.md)** - 前端服务层、状态管理、WebSocket Hook
+- **[19-input-candidates.md](./19-input-candidates.md)** - Slash / File Reference 候选集、统一补全框架
+- **[20-upload-and-attachments.md](./20-upload-and-attachments.md)** - 目录上传、输入附件上传、图片附件展示
 
 ---
 
@@ -58,6 +60,8 @@
 - **浮框如何交互** → 11-agent-interaction-ui.md
 - **视图如何渲染** → 12-view-renderer.md
 - **前端如何组织** → 13-frontend-services.md
+- **输入候选如何组织** → 19-input-candidates.md
+- **文件上传与附件如何组织** → 20-upload-and-attachments.md
 
 ---
 

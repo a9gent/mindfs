@@ -31,6 +31,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/health", h.handleHealth)
 	r.Get("/api/tree", h.handleTree)
 	r.Get("/api/file", h.handleFile)
+	r.Get("/api/candidates", h.handleCandidates)
 	r.Get("/api/sessions", h.handleSessions)
 	r.Get("/api/sessions/{key}", h.handleSessionGet)
 	r.Post("/api/skills/{id}/execute", h.handleSkillExecute)
@@ -59,6 +60,28 @@ func (h *HTTPHandler) handleSessions(w http.ResponseWriter, r *http.Request) {
 		payload = append(payload, sessionListResponse(s))
 	}
 	respondJSON(w, http.StatusOK, payload)
+}
+
+func (h *HTTPHandler) handleCandidates(w http.ResponseWriter, r *http.Request) {
+	rootID := strings.TrimSpace(r.URL.Query().Get("root"))
+	candidateType := usecase.CandidateType(strings.TrimSpace(r.URL.Query().Get("type")))
+	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
+	uc := h.service()
+	out, err := uc.SearchCandidates(r.Context(), usecase.SearchCandidatesInput{
+		RootID: rootID,
+		Type:   candidateType,
+		Query:  r.URL.Query().Get("q"),
+		Agent:  agent,
+	})
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "root not found") {
+			status = http.StatusNotFound
+		}
+		respondError(w, status, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, out.Items)
 }
 
 func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {

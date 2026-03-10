@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"mindfs/server/internal/agent"
+	"mindfs/server/internal/api/usecase"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/session"
 )
@@ -25,6 +26,7 @@ type AppContext struct {
 	roots               map[string]*RootContext // root id -> root context
 	fileChangeListeners []func(fs.FileChangeEvent)
 	streamHub           *StreamHub
+	candidateRegistry   *usecase.CandidateRegistry
 }
 
 func (s *AppContext) GetRootContext(rootID string) (*RootContext, error) {
@@ -185,4 +187,16 @@ func (s *AppContext) GetSessionStreamHub() *StreamHub {
 		s.streamHub = NewStreamHub()
 	}
 	return s.streamHub
+}
+
+func (s *AppContext) GetCandidateRegistry() *usecase.CandidateRegistry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.candidateRegistry == nil {
+		registry := usecase.NewCandidateRegistry()
+		registry.Register(usecase.NewFileCandidateProvider())
+		registry.Register(usecase.NewSkillCandidateProvider())
+		s.candidateRegistry = registry
+	}
+	return s.candidateRegistry
 }
