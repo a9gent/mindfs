@@ -1,3 +1,5 @@
+import { fetchFile } from "../services/file";
+
 export type MatchRule = {
   ext?: string;
   path?: string;
@@ -222,12 +224,12 @@ export async function loadAllPlugins(rootId: string): Promise<ViewPlugin[]> {
   const plugins: ViewPlugin[] = [];
   for (const file of pluginFiles) {
     try {
-      const fileResp = await fetch(
-        `/api/file?root=${encodeURIComponent(rootId)}&path=${encodeURIComponent(file.path)}`,
-      );
-      if (!fileResp.ok) continue;
-      const payload = await fileResp.json();
-      const content = payload?.file?.content;
+      const payload = await fetchFile({
+        rootId,
+        path: file.path,
+        readMode: "full",
+      });
+      const content = payload?.content;
       if (typeof content !== "string") continue;
       const loaded = await loadPlugin(content);
       plugins.push(loaded);

@@ -4,6 +4,7 @@ import { Renderer } from "./renderer/Renderer";
 import { sessionService, type Session } from "./services/session";
 import { buildClientContext } from "./services/context";
 import { reportError } from "./services/error";
+import { fetchFile, getCachedFile, invalidateFileCache, type FilePayload } from "./services/file";
 import { uploadFiles } from "./services/upload";
 import { PluginManager, loadAllPlugins, type PluginInput } from "./plugins/manager";
 
@@ -19,7 +20,6 @@ import { BottomSheet } from "./components/BottomSheet";
 
 // 类型定义
 export type FileEntry = { name: string; path: string; is_dir: boolean; };
-export type FilePayload = { name: string; path: string; content: string; encoding: string; truncated: boolean; next_cursor?: number; size: number; ext?: string; mime?: string; root?: string; file_meta?: any[]; targetLine?: number; targetColumn?: number; };
 type SessionMode = "chat" | "plugin";
 export type SessionItem = { key?: string; session_key?: string; root_id?: string; name?: string; type?: SessionMode; agent?: string; scope?: string; purpose?: string; closed_at?: string; related_files?: Array<{ path: string; name?: string }>; exchanges?: Array<{ role?: string; content?: string; timestamp?: string }>; pending?: boolean; };
 type Exchange = { role: string; agent?: string; content?: string; timestamp?: string; toolCall?: any; };
@@ -486,11 +486,6 @@ export function App() {
     bumpCacheVersion();
   }, [rootSessionKey, bumpCacheVersion]);
 
-  const normalizeFileResponse = useCallback((payload: any) => {
-    if (payload && payload.file) return { file: payload.file as FilePayload };
-    return { file: null };
-  }, []);
-
   const normalizeTreeResponse = useCallback((payload: any) => {
     if (payload && payload.entries) return { entries: payload.entries as FileEntry[] };
     return { entries: [] };
@@ -517,10 +512,15 @@ export function App() {
     const selectedDirPath = selectedDirRef.current === rootID ? "." : selectedDirRef.current;
     const targetDir = selectedDirPath || (fileRef.current?.path ? dirnameOfPath(fileRef.current.path) : ".");
     try {
-      await uploadFiles({
+      const uploaded = await uploadFiles({
         rootId: rootID,
         dir: targetDir,
         files,
+      });
+      uploaded.forEach((item) => {
+        if (typeof item?.path === "string" && item.path) {
+          invalidateFileCache(rootID, item.path);
+        }
       });
       const currentDir = (selectedDirRef.current === rootID ? "." : selectedDirRef.current) || ".";
       const syncMain = rootID === currentRootIdRef.current && currentDir === targetDir;
@@ -724,27 +724,14 @@ export function App() {
 
       void expandAndLoadTreeForFile();
       try {
-        const fetchFileWithMode = async (mode: "full" | "incremental", timeoutMs?: number) => {
-          const queryParams = new URLSearchParams({
-            root: String(root),
+        const fetchFileWithMode = async (mode: "full" | "incremental", timeoutMs?: number) =>
+          fetchFile({
+            rootId: String(root),
             path: String(path),
-            read: mode,
+            readMode: mode,
+            cursor,
+            timeoutMs,
           });
-          if (cursor > 0) {
-            queryParams.set("cursor", String(cursor));
-          }
-          const url = `/api/file?${queryParams.toString()}`;
-          if (!timeoutMs || timeoutMs <= 0) {
-            return fetch(url);
-          }
-          const controller = new AbortController();
-          const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-          try {
-            return await fetch(url, { signal: controller.signal });
-          } finally {
-            window.clearTimeout(timer);
-          }
-        };
 
         let readMode: "incremental" | "full" = params.readMode === "full" ? "full" : "incremental";
         if (params.readMode !== "full" && params.readMode !== "incremental") {
@@ -768,30 +755,35 @@ export function App() {
           }
           }
         }
-        let res: Response;
+        const cached = await getCachedFile({
+          rootId: String(root),
+          path: String(path),
+          readMode,
+          cursor,
+        });
+        if (cached) {
+          setFile({
+            ...cached,
+            targetLine: parsedLocation.targetLine,
+            targetColumn: parsedLocation.targetColumn,
+          });
+        }
+
+        let next: FilePayload | null;
         try {
           // full-mode read can be heavy; keep UI responsive by fast fallback.
-          res = await fetchFileWithMode(readMode, readMode === "full" ? 1500 : undefined);
+          next = await fetchFileWithMode(readMode, readMode === "full" ? 1500 : undefined);
         } catch (err) {
           if (readMode === "full") {
-            res = await fetchFileWithMode("incremental");
+            next = await fetchFileWithMode("incremental");
             readMode = "incremental";
           } else {
             throw err;
           }
         }
-        if (!res.ok && readMode === "full") {
-          res = await fetchFileWithMode("incremental");
-          readMode = "incremental";
-        }
-        if (!res.ok) {
-          throw new Error(`open file failed: status=${res.status}`);
-        }
-        const payload = await res.json();
-        const next = normalizeFileResponse(payload);
-        if (next.file) {
+        if (next) {
           setFile({
-            ...next.file,
+            ...next,
             targetLine: parsedLocation.targetLine,
             targetColumn: parsedLocation.targetColumn,
           });
@@ -831,7 +823,7 @@ export function App() {
         if (isMobile) setIsLeftOpen(false);
       } catch {}
     }
-  }), [isMobile, normalizeFileResponse, normalizeTreeResponse, setDrawerOpenForRoot, replaceURLState]);
+  }), [isMobile, normalizeTreeResponse, setDrawerOpenForRoot, replaceURLState]);
 
   const pluginHandlers = useMemo(
     () => ({
@@ -1037,6 +1029,7 @@ export function App() {
       const rootID = typeof payload?.root_id === "string" ? payload.root_id : "";
       const changedPath = typeof payload?.path === "string" ? payload.path : "";
       if (!rootID || !changedPath) return;
+      invalidateFileCache(rootID, changedPath);
       const parentDir = dirname(changedPath);
       const currentDir = currentDirAPI(rootID);
       const syncMain = rootID === currentRootIdRef.current && parentDir === currentDir;
