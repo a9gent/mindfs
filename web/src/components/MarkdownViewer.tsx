@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { memo, useEffect, useMemo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
@@ -65,7 +65,7 @@ function isExternalHref(href: string): boolean {
   return /^(https?:|mailto:|tel:)/i.test(href);
 }
 
-export function MarkdownViewer({
+function MarkdownViewerInner({
   content,
   currentPath = "",
   onFileClick,
@@ -77,10 +77,15 @@ export function MarkdownViewer({
   targetLine?: number;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const onFileClickRef = useRef(onFileClick);
   const sourceLineSelector = useMemo(() => {
     if (!targetLine || targetLine < 1) return "";
     return "[data-source-line]";
   }, [targetLine]);
+
+  useEffect(() => {
+    onFileClickRef.current = onFileClick;
+  }, [onFileClick]);
 
   useEffect(() => {
     if (!targetLine || targetLine < 1 || !containerRef.current || !sourceLineSelector) {
@@ -161,7 +166,7 @@ export function MarkdownViewer({
                 onClick={(e) => {
                   e.preventDefault();
                   if (resolvedPath) {
-                    onFileClick(resolvedPath);
+                    onFileClickRef.current?.(resolvedPath);
                   }
                 }}
                 style={{ color: "var(--accent-color)", cursor: "pointer" }}
@@ -280,6 +285,7 @@ export function MarkdownViewer({
             }
             return (
               <pre
+                className={className}
                 {...getSourceLineProps(node)}
                 style={{
                   width: "100%",
@@ -303,7 +309,7 @@ export function MarkdownViewer({
                   <code
                     className={className}
                     dangerouslySetInnerHTML={{ __html: html }}
-                    style={{ display: "block", textShadow: "none", fontFamily: monoFontFamily }}
+                    style={{ display: "block", textShadow: "none", fontFamily: monoFontFamily, border: "none", background: "transparent" }}
                   />
                 ) : (
                   <code
@@ -315,6 +321,8 @@ export function MarkdownViewer({
                       tabSize: 2 as any,
                       fontVariantLigatures: "none",
                       whiteSpace: "pre",
+                      border: "none",
+                      background: "transparent",
                     }}
                   >
                     {rawContent}
@@ -330,3 +338,9 @@ export function MarkdownViewer({
     </div>
   );
 }
+
+export const MarkdownViewer = memo(MarkdownViewerInner, (prev, next) => (
+  prev.content === next.content &&
+  prev.currentPath === next.currentPath &&
+  prev.targetLine === next.targetLine
+));

@@ -1,6 +1,6 @@
-import React from "react";
+import React, { memo } from "react";
 
-export function BinaryViewer() {
+export const BinaryViewer = memo(function BinaryViewer() {
   return (
     <div
       style={{
@@ -12,4 +12,4 @@ export function BinaryViewer() {
       Binary file preview is not available.
     </div>
   );
-}
+});

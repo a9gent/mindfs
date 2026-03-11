@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { memo, useEffect, useState } from "react";
 import type { ToolCallLocation } from "../../services/session";
 
 type ToolCallCardProps = {
@@ -33,7 +33,7 @@ const statusColors: Record<string, string> = {
   error: "#ef4444",
 };
 
-export function ToolCallCard({
+export const ToolCallCard = memo(function ToolCallCard({
   kind,
   title,
   callId: _callId,
@@ -198,4 +198,4 @@ export function ToolCallCard({
       `}</style>
     </div>
   );
-}
+});

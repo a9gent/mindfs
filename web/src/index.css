@@ -49,13 +49,19 @@
     --selection-bg: rgba(59, 130, 246, 0.2);
   }
 
-  /* 修正深色模式下的代码块显示 */
-  pre, code, pre[class*="language-"], code[class*="language-"] {
+  /* 仅修正语法高亮代码块，避免全局 pre/code 叠出双层边框 */
+  pre[class*="language-"], code[class*="language-"] {
     box-shadow: none !important;
     background: #0f172a !important; /* 统一更深邃的代码背景 */
     color: #e2e8f0 !important;
     text-shadow: none !important;
     border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  }
+
+  pre[class*="language-"] > code[class*="language-"] {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
   }
 }
 

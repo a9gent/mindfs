@@ -48,6 +48,7 @@ const mainStyle: React.CSSProperties = {
   minHeight: 0,
   position: "relative",
   zIndex: 1,
+  contain: "paint",
 };
 
 const rightStyle: React.CSSProperties = {
@@ -120,6 +121,7 @@ export function AppShell({
     color: "var(--text-primary)",
     position: "relative",
     overflow: "hidden",
+    isolation: "isolate",
     transition: "grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
   };
 
@@ -132,11 +134,12 @@ export function AppShell({
     zIndex: 2000,
     background: "var(--sidebar-bg)",
     boxShadow: side === 'left' ? "4px 0 24px rgba(0,0,0,0.15)" : "-4px 0 24px rgba(0,0,0,0.15)",
-    transform: (side === 'left' ? (leftOpen ? "translateX(0)" : "translateX(-100%)") : (rightOpen ? "translateX(0)" : "translateX(100%)")),
     transition: "transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1)",
     display: "flex",
     flexDirection: "column",
     willChange: "transform",
+    backfaceVisibility: "hidden",
+    transform: `${side === 'left' ? (leftOpen ? "translateX(0)" : "translateX(-100%)") : (rightOpen ? "translateX(0)" : "translateX(100%)")} translateZ(0)`,
   });
 
   const overlayStyle: React.CSSProperties = {
@@ -148,6 +151,8 @@ export function AppShell({
     pointerEvents: (isMobile && (leftOpen || rightOpen)) ? "auto" : "none",
     transition: "opacity 0.18s ease",
     willChange: "opacity",
+    backfaceVisibility: "hidden",
+    transform: "translateZ(0)",
   };
 
   return (

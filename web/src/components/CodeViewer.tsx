@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { memo, useEffect, useMemo, useRef } from "react";
 import Prism from "prismjs";
 import "prismjs/themes/prism.css";
 
@@ -40,7 +40,7 @@ const languageByExt: Record<string, string> = {
   ".md": "markdown",
 };
 
-export function CodeViewer({ content, ext, targetLine }: { content: string; ext?: string; targetLine?: number; targetColumn?: number }) {
+export const CodeViewer = memo(function CodeViewer({ content, ext, targetLine }: { content: string; ext?: string; targetLine?: number; targetColumn?: number }) {
   const language = languageByExt[ext ?? ""] ?? "markup";
   const lineRefs = useRef<Array<HTMLDivElement | null>>([]);
   
@@ -133,11 +133,11 @@ export function CodeViewer({ content, ext, targetLine }: { content: string; ext?
           }}
         >
         <code 
-          style={{ whiteSpace: "pre" }}
+          style={{ whiteSpace: "pre", display: "block", border: "none", background: "transparent" }}
           dangerouslySetInnerHTML={{ __html: html }} 
         />
         </pre>
       </div>
     </div>
   );
-}
+});

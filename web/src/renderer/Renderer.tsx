@@ -1,4 +1,4 @@
-import React from "react";
+import React, { memo, useMemo } from "react";
 import { JSONUIProvider, Renderer as JsonRenderer } from "@json-render/react";
 import { registry } from "./registry";
 
@@ -28,11 +28,17 @@ function normalizeTreeSpec(tree: RendererProps["tree"]): RendererProps["tree"] {
   return { ...tree, elements: normalized };
 }
 
-export function Renderer({ tree, initialState = {}, handlers = {} }: RendererProps) {
-  const spec = normalizeTreeSpec(tree);
+function RendererInner({ tree, initialState = {}, handlers = {} }: RendererProps) {
+  const spec = useMemo(() => normalizeTreeSpec(tree), [tree]);
   return (
     <JSONUIProvider registry={registry} initialState={initialState} handlers={handlers}>
       <JsonRenderer spec={spec as any} registry={registry} />
     </JSONUIProvider>
   );
 }
+
+export const Renderer = memo(RendererInner, (prev, next) => (
+  prev.tree === next.tree &&
+  prev.initialState === next.initialState &&
+  prev.handlers === next.handlers
+));

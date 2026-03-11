@@ -1180,6 +1180,28 @@ export function App() {
     } as React.CSSProperties;
   }, [pluginRender]);
 
+  const selectedSessionSnapshot = useMemo(
+    () => (selectedSession ? getSessionSnapshot(selectedSession.root_id || currentRootId, selectedSession) : null),
+    [selectedSession, currentRootId, getSessionSnapshot]
+  );
+
+  const handleSelectedSessionFileClick = useCallback((path: string) => {
+    const root = (selectedSessionRef.current?.root_id as string | undefined) || currentRootIdRef.current;
+    if (!root) return;
+    actionHandlers.open({ path, root });
+  }, [actionHandlers]);
+
+  const drawerSessionSnapshot = useMemo(
+    () => (currentSession ? getSessionSnapshot(currentRootId, currentSession) : null),
+    [currentSession, currentRootId, getSessionSnapshot]
+  );
+
+  const handleDrawerSessionFileClick = useCallback((path: string) => {
+    const root = currentRootIdRef.current;
+    if (!root) return;
+    actionHandlers.open({ path, root });
+  }, [actionHandlers]);
+
   useEffect(() => {
     const body = document.body;
     if (!pluginThemeVars || pluginBypass || !pluginRender?.output) {
@@ -1267,13 +1289,9 @@ export function App() {
           <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             {selectedSession ? (
               <SessionViewer
-                session={getSessionSnapshot(selectedSession.root_id || currentRootId, selectedSession)}
+                session={selectedSessionSnapshot}
                 rootId={selectedSession.root_id || currentRootId}
-                onFileClick={(path) => {
-                  const root = (selectedSession.root_id as string | undefined) || currentRootIdRef.current;
-                  if (!root) return;
-                  actionHandlers.open({ path, root });
-                }}
+                onFileClick={handleSelectedSessionFileClick}
               />
             ) : file ? (
               pluginRender && pluginRender.output ? (
@@ -1386,11 +1404,7 @@ export function App() {
         setInteractionMode("drawer");
         setDrawerOpenForRoot(rootID, !(drawerOpenByRootRef.current[rootID || ""] || false));
       }} />}
-      drawer={<BottomSheet isOpen={isDrawerOpen} onClose={() => setDrawerOpenForRoot(currentRootIdRef.current, false)} onExpand={() => { handleSelectSession(currentSession); setDrawerOpenForRoot(currentRootIdRef.current, false); }}>{currentSession ? <SessionViewer session={getSessionSnapshot(currentRootId, currentSession)} rootId={currentRootId} interactionMode="drawer" onFileClick={(path) => {
-        const root = currentRootIdRef.current;
-        if (!root) return;
-        actionHandlers.open({ path, root });
-      }} /> : <div style={{ padding: "40px", textAlign: "center" }}>点击蓝点或发消息开始</div>}</BottomSheet>}
+      drawer={<BottomSheet isOpen={isDrawerOpen} onClose={() => setDrawerOpenForRoot(currentRootIdRef.current, false)} onExpand={() => { handleSelectSession(currentSession); setDrawerOpenForRoot(currentRootIdRef.current, false); }}>{drawerSessionSnapshot ? <SessionViewer session={drawerSessionSnapshot} rootId={currentRootId} interactionMode="drawer" onFileClick={handleDrawerSessionFileClick} /> : <div style={{ padding: "40px", textAlign: "center" }}>点击蓝点或发消息开始</div>}</BottomSheet>}
     />
   );
 }

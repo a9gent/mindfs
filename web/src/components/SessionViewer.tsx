@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { memo, useState, useEffect, useRef } from "react";
 import { useSessionStream, type TimelineItem } from "../hooks/useSessionStream";
 import { ThinkingBlock } from "./stream/ThinkingBlock";
 import { ToolCallCard } from "./stream/ToolCallCard";
@@ -130,16 +130,21 @@ function normalizeMarkdownContent(content: string): string {
   return content.replace(/([^\n])```/g, "$1\n```");
 }
 
-export function SessionViewer({ session, rootId, interactionMode = "main", onFileClick }: SessionViewerProps) {
+function SessionViewerInner({ session, rootId, interactionMode = "main", onFileClick }: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const onFileClickRef = useRef(onFileClick);
   const sessionKey = session?.key || session?.session_key || null;
   const exchanges = Array.isArray(session?.exchanges) ? session.exchanges : [];
   const { timeline, isStreaming } = useSessionStream(sessionKey, exchanges);
   const isAwaiting = !!(session as any)?.pending;
   const shouldStickToBottomRef = useRef(true);
   const lastSessionKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    onFileClickRef.current = onFileClick;
+  }, [onFileClick]);
 
   useEffect(() => {
     const container = scrollRef.current;
@@ -246,7 +251,7 @@ export function SessionViewer({ session, rootId, interactionMode = "main", onFil
                       <button
                         key={attachment.path}
                         type="button"
-                        onClick={() => onFileClick?.(attachment.path)}
+                        onClick={() => onFileClickRef.current?.(attachment.path)}
                         style={{
                           border: "none",
                           padding: 0,
@@ -277,7 +282,7 @@ export function SessionViewer({ session, rootId, interactionMode = "main", onFil
                       <button
                         key={attachment.path}
                         type="button"
-                        onClick={() => onFileClick?.(attachment.path)}
+                        onClick={() => onFileClickRef.current?.(attachment.path)}
                         style={{
                           display: "flex",
                           alignItems: "center",
@@ -313,7 +318,7 @@ export function SessionViewer({ session, rootId, interactionMode = "main", onFil
             <div style={{ color: "var(--text-primary)", fontSize: "15px", lineHeight: "1.7", width: "100%" }}>
               <MarkdownViewer
                 content={normalizeMarkdownContent(item.content || "")}
-                onFileClick={onFileClick}
+                onFileClick={onFileClickRef.current}
               />
             </div>
             {!hideAssistantMeta && (
@@ -363,7 +368,7 @@ export function SessionViewer({ session, rootId, interactionMode = "main", onFil
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                   {displayFiles.map((file, i) => (
-                    <div key={i} onClick={() => onFileClick?.(file.path)} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "3px 6px", borderRadius: "6px", cursor: "pointer", transition: "background 0.15s" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.04)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                    <div key={i} onClick={() => onFileClickRef.current?.(file.path)} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "3px 6px", borderRadius: "6px", cursor: "pointer", transition: "background 0.15s" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.04)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
                       <img src={`https://api.iconify.design/lucide:file-text.svg?color=%2394a3b8`} alt="file" style={{ width: 13, height: 13, flexShrink: 0 }} />
                       <div style={{ flex: 1, minWidth: 0, fontSize: "12px", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</div>
                     </div>
@@ -384,3 +389,9 @@ export function SessionViewer({ session, rootId, interactionMode = "main", onFil
     </div>
   );
 }
+
+export const SessionViewer = memo(SessionViewerInner, (prev, next) => (
+  prev.session === next.session &&
+  prev.rootId === next.rootId &&
+  prev.interactionMode === next.interactionMode
+));

@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { memo, useEffect, useState } from "react";
 
 type ThinkingBlockProps = {
   content: string;
   defaultExpanded?: boolean;
 };
 
-export function ThinkingBlock({ content, defaultExpanded = false }: ThinkingBlockProps) {
+export const ThinkingBlock = memo(function ThinkingBlock({ content, defaultExpanded = false }: ThinkingBlockProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   useEffect(() => {
     if (!defaultExpanded) {
@@ -84,4 +84,4 @@ export function ThinkingBlock({ content, defaultExpanded = false }: ThinkingBloc
       )}
     </div>
   );
-}
+});

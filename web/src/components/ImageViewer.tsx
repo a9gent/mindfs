@@ -1,14 +1,18 @@
-import React from "react";
+import React, { memo, useMemo } from "react";
 
 type ImageViewerProps = {
   path: string;
   root?: string;
 };
 
-export function ImageViewer({ path, root }: ImageViewerProps) {
-  const url = root
-    ? `/api/file?raw=1&root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`
-    : `/api/file?raw=1&path=${encodeURIComponent(path)}`;
+function ImageViewerInner({ path, root }: ImageViewerProps) {
+  const url = useMemo(
+    () =>
+      root
+        ? `/api/file?raw=1&root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`
+        : `/api/file?raw=1&path=${encodeURIComponent(path)}`,
+    [path, root]
+  );
   return (
     <div
       style={{
@@ -33,3 +37,7 @@ export function ImageViewer({ path, root }: ImageViewerProps) {
     </div>
   );
 }
+
+export const ImageViewer = memo(ImageViewerInner, (prev, next) => (
+  prev.path === next.path && prev.root === next.root
+));
