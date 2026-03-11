@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"io"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"mindfs/server/internal/api/usecase"
@@ -20,6 +22,11 @@ type HTTPHandler struct {
 	AppContext *AppContext
 }
 
+const (
+	maxUploadRequestBytes = 64 << 20
+	maxUploadFileCount    = 20
+)
+
 func (h *HTTPHandler) service() *usecase.Service {
 	return &usecase.Service{Registry: h.AppContext}
 }
@@ -31,6 +38,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/health", h.handleHealth)
 	r.Get("/api/tree", h.handleTree)
 	r.Get("/api/file", h.handleFile)
+	r.Post("/api/upload", h.handleUpload)
 	r.Get("/api/candidates", h.handleCandidates)
 	r.Get("/api/sessions", h.handleSessions)
 	r.Get("/api/sessions/{key}", h.handleSessionGet)
@@ -191,6 +199,11 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("read must be incremental or full"))
 		return
 	}
+	cachedMTime, err := parseOptionalTimeQuery(r, "mtime")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("mtime must be RFC3339"))
+		return
+	}
 	raw := r.URL.Query().Get("raw")
 	if raw == "1" {
 		rawOut, err := uc.OpenFileRaw(r.Context(), usecase.OpenFileRawInput{
@@ -213,6 +226,20 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 		io.Copy(w, rawOut.File)
 		return
 	}
+	if !cachedMTime.IsZero() {
+		info, err := uc.GetFileInfo(r.Context(), usecase.GetFileInfoInput{
+			RootID: rootID,
+			Path:   path,
+		})
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err)
+			return
+		}
+		if info.MTime.Equal(cachedMTime) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
 	out, err := uc.ReadFile(r.Context(), usecase.ReadFileInput{
 		RootID:   rootID,
 		Path:     path,
@@ -229,6 +256,83 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *HTTPHandler) handleUpload(w http.ResponseWriter, r *http.Request) {
+	rootID := strings.TrimSpace(r.URL.Query().Get("root"))
+	if rootID == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("root required"))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadRequestBytes)
+	if err := r.ParseMultipartForm(maxUploadRequestBytes); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid multipart form"))
+		return
+	}
+	if r.MultipartForm == nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("files required"))
+		return
+	}
+	fileHeaders := r.MultipartForm.File["files"]
+	if len(fileHeaders) == 0 {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("files required"))
+		return
+	}
+	if len(fileHeaders) > maxUploadFileCount {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("too many files"))
+		return
+	}
+	files, err := buildUploadFiles(fileHeaders)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	defer closeMultipartFiles(files)
+
+	uc := h.service()
+	out, err := uc.SaveUploadedFiles(r.Context(), usecase.SaveUploadedFilesInput{
+		RootID: rootID,
+		Dir:    strings.TrimSpace(r.FormValue("dir")),
+		Files:  files,
+	})
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "root not found") {
+			status = http.StatusNotFound
+		}
+		respondError(w, status, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"files": out.Files,
+	})
+}
+
+func buildUploadFiles(headers []*multipart.FileHeader) ([]usecase.UploadFile, error) {
+	files := make([]usecase.UploadFile, 0, len(headers))
+	for _, header := range headers {
+		file, err := header.Open()
+		if err != nil {
+			closeMultipartFiles(files)
+			return nil, errInvalidRequest("failed to open uploaded file")
+		}
+		files = append(files, usecase.UploadFile{
+			Name:        header.Filename,
+			ContentType: header.Header.Get("Content-Type"),
+			Reader:      file,
+		})
+	}
+	return files, nil
+}
+
+func closeMultipartFiles(files []usecase.UploadFile) {
+	for _, file := range files {
+		closer, ok := file.Reader.(io.Closer)
+		if !ok {
+			continue
+		}
+		_ = closer.Close()
+	}
+}
+
 func parseNonNegativeInt64Query(r *http.Request, key string) (int64, error) {
 	raw := strings.TrimSpace(r.URL.Query().Get(key))
 	if raw == "" {
@@ -239,6 +343,21 @@ func parseNonNegativeInt64Query(r *http.Request, key string) (int64, error) {
 		return 0, errInvalidRequest(key + " must be non-negative")
 	}
 	return value, nil
+}
+
+func parseOptionalTimeQuery(r *http.Request, key string) (time.Time, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	value, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		value, err = time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return time.Time{}, errInvalidRequest(key + " must be RFC3339")
+		}
+	}
+	return value.UTC(), nil
 }
 
 func (h *HTTPHandler) handleDirs(w http.ResponseWriter, _ *http.Request) {

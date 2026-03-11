@@ -241,6 +241,7 @@ type ReadResult struct {
 	Size       int64           `json:"size"`
 	Ext        string          `json:"ext"`
 	Mime       string          `json:"mime"`
+	MTime      time.Time       `json:"mtime"`
 	Root       string          `json:"root,omitempty"`
 	FileMeta   []FileMetaEntry `json:"file_meta,omitempty"`
 }
@@ -331,6 +332,7 @@ func (r RootInfo) ReadFile(pathRel string, maxBytes int64, cursor int64, readMod
 		Size:       info.Size(),
 		Ext:        ext,
 		Mime:       mimeType,
+		MTime:      info.ModTime().UTC(),
 	}, nil
 }
 
@@ -630,6 +632,25 @@ func (r RootInfo) OpenFile(pathRel string) (*os.File, os.FileInfo, string, error
 		return nil, nil, "", err
 	}
 	return file, info, relPath, nil
+}
+
+func (r RootInfo) StatFile(pathRel string) (os.FileInfo, string, error) {
+	resolved, err := r.resolveRelativePath(pathRel)
+	if err != nil {
+		return nil, "", err
+	}
+	relPath, err := r.relativeFromAbsolute(resolved)
+	if err != nil {
+		return nil, "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return nil, "", err
+	}
+	if info.IsDir() {
+		return nil, "", errors.New("path is a directory")
+	}
+	return info, relPath, nil
 }
 
 // State captures cursor/position info for a managed directory.

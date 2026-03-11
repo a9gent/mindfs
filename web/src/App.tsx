@@ -3,6 +3,8 @@ import { getViewModeSystemPrompt } from "./renderer/viewCatalog";
 import { Renderer } from "./renderer/Renderer";
 import { sessionService, type Session } from "./services/session";
 import { buildClientContext } from "./services/context";
+import { reportError } from "./services/error";
+import { uploadFiles } from "./services/upload";
 import { PluginManager, loadAllPlugins, type PluginInput } from "./plugins/manager";
 
 // 直接导入标准组件
@@ -24,6 +26,7 @@ type Exchange = { role: string; agent?: string; content?: string; timestamp?: st
 type PendingSend = { rootId: string; mode: SessionMode; agent: string; message: string; timestamp: string; };
 type URLState = { root: string; file: string; cursor: number; pluginQuery: Record<string, string> };
 const PLUGIN_QUERY_STORAGE_PREFIX = "vp-progress:";
+const READ_FILE_TOKEN_PATTERN = /\[read file:\s*[^\]]+\]/i;
 
 function normalizeMode(mode: SessionMode | undefined): SessionMode {
   if (mode === "plugin") return mode;
@@ -183,6 +186,18 @@ function parentDirsOfFile(path: string): string[] {
     dirs.push(parts.slice(0, i).join("/"));
   }
   return dirs;
+}
+
+function dirnameOfPath(path: string): string {
+  const normalized = normalizePath(path);
+  if (!normalized) return ".";
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.length <= 1) return ".";
+  return parts.slice(0, -1).join("/");
+}
+
+function hasExplicitFileContext(message: string): boolean {
+  return READ_FILE_TOKEN_PATTERN.test(message);
 }
 
 // Hook for responsive detection
@@ -481,6 +496,45 @@ export function App() {
     return { entries: [] };
   }, []);
 
+  const refreshTreeDir = useCallback(async (rootID: string, dirPath: string, syncMain: boolean) => {
+    try {
+      const res = await fetch(`/api/tree?root=${encodeURIComponent(rootID)}&dir=${encodeURIComponent(dirPath)}`);
+      if (!res.ok) return;
+      const payload = await res.json();
+      const parsed = normalizeTreeResponse(payload);
+      setEntriesByPath((prev) => ({ ...prev, [`${rootID}:${dirPath}`]: parsed.entries }));
+      if (syncMain) {
+        setMainEntries(parsed.entries);
+      }
+    } catch {
+    }
+  }, [normalizeTreeResponse]);
+
+  const handleTreeUpload = useCallback(async (files: File[]) => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID || files.length === 0) return;
+
+    const selectedDirPath = selectedDirRef.current === rootID ? "." : selectedDirRef.current;
+    const targetDir = selectedDirPath || (fileRef.current?.path ? dirnameOfPath(fileRef.current.path) : ".");
+    try {
+      await uploadFiles({
+        rootId: rootID,
+        dir: targetDir,
+        files,
+      });
+      const currentDir = (selectedDirRef.current === rootID ? "." : selectedDirRef.current) || ".";
+      const syncMain = rootID === currentRootIdRef.current && currentDir === targetDir;
+      await refreshTreeDir(rootID, targetDir, syncMain);
+      setExpanded((prev) => Array.from(new Set([
+        ...prev,
+        rootID,
+        targetDir === "." ? rootID : `${rootID}:${targetDir}`,
+      ])));
+    } catch (err) {
+      reportError("file.write_failed", String((err as Error)?.message || "上传文件失败"));
+    }
+  }, [refreshTreeDir]);
+
   const handleSelectSession = useCallback(async (session: any) => {
     const key = session?.key || session?.session_key;
     const targetRoot = (session?.root_id as string | undefined) || currentRootIdRef.current;
@@ -584,9 +638,10 @@ export function App() {
     if (!isBoundInMain) { setInteractionMode("drawer"); setDrawerOpenForRoot(activeRoot, true); }
     setDrawerSessionForRoot(activeRoot, { ...(session as any), pending: true } as Session);
     setFile(null);
+    const explicitFileContext = hasExplicitFileContext(message);
     const context = buildClientContext({
       currentRoot: activeRoot,
-      currentPath: fileRef.current?.path ?? selectedDirRef.current ?? undefined,
+      currentPath: explicitFileContext ? undefined : (fileRef.current?.path ?? selectedDirRef.current ?? undefined),
       pluginCatalog: effectiveMode === "plugin" ? getViewModeSystemPrompt() : undefined,
     });
     const sent = await sessionService.sendMessage(activeRoot, sendSessionKey, message, effectiveMode, effectiveAgent, context);
@@ -978,19 +1033,6 @@ export function App() {
       if (!selected || selected === rootID) return ".";
       return selected;
     };
-    const refreshDir = async (rootID: string, dirPath: string, syncMain: boolean) => {
-      try {
-        const res = await fetch(`/api/tree?root=${encodeURIComponent(rootID)}&dir=${encodeURIComponent(dirPath)}`);
-        if (!res.ok) return;
-        const payload = await res.json();
-        const parsed = normalizeTreeResponse(payload);
-        if (cancelled) return;
-        setEntriesByPath((prev) => ({ ...prev, [`${rootID}:${dirPath}`]: parsed.entries }));
-        if (syncMain) {
-          setMainEntries(parsed.entries);
-        }
-      } catch {}
-    };
     const handleFileChanged = (payload: any) => {
       const rootID = typeof payload?.root_id === "string" ? payload.root_id : "";
       const changedPath = typeof payload?.path === "string" ? payload.path : "";
@@ -998,7 +1040,7 @@ export function App() {
       const parentDir = dirname(changedPath);
       const currentDir = currentDirAPI(rootID);
       const syncMain = rootID === currentRootIdRef.current && parentDir === currentDir;
-      void refreshDir(rootID, parentDir, syncMain);
+      void refreshTreeDir(rootID, parentDir, syncMain);
     };
     const unsubscribeEvents = sessionService.subscribeEvents((event) => {
       const payload = (event.payload || {}) as any;
@@ -1016,7 +1058,7 @@ export function App() {
     });
     loadSessions(currentRootId);
     return () => { cancelled = true; unsubscribeEvents(); sessionService.disconnect(); setStatus("Disconnected"); };
-  }, [currentRootId, rootSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, rollbackInFlightReplyForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot]);
+  }, [currentRootId, rootSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, rollbackInFlightReplyForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot, refreshTreeDir]);
 
   useEffect(() => {
     if (!currentRootId) return;
@@ -1221,7 +1263,7 @@ export function App() {
     <AppShell
       leftOpen={isLeftOpen} rightOpen={isRightOpen}
       onCloseLeft={() => setIsLeftOpen(false)} onCloseRight={() => setIsRightOpen(false)}
-      sidebar={<FileTree entries={rootEntries} childrenByPath={entriesByPath} expanded={expanded} selectedPath={file?.path} rootId={currentRootId} managedRoots={managedRootIds} onSelectFile={(e, r) => { actionHandlers.open({path: e.path, root: r}); if (isMobile) setIsLeftOpen(false); }} onToggleDir={(e, r) => actionHandlers.open_dir({path: e.path, root: r, toggle: true})} />}
+      sidebar={<FileTree entries={rootEntries} childrenByPath={entriesByPath} expanded={expanded} selectedDir={selectedDir} selectedPath={file?.path} rootId={currentRootId} managedRoots={managedRootIds} onSelectFile={(e, r) => { actionHandlers.open({path: e.path, root: r}); if (isMobile) setIsLeftOpen(false); }} onToggleDir={(e, r) => actionHandlers.open_dir({path: e.path, root: r, toggle: true})} />}
       rightSidebar={<SessionList sessions={sessions} selectedKey={selectedSession?.key} onSelect={(s) => { handleSelectSession(s); if (isMobile) setIsRightOpen(false); }} />}
       main={
         <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", position: "relative" }}>
@@ -1233,6 +1275,7 @@ export function App() {
             {selectedSession ? (
               <SessionViewer
                 session={getSessionSnapshot(selectedSession.root_id || currentRootId, selectedSession)}
+                rootId={selectedSession.root_id || currentRootId}
                 onFileClick={(path) => {
                   const root = (selectedSession.root_id as string | undefined) || currentRootIdRef.current;
                   if (!root) return;
@@ -1329,6 +1372,7 @@ export function App() {
                 root={currentRootId || undefined}
                 path={selectedDir || ""}
                 entries={mainEntries}
+                onUploadFiles={handleTreeUpload}
                 onItemClick={(e) => e.is_dir ? actionHandlers.open_dir({ path: e.path }) : actionHandlers.open({ path: e.path })}
                 onPathClick={(path) => {
                   const root = currentRootIdRef.current;
@@ -1349,7 +1393,7 @@ export function App() {
         setInteractionMode("drawer");
         setDrawerOpenForRoot(rootID, !(drawerOpenByRootRef.current[rootID || ""] || false));
       }} />}
-      drawer={<BottomSheet isOpen={isDrawerOpen} onClose={() => setDrawerOpenForRoot(currentRootIdRef.current, false)} onExpand={() => { handleSelectSession(currentSession); setDrawerOpenForRoot(currentRootIdRef.current, false); }}>{currentSession ? <SessionViewer session={getSessionSnapshot(currentRootId, currentSession)} interactionMode="drawer" onFileClick={(path) => {
+      drawer={<BottomSheet isOpen={isDrawerOpen} onClose={() => setDrawerOpenForRoot(currentRootIdRef.current, false)} onExpand={() => { handleSelectSession(currentSession); setDrawerOpenForRoot(currentRootIdRef.current, false); }}>{currentSession ? <SessionViewer session={getSessionSnapshot(currentRootId, currentSession)} rootId={currentRootId} interactionMode="drawer" onFileClick={(path) => {
         const root = currentRootIdRef.current;
         if (!root) return;
         actionHandlers.open({ path, root });

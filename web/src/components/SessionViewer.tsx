@@ -28,9 +28,59 @@ type SessionItem = {
 
 type SessionViewerProps = {
   session: SessionItem | null;
+  rootId?: string | null;
   interactionMode?: "main" | "drawer";
   onFileClick?: (path: string) => void;
 };
+
+type UploadAttachment = {
+  path: string;
+  name: string;
+  isImage: boolean;
+};
+
+const uploadTokenPattern = /\[read file:\s*([^\]]+)\]/g;
+
+function basename(path: string): string {
+  const normalized = (path || "").replace(/\\/g, "/");
+  const parts = normalized.split("/");
+  return parts[parts.length - 1] || path;
+}
+
+function isImagePath(path: string): boolean {
+  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(path);
+}
+
+function extractUploadAttachments(content: string): UploadAttachment[] {
+  const attachments: UploadAttachment[] = [];
+  uploadTokenPattern.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = uploadTokenPattern.exec(content || "")) !== null) {
+    const path = match[1].trim();
+    attachments.push({
+      path,
+      name: basename(path),
+      isImage: isImagePath(path),
+    });
+  }
+  return attachments;
+}
+
+function stripImageAttachmentTokens(content: string): string {
+  if (!content) {
+    return "";
+  }
+  const stripped = content.replace(uploadTokenPattern, (fullMatch, rawPath: string) => {
+    const path = String(rawPath || "").trim();
+    if (!isImagePath(path)) {
+      return fullMatch;
+    }
+    return "";
+  });
+  return stripped
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^[\n\s]+|[\n\s]+$/g, "");
+}
 
 const formatTime = (isoString?: string) => {
   if (!isoString) return "";
@@ -80,7 +130,7 @@ function normalizeMarkdownContent(content: string): string {
   return content.replace(/([^\n])```/g, "$1\n```");
 }
 
-export function SessionViewer({ session, interactionMode = "main", onFileClick }: SessionViewerProps) {
+export function SessionViewer({ session, rootId, interactionMode = "main", onFileClick }: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const sessionKey = session?.key || session?.session_key || null;
@@ -141,14 +191,96 @@ export function SessionViewer({ session, interactionMode = "main", onFileClick }
     const hasFollowingAssistantFlow = !isUser && !!next && next.type !== "user_text";
     const hideAssistantMeta = !isUser && (hasFollowingAssistantFlow || (isStreaming && idx === timeline.length - 1));
     const time = formatTime(item.timestamp);
+    const uploadAttachments = isUser ? extractUploadAttachments(item.content || "") : [];
+    const imageAttachments = uploadAttachments.filter((attachment) => attachment.isImage);
+    const fileAttachments = uploadAttachments.filter((attachment) => !attachment.isImage);
+    const displayContent = isUser ? stripImageAttachmentTokens(item.content || "") : (item.content || "");
+    const userMessageWidth = imageAttachments.length > 0 ? "min(320px, 100%)" : "auto";
+    const hasRichUserAttachments = imageAttachments.length > 0 || fileAttachments.length > 0;
     return (
-      <div key={idx} style={{ alignSelf: isUser ? "flex-end" : "flex-start", width: isUser ? "auto" : "100%", maxWidth: isUser ? "80%" : "100%", position: "relative", display: 'flex', flexDirection: 'column' }}>
+      <div key={idx} style={{ alignSelf: isUser ? "flex-end" : "flex-start", width: isUser ? userMessageWidth : "100%", maxWidth: isUser ? "80%" : "100%", position: "relative", display: 'flex', flexDirection: 'column' }}>
         {isUser ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-            <div style={{ padding: "10px 16px", borderRadius: "18px 18px 4px 18px", background: "rgba(148,163,184,0.14)", color: "var(--text-primary)", fontSize: "14px", lineHeight: "1.5", boxShadow: "none", whiteSpace: "pre-wrap" }}>
-              <InlineTokenText content={item.content || ""} isDark={false} variant="inverse" />
-            </div>
-            <span style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5 }}>{time}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '6px', width: userMessageWidth }}>
+            {hasRichUserAttachments ? (
+              <div
+                style={{
+                  width: "100%",
+                  padding: "8px",
+                  borderRadius: "18px 18px 4px 18px",
+                  background: "rgba(148,163,184,0.14)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "8px",
+                  boxSizing: "border-box",
+                }}
+              >
+                {imageAttachments.length > 0 ? (
+                  <div style={{ display: "grid", gridTemplateColumns: imageAttachments.length > 1 ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)", gap: "8px", width: "100%" }}>
+                    {imageAttachments.map((attachment) => (
+                      <button
+                        key={attachment.path}
+                        type="button"
+                        onClick={() => onFileClick?.(attachment.path)}
+                        style={{
+                          border: "none",
+                          padding: 0,
+                          background: "transparent",
+                          cursor: "pointer",
+                          borderRadius: "12px",
+                          overflow: "hidden",
+                        }}
+                        title={attachment.name}
+                      >
+                        <img
+                          src={`/api/file?raw=1&root=${encodeURIComponent(rootId || "")}&path=${encodeURIComponent(attachment.path)}`}
+                          alt={attachment.name}
+                          style={{ display: "block", width: "100%", maxHeight: "220px", objectFit: "cover", background: "rgba(15,23,42,0.06)" }}
+                        />
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {displayContent ? (
+                  <div style={{ padding: imageAttachments.length > 0 ? "2px 6px 0" : "6px 8px", color: "var(--text-primary)", fontSize: "14px", lineHeight: "1.5", whiteSpace: "pre-wrap" }}>
+                    <InlineTokenText content={displayContent} isDark={false} variant="inverse" />
+                  </div>
+                ) : null}
+                {fileAttachments.length > 0 ? (
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: "6px", width: "100%" }}>
+                    {fileAttachments.map((attachment) => (
+                      <button
+                        key={attachment.path}
+                        type="button"
+                        onClick={() => onFileClick?.(attachment.path)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px",
+                          width: "100%",
+                          padding: "8px 10px",
+                          borderRadius: "12px",
+                          border: "none",
+                          background: "rgba(255,255,255,0.46)",
+                          color: "var(--text-primary)",
+                          cursor: "pointer",
+                          textAlign: "left",
+                        }}
+                        title={attachment.path}
+                      >
+                        <span style={{ fontSize: "14px" }}>📎</span>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{attachment.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {!hasRichUserAttachments && displayContent ? (
+              <div style={{ padding: "10px 16px", borderRadius: "18px 18px 4px 18px", background: "rgba(148,163,184,0.14)", color: "var(--text-primary)", fontSize: "14px", lineHeight: "1.5", boxShadow: "none", whiteSpace: "pre-wrap", alignSelf: "flex-end" }}>
+                <InlineTokenText content={displayContent} isDark={false} variant="inverse" />
+              </div>
+            ) : null}
+            <span style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, alignSelf: 'flex-end' }}>{time}</span>
           </div>
         ) : (
           <div style={{ width: "100%", display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>

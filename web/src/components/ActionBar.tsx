@@ -4,6 +4,8 @@ import { ModeSelector } from "./ModeSelector";
 import { AgentSelector } from "./AgentSelector";
 import { fetchAgents, type AgentStatus } from "../services/agents";
 import { fetchCandidates, type CandidateItem } from "../services/candidates";
+import { reportError } from "../services/error";
+import { uploadFiles } from "../services/upload";
 import TokenEditor, {
   type TokenEditorHandle,
 } from "./editor/TokenEditor";
@@ -16,12 +18,19 @@ type SessionInfo = {
   pending?: boolean;
 };
 
+type PendingAttachment = {
+  id: string;
+  file: File;
+  previewUrl?: string;
+  isImage: boolean;
+};
+
 type ActionBarProps = {
   status?: string;
   agentsVersion?: number;
   currentRootId?: string | null;
   currentSession?: SessionInfo | null;
-  onSendMessage?: (message: string, mode: SessionMode, agent: string) => void;
+  onSendMessage?: (message: string, mode: SessionMode, agent: string) => void | Promise<void>;
   onCancelCurrentTurn?: (sessionKey: string) => void;
   onNewSession?: () => void;
   onSessionClick?: () => void;
@@ -75,9 +84,11 @@ export function ActionBar({
   const [isDark, setIsDark] = useState(window.matchMedia("(prefers-color-scheme: dark)").matches);
   const [candidates, setCandidates] = useState<CandidateItem[]>([]);
   const [activeCandidateIndex, setActiveCandidateIndex] = useState(0);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const dragStartRef = useRef(0);
   const editorRef = useRef<TokenEditorHandle>(null);
   const candidateAbortRef = useRef<AbortController | null>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
   const { isMobile } = useResponsive();
   const isConnected = status === "Connected";
@@ -120,6 +131,16 @@ export function ActionBar({
   }, [agent, agents, currentSession]);
 
   useEffect(() => () => candidateAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    return () => {
+      pendingAttachments.forEach((attachment) => {
+        if (attachment.previewUrl) {
+          URL.revokeObjectURL(attachment.previewUrl);
+        }
+      });
+    };
+  }, []);
 
   useEffect(() => {
     if (!activeToken || !currentRootId || (activeToken.type === "skill" && !agent)) {
@@ -179,22 +200,50 @@ export function ActionBar({
   }, [activeToken, syncEditorHeight]);
 
   const handleSend = useCallback(async () => {
-    const payload = serializedInput.trim();
-    if (!payload || !isConnected || sending || !agent) return;
-    editorRef.current?.clear();
-    setSerializedInput("");
-    setActiveToken(null);
-    setCandidates([]);
-    setActiveCandidateIndex(0);
-    setIsMultiLine(false);
+    const messageText = serializedInput.trim();
+    if ((!messageText && pendingAttachments.length === 0) || !isConnected || sending || !agent) return;
     setSending(true);
     try {
+      let attachmentTokens = "";
+      if (pendingAttachments.length > 0) {
+        if (!currentRootId) {
+          reportError("file.write_failed", "当前未选择项目，无法上传附件");
+          return;
+        }
+        const uploaded = await uploadFiles({
+          rootId: currentRootId,
+          files: pendingAttachments.map((attachment) => attachment.file),
+        });
+        attachmentTokens = uploaded
+          .map((file) => `[read file: ${file.path}]`)
+          .join("\n");
+      }
+      const payload = [messageText, attachmentTokens].filter(Boolean).join("\n");
+      if (!payload) {
+        return;
+      }
       await onSendMessage?.(payload, mode, agent);
+      editorRef.current?.clear();
+      setSerializedInput("");
+      setActiveToken(null);
+      setCandidates([]);
+      setActiveCandidateIndex(0);
+      setPendingAttachments((prev) => {
+        prev.forEach((attachment) => {
+          if (attachment.previewUrl) {
+            URL.revokeObjectURL(attachment.previewUrl);
+          }
+        });
+        return [];
+      });
+      setIsMultiLine(false);
+    } catch (err) {
+      reportError("file.write_failed", String((err as Error)?.message || "附件上传失败"));
     } finally {
       setSending(false);
       requestAnimationFrame(() => editorRef.current?.focus());
     }
-  }, [serializedInput, isConnected, sending, agent, onSendMessage, mode]);
+  }, [serializedInput, pendingAttachments, isConnected, sending, agent, onSendMessage, mode, currentRootId]);
 
   const handleCancel = useCallback(async () => {
     const sessionKey = currentSession?.key;
@@ -291,11 +340,11 @@ export function ActionBar({
   }, [isDragging, handleDragEnd]);
 
   const isSelectedAgentUnavailable = agents.length > 0 ? agents.find((a) => a.name === agent)?.available === false : false;
-  const canSend = !!serializedInput.trim() && isConnected && !sending && !!agent && !isSelectedAgentUnavailable;
+  const canSend = (!!serializedInput.trim() || pendingAttachments.length > 0) && isConnected && !sending && !!agent && !isSelectedAgentUnavailable;
   const hasBoundSession = !!currentSession;
   const showCancel = !!currentSession?.pending && !!currentSession?.key;
   const isModeLocked = !!currentSession;
-  const editorRightInset = isMultiLine ? 14 : isMobile ? 96 : 120;
+  const editorRightInset = isMultiLine ? 14 : isMobile ? 124 : 148;
   const editorBottomInset = isMultiLine ? 44 : 12;
   const editorMinHeight = 44;
 
@@ -424,7 +473,6 @@ export function ActionBar({
                 style={{
                   width: "28px",
                   height: "28px",
-                  margin: isMobile ? "0 1px" : "0 4px",
                   cursor: "pointer",
                   transform: `translateX(${dragX}px)`,
                   transition: isDragging ? "none" : "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
@@ -472,6 +520,35 @@ export function ActionBar({
 
               <button
                 type="button"
+                onClick={() => attachmentInputRef.current?.click()}
+                disabled={!currentRootId || sending}
+                style={{
+                  width: "28px",
+                  height: "28px",
+                  borderRadius: "8px",
+                  border: "none",
+                  background: pendingAttachments.length > 0
+                    ? "rgba(59,130,246,0.14)"
+                    : "transparent",
+                  color: pendingAttachments.length > 0
+                    ? "var(--accent-color)"
+                    : "var(--text-secondary)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: !currentRootId || sending ? "not-allowed" : "pointer",
+                  opacity: !currentRootId || sending ? 0.35 : 1,
+                }}
+                title="添加附件"
+                aria-label="添加附件"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                  <path d="M12 5v14" />
+                  <path d="M5 12h14" />
+                </svg>
+              </button>
+              <button
+                type="button"
                 onClick={showCancel ? handleCancel : handleSend}
                 disabled={showCancel ? cancelling : !canSend}
                 style={{ width: "28px", height: "28px", borderRadius: "8px", border: "none", background: showCancel ? "rgba(239,68,68,0.14)" : (canSend ? "var(--accent-color)" : "transparent"), color: showCancel ? "#ef4444" : (canSend ? "#fff" : "var(--text-secondary)"), display: "flex", alignItems: "center", justifyContent: "center", cursor: showCancel ? (cancelling ? "wait" : "pointer") : (canSend ? "pointer" : "not-allowed"), transition: "all 0.2s", opacity: showCancel ? 1 : (canSend ? 1 : 0.3) }}
@@ -484,6 +561,30 @@ export function ActionBar({
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
                 )}
               </button>
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                multiple
+                style={{ display: "none" }}
+                onChange={(event) => {
+                  const selectedFiles = Array.from(event.target.files || []);
+                  if (selectedFiles.length > 0) {
+                    setPendingAttachments((prev) => [
+                      ...prev,
+                      ...selectedFiles.map((file) => {
+                        const isImage = file.type.startsWith("image/");
+                        return {
+                          id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
+                          file,
+                          isImage,
+                          previewUrl: isImage ? URL.createObjectURL(file) : undefined,
+                        };
+                      }),
+                    ]);
+                  }
+                  event.currentTarget.value = "";
+                }}
+              />
             </div>
           </div>
 
@@ -503,6 +604,111 @@ export function ActionBar({
             </button>
           ) : null}
         </div>
+        {pendingAttachments.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px", padding: isMobile ? "6px 4px 0" : "0 4px" }}>
+            {pendingAttachments.some((attachment) => attachment.isImage) ? (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(72px, 1fr))", gap: "8px" }}>
+                {pendingAttachments
+                  .filter((attachment) => attachment.isImage && attachment.previewUrl)
+                  .map((attachment) => (
+                    <div
+                      key={attachment.id}
+                      style={{
+                        position: "relative",
+                        borderRadius: "12px",
+                        overflow: "hidden",
+                        background: isDark ? "rgba(15,23,42,0.55)" : "rgba(15,23,42,0.06)",
+                        aspectRatio: "1 / 1",
+                      }}
+                    >
+                      <img
+                        src={attachment.previewUrl}
+                        alt={attachment.file.name}
+                        style={{ display: "block", width: "100%", height: "100%", objectFit: "cover" }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPendingAttachments((prev) => {
+                            const target = prev.find((item) => item.id === attachment.id);
+                            if (target?.previewUrl) {
+                              URL.revokeObjectURL(target.previewUrl);
+                            }
+                            return prev.filter((item) => item.id !== attachment.id);
+                          });
+                        }}
+                        style={{
+                          position: "absolute",
+                          top: "6px",
+                          right: "6px",
+                          width: "22px",
+                          height: "22px",
+                          borderRadius: "999px",
+                          border: "none",
+                          background: "rgba(15,23,42,0.72)",
+                          color: "#fff",
+                          cursor: "pointer",
+                          lineHeight: 1,
+                          fontSize: "14px",
+                        }}
+                        aria-label={`移除附件 ${attachment.file.name}`}
+                        title={`移除 ${attachment.file.name}`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            ) : null}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+              {pendingAttachments
+                .filter((attachment) => !attachment.isImage)
+                .map((attachment) => (
+              <span
+                key={attachment.id}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  maxWidth: "220px",
+                  padding: "4px 8px",
+                  borderRadius: "999px",
+                  background: isDark ? "rgba(59,130,246,0.14)" : "rgba(59,130,246,0.08)",
+                  color: "var(--text-primary)",
+                  fontSize: "12px",
+                }}
+              >
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{attachment.file.name}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingAttachments((prev) => {
+                      const target = prev.find((item) => item.id === attachment.id);
+                      if (target?.previewUrl) {
+                        URL.revokeObjectURL(target.previewUrl);
+                      }
+                      return prev.filter((item) => item.id !== attachment.id);
+                    });
+                  }}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: "var(--text-secondary)",
+                    cursor: "pointer",
+                    padding: 0,
+                    lineHeight: 1,
+                    fontSize: "14px",
+                  }}
+                  aria-label={`移除附件 ${attachment.file.name}`}
+                  title={`移除 ${attachment.file.name}`}
+                >
+                  ×
+                </button>
+              </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
       <style>{`
         @keyframes spin {

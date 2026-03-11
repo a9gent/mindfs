@@ -213,15 +213,21 @@ type Exchange struct {
 建议新增统一上传接口：
 
 ```text
-POST /api/upload?root=<rootId>&mode=<dir|attachment>
+POST /api/upload?root=<rootId>
 ```
 
 `multipart/form-data` 参数：
 
 - `files`: 一个或多个文件
-- `dir`: 当前目录，相对 root 路径；仅 `mode=dir` 时必填
+- `dir`: 可选，目标目录，相对 root 路径；不传时默认上传到 `.mindfs/upload/YYYY-MM-DD/`
 
-### mode=dir
+规则：
+
+- 传 `dir`：把文件保存到指定目录
+- 不传 `dir`：把文件保存到 `.mindfs/upload/YYYY-MM-DD/`
+- 如果要上传到 root 根目录，显式传 `dir=.`
+
+### 目录上传
 
 语义：
 
@@ -248,7 +254,7 @@ POST /api/upload?root=<rootId>&mode=<dir|attachment>
 }
 ```
 
-### mode=attachment
+### 输入附件上传
 
 语义：
 
@@ -256,7 +262,7 @@ POST /api/upload?root=<rootId>&mode=<dir|attachment>
 
 约束：
 
-- 忽略 `dir`
+- 不传 `dir`
 - 支持多文件
 - 不关联 session
 
@@ -304,7 +310,7 @@ POST /api/upload?root=<rootId>&mode=<dir|attachment>
 1. 文件选择入口
 2. 多文件上传
 3. 发送前暂存待上传文件
-4. 发送时先调用 `mode=attachment`
+4. 发送时调用不带 `dir` 的上传接口
 5. 上传结果转 `[read file: ...]` token，并与原始输入拼接后发送
 
 ### SessionViewer
@@ -386,7 +392,7 @@ image (2).png
 ## 推荐实施顺序
 
 1. 后端新增统一上传接口
-2. 目录视图接入 `mode=dir`
+2. 目录视图接入传 `dir` 的上传调用
 3. ActionBar 接入待上传文件暂存
-4. 发送链路接入 `mode=attachment` 并生成 token
+4. 发送链路接入不传 `dir` 的上传调用并生成 token
 5. SessionViewer 增加图片附件展示

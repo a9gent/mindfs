@@ -551,6 +551,11 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	})
 	var responseText string
 	sess.OnUpdate(func(update agenttypes.Event) {
+		if update.Type == agenttypes.EventTypeMessageChunk {
+			if chunk, ok := update.Data.(agenttypes.MessageChunk); ok && chunk.IsLowValue() {
+				return
+			}
+		}
 		if update.Type == agenttypes.EventTypeToolCall {
 			if toolCall, ok := update.Data.(agenttypes.ToolCall); ok && toolCall.IsWriteOperation() {
 				for _, path := range toolCall.GetAffectedPaths() {
