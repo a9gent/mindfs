@@ -105,7 +105,7 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick }: F
   const relatedSessions = normalizeRelatedSessions((file as any).file_meta);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "transparent" }}>
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, background: "transparent" }}>
       <header style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "10px", background: "transparent", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", overflow: "hidden", flex: 1, minWidth: 0 }}>
           <Breadcrumbs root={file.root} path={file.path} onPathClick={onPathClick} />
@@ -170,8 +170,8 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick }: F
         <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px", flexShrink: 0, opacity: 0.7 }}>{(file.size / 1024).toFixed(1)} KB</div>
       </header>
 
-      <div style={{ flex: 1, overflow: "auto", position: "relative" }}>
-        <div style={{ minWidth: "100%", minHeight: "100%", display: "inline-block", background: "transparent" }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", position: "relative", WebkitOverflowScrolling: "touch" }}>
+        <div style={{ minWidth: "100%", display: "block", background: "transparent" }}>
           {file.mime?.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].includes(ext.toLowerCase()) ? (
             <div style={{ padding: "24px 16px" }}><ImageViewer path={file.path} root={file.root} /></div>
           ) : file.encoding === "binary" ? (

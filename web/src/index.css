@@ -51,10 +51,13 @@ body {
   background: linear-gradient(135deg, var(--bg-gradient-start), var(--bg-gradient-end));
   color: var(--text-primary);
   overflow: hidden;
+  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 #root {
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
 }
 
@@ -119,6 +122,125 @@ body[data-plugin-theme="1"] [data-slot="dialog-content"] {
   box-shadow: var(--vp-shadow) !important;
   opacity: 1 !important;
   backdrop-filter: none !important;
+}
+
+@media (max-width: 767px) {
+  body[data-plugin-theme="1"] [data-slot="dialog-content"] {
+    top: 50dvh !important;
+    left: 50vw !important;
+    right: auto !important;
+    bottom: auto !important;
+    width: min(20rem, calc(100vw - 1rem)) !important;
+    max-width: min(20rem, calc(100vw - 1rem)) !important;
+    max-height: min(80dvh, 32rem) !important;
+    padding: 1rem !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    transform: translate(-50%, -50%) !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="drawer-content"] {
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    max-height: min(85dvh, 42rem) !important;
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem) !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="popover-content"],
+  body[data-plugin-theme="1"] [data-slot="dropdown-menu-content"],
+  body[data-plugin-theme="1"] [data-slot="select-content"] {
+    width: min(22rem, calc(100vw - 1rem)) !important;
+    max-width: min(22rem, calc(100vw - 1rem)) !important;
+    max-height: min(70dvh, 28rem) !important;
+    overflow-y: auto !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="tooltip-content"] {
+    display: none !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="button"],
+  body[data-plugin-theme="1"] [data-slot="pagination-link"],
+  body[data-plugin-theme="1"] [data-slot="tabs-trigger"],
+  body[data-plugin-theme="1"] [data-slot="toggle"],
+  body[data-plugin-theme="1"] [data-slot="toggle-group-item"],
+  body[data-plugin-theme="1"] [data-slot="select-trigger"] {
+    min-height: 2.5rem !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="button"] {
+    white-space: normal !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="pagination-content"] {
+    flex-wrap: wrap !important;
+    row-gap: 0.5rem !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="tabs-list"] {
+    width: 100% !important;
+    justify-content: flex-start !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="toggle-group"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="toggle-group-item"] {
+    flex: 0 0 auto !important;
+    white-space: nowrap !important;
+  }
+
+  body[data-plugin-theme="1"] .plugin-shadcn-sandbox div.inline-flex.rounded-md.border.border-border {
+    display: flex !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  body[data-plugin-theme="1"] .plugin-shadcn-sandbox div.inline-flex.rounded-md.border.border-border > button {
+    flex: 0 0 auto !important;
+    min-height: 2.5rem !important;
+    white-space: nowrap !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="table-container"] {
+    width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="table"] {
+    min-width: max-content !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="table-head"],
+  body[data-plugin-theme="1"] [data-slot="table-cell"] {
+    white-space: nowrap !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="input"],
+  body[data-plugin-theme="1"] [data-slot="textarea"],
+  body[data-plugin-theme="1"] [data-slot="select-trigger"] {
+    font-size: 16px !important;
+  }
+
+  body[data-plugin-theme="1"] [data-slot="carousel-previous"],
+  body[data-plugin-theme="1"] [data-slot="carousel-next"] {
+    display: none !important;
+  }
 }
 
 .token-editor-input {

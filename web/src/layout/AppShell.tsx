@@ -70,6 +70,7 @@ const footerStyle: React.CSSProperties = {
   justifyContent: "center",
   background: "var(--content-bg)",
   zIndex: 100,
+  paddingBottom: "env(safe-area-inset-bottom, 0px)",
 };
 
 export function AppShell({
@@ -89,16 +90,32 @@ export function AppShell({
   onCloseRight?: () => void;
 }) {
   const { isMobile, isTablet } = useResponsive();
+  const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
+
+  useEffect(() => {
+    const updateViewportHeight = () => {
+      setViewportHeight(window.innerHeight);
+    };
+    updateViewportHeight();
+    window.addEventListener("resize", updateViewportHeight);
+    window.visualViewport?.addEventListener("resize", updateViewportHeight);
+    return () => {
+      window.removeEventListener("resize", updateViewportHeight);
+      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
+    };
+  }, []);
   
   const sidebarWidth = isMobile ? "0px" : (isTablet ? "200px" : "260px");
   const rightWidth = isMobile ? "0px" : (rightSidebar ? (isTablet ? "240px" : "280px") : "0px");
 
   const shellStyle: React.CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: `${leftOpen ? sidebarWidth : "0px"} 1fr ${rightOpen ? rightWidth : "0px"}`,
-    gridTemplateRows: "1fr auto",
-    gridTemplateAreas: `"sidebar main right" "sidebar footer right"`,
-    height: "100vh",
+    display: isMobile ? "flex" : "grid",
+    flexDirection: isMobile ? "column" : undefined,
+    gridTemplateColumns: isMobile ? undefined : `${leftOpen ? sidebarWidth : "0px"} 1fr ${rightOpen ? rightWidth : "0px"}`,
+    gridTemplateRows: isMobile ? undefined : "1fr auto",
+    gridTemplateAreas: isMobile ? undefined : `"sidebar main right" "sidebar footer right"`,
+    minHeight: isMobile ? `${viewportHeight}px` : "100vh",
+    height: isMobile ? `${viewportHeight}px` : "100dvh",
     background: "var(--bg-gradient-start, #f3f4f6)",
     color: "var(--text-primary)",
     position: "relative",
@@ -140,7 +157,17 @@ export function AppShell({
         {sidebar}
       </aside>
 
-      <main style={mainStyle}>
+      <main
+        style={
+          isMobile
+            ? {
+                ...mainStyle,
+                flex: 1,
+                minHeight: 0,
+              }
+            : mainStyle
+        }
+      >
         {main}
         {/* 将抽屉层放入主视图内部，确保绝对定位时能精准对齐主视图宽度 */}
         {drawer}
@@ -150,7 +177,17 @@ export function AppShell({
         {rightSidebar}
       </aside>
 
-      <footer style={footerStyle}>
+      <footer
+        style={
+          isMobile
+            ? {
+                ...footerStyle,
+                flexShrink: 0,
+                paddingBottom: "env(safe-area-inset-bottom, 0px)",
+              }
+            : footerStyle
+        }
+      >
         {footer}
       </footer>
     </div>

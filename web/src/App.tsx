@@ -246,8 +246,8 @@ export function App() {
   const [agentsVersion, setAgentsVersion] = useState(0);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const { isMobile } = useResponsive();
-  const [isLeftOpen, setIsLeftOpen] = useState(!isMobile);
-  const [isRightOpen, setIsRightOpen] = useState(!isMobile);
+  const [isLeftOpen, setIsLeftOpen] = useState(() => window.innerWidth >= 768);
+  const [isRightOpen, setIsRightOpen] = useState(() => window.innerWidth >= 768);
   const [currentRootId, setCurrentRootId] = useState<string | null>(null);
   const currentRootIdRef = useRef<string | null>(null);
   const [managedRootIds, setManagedRootIds] = useState<string[]>([]);
@@ -1259,12 +1259,12 @@ export function App() {
       sidebar={<FileTree entries={rootEntries} childrenByPath={entriesByPath} expanded={expanded} selectedDir={selectedDir} selectedPath={file?.path} rootId={currentRootId} managedRoots={managedRootIds} onSelectFile={(e, r) => { actionHandlers.open({path: e.path, root: r}); if (isMobile) setIsLeftOpen(false); }} onToggleDir={(e, r) => actionHandlers.open_dir({path: e.path, root: r, toggle: true})} />}
       rightSidebar={<SessionList sessions={sessions} selectedKey={selectedSession?.key} onSelect={(s) => { handleSelectSession(s); if (isMobile) setIsRightOpen(false); }} />}
       main={
-        <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", position: "relative" }}>
+        <div style={{ width: "100%", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
           {!isMobile && <div style={{ position: "absolute", top: "10px", left: isMobile ? "10px" : (isLeftOpen ? "-40px" : "10px"), right: isMobile ? "10px" : (isRightOpen ? "-40px" : "10px"), display: "flex", justifyContent: "space-between", pointerEvents: "none", zIndex: 100 }}>
             <button onClick={() => setIsLeftOpen(!isLeftOpen)} style={{ pointerEvents: "auto", background: "var(--content-bg)", border: "1px solid var(--border-color)", borderRadius: "8px", width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: isLeftOpen && !isMobile ? 0 : 1 }}>📁</button>
             <button onClick={() => setIsRightOpen(!isRightOpen)} style={{ pointerEvents: "auto", background: "var(--content-bg)", border: "1px solid var(--border-color)", borderRadius: "8px", width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: isRightOpen && !isMobile ? 0 : 1 }}>🕒</button>
           </div>}
-          <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             {selectedSession ? (
               <SessionViewer
                 session={getSessionSnapshot(selectedSession.root_id || currentRootId, selectedSession)}
@@ -1277,7 +1277,7 @@ export function App() {
               />
             ) : file ? (
               pluginRender && pluginRender.output ? (
-                <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+                <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
                   <div style={{ height: "36px", borderBottom: "1px solid var(--border-color)", padding: "0 12px", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "var(--text-secondary)" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span>🧩</span>
@@ -1292,7 +1292,7 @@ export function App() {
                       原始文件
                     </button>
                   </div>
-                  <div className="plugin-shadcn-sandbox" style={{ ...pluginThemeVars, flex: 1, overflow: "auto", padding: 12 }}>
+                  <div className="plugin-shadcn-sandbox" style={{ ...pluginThemeVars, flex: 1, minHeight: 0, overflow: "auto", padding: 12 }}>
                     <Renderer
                       key={pluginRendererKey}
                       tree={pluginRender.output.tree as any}
@@ -1302,7 +1302,7 @@ export function App() {
                   </div>
                 </div>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+                <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
                   {pluginBypass && matchedPlugin ? (
                     <div style={{ borderBottom: "1px solid var(--border-color)", padding: "8px 12px", fontSize: 12, color: "var(--text-secondary)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <span>已切换为原始文件视图（插件：{matchedPlugin.name}）</span>

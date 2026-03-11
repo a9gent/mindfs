@@ -349,7 +349,7 @@ export function ActionBar({
   const editorMinHeight = 44;
 
   return (
-    <div style={{ width: "100%", padding: isMobile ? "0" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
+    <div style={{ width: "100%", padding: isMobile ? "0 0 calc(env(safe-area-inset-bottom, 0px) + 2px)" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
       <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: isMobile ? "0" : "6px" }}>
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "28px 1fr 28px" : "1fr", alignItems: "center", gap: isMobile ? "1px" : 0, padding: isMobile ? "0 1px" : 0 }}>
           {isMobile ? (

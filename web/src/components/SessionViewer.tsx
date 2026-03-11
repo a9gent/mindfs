@@ -133,17 +133,43 @@ function normalizeMarkdownContent(content: string): string {
 export function SessionViewer({ session, rootId, interactionMode = "main", onFileClick }: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
   const scrollEndRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const sessionKey = session?.key || session?.session_key || null;
   const exchanges = Array.isArray(session?.exchanges) ? session.exchanges : [];
   const { timeline, isStreaming } = useSessionStream(sessionKey, exchanges);
   const isAwaiting = !!(session as any)?.pending;
+  const shouldStickToBottomRef = useRef(true);
+  const lastSessionKeyRef = useRef<string | null>(null);
 
-  // 自动滚动
   useEffect(() => {
-    if (scrollEndRef.current) {
-      scrollEndRef.current.scrollIntoView({ behavior: "auto" });
+    const container = scrollRef.current;
+    if (!container || !scrollEndRef.current) {
+      return;
     }
-  }, [session?.key, session?.session_key, session?.exchanges, timeline, isStreaming]);
+    const nextKey = sessionKey;
+    const isSessionChanged = lastSessionKeyRef.current !== nextKey;
+    if (isSessionChanged) {
+      lastSessionKeyRef.current = nextKey;
+      shouldStickToBottomRef.current = true;
+    }
+    if (shouldStickToBottomRef.current) {
+      scrollEndRef.current.scrollIntoView({ behavior: "auto", block: "end" });
+    }
+  }, [sessionKey, timeline, isStreaming]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const updateStickiness = () => {
+      const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop;
+      shouldStickToBottomRef.current = distanceFromBottom < 32;
+    };
+    updateStickiness();
+    el.addEventListener("scroll", updateStickiness, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", updateStickiness);
+    };
+  }, [sessionKey]);
 
   if (!session) {
     return (
@@ -303,7 +329,7 @@ export function SessionViewer({ session, rootId, interactionMode = "main", onFil
   };
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "transparent" }}>
+    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "transparent" }}>
       {interactionMode === "drawer" ? null : (
         <header style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", background: "transparent", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
           <h1 style={{ fontSize: "14px", fontWeight: 600, margin: 0, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayName}</h1>
@@ -311,10 +337,9 @@ export function SessionViewer({ session, rootId, interactionMode = "main", onFil
       )}
 
       {/* 滚动容器 */}
-      <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", position: "relative" }}>
+      <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", position: "relative", WebkitOverflowScrolling: "touch" }}>
         <div style={{ 
           width: "100%",
-          minHeight: "100%", 
           display: "block", 
           padding: "24px 16px", 
           boxSizing: "border-box",

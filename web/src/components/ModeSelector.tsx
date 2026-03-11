@@ -35,14 +35,14 @@ export function ModeSelector({
   }, [disabled]);
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
+    const handlePointerOutside = (e: PointerEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setIsOpen(false);
       }
     };
     if (isOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
+      document.addEventListener("pointerdown", handlePointerOutside);
+      return () => document.removeEventListener("pointerdown", handlePointerOutside);
     }
   }, [isOpen]);
 
