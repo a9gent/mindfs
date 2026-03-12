@@ -160,37 +160,34 @@ body[data-plugin-theme="1"] [data-slot="dialog-content"] {
   backdrop-filter: none !important;
 }
 
-@media (max-width: 767px) {
-  body[data-plugin-theme="1"] [data-slot="dialog-content"] {
-    top: 50dvh !important;
-    left: 50vw !important;
-    right: auto !important;
-    bottom: auto !important;
-    width: min(20rem, calc(100vw - 1rem)) !important;
-    max-width: min(20rem, calc(100vw - 1rem)) !important;
-    max-height: min(80dvh, 32rem) !important;
-    padding: 1rem !important;
-    overflow-x: hidden !important;
-    overflow-y: auto !important;
-    transform: translate(-50%, -50%) !important;
-  }
+body[data-plugin-theme="1"] [data-slot="drawer-content"] {
+  background: var(--vp-surface-bg-elevated) !important;
+  color: var(--vp-text) !important;
+  border: 1px solid var(--vp-border) !important;
+  box-shadow: var(--vp-shadow) !important;
+  opacity: 1 !important;
+  backdrop-filter: none !important;
+}
 
+@media (max-width: 767px) {
   body[data-plugin-theme="1"] [data-slot="drawer-content"] {
     left: 0 !important;
     right: 0 !important;
     bottom: 0 !important;
-    width: 100vw !important;
-    max-width: 100vw !important;
-    max-height: min(85dvh, 42rem) !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: min(85vh, 42rem) !important;
+    border-bottom-left-radius: 0 !important;
+    border-bottom-right-radius: 0 !important;
     padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem) !important;
   }
 
   body[data-plugin-theme="1"] [data-slot="popover-content"],
   body[data-plugin-theme="1"] [data-slot="dropdown-menu-content"],
   body[data-plugin-theme="1"] [data-slot="select-content"] {
-    width: min(22rem, calc(100vw - 1rem)) !important;
-    max-width: min(22rem, calc(100vw - 1rem)) !important;
-    max-height: min(70dvh, 28rem) !important;
+    width: min(22rem, calc(100% - 1rem)) !important;
+    max-width: min(22rem, calc(100% - 1rem)) !important;
+    max-height: min(70vh, 28rem) !important;
     overflow-y: auto !important;
   }
 

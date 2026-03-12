@@ -57,6 +57,47 @@ return (
 目前的组件库混杂了布局组件和功能组件。重构后，不需要将 `Shell`, `Sidebar`, `Main` 注册给 JSON 解析器。
 `registry` 里只需要注册**允许 AI 或后端在“主视图”中使用的组件**，例如 `Container`, `AssociationView`, `Button`, `MarkdownViewer` 等。极大降低组件库的耦合。
 
+### 3.1 插件浮层组件的移动端兼容性约束
+本次 `txt-novel` 插件的“章节目录”问题暴露出一个额外约束：`json-render` 本身负责的是 JSON 到组件树的映射，真正的兼容性风险集中在 `@json-render/shadcn` 这类基于 Radix Portal 的浮层组件实现上，而不是 JSON 渲染机制本身。
+
+具体表现：
+1. `Dialog` 底层依赖 `fixed + transform + portal` 的桌面式居中弹层。
+2. QQ、Chrome、荣耀自带浏览器等移动端内核对这类定位组合的计算不一致，容易出现弹框跑到左上角、右下角、只显示局部等问题。
+3. 单纯依赖全局 CSS 去重写 `dialog-content` 的定位规则不稳定，经常是修好一个浏览器、另一个浏览器又异常。
+
+因此在重构后的 `registry` 设计中，需要把“移动端浮层策略”视为组件层职责，而不是插件个例：
+1. **移动端 `Dialog` 默认降级为 `Drawer`**。桌面端保留 `Dialog`，移动端统一走底部抽屉式交互。
+2. **插件主题样式必须同时覆盖 `dialog-content` 和 `drawer-content`**，避免移动端切换实现后出现透明、边框丢失、阴影缺失等表现不一致。
+3. **`Popover` / `DropdownMenu` / `Select` 等 Portal 浮层只做尺寸和滚动约束，不强改定位**，减少浏览器兼容性抖动。
+
+这个约束说明：`registry.tsx` 不只是“把组件暴露给 JSON 使用”，还承担了“按端能力选择稳定实现”的职责。后续如果继续扩展 `@json-render/shadcn` 组件，应优先在 registry 层做响应式包装，而不是在插件 CSS 中做浏览器定向修补。
+
+### 3.2 对 `6bc57a7` 这次移动端适配提交的补充复盘
+`6bc57a7 (adapt for mobile browser: plugin component, input bar)` 做了一次重要但不完全的移动端适配，值得单独记录：
+
+1. **它解决的是插件组件“可用性”问题**。该提交在 `web/src/index.css` 中为插件视图补充了移动端样式约束，包括：
+   - `Dialog` / `Drawer` / `Popover` / `DropdownMenu` / `Select` 的尺寸限制
+   - `Tabs` / `ToggleGroup` / 表格等横向滚动处理
+   - 输入框字号、按钮最小点击面积、分页换行等触屏友好性调整
+2. **它同时暴露了插件浮层“实现策略”问题**。提交中对 `dialog-content` 使用了全局 CSS 重写，试图通过移动端强制居中规则修复弹框体验：
+   - `top: 50dvh`
+   - `left: 50vw`
+   - `transform: translate(-50%, -50%)`
+   - `max-height: min(80dvh, 32rem)`
+3. **这套写法在主流移动浏览器上并不稳定**。QQ、Chrome、荣耀自带浏览器对 `dvh/vw + fixed + transform + portal` 的组合处理不一致，最终表现为：
+   - 弹框跑到左上角或右下角
+   - 只显示弹框局部
+   - 同一套 CSS 在不同浏览器上互相打架
+4. **因此，这次问题不是提交方向错误，而是修复层级选错了**：
+   - 该提交对 `Tabs`、表格、按钮、输入框、横向滚动等普通插件组件的适配思路是正确的
+   - 但 `Dialog` 这类 Portal 浮层不应继续依赖 CSS 层强改定位，而应在 registry / 组件层切换为更稳定的移动端实现
+
+这意味着后续对插件组件的移动端治理应分成两类：
+1. **普通组件**：继续沿用 `6bc57a7` 的 CSS 尺寸、滚动、触控优化思路。
+2. **Portal 浮层组件**：从 `6bc57a7` 的“CSS 定位修补”升级为“组件层响应式降级”，例如移动端 `Dialog -> Drawer`。
+
+从结果看，`6bc57a7` 可以视为“插件组件移动端适配的第一阶段”，它完成了基础可用性改造；而本次 `txt-novel` 目录问题则补齐了第二阶段结论：**浮层类组件必须在 registry 层做移动端实现分流，不能只靠 CSS 兜底。**
+
 ### 4. 彻底分离 Action 与 Props
 *   **静态外壳（文件树、会话列表等）**：直接使用标准 React 闭包回调，直接操作 `App.tsx` 中的 State。
 *   **定制化主视图 (`viewTree`)**：里面不再容忍任何 JS 函数，严格使用可序列化的 Action 定义（例如 `{"action": "open_file", "params": {"path": "..."}}`）。通过局部的 `<JSONUIProvider>` 中的 `actionHandlers` 来拦截并执行。
