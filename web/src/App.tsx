@@ -236,6 +236,11 @@ export function App() {
   const fileCursorRef = useRef<number>(0);
   const lastPluginResetFileKeyRef = useRef<string>("");
   const pluginBypassRef = useRef<boolean>(false);
+  const fileOpenRequestRef = useRef(0);
+  const fullUpgradeAttemptRef = useRef("");
+  const pluginsLoadedByRootRef = useRef<Record<string, boolean>>({});
+  const pluginsLoadingByRootRef = useRef<Record<string, Promise<void>>>({});
+  const didInitRef = useRef(false);
   
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionItem | null>(null);
@@ -675,6 +680,8 @@ export function App() {
 
   const actionHandlers = useMemo(() => ({
     open: async (params: any) => {
+      const requestId = ++fileOpenRequestRef.current;
+      const isStale = () => fileOpenRequestRef.current !== requestId;
       const parsedLocation = parseFileLocation(String(params.path || ""));
       const path = parsedLocation.path, root = params.root || currentRootIdRef.current;
       if (!path || !root) return;
@@ -734,6 +741,7 @@ export function App() {
           });
 
         let readMode: "incremental" | "full" = params.readMode === "full" ? "full" : "incremental";
+        let requiresFull = params.readMode === "full";
         if (params.readMode !== "full" && params.readMode !== "incremental") {
           const currentFilePath = fileRef.current?.path || "";
           const currentFileRoot = (fileRef.current?.root || currentRootIdRef.current || "");
@@ -750,6 +758,7 @@ export function App() {
           try {
             const plugin = pluginManagerRef.current.match(root, buildMatchInputFromPath(path, nextPluginQuery));
             readMode = inferReadModeFromPlugin(plugin);
+            requiresFull = readMode === "full";
           } catch {
             readMode = "incremental";
           }
@@ -761,7 +770,7 @@ export function App() {
           readMode,
           cursor,
         });
-        if (cached) {
+        if (cached && !isStale()) {
           setFile({
             ...cached,
             targetLine: parsedLocation.targetLine,
@@ -771,15 +780,17 @@ export function App() {
 
         let next: FilePayload | null;
         try {
-          // full-mode read can be heavy; keep UI responsive by fast fallback.
-          next = await fetchFileWithMode(readMode, readMode === "full" ? 1500 : undefined);
+          next = await fetchFileWithMode(readMode, requiresFull ? undefined : (readMode === "full" ? 1500 : undefined));
         } catch (err) {
-          if (readMode === "full") {
+          if (readMode === "full" && !requiresFull) {
             next = await fetchFileWithMode("incremental");
             readMode = "incremental";
           } else {
             throw err;
           }
+        }
+        if (isStale()) {
+          return;
         }
         if (next) {
           setFile({
@@ -797,10 +808,14 @@ export function App() {
       }
     },
     open_dir: async (params: any) => {
+      fileOpenRequestRef.current += 1;
       const path = params.path, rootParam = params.root || currentRootIdRef.current, isToggle = !!params.toggle;
       if (!path || !rootParam) return;
       const isActuallyRoot = managedRootIdsRef.current.has(path);
       const root = isActuallyRoot ? path : rootParam;
+      setFile(null);
+      setSelectedSession(null);
+      setMainEntries([]);
       if (currentRootIdRef.current !== root) {
         setCurrentRootId(root);
       }
@@ -824,6 +839,39 @@ export function App() {
       } catch {}
     }
   }), [isMobile, normalizeTreeResponse, setDrawerOpenForRoot, replaceURLState]);
+  const actionHandlersRef = useRef(actionHandlers);
+  useEffect(() => {
+    actionHandlersRef.current = actionHandlers;
+  }, [actionHandlers]);
+
+  const ensurePluginsLoaded = useCallback(async (rootId: string) => {
+    if (!rootId || pluginsLoadedByRootRef.current[rootId]) {
+      return;
+    }
+    const inflight = pluginsLoadingByRootRef.current[rootId];
+    if (inflight) {
+      await inflight;
+      return;
+    }
+    setPluginLoading(true);
+    const request = loadAllPlugins(rootId)
+      .then((plugins) => {
+        pluginManagerRef.current.set(rootId, plugins);
+        pluginsLoadedByRootRef.current[rootId] = true;
+        setPluginVersion((v) => v + 1);
+      })
+      .catch(() => {
+        pluginManagerRef.current.clear(rootId);
+        pluginsLoadedByRootRef.current[rootId] = true;
+        setPluginVersion((v) => v + 1);
+      })
+      .finally(() => {
+        delete pluginsLoadingByRootRef.current[rootId];
+        setPluginLoading(false);
+      });
+    pluginsLoadingByRootRef.current[rootId] = request;
+    await request;
+  }, []);
 
   const pluginHandlers = useMemo(
     () => ({
@@ -1055,30 +1103,18 @@ export function App() {
 
   useEffect(() => {
     if (!currentRootId) return;
-    let cancelled = false;
-    setPluginLoading(true);
-    loadAllPlugins(currentRootId)
-      .then((plugins) => {
-        if (cancelled) return;
-        pluginManagerRef.current.set(currentRootId, plugins);
-        setPluginVersion((v) => v + 1);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        pluginManagerRef.current.clear(currentRootId);
-        setPluginVersion((v) => v + 1);
-      })
-      .finally(() => {
-        if (!cancelled) setPluginLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [currentRootId]);
+    if (pluginsLoadedByRootRef.current[currentRootId]) return;
+    void ensurePluginsLoaded(currentRootId).catch(() => {
+    });
+  }, [currentRootId, ensurePluginsLoaded]);
 
   useEffect(() => {
+    if (didInitRef.current) {
+      return;
+    }
+    didInitRef.current = true;
     let cancelled = false;
-    fetch("/api/dirs").then(r => r.json()).then(dirs => {
+    fetch("/api/dirs").then(r => r.json()).then(async dirs => {
       if (cancelled || !dirs.length) return;
       const ids = dirs.map((d: any) => d.id);
       managedRootIdsRef.current = new Set(ids); setManagedRootIds(ids);
@@ -1092,13 +1128,15 @@ export function App() {
       setCurrentRootId(preferredRoot);
       setPluginQuery(urlState.pluginQuery);
       if (urlState.file) {
-        actionHandlers.open({ path: urlState.file, root: preferredRoot, cursor: urlState.cursor, preservePluginQuery: true });
+        await ensurePluginsLoaded(preferredRoot);
+        if (cancelled) return;
+        actionHandlersRef.current.open({ path: urlState.file, root: preferredRoot, cursor: urlState.cursor, preservePluginQuery: true });
       } else {
-        actionHandlers.open_dir({ path: preferredRoot, root: preferredRoot, preservePluginQuery: true });
+        actionHandlersRef.current.open_dir({ path: preferredRoot, root: preferredRoot, preservePluginQuery: true });
       }
     });
     return () => { cancelled = true; };
-  }, [actionHandlers]);
+  }, [ensurePluginsLoaded]);
 
   useEffect(() => {
     function handlePopState() {
@@ -1146,6 +1184,24 @@ export function App() {
     const input = toPluginInput(file, pluginQuery);
     return pluginManagerRef.current.match(currentRootId, input);
   }, [currentRootId, file, pluginVersion, pluginQuery]);
+
+  useEffect(() => {
+    if (!file || pluginBypass || !matchedPlugin) return;
+    if (inferReadModeFromPlugin(matchedPlugin) !== "full") return;
+    if (!file.truncated) return;
+    const root = file.root || currentRootId;
+    if (!root) return;
+    const upgradeKey = `${root}:${file.path}:${matchedPlugin.name}:${JSON.stringify(pluginQuery)}`;
+    if (fullUpgradeAttemptRef.current === upgradeKey) return;
+    fullUpgradeAttemptRef.current = upgradeKey;
+    void actionHandlers.open({
+      path: file.path,
+      root,
+      cursor: fileCursorRef.current || 0,
+      readMode: "full",
+      preservePluginQuery: true,
+    });
+  }, [file, pluginBypass, matchedPlugin, currentRootId, pluginQuery, actionHandlers]);
 
   const pluginRender = useMemo(() => {
     if (!file || pluginBypass || !matchedPlugin) return null;
