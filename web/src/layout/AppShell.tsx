@@ -132,7 +132,7 @@ export function AppShell({
     [side]: 0,
     width: "75vw",
     zIndex: 2000,
-    background: "var(--sidebar-bg)",
+    background: "var(--mobile-sidebar-bg, var(--sidebar-bg))",
     boxShadow: side === 'left' ? "4px 0 24px rgba(0,0,0,0.15)" : "-4px 0 24px rgba(0,0,0,0.15)",
     transition: "transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1)",
     display: "flex",

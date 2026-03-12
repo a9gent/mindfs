@@ -10,6 +10,7 @@
   --text-secondary: #475569; /* Better contrast */
   --border-color: rgba(0, 0, 0, 0.06);
   --sidebar-bg: rgba(255, 255, 255, 0.65);
+  --mobile-sidebar-bg: #ffffff;
   --content-bg: rgba(255, 255, 255, 0.85);
   --mobile-overlay-bg: #ffffff;
   --panel-bg: #ffffff;
@@ -34,6 +35,7 @@
     --text-secondary: #94A3B8;
     --border-color: rgba(255, 255, 255, 0.08);
     --sidebar-bg: #0f172a;
+    --mobile-sidebar-bg: #0f172a;
     --content-bg: #020617;
     --mobile-overlay-bg: #020617;
     --panel-bg: #0f172a;
