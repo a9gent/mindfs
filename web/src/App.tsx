@@ -346,6 +346,30 @@ export function App() {
     });
   }, []);
 
+  const updateSessionAgentForKey = useCallback((rootID: string, sessionKey: string, agent: string) => {
+    if (!rootID || !sessionKey || !agent) return;
+    const cacheKey = rootSessionKey(rootID, sessionKey);
+    const cached = sessionCacheRef.current[cacheKey];
+    if (cached) {
+      sessionCacheRef.current[cacheKey] = {
+        ...(cached as any),
+        agent,
+        updated_at: new Date().toISOString(),
+      } as Session;
+    }
+    setSelectedSession((prev) => {
+      const prevKey = prev?.key || prev?.session_key;
+      const prevRoot = (prev?.root_id as string | undefined) || currentRootIdRef.current;
+      if (!prev || prevKey !== sessionKey || prevRoot !== rootID) return prev;
+      return { ...(prev as any), agent } as SessionItem;
+    });
+    const current = drawerSessionByRootRef.current[rootID];
+    if (current && current.key === sessionKey && current.agent !== agent) {
+      setDrawerSessionForRoot(rootID, { ...(current as any), agent } as Session);
+    }
+    bumpCacheVersion();
+  }, [rootSessionKey, setDrawerSessionForRoot, bumpCacheVersion]);
+
   const resolveAgentForSession = useCallback((rootID: string, sessionKey: string, fallbackAgent?: string): string => {
     if (fallbackAgent) return fallbackAgent;
     const cacheKey = rootSessionKey(rootID, sessionKey);
@@ -611,6 +635,11 @@ export function App() {
     if (sendSessionKey && session) {
       effectiveMode = normalizeMode(session.type as any);
       effectiveAgent = agent || session.agent || "";
+      updateSessionAgentForKey(activeRoot, sendSessionKey, effectiveAgent);
+      session = {
+        ...(session as any),
+        agent: effectiveAgent,
+      } as Session;
       setBoundSessionForRoot(activeRoot, sendSessionKey);
       setSelectedPendingByKey(sendSessionKey, true);
       setDrawerSessionForRoot(activeRoot, { ...(session as any), pending: true } as Session);
@@ -657,7 +686,7 @@ export function App() {
         setDrawerSessionForRoot(activeRoot, { ...(latest as any), pending: false } as Session);
       }
     }
-  }, [activeBoundSessionKey, rootSessionKey, setSelectedPendingByKey, bumpCacheVersion, setBoundSessionForRoot, setDrawerOpenForRoot, setDrawerSessionForRoot]);
+  }, [activeBoundSessionKey, rootSessionKey, setSelectedPendingByKey, bumpCacheVersion, setBoundSessionForRoot, setDrawerOpenForRoot, setDrawerSessionForRoot, updateSessionAgentForKey]);
 
   const handleCancelCurrentTurn = useCallback(async (sessionKey: string) => {
     const activeRoot = currentRootIdRef.current;

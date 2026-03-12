@@ -86,6 +86,7 @@ export function ActionBar({
   const [activeCandidateIndex, setActiveCandidateIndex] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const dragStartRef = useRef(0);
+  const syncedSessionKeyRef = useRef<string | null>(null);
   const editorRef = useRef<TokenEditorHandle>(null);
   const candidateAbortRef = useRef<AbortController | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
@@ -102,11 +103,18 @@ export function ActionBar({
   }, []);
 
   useEffect(() => {
-    if (currentSession) {
-      const nextMode = currentSession.type === "plugin" ? "plugin" : "chat";
-      setMode(nextMode);
-      setAgent(currentSession.agent);
+    const sessionKey = currentSession?.key || currentSession?.session_key || null;
+    if (!currentSession) {
+      syncedSessionKeyRef.current = null;
+      return;
     }
+    if (syncedSessionKeyRef.current === sessionKey) {
+      return;
+    }
+    syncedSessionKeyRef.current = sessionKey;
+    const nextMode = currentSession.type === "plugin" ? "plugin" : "chat";
+    setMode(nextMode);
+    setAgent(currentSession.agent || "");
   }, [currentSession]);
 
   useEffect(() => {
