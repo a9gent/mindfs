@@ -6,6 +6,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 // HTTPHandler provides REST endpoints for health, tree, file, and action.
 type HTTPHandler struct {
 	AppContext *AppContext
+	StaticDir  string
 }
 
 const (
@@ -34,7 +36,7 @@ func (h *HTTPHandler) service() *usecase.Service {
 // Routes constructs the chi router with all endpoints.
 func (h *HTTPHandler) Routes() http.Handler {
 	r := chi.NewRouter()
-	r.Get("/", h.handleIndex)
+	r.Get("/", h.handleFrontend)
 	r.Get("/health", h.handleHealth)
 	r.Get("/api/tree", h.handleTree)
 	r.Get("/api/file", h.handleFile)
@@ -47,6 +49,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 
 	// Agent status API
 	r.Get("/api/agents", h.handleAgentsList)
+	r.NotFound(h.handleNotFound)
 
 	return r
 }
@@ -162,7 +165,10 @@ func (h *HTTPHandler) handleAgentsList(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, statuses)
 }
 
-func (h *HTTPHandler) handleIndex(w http.ResponseWriter, _ *http.Request) {
+func (h *HTTPHandler) handleFrontend(w http.ResponseWriter, r *http.Request) {
+	if h.serveStaticAsset(w, r) {
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(indexHTML))
 }
@@ -170,6 +176,53 @@ func (h *HTTPHandler) handleIndex(w http.ResponseWriter, _ *http.Request) {
 func (h *HTTPHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
+}
+
+func (h *HTTPHandler) handleNotFound(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" || r.URL.Path == "/ws" || r.URL.Path == "/health" {
+		http.NotFound(w, r)
+		return
+	}
+	h.handleFrontend(w, r)
+}
+
+func (h *HTTPHandler) serveStaticAsset(w http.ResponseWriter, r *http.Request) bool {
+	staticDir := strings.TrimSpace(h.StaticDir)
+	if staticDir == "" {
+		return false
+	}
+
+	cleanPath := pathForStaticAsset(r.URL.Path)
+	if cleanPath == "" {
+		cleanPath = "index.html"
+	}
+
+	assetPath := filepath.Join(staticDir, cleanPath)
+	if info, err := os.Stat(assetPath); err == nil && !info.IsDir() {
+		http.ServeFile(w, r, assetPath)
+		return true
+	}
+
+	if filepath.Ext(cleanPath) != "" {
+		http.NotFound(w, r)
+		return true
+	}
+
+	indexPath := filepath.Join(staticDir, "index.html")
+	if info, err := os.Stat(indexPath); err == nil && !info.IsDir() {
+		http.ServeFile(w, r, indexPath)
+		return true
+	}
+
+	return false
+}
+
+func pathForStaticAsset(requestPath string) string {
+	cleaned := filepath.Clean("/" + requestPath)
+	if cleaned == "/" {
+		return ""
+	}
+	return strings.TrimPrefix(cleaned, "/")
 }
 
 func (h *HTTPHandler) handleTree(w http.ResponseWriter, r *http.Request) {

@@ -24,6 +24,7 @@ func main() {
 	addr := flag.String("addr", ":7331", "listen address")
 	web := flag.Bool("web", true, "start web dev server")
 	webDir := flag.String("web-dir", "web", "web project directory")
+	staticDir := flag.String("static-dir", "web/dist", "directory for serving built web assets on the backend port")
 	flag.Parse()
 
 	root := "."
@@ -51,7 +52,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- app.Start(ctx, *addr)
+		errCh <- app.Start(ctx, *addr, app.StartOptions{StaticDir: *staticDir})
 	}()
 	if err := waitForServer(*addr, 8*time.Second); err != nil {
 		cancel()

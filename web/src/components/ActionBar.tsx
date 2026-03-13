@@ -86,7 +86,7 @@ export function ActionBar({
   const [activeCandidateIndex, setActiveCandidateIndex] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const dragStartRef = useRef(0);
-  const syncedSessionKeyRef = useRef<string | null>(null);
+  const syncedSessionSignatureRef = useRef<string>("");
   const editorRef = useRef<TokenEditorHandle>(null);
   const candidateAbortRef = useRef<AbortController | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
@@ -105,16 +105,18 @@ export function ActionBar({
   useEffect(() => {
     const sessionKey = currentSession?.key || currentSession?.session_key || null;
     if (!currentSession) {
-      syncedSessionKeyRef.current = null;
+      syncedSessionSignatureRef.current = "";
       return;
     }
-    if (syncedSessionKeyRef.current === sessionKey) {
-      return;
-    }
-    syncedSessionKeyRef.current = sessionKey;
     const nextMode = currentSession.type === "plugin" ? "plugin" : "chat";
+    const nextAgent = currentSession.agent || "";
+    const signature = `${sessionKey || ""}::${nextMode}::${nextAgent}`;
+    if (syncedSessionSignatureRef.current === signature) {
+      return;
+    }
+    syncedSessionSignatureRef.current = signature;
     setMode(nextMode);
-    setAgent(currentSession.agent || "");
+    setAgent(nextAgent);
   }, [currentSession]);
 
   useEffect(() => {

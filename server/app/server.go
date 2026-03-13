@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"net/http"
+	"os"
 	"time"
 
 	"mindfs/server/internal/agent"
@@ -10,8 +11,12 @@ import (
 	"mindfs/server/internal/fs"
 )
 
+type StartOptions struct {
+	StaticDir string
+}
+
 // Start boots the HTTP/WS server.
-func Start(ctx context.Context, addr string) error {
+func Start(ctx context.Context, addr string, opts StartOptions) error {
 	registry, err := fs.NewDefaultRegistry()
 	if err != nil {
 		return err
@@ -33,7 +38,10 @@ func Start(ctx context.Context, addr string) error {
 		Agents: agentPool,
 		Prober: agentProber,
 	}
-	httpHandler := &api.HTTPHandler{AppContext: services}
+	httpHandler := &api.HTTPHandler{
+		AppContext: services,
+		StaticDir:  resolveStaticDir(opts.StaticDir),
+	}
 	wsHandler := &api.WSHandler{AppContext: services}
 
 	mux := http.NewServeMux()
@@ -56,4 +64,14 @@ func Start(ctx context.Context, addr string) error {
 	}()
 
 	return server.ListenAndServe()
+}
+
+func resolveStaticDir(staticDir string) string {
+	if staticDir == "" {
+		return ""
+	}
+	if info, err := os.Stat(staticDir); err == nil && info.IsDir() {
+		return staticDir
+	}
+	return ""
 }

@@ -330,6 +330,27 @@ export function App() {
 
   const rootSessionKey = useCallback((rootId: string, sessionKey: string) => `${rootId}::${sessionKey}`, []);
   const bumpCacheVersion = useCallback(() => setCacheVersion((v) => v + 1), []);
+  const resolveRootForSessionKey = useCallback((sessionKey: string): string | null => {
+    if (!sessionKey) return null;
+    const currentRoot = currentRootIdRef.current;
+    if (currentRoot && sessionCacheRef.current[rootSessionKey(currentRoot, sessionKey)]) {
+      return currentRoot;
+    }
+    for (const [rootID, key] of Object.entries(boundSessionByRootRef.current)) {
+      if (key === sessionKey) {
+        return rootID;
+      }
+    }
+    for (const [rootID, session] of Object.entries(drawerSessionByRootRef.current)) {
+      if (session?.key === sessionKey) {
+        return rootID;
+      }
+    }
+    const suffix = `::${sessionKey}`;
+    const matched = Object.keys(sessionCacheRef.current).find((key) => key.endsWith(suffix));
+    if (!matched) return null;
+    return matched.slice(0, matched.length-suffix.length);
+  }, [rootSessionKey]);
   const getSessionSnapshot = useCallback((rootId: string | null | undefined, session: Session | SessionItem | null | undefined) => {
     if (!rootId || !session) return null;
     const key = (session as any).key || (session as any).session_key;
@@ -558,6 +579,20 @@ export function App() {
     const applySession = (fullSession: Session) => {
       sessionCacheRef.current[cacheKey] = fullSession;
       loadedSessionRef.current[cacheKey] = true;
+      setSelectedSession((prev) => {
+        const prevKey = prev?.key || prev?.session_key;
+        const prevRoot = (prev?.root_id as string | undefined) || currentRootIdRef.current;
+        if (prevKey !== key || prevRoot !== targetRoot) {
+          return prev;
+        }
+        return {
+          ...(prev as any),
+          ...(fullSession as any),
+          key,
+          session_key: key,
+          root_id: targetRoot,
+        } as SessionItem;
+      });
       if ((boundSessionByRootRef.current[targetRoot] || null) === key) {
         setDrawerSessionForRoot(targetRoot, fullSession);
       }
@@ -1131,11 +1166,17 @@ export function App() {
           }
           break;
         case "session.stream": handleSessionStream(payload); break;
-        case "session.done":
-          if (currentRootIdRef.current) {
+        case "session.done": {
+          const sessionKey = typeof payload?.session_key === "string" ? payload.session_key : "";
+          const rootID = resolveRootForSessionKey(sessionKey) || currentRootIdRef.current || "";
+          if (rootID && sessionKey) {
+            handleSessionStreamDone(rootID, sessionKey);
+            loadSessions(rootID);
+          } else if (currentRootIdRef.current) {
             loadSessions(currentRootIdRef.current);
           }
           break;
+        }
         case "session.user_message":
           if (typeof payload?.session_key === "string" && typeof payload?.root_id === "string") {
             const rootID = payload.root_id;
@@ -1181,7 +1222,7 @@ export function App() {
     });
     loadSessions(currentRootId);
     return () => { cancelled = true; unsubscribeEvents(); sessionService.disconnect(); setStatus("Disconnected"); };
-  }, [currentRootId, rootSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot, refreshTreeDir]);
+  }, [currentRootId, rootSessionKey, resolveRootForSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot, refreshTreeDir]);
 
   useEffect(() => {
     if (!currentRootId) return;

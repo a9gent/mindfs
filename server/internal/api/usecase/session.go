@@ -491,12 +491,17 @@ func (s *Service) ensureAgentSession(
 		return existing, nil
 	}
 
+	openCtx := pool.Context()
+	if openCtx == nil {
+		openCtx = ctx
+	}
+
 	openInput := agenttypes.OpenSessionInput{
 		SessionKey: poolSessionKey,
 		AgentName:  agentName,
 		RootPath:   rootAbs,
 	}
-	sess, err := pool.GetOrCreate(ctx, openInput)
+	sess, err := pool.GetOrCreate(openCtx, openInput)
 	if err != nil {
 		if prober := s.Registry.GetProber(); prober != nil {
 			prober.ReportFailure(agentName, err)
