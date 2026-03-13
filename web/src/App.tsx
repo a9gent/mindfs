@@ -24,7 +24,7 @@ type SessionMode = "chat" | "plugin";
 export type SessionItem = { key?: string; session_key?: string; root_id?: string; name?: string; type?: SessionMode; agent?: string; scope?: string; purpose?: string; closed_at?: string; related_files?: Array<{ path: string; name?: string }>; exchanges?: Array<{ role?: string; content?: string; timestamp?: string }>; pending?: boolean; };
 type Exchange = { role: string; agent?: string; content?: string; timestamp?: string; toolCall?: any; };
 type PendingSend = { rootId: string; mode: SessionMode; agent: string; message: string; timestamp: string; };
-type URLState = { root: string; file: string; cursor: number; pluginQuery: Record<string, string> };
+type URLState = { root: string; file: string; session: string; cursor: number; pluginQuery: Record<string, string> };
 const PLUGIN_QUERY_STORAGE_PREFIX = "vp-progress:";
 const READ_FILE_TOKEN_PATTERN = /\[read file:\s*[^\]]+\]/i;
 
@@ -67,6 +67,7 @@ function readURLState(): URLState {
   return {
     root: params.get("root") || "",
     file: params.get("file") || "",
+    session: params.get("session") || "",
     cursor: parseCursor(params.get("cursor")),
     pluginQuery: parsePluginQuery(window.location.search),
   };
@@ -76,6 +77,7 @@ function buildURLSearch(next: URLState): string {
   const params = new URLSearchParams();
   if (next.root) params.set("root", next.root);
   if (next.file) params.set("file", next.file);
+  if (next.session) params.set("session", next.session);
   if (next.cursor > 0) params.set("cursor", String(next.cursor));
   Object.entries(next.pluginQuery).forEach(([key, value]) => {
     if (!key) return;
@@ -241,6 +243,7 @@ export function App() {
   const pluginsLoadedByRootRef = useRef<Record<string, boolean>>({});
   const pluginsLoadingByRootRef = useRef<Record<string, Promise<void>>>({});
   const didInitRef = useRef(false);
+  const handleSelectSessionRef = useRef<((session: any) => Promise<void>) | null>(null);
   
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionItem | null>(null);
@@ -546,6 +549,7 @@ export function App() {
     const key = session?.key || session?.session_key;
     const targetRoot = (session?.root_id as string | undefined) || currentRootIdRef.current;
     if (!targetRoot || !key) return;
+    replaceURLState({ root: targetRoot, file: "", session: key, cursor: 0, pluginQuery: {} });
     setSelectedSession(session);
     setInteractionMode("main");
     setDrawerOpenForRoot(targetRoot, false);
@@ -587,7 +591,11 @@ export function App() {
         void sessionService.markSessionReady(targetRoot, key);
       }
     } catch (err) {}
-  }, [isMobile, rootSessionKey, bumpCacheVersion, setDrawerOpenForRoot, setDrawerSessionForRoot]);
+  }, [isMobile, rootSessionKey, bumpCacheVersion, setDrawerOpenForRoot, setDrawerSessionForRoot, replaceURLState]);
+
+  useEffect(() => {
+    handleSelectSessionRef.current = handleSelectSession;
+  }, [handleSelectSession]);
 
   const handleSendMessage = useCallback(async (message: string, mode: SessionMode, agent: string) => {
     const activeRoot = currentRootIdRef.current;
@@ -713,7 +721,7 @@ export function App() {
       // Priority: URL query > localStorage persisted query.
       const nextPluginQuery = preserveQuery ? { ...persistedQuery, ...urlQuery } : persistedQuery;
       setPluginQuery(nextPluginQuery);
-      replaceURLState({ root, file: path, cursor, pluginQuery: nextPluginQuery });
+      replaceURLState({ root, file: path, session: "", cursor, pluginQuery: nextPluginQuery });
       persistPluginQuery(String(root), String(path), nextPluginQuery);
 
       const expandAndLoadTreeForFile = async () => {
@@ -834,7 +842,7 @@ export function App() {
       const preserveQuery = !!params.preservePluginQuery;
       const nextPluginQuery = preserveQuery ? parsePluginQuery(window.location.search) : {};
       setPluginQuery(nextPluginQuery);
-      replaceURLState({ root, file: "", cursor: 0, pluginQuery: nextPluginQuery });
+      replaceURLState({ root, file: "", session: "", cursor: 0, pluginQuery: nextPluginQuery });
       try {
         const res = await fetch(`/api/tree?root=${encodeURIComponent(root)}&dir=${encodeURIComponent(apiDir)}`);
         const payload = await res.json();
@@ -932,6 +940,7 @@ export function App() {
         const nextState: URLState = {
           root: nextRoot || "",
           file: nextPath || "",
+          session: "",
           cursor: nextCursor,
           pluginQuery: nextPluginQuery,
         };
@@ -1200,7 +1209,10 @@ export function App() {
       const preferredRoot = urlState.root && ids.includes(urlState.root) ? urlState.root : ids[0];
       setCurrentRootId(preferredRoot);
       setPluginQuery(urlState.pluginQuery);
-      if (urlState.file) {
+      if (urlState.session) {
+        if (cancelled) return;
+        await handleSelectSessionRef.current?.({ key: urlState.session, session_key: urlState.session, root_id: preferredRoot });
+      } else if (urlState.file) {
         await ensurePluginsLoaded(preferredRoot);
         if (cancelled) return;
         actionHandlersRef.current.open({ path: urlState.file, root: preferredRoot, cursor: urlState.cursor, preservePluginQuery: true });
@@ -1219,6 +1231,14 @@ export function App() {
       }
       setPluginQuery(state.pluginQuery);
       if (!state.root) {
+        return;
+      }
+      if (state.session) {
+        const currentSessionKey = selectedSessionRef.current?.key || selectedSessionRef.current?.session_key || "";
+        const currentSessionRoot = (selectedSessionRef.current?.root_id as string | undefined) || currentRootIdRef.current || "";
+        if (state.session !== currentSessionKey || state.root !== currentSessionRoot) {
+          void handleSelectSessionRef.current?.({ key: state.session, session_key: state.session, root_id: state.root });
+        }
         return;
       }
       if (state.file) {
