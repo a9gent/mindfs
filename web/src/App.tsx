@@ -927,15 +927,15 @@ export function App() {
       if (!path || !rootParam) return;
       const isActuallyRoot = managedRootIdsRef.current.has(path);
       const root = isActuallyRoot ? path : rootParam;
-      if (currentRootIdRef.current !== root) {
-        setCurrentRootId(root);
-      }
       const expandedKey = isActuallyRoot ? path : `${root}:${path}`;
       const preserveQuery = !!params.preservePluginQuery;
       const nextPluginQuery = preserveQuery ? parsePluginQuery(window.location.search) : {};
       const loadDirectoryView = async (targetPath: string) => {
         const targetIsRoot = managedRootIdsRef.current.has(targetPath);
         const apiDir = targetIsRoot ? "." : targetPath;
+        if (currentRootIdRef.current !== root) {
+          setCurrentRootId(root);
+        }
         setFile(null);
         setSelectedSession(null);
         setMainEntries([]);
