@@ -217,7 +217,6 @@ func (m *Manager) AddRelatedFile(_ context.Context, key string, file RelatedFile
 		}
 	}
 	session.RelatedFiles = append(session.RelatedFiles, file)
-	session.UpdatedAt = m.now().UTC()
 	if err := m.upsertSessionMetaUnsafe(session); err != nil {
 		return err
 	}

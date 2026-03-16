@@ -201,6 +201,8 @@ type Entry struct {
 	Name  string `json:"name"`
 	Path  string `json:"path"`
 	IsDir bool   `json:"is_dir"`
+	Size  int64  `json:"size"`
+	MTime string `json:"mtime"`
 }
 
 func (r RootInfo) ListEntries(dirRelPath string) ([]Entry, error) {
@@ -220,7 +222,17 @@ func (r RootInfo) ListEntries(dirRelPath string) ([]Entry, error) {
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, Entry{Name: name, Path: relPath, IsDir: entry.IsDir()})
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, Entry{
+			Name:  name,
+			Path:  relPath,
+			IsDir: entry.IsDir(),
+			Size:  info.Size(),
+			MTime: info.ModTime().UTC().Format(time.RFC3339Nano),
+		})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].IsDir != result[j].IsDir {

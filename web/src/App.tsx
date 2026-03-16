@@ -5,6 +5,11 @@ import { sessionService, type Session } from "./services/session";
 import { buildClientContext } from "./services/context";
 import { reportError } from "./services/error";
 import { fetchFile, getCachedFile, invalidateFileCache, type FilePayload } from "./services/file";
+import {
+  DEFAULT_DIRECTORY_SORT_MODE,
+  type DirectorySortMode,
+  type FileEntry,
+} from "./services/directorySort";
 import { uploadFiles } from "./services/upload";
 import { PluginManager, loadAllPlugins, type PluginInput } from "./plugins/manager";
 
@@ -19,13 +24,14 @@ import { ActionBar } from "./components/ActionBar";
 import { BottomSheet } from "./components/BottomSheet";
 
 // 类型定义
-export type FileEntry = { name: string; path: string; is_dir: boolean; };
 type SessionMode = "chat" | "plugin";
 export type SessionItem = { key?: string; session_key?: string; root_id?: string; name?: string; type?: SessionMode; agent?: string; scope?: string; purpose?: string; closed_at?: string; related_files?: Array<{ path: string; name?: string }>; exchanges?: Array<{ role?: string; content?: string; timestamp?: string }>; pending?: boolean; };
 type Exchange = { role: string; agent?: string; content?: string; timestamp?: string; toolCall?: any; };
 type PendingSend = { rootId: string; mode: SessionMode; agent: string; message: string; timestamp: string; };
 type URLState = { root: string; file: string; session: string; cursor: number; pluginQuery: Record<string, string> };
 const PLUGIN_QUERY_STORAGE_PREFIX = "vp-progress:";
+const TREE_SORT_STORAGE_KEY = "mindfs-tree-sort-mode";
+const DIRECTORY_SORT_OVERRIDES_STORAGE_KEY = "mindfs-directory-sort-overrides";
 const READ_FILE_TOKEN_PATTERN = /\[read file:\s*[^\]]+\]/i;
 
 function normalizeMode(mode: SessionMode | undefined): SessionMode {
@@ -60,6 +66,15 @@ function normalizeCursor(value: unknown): number | null {
     return 0;
   }
   return parsed;
+}
+
+function isDirectorySortMode(value: string | null | undefined): value is DirectorySortMode {
+  return value === "name-asc"
+    || value === "name-desc"
+    || value === "mtime-desc"
+    || value === "mtime-asc"
+    || value === "size-desc"
+    || value === "size-asc";
 }
 
 function readURLState(): URLState {
@@ -264,6 +279,30 @@ export function App() {
   const [expanded, setExpanded] = useState<string[]>([]);
   const [selectedDir, setSelectedDir] = useState<string | null>(null);
   const [mainEntries, setMainEntries] = useState<FileEntry[]>([]);
+  const [treeSortMode, setTreeSortMode] = useState<DirectorySortMode>(() => {
+    if (typeof window === "undefined") {
+      return DEFAULT_DIRECTORY_SORT_MODE;
+    }
+    const saved = window.localStorage.getItem(TREE_SORT_STORAGE_KEY);
+    return isDirectorySortMode(saved) ? saved : DEFAULT_DIRECTORY_SORT_MODE;
+  });
+  const [directorySortOverrides, setDirectorySortOverrides] = useState<Record<string, DirectorySortMode>>(() => {
+    if (typeof window === "undefined") {
+      return {};
+    }
+    try {
+      const saved = window.localStorage.getItem(DIRECTORY_SORT_OVERRIDES_STORAGE_KEY);
+      if (!saved) {
+        return {};
+      }
+      const parsed = JSON.parse(saved) as Record<string, string>;
+      return Object.fromEntries(
+        Object.entries(parsed).filter(([, value]) => isDirectorySortMode(value)),
+      ) as Record<string, DirectorySortMode>;
+    } catch {
+      return {};
+    }
+  });
   const [status, setStatus] = useState("Disconnected");
   const [file, setFile] = useState<FilePayload | null>(null);
   const [pluginVersion, setPluginVersion] = useState(0);
@@ -290,6 +329,18 @@ export function App() {
   useEffect(() => { selectedSessionRef.current = selectedSession; }, [selectedSession]);
   useEffect(() => { currentSessionRef.current = currentSession; }, [currentSession]);
   useEffect(() => { interactionModeRef.current = interactionMode; }, [interactionMode]);
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(TREE_SORT_STORAGE_KEY, treeSortMode);
+  }, [treeSortMode]);
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(DIRECTORY_SORT_OVERRIDES_STORAGE_KEY, JSON.stringify(directorySortOverrides));
+  }, [directorySortOverrides]);
   useEffect(() => {
     const rootID = currentRootId;
     if (!rootID) return;
@@ -321,6 +372,18 @@ export function App() {
       setIsDrawerOpen(open);
     }
   }, []);
+
+  const getDirectorySortKey = useCallback((rootID: string | null | undefined, dirPath: string | null | undefined) => {
+    if (!rootID) {
+      return "";
+    }
+    const normalizedDir = !dirPath || dirPath === rootID ? "." : dirPath;
+    return `${rootID}:${normalizedDir}`;
+  }, []);
+
+  const currentDirectorySortKey = getDirectorySortKey(currentRootId, selectedDir);
+  const currentDirectorySortOverride = currentDirectorySortKey ? directorySortOverrides[currentDirectorySortKey] : undefined;
+  const currentDirectorySortMode = currentDirectorySortOverride || treeSortMode;
 
   const replaceURLState = useCallback((next: URLState) => {
     const search = buildURLSearch(next);
@@ -864,30 +927,45 @@ export function App() {
       if (!path || !rootParam) return;
       const isActuallyRoot = managedRootIdsRef.current.has(path);
       const root = isActuallyRoot ? path : rootParam;
-      setFile(null);
-      setSelectedSession(null);
-      setMainEntries([]);
       if (currentRootIdRef.current !== root) {
         setCurrentRootId(root);
       }
       const expandedKey = isActuallyRoot ? path : `${root}:${path}`;
-      const apiDir = isActuallyRoot ? "." : path;
-      if (isToggle && expandedRef.current.includes(expandedKey)) { setExpanded((prev) => prev.filter(k => k !== expandedKey)); return; }
-      if (isActuallyRoot) { setCurrentRootId(path); setExpanded((prev) => Array.from(new Set([...prev, path]))); } else { setExpanded((prev) => Array.from(new Set([...prev, expandedKey]))); }
       const preserveQuery = !!params.preservePluginQuery;
       const nextPluginQuery = preserveQuery ? parsePluginQuery(window.location.search) : {};
-      setPluginQuery(nextPluginQuery);
-      replaceURLState({ root, file: "", session: "", cursor: 0, pluginQuery: nextPluginQuery });
-      try {
-        const res = await fetch(`/api/tree?root=${encodeURIComponent(root)}&dir=${encodeURIComponent(apiDir)}`);
-        const payload = await res.json();
-        const parsed = normalizeTreeResponse(payload);
-        setEntriesByPath((prev) => ({ ...prev, [`${root}:${apiDir}`]: parsed.entries }));
-        setMainEntries(parsed.entries); setSelectedDir(path); setFile(null); setSelectedSession(null);
-        fileCursorRef.current = 0;
-        setDrawerOpenForRoot(root, false);
-        if (isMobile) setIsLeftOpen(false);
-      } catch {}
+      const loadDirectoryView = async (targetPath: string) => {
+        const targetIsRoot = managedRootIdsRef.current.has(targetPath);
+        const apiDir = targetIsRoot ? "." : targetPath;
+        setFile(null);
+        setSelectedSession(null);
+        setMainEntries([]);
+        setPluginQuery(nextPluginQuery);
+        replaceURLState({ root, file: "", session: "", cursor: 0, pluginQuery: nextPluginQuery });
+        try {
+          const res = await fetch(`/api/tree?root=${encodeURIComponent(root)}&dir=${encodeURIComponent(apiDir)}`);
+          const payload = await res.json();
+          const parsed = normalizeTreeResponse(payload);
+          setEntriesByPath((prev) => ({ ...prev, [`${root}:${apiDir}`]: parsed.entries }));
+          setMainEntries(parsed.entries);
+          setSelectedDir(targetPath);
+          setFile(null);
+          setSelectedSession(null);
+          fileCursorRef.current = 0;
+          setDrawerOpenForRoot(root, false);
+          if (isMobile) setIsLeftOpen(false);
+        } catch {}
+      };
+      if (isToggle && expandedRef.current.includes(expandedKey)) {
+        setExpanded((prev) => prev.filter(k => k !== expandedKey));
+        if (!isActuallyRoot) {
+          const parentDir = dirnameOfPath(path);
+          const parentPath = parentDir === "." ? root : parentDir;
+          await loadDirectoryView(parentPath);
+        }
+        return;
+      }
+      if (isActuallyRoot) { setCurrentRootId(path); setExpanded((prev) => Array.from(new Set([...prev, path]))); } else { setExpanded((prev) => Array.from(new Set([...prev, expandedKey]))); }
+      await loadDirectoryView(path);
     }
   }), [isMobile, normalizeTreeResponse, setDrawerOpenForRoot, replaceURLState]);
   const actionHandlersRef = useRef(actionHandlers);
@@ -1468,7 +1546,7 @@ export function App() {
     <AppShell
       leftOpen={isLeftOpen} rightOpen={isRightOpen}
       onCloseLeft={() => setIsLeftOpen(false)} onCloseRight={() => setIsRightOpen(false)}
-      sidebar={<FileTree entries={rootEntries} childrenByPath={entriesByPath} expanded={expanded} selectedDir={selectedDir} selectedPath={file?.path} rootId={currentRootId} managedRoots={managedRootIds} onSelectFile={(e, r) => { actionHandlers.open({path: e.path, root: r}); if (isMobile) setIsLeftOpen(false); }} onToggleDir={(e, r) => actionHandlers.open_dir({path: e.path, root: r, toggle: true})} />}
+      sidebar={<FileTree entries={rootEntries} childrenByPath={entriesByPath} expanded={expanded} sortMode={treeSortMode} onSortModeChange={setTreeSortMode} selectedDir={selectedDir} selectedPath={file?.path} rootId={currentRootId} managedRoots={managedRootIds} onSelectFile={(e, r) => { actionHandlers.open({path: e.path, root: r}); if (isMobile) setIsLeftOpen(false); }} onToggleDir={(e, r) => actionHandlers.open_dir({path: e.path, root: r, toggle: true})} />}
       rightSidebar={<SessionList sessions={sessions} selectedKey={selectedSession?.key} onSelect={(s) => { handleSelectSession(s); if (isMobile) setIsRightOpen(false); }} />}
       main={
         <div style={{ width: "100%", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
@@ -1573,6 +1651,26 @@ export function App() {
                 root={currentRootId || undefined}
                 path={selectedDir || ""}
                 entries={mainEntries}
+                sortMode={currentDirectorySortMode}
+                sortControlValue={currentDirectorySortOverride || "inherit"}
+                onSortModeChange={(nextMode) => {
+                  const rootID = currentRootIdRef.current;
+                  const nextKey = getDirectorySortKey(rootID, selectedDirRef.current);
+                  if (!nextKey) {
+                    return;
+                  }
+                  setDirectorySortOverrides((prev) => {
+                    if (nextMode === "inherit") {
+                      if (!(nextKey in prev)) {
+                        return prev;
+                      }
+                      const next = { ...prev };
+                      delete next[nextKey];
+                      return next;
+                    }
+                    return { ...prev, [nextKey]: nextMode };
+                  });
+                }}
                 onUploadFiles={handleTreeUpload}
                 onItemClick={(e) => e.is_dir ? actionHandlers.open_dir({ path: e.path }) : actionHandlers.open({ path: e.path })}
                 onPathClick={(path) => {

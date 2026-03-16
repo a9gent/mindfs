@@ -1,19 +1,54 @@
 import React from "react";
+import {
+  DIRECTORY_SORT_OPTIONS,
+  type DirectorySortMode,
+  type FileEntry,
+  sortDirectoryEntries,
+} from "../services/directorySort";
 
-type FileEntry = {
-  name: string;
-  path: string;
-  is_dir: boolean;
-};
+type DirectorySortControlValue = DirectorySortMode | "inherit";
 
 type DefaultListViewProps = {
   root?: string;
   path?: string;
   entries: FileEntry[];
+  sortMode: DirectorySortMode;
+  sortControlValue: DirectorySortControlValue;
   onItemClick?: (entry: FileEntry) => void;
   onPathClick?: (path: string) => void;
+  onSortModeChange?: (mode: DirectorySortControlValue) => void;
   onUploadFiles?: (files: File[]) => void | Promise<void>;
 };
+
+function formatCompactTime(value?: string): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  const sameYear = date.getFullYear() === now.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  const hours = `${date.getHours()}`.padStart(2, "0");
+  const minutes = `${date.getMinutes()}`.padStart(2, "0");
+  if (sameYear) {
+    return `${month}-${day} ${hours}:${minutes}`;
+  }
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function formatCompactSize(size?: number): string {
+  if (!size || size < 0) return "";
+  if (size < 1024) return `${size} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = size / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const fractionDigits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(fractionDigits).replace(/\.0+$|(\.\d*[1-9])0+$/, "$1")} ${units[unitIndex]}`;
+}
 
 // 路径导航组件
 function Breadcrumbs({ root, path, onPathClick }: { root?: string; path: string; onPathClick?: (path: string) => void }) {
@@ -75,15 +110,42 @@ function Breadcrumbs({ root, path, onPathClick }: { root?: string; path: string;
   );
 }
 
-export function DefaultListView({ root, path = "", entries, onItemClick, onPathClick, onUploadFiles }: DefaultListViewProps) {
+export function DefaultListView({
+  root,
+  path = "",
+  entries,
+  sortMode,
+  sortControlValue,
+  onItemClick,
+  onPathClick,
+  onSortModeChange,
+  onUploadFiles,
+}: DefaultListViewProps) {
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const menuRef = React.useRef<HTMLDivElement | null>(null);
+  const [isMenuOpen, setIsMenuOpen] = React.useState(false);
+  const sortedEntries = React.useMemo(() => sortDirectoryEntries(entries, sortMode), [entries, sortMode]);
+  const showCompactMeta = sortMode === "mtime-desc" || sortMode === "mtime-asc" || sortMode === "size-desc" || sortMode === "size-asc";
+
+  React.useEffect(() => {
+    if (!isMenuOpen) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setIsMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [isMenuOpen]);
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "transparent" }}>
       <header
         style={{
           height: "36px",
-          padding: "0 8px 0 16px",
+          padding: "0 3px 0 16px",
           borderBottom: "1px solid var(--border-color)",
           display: "flex",
           alignItems: "center",
@@ -100,31 +162,134 @@ export function DefaultListView({ root, path = "", entries, onItemClick, onPathC
           <div style={{ fontSize: "11px", color: "var(--text-secondary)", opacity: 0.6 }}>
             {entries.length} 个项目
           </div>
-          <button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            disabled={!root}
-            style={{
-              width: "28px",
-              height: "28px",
-              borderRadius: "999px",
-              border: "none",
-              background: "transparent",
-              color: "var(--text-secondary)",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              cursor: root ? "pointer" : "not-allowed",
-              opacity: root ? 1 : 0.45,
-            }}
-            title="上传到当前目录"
-            aria-label="上传到当前目录"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-              <path d="M12 5v14" />
-              <path d="M5 12h14" />
-            </svg>
-          </button>
+          <div ref={menuRef} style={{ position: "relative" }}>
+            <button
+              type="button"
+              onClick={() => setIsMenuOpen((open) => !open)}
+              aria-label="打开目录菜单"
+              style={{
+                width: "28px",
+                height: "28px",
+                borderRadius: "8px",
+                border: "none",
+                background: isMenuOpen ? "rgba(0, 0, 0, 0.06)" : "transparent",
+                color: "var(--text-secondary)",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                outline: "none",
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="12" cy="5" r="1.8" />
+                <circle cx="12" cy="12" r="1.8" />
+                <circle cx="12" cy="19" r="1.8" />
+              </svg>
+            </button>
+            {isMenuOpen ? (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 6px)",
+                  right: 0,
+                  minWidth: "176px",
+                  padding: "6px",
+                  borderRadius: "10px",
+                  border: "1px solid var(--border-color)",
+                  background: "var(--menu-bg)",
+                  boxShadow: "0 12px 30px rgba(15, 23, 42, 0.14)",
+                  zIndex: 20,
+                }}
+              >
+                <div style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)" }}>当前目录排序</div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSortModeChange?.("inherit");
+                    setIsMenuOpen(false);
+                  }}
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    background: sortControlValue === "inherit" ? "var(--selection-bg)" : "transparent",
+                    color: sortControlValue === "inherit" ? "var(--accent-color)" : "var(--text-primary)",
+                    borderRadius: "8px",
+                    padding: "8px 10px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    textAlign: "left",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                  }}
+                >
+                  <span>跟随全局</span>
+                  <span style={{ fontSize: "11px", opacity: sortControlValue === "inherit" ? 1 : 0 }}>✓</span>
+                </button>
+                {DIRECTORY_SORT_OPTIONS.map((option) => {
+                  const active = sortControlValue === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => {
+                        onSortModeChange?.(option.value as DirectorySortControlValue);
+                        setIsMenuOpen(false);
+                      }}
+                      style={{
+                        width: "100%",
+                        border: "none",
+                        background: active ? "var(--selection-bg)" : "transparent",
+                        color: active ? "var(--accent-color)" : "var(--text-primary)",
+                        borderRadius: "8px",
+                        padding: "8px 10px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        textAlign: "left",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                      }}
+                    >
+                      <span>{option.label}</span>
+                      <span style={{ fontSize: "11px", opacity: active ? 1 : 0 }}>✓</span>
+                    </button>
+                  );
+                })}
+                <div style={{ height: "1px", background: "var(--border-color)", margin: "6px 4px" }} />
+                <button
+                  type="button"
+                  onClick={() => {
+                    inputRef.current?.click();
+                    setIsMenuOpen(false);
+                  }}
+                  disabled={!root}
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    background: "transparent",
+                    color: root ? "var(--text-primary)" : "var(--text-secondary)",
+                    borderRadius: "8px",
+                    padding: "8px 10px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    textAlign: "left",
+                    cursor: root ? "pointer" : "not-allowed",
+                    fontSize: "12px",
+                    opacity: root ? 1 : 0.45,
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                    <path d="M12 5v14" />
+                    <path d="M5 12h14" />
+                  </svg>
+                  <span>上传到当前目录</span>
+                </button>
+              </div>
+            ) : null}
+          </div>
           <input
             ref={inputRef}
             type="file"
@@ -143,7 +308,7 @@ export function DefaultListView({ root, path = "", entries, onItemClick, onPathC
 
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "24px 16px" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px", width: "100%" }}>
-          {entries.map((entry) => (
+          {sortedEntries.map((entry) => (
             <div
               key={entry.path}
               onClick={() => onItemClick?.(entry)}
@@ -183,9 +348,28 @@ export function DefaultListView({ root, path = "", entries, onItemClick, onPathC
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
                 )}
               </div>
-              <div style={{ minWidth: 0, fontWeight: 500, fontSize: "13px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "var(--text-primary)" }}>
+              <div style={{ minWidth: 0, flex: 1, fontWeight: 500, fontSize: "13px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "var(--text-primary)" }}>
                 {entry.name}
               </div>
+              {showCompactMeta ? (
+                <div
+                  style={{
+                    flexShrink: 0,
+                    minWidth: "76px",
+                    textAlign: "right",
+                    fontSize: "11px",
+                    color: "var(--text-secondary)",
+                    opacity: 0.88,
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {sortMode === "mtime-desc" || sortMode === "mtime-asc"
+                    ? formatCompactTime(entry.mtime)
+                    : !entry.is_dir
+                    ? formatCompactSize(entry.size)
+                    : ""}
+                </div>
+              ) : null}
             </div>
           ))}
         </div>

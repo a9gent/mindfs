@@ -565,11 +565,16 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 				return
 			}
 		}
-		if update.Type == agenttypes.EventTypeToolCall {
+		if update.Type == agenttypes.EventTypeToolCall || update.Type == agenttypes.EventTypeToolUpdate {
 			if toolCall, ok := update.Data.(agenttypes.ToolCall); ok && toolCall.IsWriteOperation() {
 				for _, path := range toolCall.GetAffectedPaths() {
-					if watcher != nil {
+					if watcher == nil {
+						continue
+					}
+					if update.Type == agenttypes.EventTypeToolCall && toolCall.Status == "running" {
 						watcher.RecordPendingWrite(current.Key, path)
+					}
+					if update.Type == agenttypes.EventTypeToolUpdate || toolCall.Status == "complete" {
 						watcher.RecordSessionFile(current.Key, path)
 					}
 				}
