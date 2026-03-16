@@ -420,9 +420,17 @@ export function App() {
     if (!key) return null;
     const ck = rootSessionKey(rootId, key);
     const cached = sessionCacheRef.current[ck];
+    const drawerSession = drawerSessionByRootRef.current[rootId];
     const fallbackExchanges = Array.isArray((session as any).exchanges) ? ((session as any).exchanges as Exchange[]) : [];
     const exchanges = Array.isArray((cached as any)?.exchanges) ? (((cached as any).exchanges as Exchange[]) || []) : fallbackExchanges;
-    return { ...(session as any), ...(cached as any), key, exchanges } as any;
+    const pending = drawerSession?.key === key
+      ? !!(drawerSession as any)?.pending
+      : typeof (session as any)?.pending === "boolean"
+        ? !!(session as any).pending
+        : typeof (cached as any)?.pending === "boolean"
+          ? !!(cached as any).pending
+          : undefined;
+    return { ...(session as any), ...(cached as any), ...(drawerSession?.key === key ? (drawerSession as any) : null), key, exchanges, pending } as any;
   }, [rootSessionKey, cacheVersion]);
 
   const setSelectedPendingByKey = useCallback((sessionKey: string, pending: boolean) => {
@@ -633,8 +641,12 @@ export function App() {
     const key = session?.key || session?.session_key;
     const targetRoot = (session?.root_id as string | undefined) || currentRootIdRef.current;
     if (!targetRoot || !key) return;
+    const currentDrawer = drawerSessionByRootRef.current[targetRoot];
+    const preservePending = currentDrawer?.key === key
+      ? !!(currentDrawer as any)?.pending
+      : !!(session as any)?.pending;
     replaceURLState({ root: targetRoot, file: "", session: key, cursor: 0, pluginQuery: {} });
-    setSelectedSession(session);
+    setSelectedSession({ ...(session as any), pending: preservePending } as SessionItem);
     setInteractionMode("main");
     setDrawerOpenForRoot(targetRoot, false);
     if (isMobile) setIsRightOpen(false);
@@ -651,13 +663,18 @@ export function App() {
         return {
           ...(prev as any),
           ...(fullSession as any),
+          pending: typeof (prev as any)?.pending === "boolean" ? !!(prev as any).pending : preservePending,
           key,
           session_key: key,
           root_id: targetRoot,
         } as SessionItem;
       });
       if ((boundSessionByRootRef.current[targetRoot] || null) === key) {
-        setDrawerSessionForRoot(targetRoot, fullSession);
+        const activeDrawer = drawerSessionByRootRef.current[targetRoot];
+        setDrawerSessionForRoot(targetRoot, {
+          ...(fullSession as any),
+          pending: activeDrawer?.key === key ? !!(activeDrawer as any)?.pending : preservePending,
+        } as Session);
       }
       bumpCacheVersion();
     };
@@ -754,6 +771,15 @@ export function App() {
     let session: Session | null = null;
     if (sendSessionKey) {
       session = sessionCacheRef.current[rootSessionKey(activeRoot, sendSessionKey)];
+      if (!session) {
+        const current = currentSessionRef.current;
+        if (current?.key === sendSessionKey) {
+          session = current as Session;
+        }
+      }
+      if (!session && selectedKey === sendSessionKey) {
+        session = ({ ...(selected as any), key: sendSessionKey } as Session);
+      }
     } else {
       if (selectedKey && !selectedKey.startsWith("pending-")) {
         sendSessionKey = selectedKey;
@@ -1459,14 +1485,14 @@ export function App() {
   const selectedInCurrentRoot = !!selectedSession && !!currentRootId && selectedRoot === currentRootId;
   const selectedKey = selectedSession?.key || selectedSession?.session_key || "";
   const boundFromSelected = selectedInCurrentRoot && selectedKey === activeBoundSessionKey
-    ? ({ ...selectedSession, pending: false } as any)
+    ? (selectedSession as any)
     : null;
   const boundFromCache = activeBoundSessionKey && currentRootId
     ? (sessionCacheRef.current[rootSessionKey(currentRootId, activeBoundSessionKey)] as any)
     : null;
   const actionBarSession = activeBoundSessionKey
     ? ((currentSession as any) || boundFromCache || boundFromSelected)
-    : (selectedInCurrentRoot ? ({ ...selectedSession, pending: false } as any) : null);
+    : (selectedInCurrentRoot ? (selectedSession as any) : null);
 
   const matchedPlugin = useMemo(() => {
     if (!currentRootId || !file) return null;
