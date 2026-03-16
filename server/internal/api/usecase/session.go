@@ -3,9 +3,11 @@ package usecase
 import (
 	"context"
 	"errors"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"mindfs/server/internal/agent"
 	agenttypes "mindfs/server/internal/agent/types"
@@ -172,7 +174,19 @@ type CancelSessionTurnInput struct {
 	Key    string
 }
 
-const switchContextTailLines = 20
+const (
+	switchContextTailLines   = 20
+	sessionNameTimeout       = 30 * time.Second
+	sessionNameMaxRunes      = 24
+	sessionNameMinMessageLen = 12
+)
+
+type SuggestSessionNameInput struct {
+	RootID       string
+	SessionKey   string
+	Agent        string
+	FirstMessage string
+}
 
 var (
 	sessionSendLocksMu sync.Mutex
@@ -268,6 +282,148 @@ func buildSwitchReadHint(exchangeLogPath string, lines int) string {
 		"Execution order: read history first, then compose the final answer.\n" +
 		"Note: do not send any natural-language response before finishing the required history reads. Start reading immediately via tools/commands.\n" +
 		"Only if reading fails, output a brief error and stop.\n\n"
+}
+
+func sessionNameRunner(ctx context.Context, pool *agent.Pool, rootAbs string, in SuggestSessionNameInput) (string, error) {
+	agentName := strings.TrimSpace(in.Agent)
+	if agentName == "" || pool == nil {
+		return "", nil
+	}
+
+	sessionKey := agentPoolSessionKey("name-"+in.SessionKey, agentName)
+	sess, err := pool.GetOrCreate(ctx, agenttypes.OpenSessionInput{
+		SessionKey: sessionKey,
+		AgentName:  agentName,
+		RootPath:   rootAbs,
+	})
+	if err != nil {
+		return "", err
+	}
+	defer pool.Close(sessionKey)
+
+	var response strings.Builder
+	sess.OnUpdate(func(update agenttypes.Event) {
+		if update.Type != agenttypes.EventTypeMessageChunk {
+			return
+		}
+		chunk, ok := update.Data.(agenttypes.MessageChunk)
+		if !ok {
+			return
+		}
+		response.WriteString(chunk.Content)
+	})
+
+	if err := sess.SendMessage(ctx, buildSessionNamePrompt(normalizeSessionNameCandidate(in.FirstMessage))); err != nil {
+		return "", err
+	}
+	return response.String(), nil
+}
+
+func (s *Service) SuggestSessionName(ctx context.Context, in SuggestSessionNameInput) (*session.Session, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(in.RootID) == "" || strings.TrimSpace(in.SessionKey) == "" {
+		return nil, nil
+	}
+	agentName := strings.TrimSpace(in.Agent)
+	if agentName == "" {
+		return nil, nil
+	}
+	message := normalizeSessionNameCandidate(in.FirstMessage)
+	messageLen := len([]rune(message))
+	if messageLen < sessionNameMinMessageLen {
+		return nil, nil
+	}
+
+	manager, err := s.Registry.GetSessionManager(in.RootID)
+	if err != nil {
+		return nil, err
+	}
+	current, err := manager.Get(ctx, in.SessionKey)
+	if err != nil {
+		return nil, err
+	}
+	fallback := buildFallbackSessionName(in.FirstMessage)
+	if strings.TrimSpace(current.Name) != fallback {
+		return nil, nil
+	}
+
+	pool := s.Registry.GetAgentPool()
+	if pool == nil {
+		return nil, nil
+	}
+
+	rootAbs, err := manager.Root().RootDir()
+	if err != nil {
+		return nil, err
+	}
+	nameCtx, cancel := context.WithTimeout(ctx, sessionNameTimeout)
+	defer cancel()
+
+	rawName, err := sessionNameRunner(nameCtx, pool, rootAbs, in)
+	if err != nil {
+		log.Printf("[session-name] suggest.error root=%s session=%s agent=%s err=%v", in.RootID, in.SessionKey, agentName, err)
+		if prober := s.Registry.GetProber(); prober != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+			prober.ReportFailure(agentName, err)
+		}
+		return nil, nil
+	}
+	if prober := s.Registry.GetProber(); prober != nil {
+		prober.ReportSuccess(agentName)
+	}
+
+	name := normalizeSessionNameCandidate(rawName)
+	if name == "" || name == fallback {
+		return nil, nil
+	}
+	renamed, err := manager.Rename(ctx, in.SessionKey, name)
+	if err != nil {
+		log.Printf("[session-name] rename.error root=%s session=%s err=%v", in.RootID, in.SessionKey, err)
+		return nil, err
+	}
+	log.Printf("[session-name] rename.done root=%s session=%s name=%q", in.RootID, in.SessionKey, renamed.Name)
+	return renamed, nil
+}
+
+func buildFallbackSessionName(message string) string {
+	oneLine := strings.Join(strings.Fields(strings.TrimSpace(message)), " ")
+	if oneLine == "" {
+		return ""
+	}
+	const max = 60
+	runes := []rune(oneLine)
+	if len(runes) <= max {
+		return oneLine
+	}
+	return string(runes[:max]) + "..."
+}
+
+func buildSessionNamePrompt(message string) string {
+	return strings.TrimSpace(strings.Join([]string{
+		"Generate a concise session title for the user's first message.",
+		"Rules:",
+		"- Reply with the title only.",
+		"- Single line only.",
+		"- No quotes.",
+		"- No trailing punctuation.",
+		"- Keep it under 18 Chinese characters or 8 English words.",
+		"",
+		"User message:",
+		message,
+	}, "\n"))
+}
+
+func normalizeSessionNameCandidate(raw string) string {
+	cleaned := strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
+	cleaned = strings.Trim(cleaned, "\"'`“”‘’")
+	cleaned = strings.TrimSpace(cleaned)
+	cleaned = strings.TrimRight(cleaned, ".,;:!?，。；：！？")
+	runes := []rune(cleaned)
+	if len(runes) > sessionNameMaxRunes {
+		return strings.TrimSpace(string(runes[:sessionNameMaxRunes]))
+	}
+	return cleaned
 }
 
 func isCanceledTurnError(err error) bool {

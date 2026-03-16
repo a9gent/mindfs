@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"mindfs/server/internal/fs"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -261,6 +262,28 @@ func (m *Manager) Close(ctx context.Context, key string) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.closeSessionUnsafe(key)
+}
+
+func (m *Manager) Rename(_ context.Context, key, name string) (*Session, error) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return nil, errors.New("session name required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, err := m.getSessionUnsafe(key)
+	if err != nil {
+		return nil, err
+	}
+	if session.Name == trimmed {
+		return session, nil
+	}
+	session.Name = trimmed
+	session.UpdatedAt = m.now().UTC()
+	if err := m.upsertSessionMetaUnsafe(session); err != nil {
+		return nil, err
+	}
+	return session, nil
 }
 
 func (m *Manager) closeSessionUnsafe(key string) (*Session, error) {

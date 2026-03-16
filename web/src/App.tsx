@@ -1294,6 +1294,36 @@ export function App() {
             loadSessions(rootID);
           }
           break;
+        case "session.meta.updated":
+          if (typeof payload?.root_id === "string" && typeof payload?.session?.key === "string") {
+            const rootID = payload.root_id;
+            const sessionKey = payload.session.key;
+            const cacheKey = rootSessionKey(rootID, sessionKey);
+            const cached = sessionCacheRef.current[cacheKey];
+            if (cached) {
+              sessionCacheRef.current[cacheKey] = {
+                ...cached,
+                name: typeof payload.session.name === "string" ? payload.session.name : cached.name,
+                updated_at: payload.session.updated_at || cached.updated_at,
+              } as Session;
+              bumpCacheVersion();
+            }
+            if ((selectedSessionRef.current?.key || selectedSessionRef.current?.session_key) === sessionKey) {
+              setSelectedSession((prev) => prev ? ({
+                ...(prev as any),
+                name: typeof payload.session.name === "string" ? payload.session.name : prev.name,
+                updated_at: payload.session.updated_at || prev.updated_at,
+              } as SessionItem) : prev);
+            }
+            if (boundSessionByRootRef.current[rootID] === sessionKey) {
+              const latest = sessionCacheRef.current[cacheKey];
+              if (latest) {
+                setDrawerSessionForRoot(rootID, latest);
+              }
+            }
+            loadSessions(rootID);
+          }
+          break;
         case "file.changed": handleFileChanged(payload); break;
         case "agent.status.changed": setAgentsVersion(v => v + 1); break;
       }

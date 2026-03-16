@@ -1,0 +1,310 @@
+package usecase
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"mindfs/server/internal/agent"
+	rootfs "mindfs/server/internal/fs"
+	"mindfs/server/internal/session"
+)
+
+func TestSaveUploadedFilesDefaultsToAttachmentDirAndRenamesConflicts(t *testing.T) {
+	rootDir := t.TempDir()
+	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)
+	service := Service{Registry: uploadTestRegistry{root: root}}
+
+	out, err := service.SaveUploadedFiles(context.Background(), SaveUploadedFilesInput{
+		RootID: "mindfs",
+		Files: []UploadFile{
+			{
+				Name:        "demo.txt",
+				ContentType: "text/plain; charset=utf-8",
+				Reader:      bytes.NewBufferString("first file"),
+			},
+			{
+				Name:        "demo.txt",
+				ContentType: "text/plain",
+				Reader:      bytes.NewBufferString("second file"),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveUploadedFiles returned error: %v", err)
+	}
+	if len(out.Files) != 2 {
+		t.Fatalf("expected 2 saved files, got %d", len(out.Files))
+	}
+
+	dateDir := time.Now().Format("2006-01-02")
+	wantFirst := filepath.ToSlash(filepath.Join(".mindfs", "upload", dateDir, "demo.txt"))
+	wantSecond := filepath.ToSlash(filepath.Join(".mindfs", "upload", dateDir, "demo (1).txt"))
+	if out.Files[0].Path != wantFirst {
+		t.Fatalf("first upload path = %q, want %q", out.Files[0].Path, wantFirst)
+	}
+	if out.Files[1].Path != wantSecond {
+		t.Fatalf("second upload path = %q, want %q", out.Files[1].Path, wantSecond)
+	}
+	if out.Files[0].Mime != "text/plain" {
+		t.Fatalf("first upload mime = %q, want text/plain", out.Files[0].Mime)
+	}
+	if out.Files[1].Name != "demo (1).txt" {
+		t.Fatalf("second upload name = %q, want %q", out.Files[1].Name, "demo (1).txt")
+	}
+
+	assertFileContent(t, filepath.Join(rootDir, filepath.FromSlash(wantFirst)), "first file")
+	assertFileContent(t, filepath.Join(rootDir, filepath.FromSlash(wantSecond)), "second file")
+}
+
+func TestSaveUploadedFilesUsesExplicitDir(t *testing.T) {
+	rootDir := t.TempDir()
+	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)
+	service := Service{Registry: uploadTestRegistry{root: root}}
+
+	out, err := service.SaveUploadedFiles(context.Background(), SaveUploadedFilesInput{
+		RootID: "mindfs",
+		Dir:    "design",
+		Files: []UploadFile{
+			{
+				Name:        "spec.pdf",
+				ContentType: "application/pdf",
+				Reader:      bytes.NewBufferString("pdf-bytes"),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveUploadedFiles returned error: %v", err)
+	}
+	if len(out.Files) != 1 {
+		t.Fatalf("expected 1 saved file, got %d", len(out.Files))
+	}
+	if out.Files[0].Path != "design/spec.pdf" {
+		t.Fatalf("saved path = %q, want %q", out.Files[0].Path, "design/spec.pdf")
+	}
+	assertFileContent(t, filepath.Join(rootDir, "design", "spec.pdf"), "pdf-bytes")
+}
+
+func TestFileCandidateProviderSearch(t *testing.T) {
+	rootDir := t.TempDir()
+	mustWriteFile(t, filepath.Join(rootDir, "design", "18-view-plugin.md"), "a")
+	mustWriteFile(t, filepath.Join(rootDir, "design", "14-json-render-refactoring.md"), "a")
+	mustWriteFile(t, filepath.Join(rootDir, "node_modules", "pkg", "index.js"), "a")
+	mustWriteFile(t, filepath.Join(rootDir, ".git", "config"), "a")
+	mustWriteFile(t, filepath.Join(rootDir, ".mindfs", "state.json"), "a")
+	mustWriteFile(t, filepath.Join(rootDir, ".DS_Store"), "a")
+	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)
+
+	provider := NewFileCandidateProvider()
+	items, err := provider.Search(context.Background(), root, "", "design")
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d: %#v", len(items), items)
+	}
+	if items[0].Name != "design/18-view-plugin.md" {
+		t.Fatalf("expected shorter matching path first, got %q", items[0].Name)
+	}
+	for _, item := range items {
+		switch item.Name {
+		case "node_modules/pkg/index.js", ".git/config", ".mindfs/state.json", ".DS_Store":
+			t.Fatalf("unexpected filtered path in results: %q", item.Name)
+		}
+	}
+}
+
+func TestSkillCandidateProviderSearch(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	rootDir := t.TempDir()
+	mustWriteFile(t, filepath.Join(homeDir, ".codex", "skills", "status", "SKILL.md"), "---\nname: status\ndescription: Home status skill\n---\n")
+	mustWriteFile(t, filepath.Join(homeDir, ".agents", "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Shared review skill\n---\n")
+	mustWriteFile(t, filepath.Join(rootDir, ".codex", "skills", "status", "SKILL.md"), "---\nname: status\ndescription: Root status skill\n---\n")
+	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)
+
+	provider := NewSkillCandidateProvider()
+	items, err := provider.Search(context.Background(), root, "codex", "")
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 unique items, got %d: %#v", len(items), items)
+	}
+	if items[0].Name != "review" && items[0].Name != "status" {
+		t.Fatalf("unexpected first item: %#v", items[0])
+	}
+	descriptionByName := make(map[string]string, len(items))
+	for _, item := range items {
+		descriptionByName[item.Name] = item.Description
+	}
+	if got := descriptionByName["status"]; got != "Home status skill" {
+		t.Fatalf("expected first scanned status skill to win, got %q", got)
+	}
+	if got := descriptionByName["review"]; got != "Shared review skill" {
+		t.Fatalf("unexpected review description: %q", got)
+	}
+}
+
+func TestSessionNameRunnerRealAgent(t *testing.T) {
+	if os.Getenv("MINDFS_RUN_REAL_AGENT") != "1" {
+		t.Skip("set MINDFS_RUN_REAL_AGENT=1 to run real agent interaction test")
+	}
+
+	cfg, err := agent.LoadConfig("")
+	if err != nil {
+		t.Skipf("LoadConfig failed: %v", err)
+	}
+
+	agentName, ok := selectRunnableAgent(cfg)
+	if !ok {
+		t.Skip("no runnable configured agent found (set MINDFS_IT_AGENT_NAME)")
+	}
+
+	pool := agent.NewPool(cfg)
+	defer pool.CloseAll()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	got, err := sessionNameRunner(ctx, pool, t.TempDir(), SuggestSessionNameInput{
+		SessionKey:   "real-it-" + time.Now().UTC().Format("20060102-150405"),
+		Agent:        agentName,
+		FirstMessage: "Please help me investigate why the session list does not refresh immediately after a new session is created.",
+	})
+	if err != nil {
+		t.Fatalf("sessionNameRunner returned error: %v", err)
+	}
+	if strings.TrimSpace(got) == "" {
+		t.Fatal("sessionNameRunner returned empty title")
+	}
+	if strings.Contains(got, "\n") {
+		t.Fatalf("sessionNameRunner returned multi-line title: %q", got)
+	}
+}
+
+func TestSessionNameRunnerSkipsWithoutAgentOrPool(t *testing.T) {
+	testCases := []struct {
+		name  string
+		input SuggestSessionNameInput
+	}{
+		{
+			name: "missing agent",
+			input: SuggestSessionNameInput{
+				SessionKey:   "s-1",
+				FirstMessage: "hello world session title",
+			},
+		},
+		{
+			name: "missing pool",
+			input: SuggestSessionNameInput{
+				SessionKey:   "s-1",
+				Agent:        "codex",
+				FirstMessage: "hello world session title",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := sessionNameRunner(context.Background(), nil, "/tmp/root", tc.input)
+			if err != nil || got != "" {
+				t.Fatalf("sessionNameRunner = (%q, %v), want empty nil", got, err)
+			}
+		})
+	}
+}
+
+func assertFileContent(t *testing.T, path string, want string) {
+	t.Helper()
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", path, err)
+	}
+	if string(payload) != want {
+		t.Fatalf("file content = %q, want %q", string(payload), want)
+	}
+}
+
+func mustWriteFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", path, err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+}
+
+func selectRunnableAgent(cfg agent.Config) (string, bool) {
+	want := strings.TrimSpace(os.Getenv("MINDFS_IT_AGENT_NAME"))
+	if want != "" {
+		def, ok := cfg.GetAgent(want)
+		if !ok {
+			return "", false
+		}
+		if _, err := exec.LookPath(def.Command); err != nil {
+			return "", false
+		}
+		return want, true
+	}
+
+	for _, name := range []string{"codex", "claude", "gemini"} {
+		def, ok := cfg.GetAgent(name)
+		if !ok {
+			continue
+		}
+		if _, err := exec.LookPath(def.Command); err != nil {
+			continue
+		}
+		return name, true
+	}
+	return "", false
+}
+
+type uploadTestRegistry struct {
+	root rootfs.RootInfo
+}
+
+func (r uploadTestRegistry) GetRoot(rootID string) (rootfs.RootInfo, error) {
+	if rootID != r.root.ID {
+		return rootfs.RootInfo{}, errors.New("root not found")
+	}
+	return r.root, nil
+}
+
+func (uploadTestRegistry) GetSessionManager(string) (*session.Manager, error) {
+	return nil, nil
+}
+
+func (uploadTestRegistry) UpsertRoot(string) (rootfs.RootInfo, error) {
+	return rootfs.RootInfo{}, nil
+}
+
+func (uploadTestRegistry) ListRoots() []rootfs.RootInfo {
+	return nil
+}
+
+func (uploadTestRegistry) GetAgentPool() *agent.Pool {
+	return nil
+}
+
+func (uploadTestRegistry) GetProber() *agent.Prober {
+	return nil
+}
+
+func (uploadTestRegistry) GetCandidateRegistry() *CandidateRegistry {
+	return nil
+}
+
+func (uploadTestRegistry) GetFileWatcher(string, *session.Manager) (*rootfs.SharedFileWatcher, error) {
+	return nil, nil
+}
+
+func (uploadTestRegistry) ReleaseFileWatcher(string, string) {}

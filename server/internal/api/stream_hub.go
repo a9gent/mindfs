@@ -128,6 +128,23 @@ func buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionNam
 	}
 }
 
+func buildSessionMetaUpdatedResponse(rootID string, sess *session.Session) WSResponse {
+	if sess == nil {
+		return WSResponse{Type: "session.meta.updated"}
+	}
+	return WSResponse{
+		Type: "session.meta.updated",
+		Payload: map[string]any{
+			"root_id": rootID,
+			"session": map[string]any{
+				"key":        sess.Key,
+				"name":       sess.Name,
+				"updated_at": sess.UpdatedAt,
+			},
+		},
+	}
+}
+
 func (h *StreamHub) ensurePendingSessionLocked(sessionKey string) *SessionPendingState {
 	state := h.pendingSessions[sessionKey]
 	if state == nil {
@@ -364,6 +381,10 @@ func (h *StreamHub) BroadcastSessionUserMessage(
 		}
 		h.SendToClient(clientID, resp)
 	}
+}
+
+func (h *StreamHub) BroadcastSessionMetaUpdated(rootID string, sess *session.Session) {
+	h.BroadcastAll(buildSessionMetaUpdatedResponse(rootID, sess))
 }
 
 func (h *StreamHub) WriteJSON(conn *websocket.Conn, value any) error {

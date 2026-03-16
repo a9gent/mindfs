@@ -154,6 +154,26 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 			return
 		}
 		key = created.Key
+		go func(rootID, sessionKey, agentName, firstMessage string) {
+			updated, err := uc.SuggestSessionName(context.Background(), usecase.SuggestSessionNameInput{
+				RootID:       rootID,
+				SessionKey:   sessionKey,
+				Agent:        agentName,
+				FirstMessage: firstMessage,
+			})
+			if err != nil {
+				log.Printf("[session-name] async.error root=%s session=%s agent=%s err=%v", rootID, sessionKey, agentName, err)
+				return
+			}
+			if updated == nil {
+				return
+			}
+			if h.AppContext == nil {
+				return
+			}
+			log.Printf("[session-name] async.broadcast root=%s session=%s name=%q", rootID, sessionKey, updated.Name)
+			h.AppContext.GetSessionStreamHub().BroadcastSessionMetaUpdated(rootID, updated)
+		}(rootID, key, agentName, content)
 	}
 	if h.AppContext != nil {
 		h.AppContext.GetSessionStreamHub().BindSessionClient(key, clientID)
