@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { CodeViewer } from "./CodeViewer";
 import { ImageViewer } from "./ImageViewer";
@@ -30,6 +30,8 @@ type RelatedSession = {
   source_session: string;
   session_name?: string;
   agent?: string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 type FileViewerProps = {
@@ -76,6 +78,20 @@ function Breadcrumbs({ root, path, onPathClick }: { root?: string; path: string;
 }
 
 export function FileViewer({ file, onSessionClick, onPathClick, onFileClick }: FileViewerProps) {
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth <= 768;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const media = window.matchMedia("(max-width: 768px)");
+    const update = () => setIsMobile(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
   if (!file) {
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", flexDirection: "column", gap: "12px" }}>
@@ -95,14 +111,36 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick }: F
       const value = item as Record<string, unknown>;
       const source = (typeof value.source_session === "string" && value.source_session) || (typeof value.sourceSession === "string" && value.sourceSession) || (typeof value.session_key === "string" && value.session_key) || "";
       if (!source) return null;
-      return { source_session: source, session_name: (typeof value.session_name === "string" && value.session_name) || undefined, agent: typeof value.agent === "string" ? value.agent : undefined };
+      return {
+        source_session: source,
+        session_name: (typeof value.session_name === "string" && value.session_name) || undefined,
+        agent: typeof value.agent === "string" ? value.agent : undefined,
+        created_at: typeof value.created_at === "string" ? value.created_at : undefined,
+        updated_at: typeof value.updated_at === "string" ? value.updated_at : undefined,
+      };
     }).filter((v): v is RelatedSession => Boolean(v));
     const dedup = new Map<string, RelatedSession>();
-    normalized.forEach((item) => { if (!dedup.has(item.source_session)) dedup.set(item.source_session, item); });
-    return Array.from(dedup.values());
+    normalized.forEach((item) => {
+      const existing = dedup.get(item.source_session);
+      if (!existing) {
+        dedup.set(item.source_session, item);
+        return;
+      }
+      const existingTime = Date.parse(existing.updated_at || existing.created_at || "") || 0;
+      const itemTime = Date.parse(item.updated_at || item.created_at || "") || 0;
+      if (itemTime >= existingTime) {
+        dedup.set(item.source_session, item);
+      }
+    });
+    return Array.from(dedup.values()).sort((left, right) => {
+      const leftTime = Date.parse(left.updated_at || left.created_at || "") || 0;
+      const rightTime = Date.parse(right.updated_at || right.created_at || "") || 0;
+      return rightTime - leftTime;
+    });
   };
 
   const relatedSessions = normalizeRelatedSessions((file as any).file_meta);
+  const visibleRelatedSessions = relatedSessions.slice(0, isMobile ? 2 : 3);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, background: "transparent" }}>
@@ -127,7 +165,7 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick }: F
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
               </svg>
               <div style={{ display: 'flex', gap: '4px', overflowX: 'auto', whiteSpace: 'nowrap', scrollbarWidth: 'none' }}>
-                {relatedSessions.map((meta) => (
+                {visibleRelatedSessions.map((meta) => (
                   <button
                     key={meta.source_session}
                     type="button"
@@ -160,7 +198,19 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick }: F
                       e.currentTarget.style.borderColor = "rgba(0, 0, 0, 0.05)";
                     }}
                   >
-                    {meta.session_name || `Session ${meta.source_session.slice(0, 8)}`}
+                    <span
+                      style={{
+                        display: "inline-block",
+                        maxWidth: isMobile ? "72px" : "120px",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        verticalAlign: "bottom",
+                      }}
+                      title={meta.session_name || `Session ${meta.source_session.slice(0, 8)}`}
+                    >
+                      {meta.session_name || `Session ${meta.source_session.slice(0, 8)}`}
+                    </span>
                   </button>
                 ))}
               </div>
