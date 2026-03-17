@@ -357,6 +357,7 @@ export function App() {
   const [pluginLoading, setPluginLoading] = useState(false);
   const [pluginBypass, setPluginBypass] = useState(false);
   const [pluginQuery, setPluginQuery] = useState<Record<string, string>>(() => readURLState().pluginQuery);
+  const [showHiddenFiles, setShowHiddenFiles] = useState(false);
 
   const ensureCompletionAudioContext = useCallback((): AudioContext | null => {
     if (typeof window === "undefined") {
@@ -1368,6 +1369,11 @@ export function App() {
     actionHandlers.open_dir({ path: path === "." ? root : path, root });
   }, [actionHandlers]);
 
+  const visibleMainEntries = useMemo(
+    () => (showHiddenFiles ? mainEntries : mainEntries.filter((entry) => !entry.name.startsWith("."))),
+    [mainEntries, showHiddenFiles],
+  );
+
 
   useEffect(() => {
     if (!currentRootId) return;
@@ -1878,7 +1884,8 @@ export function App() {
       <DefaultListView
         root={currentRootId || undefined}
         path={selectedDir || ""}
-        entries={mainEntries}
+        entries={visibleMainEntries}
+        showHiddenFiles={showHiddenFiles}
         sortMode={currentDirectorySortMode}
         sortControlValue={currentDirectorySortOverride || "inherit"}
         onSortModeChange={(nextMode) => {
@@ -1982,7 +1989,7 @@ export function App() {
     <AppShell
       leftOpen={isLeftOpen} rightOpen={isRightOpen}
       onCloseLeft={() => setIsLeftOpen(false)} onCloseRight={() => setIsRightOpen(false)}
-      sidebar={<FileTree entries={rootEntries} childrenByPath={entriesByPath} expanded={expanded} sortMode={treeSortMode} onSortModeChange={setTreeSortMode} selectedDir={selectedDir} selectedPath={file?.path} rootId={currentRootId} managedRoots={managedRootIds} onSelectFile={(e, r) => { actionHandlers.open({path: e.path, root: r}); if (isMobile) setIsLeftOpen(false); }} onToggleDir={(e, r) => actionHandlers.open_dir({path: e.path, root: r, toggle: true})} />}
+      sidebar={<FileTree entries={rootEntries} childrenByPath={entriesByPath} expanded={expanded} sortMode={treeSortMode} showHiddenFiles={showHiddenFiles} onSortModeChange={setTreeSortMode} onShowHiddenFilesChange={setShowHiddenFiles} selectedDir={selectedDir} selectedPath={file?.path} rootId={currentRootId} managedRoots={managedRootIds} onSelectFile={(e, r) => { actionHandlers.open({path: e.path, root: r}); if (isMobile) setIsLeftOpen(false); }} onToggleDir={(e, r) => actionHandlers.open_dir({path: e.path, root: r, toggle: true})} />}
       rightSidebar={<SessionList sessions={sessions} selectedKey={selectedSession?.key} onSelect={(s) => { handleSelectSession(s); if (isMobile) setIsRightOpen(false); }} onDelete={handleDeleteSession} />}
       main={
         <div style={{ width: "100%", flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", position: "relative" }}>

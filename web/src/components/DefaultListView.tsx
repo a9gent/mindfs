@@ -12,6 +12,7 @@ type DefaultListViewProps = {
   root?: string;
   path?: string;
   entries: FileEntry[];
+  showHiddenFiles?: boolean;
   sortMode: DirectorySortMode;
   sortControlValue: DirectorySortControlValue;
   onItemClick?: (entry: FileEntry) => void;
@@ -114,6 +115,7 @@ export function DefaultListView({
   root,
   path = "",
   entries,
+  showHiddenFiles = false,
   sortMode,
   sortControlValue,
   onItemClick,
@@ -124,7 +126,10 @@ export function DefaultListView({
   const inputRef = React.useRef<HTMLInputElement>(null);
   const menuRef = React.useRef<HTMLDivElement | null>(null);
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
-  const sortedEntries = React.useMemo(() => sortDirectoryEntries(entries, sortMode), [entries, sortMode]);
+  const sortedEntries = React.useMemo(() => {
+    const visibleEntries = showHiddenFiles ? entries : entries.filter((entry) => !entry.name.startsWith("."));
+    return sortDirectoryEntries(visibleEntries, sortMode);
+  }, [entries, showHiddenFiles, sortMode]);
   const showCompactMeta = sortMode === "mtime-desc" || sortMode === "mtime-asc" || sortMode === "size-desc" || sortMode === "size-asc";
 
   React.useEffect(() => {
@@ -160,7 +165,7 @@ export function DefaultListView({
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
           <div style={{ fontSize: "11px", color: "var(--text-secondary)", opacity: 0.6 }}>
-            {entries.length} 个项目
+            {sortedEntries.length} 个项目
           </div>
           <div ref={menuRef} style={{ position: "relative" }}>
             <button

@@ -16,6 +16,7 @@ type FileTreeProps = {
   childrenByPath: Record<string, FileEntry[]>;
   expanded: string[];
   sortMode: DirectorySortMode;
+  showHiddenFiles?: boolean;
   selectedDir?: string | null;
   selectedPath?: string | null;
   rootId?: string | null;
@@ -23,6 +24,7 @@ type FileTreeProps = {
   fileMetas?: Record<string, FileMeta>;
   activeSessionKey?: string | null;
   onSortModeChange?: (mode: DirectorySortMode) => void;
+  onShowHiddenFilesChange?: (show: boolean) => void;
   onSelectFile?: (entry: FileEntry, rootId: string) => void;
   onToggleDir?: (entry: FileEntry, rootId: string) => void;
 };
@@ -86,6 +88,7 @@ export function FileTree({
   childrenByPath,
   expanded,
   sortMode,
+  showHiddenFiles = false,
   selectedDir,
   selectedPath,
   rootId,
@@ -93,6 +96,7 @@ export function FileTree({
   fileMetas = {},
   activeSessionKey,
   onSortModeChange,
+  onShowHiddenFilesChange,
   onSelectFile,
   onToggleDir,
 }: FileTreeProps) {
@@ -119,9 +123,16 @@ export function FileTree({
     return `${entryRoot}:${entry.path}`;
   };
 
+  const visibleEntries = React.useCallback((items: FileEntry[]) => {
+    if (showHiddenFiles) {
+      return items;
+    }
+    return items.filter((entry) => !entry.name.startsWith("."));
+  }, [showHiddenFiles]);
+
   const renderEntries = (items: FileEntry[], depth: number, branchRoot: string) => (
     <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-      {sortDirectoryEntries(items, sortMode).map((entry) => {
+      {sortDirectoryEntries(visibleEntries(items), sortMode).map((entry) => {
         const entryRoot = managedSet.has(entry.path) ? entry.path : branchRoot;
         const expandedKey = managedSet.has(entry.path) ? entry.path : `${entryRoot}:${entry.path}`;
         const isOpen = expandedSet.has(expandedKey);
@@ -258,6 +269,28 @@ export function FileTree({
                   </button>
                 );
               })}
+              <div style={{ height: "1px", background: "var(--border-color)", margin: "6px 4px" }} />
+              <button
+                type="button"
+                onClick={() => onShowHiddenFilesChange?.(!showHiddenFiles)}
+                style={{
+                  width: "100%",
+                  border: "none",
+                  background: showHiddenFiles ? "var(--selection-bg)" : "transparent",
+                  color: showHiddenFiles ? "var(--accent-color)" : "var(--text-primary)",
+                  borderRadius: "8px",
+                  padding: "8px 10px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  fontSize: "12px",
+                }}
+              >
+                <span>显示隐藏文件</span>
+                <span style={{ fontSize: "11px", opacity: showHiddenFiles ? 1 : 0 }}>✓</span>
+              </button>
             </div>
           ) : null}
         </div>
