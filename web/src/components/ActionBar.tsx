@@ -30,6 +30,7 @@ type ActionBarProps = {
   agentsVersion?: number;
   currentRootId?: string | null;
   currentSession?: SessionInfo | null;
+  canOpenSessionDrawer?: boolean;
   onSendMessage?: (message: string, mode: SessionMode, agent: string) => void | Promise<void>;
   onCancelCurrentTurn?: (sessionKey: string) => void;
   onNewSession?: () => void;
@@ -63,6 +64,7 @@ export function ActionBar({
   agentsVersion = 0,
   currentRootId,
   currentSession,
+  canOpenSessionDrawer = false,
   onSendMessage,
   onCancelCurrentTurn,
   onNewSession,
@@ -89,6 +91,7 @@ export function ActionBar({
   const syncedSessionSignatureRef = useRef<string>("");
   const editorRef = useRef<TokenEditorHandle>(null);
   const candidateAbortRef = useRef<AbortController | null>(null);
+  const candidateItemRefs = useRef<Array<HTMLDivElement | null>>([]);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
   const { isMobile } = useResponsive();
@@ -181,6 +184,18 @@ export function ActionBar({
       });
     return () => controller.abort();
   }, [activeToken, currentRootId, agent]);
+
+  useEffect(() => {
+    if (candidates.length === 0) {
+      candidateItemRefs.current = [];
+      return;
+    }
+    const activeItem = candidateItemRefs.current[activeCandidateIndex];
+    if (!activeItem) {
+      return;
+    }
+    activeItem.scrollIntoView({ block: "nearest" });
+  }, [candidates, activeCandidateIndex]);
 
   const syncEditorHeight = useCallback(() => {
     const height = editorRef.current?.getHeight() || 44;
@@ -434,6 +449,9 @@ export function ActionBar({
                 {candidates.map((candidate, index) => (
                   <div
                     key={`${candidate.type}:${candidate.name}`}
+                    ref={(element) => {
+                      candidateItemRefs.current[index] = element;
+                    }}
                     onMouseDown={(e) => {
                       e.preventDefault();
                       applyCandidate(candidate);
@@ -476,8 +494,8 @@ export function ActionBar({
                   }
                 }}
                 style={{
-                  width: "28px",
-                  height: "28px",
+                  width: "32px",
+                  height: "32px",
                   cursor: "pointer",
                   transform: `translateX(${dragX}px)`,
                   transition: isDragging ? "none" : "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
@@ -494,8 +512,8 @@ export function ActionBar({
                 {!hasBoundSession ? (
                   <div
                     style={{
-                      width: "12px",
-                      height: "12px",
+                      width: "14px",
+                      height: "14px",
                       borderRadius: "50%",
                       background: "transparent",
                       border: "2px solid #94a3b8",
@@ -504,8 +522,8 @@ export function ActionBar({
                 ) : (
                   <div
                     style={{
-                      width: "12px",
-                      height: "12px",
+                      width: "14px",
+                      height: "14px",
                       borderRadius: "50%",
                       background: "transparent",
                       border: "2px solid #2563eb",
@@ -513,6 +531,30 @@ export function ActionBar({
                     }}
                   />
                 )}
+                {canOpenSessionDrawer ? (
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 12 12"
+                    fill="none"
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      margin: "auto",
+                      color: "#2563eb",
+                      pointerEvents: "none",
+                    }}
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M3.25 7.25 6 4.5l2.75 2.75"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                ) : null}
                 {isDragging && dragX < -10 ? (
                   <div style={{ position: "absolute", right: "100%", top: "50%", transform: "translateY(-50%)", marginRight: "8px", fontSize: "10px", fontWeight: 600, color: dragX <= DRAG_THRESHOLD ? "var(--accent-color)" : "#9ca3af", whiteSpace: "nowrap", opacity: Math.min(1, Math.abs(dragX) / 20), pointerEvents: "none" }}>
                     {dragX <= DRAG_THRESHOLD ? "松开新建" : "左滑新建"}
