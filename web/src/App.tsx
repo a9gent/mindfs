@@ -325,6 +325,7 @@ export function App() {
   const [managedRootIds, setManagedRootIds] = useState<string[]>([]);
   const [rootEntries, setRootEntries] = useState<FileEntry[]>([]);
   const [entriesByPath, setEntriesByPath] = useState<Record<string, FileEntry[]>>({});
+  const entriesByPathRef = useRef<Record<string, FileEntry[]>>({});
   const [expanded, setExpanded] = useState<string[]>([]);
   const [selectedDir, setSelectedDir] = useState<string | null>(null);
   const [mainEntries, setMainEntries] = useState<FileEntry[]>([]);
@@ -358,6 +359,7 @@ export function App() {
   const [pluginLoading, setPluginLoading] = useState(false);
   const [pluginBypass, setPluginBypass] = useState(false);
   const [pluginQuery, setPluginQuery] = useState<Record<string, string>>(() => readURLState().pluginQuery);
+  const pluginQueryRef = useRef<Record<string, string>>(readURLState().pluginQuery);
   const [showHiddenFiles, setShowHiddenFiles] = useState(false);
 
   const ensureCompletionAudioContext = useCallback((): AudioContext | null => {
@@ -438,7 +440,9 @@ export function App() {
   useEffect(() => { currentRootIdRef.current = currentRootId; }, [currentRootId]);
   useEffect(() => { expandedRef.current = expanded; }, [expanded]);
   useEffect(() => { selectedDirRef.current = selectedDir; }, [selectedDir]);
+  useEffect(() => { entriesByPathRef.current = entriesByPath; }, [entriesByPath]);
   useEffect(() => { fileRef.current = file; }, [file]);
+  useEffect(() => { pluginQueryRef.current = pluginQuery; }, [pluginQuery]);
   useEffect(() => {
     if (!file?.path || !currentRootId) return;
     const nextKey = `${currentRootId}:${file.path}`;
@@ -741,7 +745,7 @@ export function App() {
     let readMode: "incremental" | "full" = "incremental";
     if (!pluginBypassRef.current) {
       try {
-        const plugin = pluginManagerRef.current.match(rootID, buildMatchInputFromPath(changedPath, pluginQuery));
+        const plugin = pluginManagerRef.current.match(rootID, buildMatchInputFromPath(changedPath, pluginQueryRef.current));
         readMode = inferReadModeFromPlugin(plugin);
       } catch {
         readMode = "incremental";
@@ -768,7 +772,7 @@ export function App() {
     } catch (err) {
       console.error("[file.refresh.changed] failed", { rootID, changedPath, err });
     }
-  }, [pluginQuery]);
+  }, []);
 
   const handleTreeUpload = useCallback(async (files: File[]) => {
     const rootID = currentRootIdRef.current;
@@ -1077,6 +1081,9 @@ export function App() {
         });
         const toLoad = [".", ...dirs];
         for (const dir of toLoad) {
+          if (entriesByPathRef.current[`${root}:${dir}`]) {
+            continue;
+          }
           try {
             const res = await fetch(appURL("/api/tree", new URLSearchParams({ root: String(root), dir })));
             if (!res.ok) continue;
