@@ -29,7 +29,10 @@ type Selection struct {
 }
 
 type ListSessionsInput struct {
-	RootID string
+	RootID     string
+	BeforeTime time.Time
+	AfterTime  time.Time
+	Limit      int
 }
 
 type ListSessionsOutput struct {
@@ -44,7 +47,11 @@ func (s *Service) ListSessions(ctx context.Context, in ListSessionsInput) (ListS
 	if err != nil {
 		return ListSessionsOutput{}, err
 	}
-	items, err := manager.List(ctx)
+	items, err := manager.List(ctx, session.ListOptions{
+		BeforeTime: in.BeforeTime,
+		AfterTime:  in.AfterTime,
+		Limit:      in.Limit,
+	})
 	if err != nil {
 		return ListSessionsOutput{}, err
 	}
@@ -70,6 +77,7 @@ func (s *Service) CreateSession(ctx context.Context, in CreateSessionInput) (*se
 type GetSessionInput struct {
 	RootID string
 	Key    string
+	Seq    int
 }
 
 func (s *Service) GetSession(ctx context.Context, in GetSessionInput) (*session.Session, error) {
@@ -80,7 +88,7 @@ func (s *Service) GetSession(ctx context.Context, in GetSessionInput) (*session.
 	if err != nil {
 		return nil, err
 	}
-	return manager.Get(ctx, in.Key)
+	return manager.Get(ctx, in.Key, in.Seq)
 }
 
 type CloseSessionInput struct {
@@ -367,7 +375,7 @@ func (s *Service) SuggestSessionName(ctx context.Context, in SuggestSessionNameI
 	if err != nil {
 		return nil, err
 	}
-	current, err := manager.Get(ctx, in.SessionKey)
+	current, err := manager.Get(ctx, in.SessionKey, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -711,7 +719,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	if err != nil {
 		return err
 	}
-	current, err := manager.Get(ctx, in.Key)
+	current, err := manager.Get(ctx, in.Key, 0)
 	if err != nil {
 		return err
 	}
@@ -806,7 +814,7 @@ func (s *Service) CancelSessionTurn(ctx context.Context, in CancelSessionTurnInp
 	if err != nil {
 		return err
 	}
-	current, err := manager.Get(ctx, in.Key)
+	current, err := manager.Get(ctx, in.Key, 0)
 	if err != nil {
 		return err
 	}

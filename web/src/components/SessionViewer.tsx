@@ -126,9 +126,11 @@ const formatToolCallResult = (toolCall: Partial<ToolCall>): string => {
 
 function normalizeMarkdownContent(content: string): string {
   if (!content) return "";
-  // Some historical messages contain fenced code blocks without a leading newline,
-  // e.g. "text...```lang". Markdown won't parse that as a block.
-  return content.replace(/([^\n])```/g, "$1\n```");
+  let normalized = content.replace(/([^\n])```/g, "$1\n```");
+  normalized = normalized.replace(/```(typescript|javascript|markdown|python|bash|json|tsx|jsx|yaml|shell|text|sql|yml|txt|sh|go|js|ts|md)(?=\S)/gi, "```$1\n");
+  normalized = normalized.replace(/([^\n])```/g, "$1\n```");
+  normalized = normalized.replace(/^(#{1,6})([^\s#])/gm, "$1 $2");
+  return normalized;
 }
 
 function SessionViewerInner({ session, rootId, interactionMode = "main", onFileClick }: SessionViewerProps) {

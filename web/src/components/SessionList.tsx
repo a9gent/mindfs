@@ -20,6 +20,9 @@ type SessionListProps = {
   onSelect?: (session: SessionItem) => void;
   onRestore?: (session: SessionItem) => void;
   onDelete?: (session: SessionItem) => void;
+  onLoadOlder?: () => void;
+  loadingOlder?: boolean;
+  hasMore?: boolean;
 };
 
 const typeIcons: Record<SessionType, string> = {
@@ -32,6 +35,9 @@ export function SessionList({
   selectedKey = "",
   onSelect,
   onDelete,
+  onLoadOlder,
+  loadingOlder = false,
+  hasMore = false,
 }: SessionListProps) {
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "transparent" }}>
@@ -77,6 +83,25 @@ export function SessionList({
                 onDelete={onDelete}
               />
             ))}
+            {hasMore ? (
+              <button
+                type="button"
+                onClick={onLoadOlder}
+                disabled={loadingOlder}
+                style={{
+                  marginTop: "8px",
+                  border: "1px solid var(--border-color)",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  borderRadius: "8px",
+                  padding: "8px 10px",
+                  cursor: loadingOlder ? "default" : "pointer",
+                  fontSize: "12px",
+                }}
+              >
+                {loadingOlder ? "加载中..." : "加载更多"}
+              </button>
+            ) : null}
           </div>
         )}
       </div>

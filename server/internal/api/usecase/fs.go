@@ -343,7 +343,7 @@ func fillFileMetaSessionInfo(ctx context.Context, s *Service, rootID string, met
 		if meta[i].SessionName != "" && meta[i].Agent != "" {
 			continue
 		}
-		sess, err := manager.Get(ctx, meta[i].SourceSession)
+		sess, err := manager.Get(ctx, meta[i].SourceSession, 0)
 		if err != nil || sess == nil {
 			continue
 		}

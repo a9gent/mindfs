@@ -27,6 +27,7 @@ type HTTPHandler struct {
 const (
 	maxUploadRequestBytes = 64 << 20
 	maxUploadFileCount    = 20
+	sessionListPageSize   = 50
 )
 
 func (h *HTTPHandler) service() *usecase.Service {
@@ -58,8 +59,27 @@ func (h *HTTPHandler) Routes() http.Handler {
 
 func (h *HTTPHandler) handleSessions(w http.ResponseWriter, r *http.Request) {
 	rootID := r.URL.Query().Get("root")
+	beforeTime, err := parseOptionalTimeQuery(r, "before_time")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	afterTime, err := parseOptionalTimeQuery(r, "after_time")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !beforeTime.IsZero() && !afterTime.IsZero() {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("before_time and after_time are mutually exclusive"))
+		return
+	}
 	uc := h.service()
-	out, err := uc.ListSessions(r.Context(), usecase.ListSessionsInput{RootID: rootID})
+	out, err := uc.ListSessions(r.Context(), usecase.ListSessionsInput{
+		RootID:     rootID,
+		BeforeTime: beforeTime,
+		AfterTime:  afterTime,
+		Limit:      sessionListPageSize,
+	})
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err)
 		return
@@ -100,10 +120,16 @@ func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("session key required"))
 		return
 	}
+	afterSeq, err := parsePositiveIntQuery(r, "seq")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("seq must be a positive integer"))
+		return
+	}
 	uc := h.service()
 	out, err := uc.GetSession(r.Context(), usecase.GetSessionInput{
 		RootID: rootID,
 		Key:    key,
+		Seq:    afterSeq,
 	})
 	if err != nil {
 		respondError(w, http.StatusNotFound, err)
@@ -441,6 +467,18 @@ func parseOptionalTimeQuery(r *http.Request, key string) (time.Time, error) {
 		}
 	}
 	return value.UTC(), nil
+}
+
+func parsePositiveIntQuery(r *http.Request, key string) (int, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, errInvalidRequest(key + " must be positive")
+	}
+	return value, nil
 }
 
 func (h *HTTPHandler) handleDirs(w http.ResponseWriter, _ *http.Request) {

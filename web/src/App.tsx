@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getViewModeSystemPrompt } from "./renderer/viewCatalog";
 import { Renderer } from "./renderer/Renderer";
-import { sessionService, type Session } from "./services/session";
+import { deleteCachedSession, getCachedSession, sessionService, syncSession, type Session } from "./services/session";
 import { buildClientContext } from "./services/context";
 import { reportError } from "./services/error";
 import { fetchFile, getCachedFile, invalidateFileCache, type FilePayload } from "./services/file";
@@ -26,7 +26,7 @@ import { BottomSheet } from "./components/BottomSheet";
 
 // 类型定义
 type SessionMode = "chat" | "plugin";
-export type SessionItem = { key?: string; session_key?: string; root_id?: string; name?: string; type?: SessionMode; agent?: string; scope?: string; purpose?: string; closed_at?: string; related_files?: Array<{ path: string; name?: string }>; exchanges?: Array<{ role?: string; content?: string; timestamp?: string }>; pending?: boolean; };
+export type SessionItem = { key?: string; session_key?: string; root_id?: string; name?: string; type?: SessionMode; agent?: string; scope?: string; purpose?: string; created_at?: string; updated_at?: string; closed_at?: string; related_files?: Array<{ path: string; name?: string }>; exchanges?: Array<{ role?: string; content?: string; timestamp?: string }>; pending?: boolean; };
 type Exchange = { role: string; agent?: string; content?: string; timestamp?: string; toolCall?: any; };
 type PendingSend = { rootId: string; mode: SessionMode; agent: string; message: string; timestamp: string; };
 type URLState = { root: string; file: string; session: string; cursor: number; pluginQuery: Record<string, string> };
@@ -310,6 +310,9 @@ export function App() {
   const handleSelectSessionRef = useRef<((session: any) => Promise<void>) | null>(null);
   
   const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const sessionsRef = useRef<SessionItem[]>([]);
+  const [hasMoreSessions, setHasMoreSessions] = useState(false);
+  const [loadingOlderSessions, setLoadingOlderSessions] = useState(false);
   const [selectedSession, setSelectedSession] = useState<SessionItem | null>(null);
   const [activeBoundSessionKey, setActiveBoundSessionKey] = useState<string | null>(null);
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
@@ -456,6 +459,7 @@ export function App() {
     pluginBypassRef.current = pluginBypass;
   }, [pluginBypass]);
   useEffect(() => { selectedSessionRef.current = selectedSession; }, [selectedSession]);
+  useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
   useEffect(() => { currentSessionRef.current = currentSession; }, [currentSession]);
   useEffect(() => { interactionModeRef.current = interactionMode; }, [interactionMode]);
   useEffect(() => {
@@ -522,6 +526,27 @@ export function App() {
 
   const rootSessionKey = useCallback((rootId: string, sessionKey: string) => `${rootId}::${sessionKey}`, []);
   const bumpCacheVersion = useCallback(() => setCacheVersion((v) => v + 1), []);
+  const mergeSessionItems = useCallback((current: SessionItem[], incoming: SessionItem[]) => {
+    const byKey = new Map<string, SessionItem>();
+    for (const item of current) {
+      const key = item.key || item.session_key;
+      if (key) {
+        byKey.set(key, item);
+      }
+    }
+    for (const item of incoming) {
+      const key = item.key || item.session_key;
+      if (!key) {
+        continue;
+      }
+      byKey.set(key, { ...(byKey.get(key) || {}), ...item });
+    }
+    return Array.from(byKey.values()).sort((a, b) => {
+      const left = Date.parse(a.updated_at || "") || 0;
+      const right = Date.parse(b.updated_at || "") || 0;
+      return right - left;
+    });
+  }, []);
   const resolveRootForSessionKey = useCallback((sessionKey: string): string | null => {
     if (!sessionKey) return null;
     const currentRoot = currentRootIdRef.current;
@@ -820,7 +845,6 @@ export function App() {
     const cacheKey = rootSessionKey(targetRoot, key);
     const applySession = (fullSession: Session) => {
       sessionCacheRef.current[cacheKey] = fullSession;
-      loadedSessionRef.current[cacheKey] = true;
       setSelectedSession((prev) => {
         const prevKey = prev?.key || prev?.session_key;
         const prevRoot = (prev?.root_id as string | undefined) || currentRootIdRef.current;
@@ -848,7 +872,11 @@ export function App() {
     const cached = sessionCacheRef.current[cacheKey];
     if (cached) {
       applySession(cached);
-      return;
+    } else {
+      const persisted = await getCachedSession(targetRoot, key);
+      if (persisted) {
+        applySession(persisted);
+      }
     }
     if (loadedSessionRef.current[cacheKey]) {
       return;
@@ -860,9 +888,7 @@ export function App() {
         if (fullSession) applySession(fullSession);
         return;
       }
-      const request = sessionService
-        .getSession(targetRoot, key)
-        .then((full) => (full ? ({ ...(full as any), key } as Session) : null))
+      const request = syncSession(targetRoot, key, sessionCacheRef.current[cacheKey])
         .finally(() => {
           delete loadingSessionRef.current[cacheKey];
         });
@@ -870,6 +896,7 @@ export function App() {
       const fullSession = await request;
       if (fullSession) {
         applySession(fullSession);
+        loadedSessionRef.current[cacheKey] = true;
         void sessionService.markSessionReady(targetRoot, key);
       }
     } catch (err) {}
@@ -1395,20 +1422,35 @@ export function App() {
   useEffect(() => {
     if (!currentRootId) return;
     let cancelled = false;
-    const loadSessions = async (rootID: string) => {
+    const loadSessions = async (rootID: string, options?: { beforeTime?: string; afterTime?: string; replace?: boolean }) => {
       try {
-        const res = await fetch(appURL("/api/sessions", new URLSearchParams({ root: rootID })));
-        const payload = await res.json();
-        if (!cancelled) { const next = Array.isArray(payload) ? payload : []; setSessions(next); }
+        const next = await sessionService.fetchSessions(rootID, {
+          beforeTime: options?.beforeTime,
+          afterTime: options?.afterTime,
+        }) as SessionItem[];
+        if (cancelled) return;
+        setHasMoreSessions(next.length >= 50);
+        if (options?.replace || (!options?.beforeTime && !options?.afterTime)) {
+          setSessions(next);
+          return;
+        }
+        setSessions((prev) => mergeSessionItems(prev, next));
       } catch {}
     };
     const reloadSessionForReplay = async (rootID: string, sessionKey: string) => {
       if (!rootID || !sessionKey) return;
-      const fullSession = await sessionService.getSession(rootID, sessionKey);
+      const cacheKey = rootSessionKey(rootID, sessionKey);
+      if (!sessionCacheRef.current[cacheKey]) {
+        const persisted = await getCachedSession(rootID, sessionKey);
+        if (persisted && !cancelled) {
+          sessionCacheRef.current[cacheKey] = persisted;
+        }
+      }
+      const fullSession = await syncSession(rootID, sessionKey, sessionCacheRef.current[cacheKey]);
       if (!fullSession || cancelled) return;
       const normalized = { ...(fullSession as any), key: sessionKey } as Session;
-      const cacheKey = rootSessionKey(rootID, sessionKey);
       sessionCacheRef.current[cacheKey] = normalized;
+      loadedSessionRef.current[cacheKey] = true;
       bumpCacheVersion();
       if ((selectedSessionRef.current?.key || selectedSessionRef.current?.session_key) === sessionKey) {
         setSelectedSession((prev) => prev ? ({ ...(prev as any), ...(normalized as any) } as SessionItem) : prev);
@@ -1543,7 +1585,8 @@ export function App() {
         case "ws.reconnected":
         case "ws.connected":
           if (currentRootIdRef.current) {
-            loadSessions(currentRootIdRef.current);
+            const newest = sessionsRef.current[0]?.updated_at || "";
+            void loadSessions(currentRootIdRef.current, newest ? { afterTime: newest } : { replace: true });
             const boundKey = boundSessionByRootRef.current[currentRootIdRef.current] || "";
             if (boundKey) {
               void reloadSessionForReplay(currentRootIdRef.current, boundKey);
@@ -1556,9 +1599,11 @@ export function App() {
           const rootID = resolveRootForSessionKey(sessionKey) || currentRootIdRef.current || "";
           if (rootID && sessionKey) {
             handleSessionStreamDone(rootID, sessionKey);
-            loadSessions(rootID);
+            const newest = sessionsRef.current[0]?.updated_at || "";
+            void loadSessions(rootID, newest ? { afterTime: newest } : { replace: true });
           } else if (currentRootIdRef.current) {
-            loadSessions(currentRootIdRef.current);
+            const newest = sessionsRef.current[0]?.updated_at || "";
+            void loadSessions(currentRootIdRef.current, newest ? { afterTime: newest } : { replace: true });
           }
           break;
         }
@@ -1598,7 +1643,8 @@ export function App() {
               updated_at: sessionMeta?.updated_at || exchange?.timestamp || new Date().toISOString(),
             } as Session;
             bumpCacheVersion();
-            loadSessions(rootID);
+            const newest = sessionsRef.current[0]?.updated_at || "";
+            void loadSessions(rootID, newest ? { afterTime: newest } : { replace: true });
           }
           break;
         case "session.meta.updated":
@@ -1628,19 +1674,20 @@ export function App() {
                 setDrawerSessionForRoot(rootID, latest);
               }
             }
-            loadSessions(rootID);
+            const newest = sessionsRef.current[0]?.updated_at || "";
+            void loadSessions(rootID, newest ? { afterTime: newest } : { replace: true });
           }
           break;
         case "file.changed": handleFileChanged(payload); break;
         case "agent.status.changed": setAgentsVersion(v => v + 1); break;
       }
     });
-    loadSessions(currentRootId);
+    void loadSessions(currentRootId, { replace: true });
     return () => {
       cancelled = true;
       unsubscribeEvents();
     };
-  }, [currentRootId, rootSessionKey, resolveRootForSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot, refreshTreeDir, refreshCurrentFileContent]);
+  }, [currentRootId, mergeSessionItems, rootSessionKey, resolveRootForSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot, refreshTreeDir, refreshCurrentFileContent]);
 
   useEffect(() => {
     if (!currentRootId) return;
@@ -1648,6 +1695,22 @@ export function App() {
     void ensurePluginsLoaded(currentRootId).catch(() => {
     });
   }, [currentRootId, ensurePluginsLoaded]);
+
+  const handleLoadOlderSessions = useCallback(async () => {
+    const rootID = currentRootIdRef.current;
+    const oldest = sessionsRef.current[sessionsRef.current.length - 1]?.updated_at || "";
+    if (!rootID || !oldest || loadingOlderSessions) {
+      return;
+    }
+    setLoadingOlderSessions(true);
+    try {
+      const next = await sessionService.fetchSessions(rootID, { beforeTime: oldest }) as SessionItem[];
+      setHasMoreSessions(next.length >= 50);
+      setSessions((prev) => mergeSessionItems(prev, next));
+    } finally {
+      setLoadingOlderSessions(false);
+    }
+  }, [loadingOlderSessions, mergeSessionItems]);
 
   useEffect(() => {
     if (didInitRef.current) {
@@ -2009,7 +2072,7 @@ export function App() {
       leftOpen={isLeftOpen} rightOpen={isRightOpen}
       onCloseLeft={() => setIsLeftOpen(false)} onCloseRight={() => setIsRightOpen(false)}
       sidebar={<FileTree entries={rootEntries} childrenByPath={entriesByPath} expanded={expanded} sortMode={treeSortMode} showHiddenFiles={showHiddenFiles} onSortModeChange={setTreeSortMode} onShowHiddenFilesChange={setShowHiddenFiles} selectedDir={selectedDir} selectedPath={file?.path} rootId={currentRootId} managedRoots={managedRootIds} onSelectFile={(e, r) => { actionHandlers.open({path: e.path, root: r}); if (isMobile) setIsLeftOpen(false); }} onToggleDir={(e, r) => actionHandlers.open_dir({path: e.path, root: r, toggle: true})} />}
-      rightSidebar={<SessionList sessions={sessions} selectedKey={selectedSession?.key} onSelect={(s) => { handleSelectSession(s); if (isMobile) setIsRightOpen(false); }} onDelete={handleDeleteSession} />}
+      rightSidebar={<SessionList sessions={sessions} selectedKey={selectedSession?.key} onSelect={(s) => { handleSelectSession(s); if (isMobile) setIsRightOpen(false); }} onDelete={handleDeleteSession} onLoadOlder={handleLoadOlderSessions} loadingOlder={loadingOlderSessions} hasMore={hasMoreSessions} />}
       main={
         <div style={{ width: "100%", flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", position: "relative" }}>
           {!isMobile && <div style={{ position: "absolute", top: "10px", left: isMobile ? "10px" : (isLeftOpen ? "-40px" : "10px"), right: isMobile ? "10px" : (isRightOpen ? "-40px" : "10px"), display: "flex", justifyContent: "space-between", pointerEvents: "none", zIndex: 100 }}>

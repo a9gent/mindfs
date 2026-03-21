@@ -72,6 +72,12 @@ type CreateInput struct {
 	Name  string
 }
 
+type ListOptions struct {
+	BeforeTime time.Time
+	AfterTime  time.Time
+	Limit      int
+}
+
 func NewManager(root fs.RootInfo, opts ...Option) *Manager {
 	m := &Manager{
 		root:            root,
@@ -151,16 +157,16 @@ func (m *Manager) Create(_ context.Context, input CreateInput) (*Session, error)
 	return session, nil
 }
 
-func (m *Manager) Get(_ context.Context, key string) (*Session, error) {
+func (m *Manager) Get(_ context.Context, key string, afterSeq int) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.getSessionUnsafe(key)
+	return m.getSessionUnsafe(key, afterSeq)
 }
 
-func (m *Manager) List(_ context.Context) ([]*Session, error) {
+func (m *Manager) List(_ context.Context, opts ListOptions) ([]*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.listSessionsUnsafe()
+	return m.listSessionsUnsafe(opts)
 }
 
 func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role, content, agent string) error {
@@ -169,7 +175,7 @@ func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role,
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	current, err := m.getSessionUnsafe(session.Key)
+	current, err := m.getSessionUnsafe(session.Key, 0)
 	if err != nil {
 		return err
 	}
@@ -211,7 +217,7 @@ func (m *Manager) AddRelatedFile(_ context.Context, key string, file RelatedFile
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	session, err := m.getSessionUnsafe(key)
+	session, err := m.getSessionUnsafe(key, 0)
 	if err != nil {
 		return err
 	}
@@ -247,7 +253,7 @@ func (m *Manager) UpdateAgentState(_ context.Context, session *Session, agent st
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	current, err := m.getSessionUnsafe(session.Key)
+	current, err := m.getSessionUnsafe(session.Key, 0)
 	if err != nil {
 		return err
 	}
@@ -280,7 +286,7 @@ func (m *Manager) Rename(_ context.Context, key, name string) (*Session, error) 
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	session, err := m.getSessionUnsafe(key)
+	session, err := m.getSessionUnsafe(key, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +302,7 @@ func (m *Manager) Rename(_ context.Context, key, name string) (*Session, error) 
 }
 
 func (m *Manager) closeSessionUnsafe(key string) (*Session, error) {
-	session, err := m.getSessionUnsafe(key)
+	session, err := m.getSessionUnsafe(key, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +358,7 @@ func (m *Manager) CheckIdle(ctx context.Context, idleAfter, closeAfter time.Dura
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	sessions, err := m.listSessionsUnsafe()
+	sessions, err := m.listSessionsUnsafe(ListOptions{})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -437,15 +443,19 @@ func (m *Manager) createSessionUnsafe(session *Session) error {
 	return m.root.WriteMetaFile(path, []byte{})
 }
 
-func (m *Manager) getSessionUnsafe(key string) (*Session, error) {
-	if cached, ok := m.sessions[key]; ok && cached != nil {
-		return cached, nil
+func (m *Manager) getSessionUnsafe(key string, afterSeq int) (*Session, error) {
+	if afterSeq <= 0 {
+		if cached, ok := m.sessions[key]; ok && cached != nil {
+			return cached, nil
+		}
 	}
-	loaded, err := m.loadSessionUnsafe(key)
+	loaded, err := m.loadSessionUnsafe(key, afterSeq)
 	if err != nil {
 		return nil, err
 	}
-	m.sessions[key] = loaded
+	if afterSeq <= 0 {
+		m.sessions[key] = loaded
+	}
 	return loaded, nil
 }
 
@@ -469,14 +479,31 @@ WHERE key = ?`, key)
 	return session, nil
 }
 
-func (m *Manager) listSessionsUnsafe() ([]*Session, error) {
+func (m *Manager) listSessionsUnsafe(opts ListOptions) ([]*Session, error) {
 	db, err := m.ensureSessionMetaDBUnsafe()
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(`
-SELECT key FROM sessions
-ORDER BY updated_at DESC`)
+	query := `
+SELECT key FROM sessions`
+	args := make([]any, 0, 2)
+	if !opts.BeforeTime.IsZero() {
+		query += `
+WHERE updated_at < ?`
+		args = append(args, opts.BeforeTime.UTC().Format(time.RFC3339Nano))
+	} else if !opts.AfterTime.IsZero() {
+		query += `
+WHERE updated_at > ?`
+		args = append(args, opts.AfterTime.UTC().Format(time.RFC3339Nano))
+	}
+	query += `
+ORDER BY updated_at DESC`
+	if opts.Limit > 0 {
+		query += `
+LIMIT ?`
+		args = append(args, opts.Limit)
+	}
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -494,7 +521,7 @@ ORDER BY updated_at DESC`)
 	}
 	items := make([]*Session, 0, len(keys))
 	for _, key := range keys {
-		session, err := m.getSessionUnsafe(key)
+		session, err := m.getSessionUnsafe(key, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -503,12 +530,12 @@ ORDER BY updated_at DESC`)
 	return items, nil
 }
 
-func (m *Manager) loadSessionUnsafe(key string) (*Session, error) {
+func (m *Manager) loadSessionUnsafe(key string, afterSeq int) (*Session, error) {
 	meta, err := m.getSessionMetaUnsafe(key)
 	if err != nil {
 		return nil, err
 	}
-	exchanges, _, err := m.loadExchanges(key)
+	exchanges, _, err := m.loadExchanges(key, afterSeq)
 	if err != nil {
 		return nil, err
 	}
@@ -536,7 +563,7 @@ func (m *Manager) upsertSessionMetaUnsafe(session *Session) error {
 	return nil
 }
 
-func (m *Manager) loadExchanges(key string) ([]Exchange, int, error) {
+func (m *Manager) loadExchanges(key string, afterSeq int) ([]Exchange, int, error) {
 	path, err := m.exchangePath(key)
 	if err != nil {
 		return nil, 0, err
@@ -565,6 +592,9 @@ func (m *Manager) loadExchanges(key string) ([]Exchange, int, error) {
 		}
 		if entry.Seq > total {
 			total = entry.Seq
+		}
+		if afterSeq > 0 && entry.Seq <= afterSeq {
+			continue
 		}
 		exchanges = append(exchanges, entry)
 	}
