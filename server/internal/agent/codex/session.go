@@ -15,6 +15,8 @@ import (
 type OpenOptions struct {
 	AgentName  string
 	SessionKey string
+	Model      string
+	Probe      bool
 	RootPath   string
 	Command    string
 	Args       []string
@@ -36,14 +38,17 @@ func (r *Runtime) OpenSession(_ context.Context, opts OpenOptions) (types.Sessio
 	}
 	client := r.getOrCreateClient(opts)
 	threadOptions := codexsdk.ThreadOptions{
-		SandboxMode:      codexsdk.SandboxModeWorkspaceWrite,
+		Model:            strings.TrimSpace(opts.Model),
 		WorkingDirectory: opts.RootPath,
+	}
+	if !opts.Probe {
+		threadOptions.SandboxMode = codexsdk.SandboxModeWorkspaceWrite
 		// CLI mode should work for non-git workspaces too.
-		SkipGitRepoCheck: true,
-		ApprovalPolicy:   codexsdk.ApprovalModeNever,
-		ApprovalHandler: func(_ codexsdk.ApprovalRequest) (codexsdk.ApprovalDecision, error) {
+		threadOptions.SkipGitRepoCheck = true
+		threadOptions.ApprovalPolicy = codexsdk.ApprovalModeNever
+		threadOptions.ApprovalHandler = func(_ codexsdk.ApprovalRequest) (codexsdk.ApprovalDecision, error) {
 			return codexsdk.ApprovalDecisionApproved, nil
-		},
+		}
 	}
 
 	thread := client.StartThread(threadOptions)
@@ -52,7 +57,12 @@ func (r *Runtime) OpenSession(_ context.Context, opts OpenOptions) (types.Sessio
 	if id := thread.ID(); id != nil && strings.TrimSpace(*id) != "" {
 		threadID = strings.TrimSpace(*id)
 	}
-	return &session{thread: thread, threadID: threadID, sessionKey: opts.SessionKey}, nil
+	return &session{
+		client:     client,
+		thread:     thread,
+		threadID:   threadID,
+		sessionKey: opts.SessionKey,
+	}, nil
 }
 
 func (r *Runtime) CloseAll() {
@@ -62,6 +72,18 @@ func (r *Runtime) CloseAll() {
 }
 
 func (r *Runtime) getOrCreateClient(opts OpenOptions) *codexsdk.Codex {
+	if opts.Probe {
+		codexOptions := codexsdk.CodexOptions{
+			Transport:             codexsdk.TransportAppServer,
+			AppServerPathOverride: opts.Command,
+			Env:                   opts.Env,
+			Verbose:               true,
+		}
+		if len(opts.Args) > 0 {
+			codexOptions.AppServerArgs = append([]string{}, opts.Args...)
+		}
+		return codexsdk.NewCodex(codexOptions)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if client, ok := r.clients[opts.AgentName]; ok {
@@ -79,6 +101,7 @@ func (r *Runtime) getOrCreateClient(opts OpenOptions) *codexsdk.Codex {
 }
 
 type session struct {
+	client     *codexsdk.Codex
 	thread     *codexsdk.Thread
 	threadID   string
 	sessionKey string
@@ -152,6 +175,37 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 
 	s.updateThreadIDFromThread()
 	return nil
+}
+
+func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
+	if s == nil || s.client == nil {
+		return types.ModelList{}, errors.New("codex session not initialized")
+	}
+	resp, err := s.client.ListModels(ctx, codexsdk.ModelListParams{})
+	if err != nil {
+		return types.ModelList{}, err
+	}
+	models := make([]types.ModelInfo, 0, len(resp.Data))
+	currentModelID := ""
+	for _, model := range resp.Data {
+		name := strings.TrimSpace(model.DisplayName)
+		if name == "" {
+			name = strings.TrimSpace(model.Model)
+		}
+		models = append(models, types.ModelInfo{
+			ID:          model.Model,
+			Name:        name,
+			Description: model.Description,
+			Hidden:      model.Hidden,
+		})
+		if model.IsDefault && currentModelID == "" {
+			currentModelID = model.Model
+		}
+	}
+	return types.ModelList{
+		CurrentModelID: currentModelID,
+		Models:         models,
+	}, nil
 }
 
 func (s *session) emitMessageDelta(msg *codexsdk.AgentMessageItem, textByID map[string]string) {

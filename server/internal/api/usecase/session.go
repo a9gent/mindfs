@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -198,6 +199,7 @@ type SendMessageInput struct {
 	RootID    string
 	Key       string
 	Agent     string
+	Model     string
 	Content   string
 	ClientCtx ClientContext
 	OnStart   func()
@@ -675,9 +677,19 @@ func (s *Service) ensureAgentSession(
 	pool *agent.Pool,
 	current *session.Session,
 	agentName string,
+	model string,
 	rootAbs string,
 ) (agenttypes.Session, error) {
 	poolSessionKey := agentPoolSessionKey(current.Key, agentName)
+	nextModel := strings.TrimSpace(model)
+	currentModel := ""
+	if current != nil {
+		currentModel = strings.TrimSpace(current.Model)
+	}
+	if current != nil && currentModel != nextModel {
+		log.Printf("[session/model] switch.detected session=%s agent=%s from=%q to=%q action=close_runtime_session", current.Key, agentName, currentModel, nextModel)
+		pool.Close(poolSessionKey)
+	}
 	if existing, ok := pool.Get(poolSessionKey); ok {
 		return existing, nil
 	}
@@ -690,20 +702,28 @@ func (s *Service) ensureAgentSession(
 	openInput := agenttypes.OpenSessionInput{
 		SessionKey: poolSessionKey,
 		AgentName:  agentName,
+		Model:      nextModel,
 		RootPath:   rootAbs,
 	}
+	log.Printf("[session/model] open session=%s agent=%s model=%q pool_session=%s", current.Key, agentName, nextModel, poolSessionKey)
 	sess, err := pool.GetOrCreate(openCtx, openInput)
 	if err != nil {
 		if prober := s.Registry.GetProber(); prober != nil {
 			prober.ReportFailure(agentName, err)
 		}
+		log.Printf("[session/model] open.error session=%s agent=%s model=%q pool_session=%s err=%v", current.Key, agentName, nextModel, poolSessionKey, err)
 		return nil, err
 	}
+	log.Printf("[session/model] open.done session=%s agent=%s model=%q runtime_session=%s pool_session=%s", current.Key, agentName, nextModel, sess.SessionID(), poolSessionKey)
 	return sess, nil
 }
 
 func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	if err := s.ensureRegistry(); err != nil {
+		return err
+	}
+	if err := s.validateAgentModel(in.Agent, in.Model); err != nil {
+		log.Printf("[session/model] validate.error root=%s session=%s agent=%s model=%q err=%v", in.RootID, in.Key, strings.TrimSpace(in.Agent), strings.TrimSpace(in.Model), err)
 		return err
 	}
 	turnCtx, turnCancel := context.WithCancel(ctx)
@@ -735,7 +755,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	}
 	root := manager.Root()
 	rootAbs, _ := root.RootDir()
-	sess, err := s.ensureAgentSession(turnCtx, agentPool, current, in.Agent, rootAbs)
+	sess, err := s.ensureAgentSession(turnCtx, agentPool, current, in.Agent, in.Model, rootAbs)
 	if err != nil {
 		return err
 	}
@@ -784,6 +804,9 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		}
 	})
 	sendErr := sess.SendMessage(turnCtx, prompt)
+	if err := manager.UpdateModel(ctx, current, in.Model); err != nil {
+		return err
+	}
 	if err := manager.AddExchangeForAgent(ctx, current, "user", in.Content, in.Agent); err != nil {
 		return err
 	}
@@ -804,6 +827,28 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	}
 	manager.UpdateAgentState(ctx, current, in.Agent, contextLineCount(current.Exchanges))
 	return nil
+}
+
+func (s *Service) validateAgentModel(agentName, model string) error {
+	agentName = strings.TrimSpace(agentName)
+	model = strings.TrimSpace(model)
+	if agentName == "" || model == "" || s.Registry == nil {
+		return nil
+	}
+	prober := s.Registry.GetProber()
+	if prober == nil {
+		return nil
+	}
+	status, ok := prober.GetStatus(agentName)
+	if !ok || len(status.Models) == 0 {
+		return nil
+	}
+	for _, item := range status.Models {
+		if strings.TrimSpace(item.ID) == model {
+			return nil
+		}
+	}
+	return fmt.Errorf("model %q is not supported by agent %q", model, agentName)
 }
 
 func (s *Service) CancelSessionTurn(ctx context.Context, in CancelSessionTurnInput) error {

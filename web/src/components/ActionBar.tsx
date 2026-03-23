@@ -15,6 +15,7 @@ type SessionInfo = {
   name: string;
   type: "chat" | "plugin";
   agent: string;
+  model?: string;
   pending?: boolean;
 };
 
@@ -31,7 +32,7 @@ type ActionBarProps = {
   currentRootId?: string | null;
   currentSession?: SessionInfo | null;
   canOpenSessionDrawer?: boolean;
-  onSendMessage?: (message: string, mode: SessionMode, agent: string) => void | Promise<void>;
+  onSendMessage?: (message: string, mode: SessionMode, agent: string, model?: string) => void | Promise<void>;
   onCancelCurrentTurn?: (sessionKey: string) => void;
   onNewSession?: () => void;
   onSessionClick?: () => void;
@@ -74,6 +75,7 @@ export function ActionBar({
 }: ActionBarProps) {
   const [mode, setMode] = useState<SessionMode>("chat");
   const [agent, setAgent] = useState("");
+  const [model, setModel] = useState("");
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [serializedInput, setSerializedInput] = useState("");
   const [activeToken, setActiveToken] = useState<{ type: "file" | "skill"; query: string } | null>(null);
@@ -113,13 +115,15 @@ export function ActionBar({
     }
     const nextMode = currentSession.type === "plugin" ? "plugin" : "chat";
     const nextAgent = currentSession.agent || "";
-    const signature = `${sessionKey || ""}::${nextMode}::${nextAgent}`;
+    const nextModel = currentSession.model || "";
+    const signature = `${sessionKey || ""}::${nextMode}::${nextAgent}::${nextModel}`;
     if (syncedSessionSignatureRef.current === signature) {
       return;
     }
     syncedSessionSignatureRef.current = signature;
     setMode(nextMode);
     setAgent(nextAgent);
+    setModel(nextModel);
   }, [currentSession]);
 
   useEffect(() => {
@@ -137,11 +141,26 @@ export function ActionBar({
   useEffect(() => {
     if (currentSession || agents.length === 0) return;
     if (agents.some((a) => a.name === agent)) return;
-    const preferred = agents.find((a) => a.available) ?? agents[0];
-    if (preferred) {
-      setAgent(preferred.name);
-    }
+      const preferred = agents.find((a) => a.available) ?? agents[0];
+      if (preferred) {
+        setAgent(preferred.name);
+        setModel("");
+      }
   }, [agent, agents, currentSession]);
+
+  useEffect(() => {
+    if (!agent || !model) {
+      return;
+    }
+    const selectedAgent = agents.find((item) => item.name === agent);
+    if (!selectedAgent) {
+      return;
+    }
+    const hasModel = (selectedAgent.models ?? []).some((item) => item.id === model);
+    if (!hasModel) {
+      setModel("");
+    }
+  }, [agent, model, agents]);
 
   useEffect(() => () => candidateAbortRef.current?.abort(), []);
 
@@ -247,7 +266,7 @@ export function ActionBar({
       if (!payload) {
         return;
       }
-      await onSendMessage?.(payload, mode, agent);
+      await onSendMessage?.(payload, mode, agent, model || undefined);
       editorRef.current?.clear();
       setSerializedInput("");
       setActiveToken(null);
@@ -268,7 +287,7 @@ export function ActionBar({
       setSending(false);
       requestAnimationFrame(() => editorRef.current?.focus());
     }
-  }, [serializedInput, pendingAttachments, isConnected, sending, agent, onSendMessage, mode, currentRootId]);
+  }, [serializedInput, pendingAttachments, isConnected, sending, agent, model, onSendMessage, mode, currentRootId]);
 
   const handleCancel = useCallback(async () => {
     const sessionKey = currentSession?.key;
@@ -565,7 +584,17 @@ export function ActionBar({
               </div>
 
               <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} />
-              <AgentSelector agent={agent} agents={agents} onAgentChange={setAgent} compact={true} warnUnavailable={isSelectedAgentUnavailable} />
+              <AgentSelector
+                agent={agent}
+                model={model}
+                agents={agents}
+                onAgentChange={(nextAgent, nextModel) => {
+                  setAgent(nextAgent);
+                  setModel(nextModel || "");
+                }}
+                compact={true}
+                warnUnavailable={isSelectedAgentUnavailable}
+              />
 
               <button
                 type="button"

@@ -32,7 +32,7 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 		return err
 	}
 	agentPool := agent.NewPool(agentConfig)
-	agentProber := agent.NewProber(&agentConfig, 5*time.Minute)
+	agentProber := agent.NewProber(&agentConfig, agentPool, 5*time.Minute)
 	agentProber.Start(ctx)
 
 	services := &api.AppContext{

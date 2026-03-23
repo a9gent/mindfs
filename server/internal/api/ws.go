@@ -96,11 +96,14 @@ func (h *WSHandler) broadcastAgentStatusChange(status agent.Status) {
 	resp := WSResponse{
 		Type: "agent.status.changed",
 		Payload: map[string]any{
-			"name":       status.Name,
-			"available":  status.Available,
-			"version":    status.Version,
-			"error":      status.Error,
-			"last_probe": status.LastProbe,
+			"name":             status.Name,
+			"available":        status.Available,
+			"version":          status.Version,
+			"error":            status.Error,
+			"last_probe":       status.LastProbe,
+			"current_model_id": status.CurrentModelID,
+			"models":           status.Models,
+			"models_error":     status.ModelsError,
 		},
 	}
 	h.broadcastWS(resp)
@@ -132,6 +135,7 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 	content := getString(req.Payload, "content")
 	sessionType := getString(req.Payload, "type")
 	agentName := getString(req.Payload, "agent")
+	model := getString(req.Payload, "model")
 	if content == "" || sessionType == "" || agentName == "" {
 		h.sendWSError(conn, req.ID, "invalid_request", "content, type and agent required")
 		return
@@ -146,6 +150,7 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 			Input: session.CreateInput{
 				Type:  sessionType,
 				Agent: agentName,
+				Model: model,
 				Name:  sessionName,
 			},
 		})
@@ -191,10 +196,11 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 		RootID:    rootID,
 		Key:       key,
 		Agent:     agentName,
+		Model:     model,
 		Content:   content,
 		ClientCtx: clientCtx,
 		OnStart: func() {
-			streamHub.BroadcastSessionUserMessage(rootID, key, sessionType, sessionName, agentName, content, clientID)
+			streamHub.BroadcastSessionUserMessage(rootID, key, sessionType, sessionName, agentName, model, content, clientID)
 		},
 		OnUpdate: func(update agenttypes.Event) {
 			event := updateToEvent(update)

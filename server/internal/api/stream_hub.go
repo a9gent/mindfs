@@ -21,6 +21,7 @@ type StreamHub struct {
 
 type PendingUserMessage struct {
 	Agent     string    `json:"agent,omitempty"`
+	Model     string    `json:"model,omitempty"`
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -76,6 +77,7 @@ func cloneUserExchange(msg *PendingUserMessage) *session.Exchange {
 	return &session.Exchange{
 		Role:      "user",
 		Agent:     msg.Agent,
+		Model:     msg.Model,
 		Content:   msg.Content,
 		Timestamp: msg.Timestamp,
 	}
@@ -101,11 +103,12 @@ func buildSessionDoneResponse(sessionKey, requestID string) WSResponse {
 	}
 }
 
-func buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, content string, timestamp time.Time) WSResponse {
+func buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, model, content string, timestamp time.Time) WSResponse {
 	sessionPayload := map[string]any{
 		"key":        sessionKey,
 		"type":       sessionType,
 		"agent":      agentName,
+		"model":      model,
 		"created_at": timestamp,
 		"updated_at": timestamp,
 	}
@@ -121,6 +124,7 @@ func buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionNam
 			"exchange": map[string]any{
 				"role":      "user",
 				"agent":     agentName,
+				"model":     model,
 				"content":   content,
 				"timestamp": timestamp,
 			},
@@ -139,6 +143,7 @@ func buildSessionMetaUpdatedResponse(rootID string, sess *session.Session) WSRes
 			"session": map[string]any{
 				"key":        sess.Key,
 				"name":       sess.Name,
+				"model":      sess.Model,
 				"updated_at": sess.UpdatedAt,
 			},
 		},
@@ -250,12 +255,13 @@ func (h *StreamHub) getAllClientIDs() []string {
 	return clientIDs
 }
 
-func (h *StreamHub) SetPendingUser(sessionKey, agent, content string) *PendingUserMessage {
+func (h *StreamHub) SetPendingUser(sessionKey, agent, model, content string) *PendingUserMessage {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	state := h.ensurePendingSessionLocked(sessionKey)
 	state.User = &PendingUserMessage{
 		Agent:     agent,
+		Model:     model,
 		Content:   content,
 		Timestamp: time.Now().UTC(),
 	}
@@ -263,6 +269,7 @@ func (h *StreamHub) SetPendingUser(sessionKey, agent, content string) *PendingUs
 	h.clearReplayStatesForSessionLocked(sessionKey)
 	return &PendingUserMessage{
 		Agent:     state.User.Agent,
+		Model:     state.User.Model,
 		Content:   state.User.Content,
 		Timestamp: state.User.Timestamp,
 	}
@@ -370,11 +377,12 @@ func (h *StreamHub) BroadcastSessionUserMessage(
 	sessionType string,
 	sessionName string,
 	agentName string,
+	model string,
 	content string,
 	excludeClientID string,
 ) {
-	pendingUser := h.SetPendingUser(sessionKey, agentName, content)
-	resp := buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, content, pendingUser.Timestamp)
+	pendingUser := h.SetPendingUser(sessionKey, agentName, model, content)
+	resp := buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, model, content, pendingUser.Timestamp)
 	for _, clientID := range h.GetSessionClientIDs(sessionKey, false) {
 		if clientID == excludeClientID {
 			continue

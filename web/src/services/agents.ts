@@ -8,6 +8,16 @@ export type AgentStatus = {
   version?: string;
   error?: string;
   last_probe?: string;
+  current_model_id?: string;
+  models?: AgentModelInfo[];
+  models_error?: string;
+};
+
+export type AgentModelInfo = {
+  id: string;
+  name: string;
+  description?: string;
+  hidden?: boolean;
 };
 
 let cachedAgents: AgentStatus[] = [];

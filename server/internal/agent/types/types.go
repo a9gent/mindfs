@@ -12,6 +12,9 @@ type Session interface {
 	// SendMessage sends a message to the current session.
 	SendMessage(ctx context.Context, content string) error
 
+	// ListModels returns the models visible to the current session/runtime.
+	ListModels(ctx context.Context) (ModelList, error)
+
 	// CancelCurrentTurn cancels the in-flight turn, if any.
 	CancelCurrentTurn() error
 
@@ -28,7 +31,21 @@ type Session interface {
 type OpenSessionInput struct {
 	SessionKey string
 	AgentName  string
+	Model      string
+	Probe      bool
 	RootPath   string
+}
+
+type ModelInfo struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Hidden      bool   `json:"hidden,omitempty"`
+}
+
+type ModelList struct {
+	CurrentModelID string      `json:"current_model_id,omitempty"`
+	Models         []ModelInfo `json:"models,omitempty"`
 }
 
 // EventType defines the type of a session event.

@@ -26,10 +26,10 @@ github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/stretchr/testify v1.8.1 h1:w7B6lhMri9wdJUVmEZPGGhZzrYTPvgJArz7wNPgYKsk=
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
-github.com/yandc/claude-agent-sdk-go v0.0.0-20260228035121-e62f66408bee h1:s7tSh0s5FKXilu3p+gVr6MVwGZABIRXAKqtMzIopBbk=
-github.com/yandc/claude-agent-sdk-go v0.0.0-20260228035121-e62f66408bee/go.mod h1:F0UH/dW/gpCuTfWRWa2qwT18HeiYwUTSd+Q6KSFHIjo=
-github.com/yandc/codex-go-sdk v0.0.0-20260228040055-048c8cdcd868 h1:Gig0CsNYYVwZOLATKncbeoreKnZAN7uEQ/55evhDbKE=
-github.com/yandc/codex-go-sdk v0.0.0-20260228040055-048c8cdcd868/go.mod h1:YTvQqlQmaABafBpZf5dftTiLj03hBgoR8a9UTZR/TNQ=
+github.com/yandc/claude-agent-sdk-go v0.0.0-20260323052654-264103ad0773 h1:WQewlvyiVjCAzwXxfEtIPbL9z7c54t+rs+p3k2Rqcwc=
+github.com/yandc/claude-agent-sdk-go v0.0.0-20260323052654-264103ad0773/go.mod h1:F0UH/dW/gpCuTfWRWa2qwT18HeiYwUTSd+Q6KSFHIjo=
+github.com/yandc/codex-go-sdk v0.0.0-20260323054822-001897673526 h1:P6wT20aF1MLsFwKLar/jeY5eRBfR4S83mUQ7iZwSONA=
+github.com/yandc/codex-go-sdk v0.0.0-20260323054822-001897673526/go.mod h1:YTvQqlQmaABafBpZf5dftTiLj03hBgoR8a9UTZR/TNQ=
 golang.org/x/mod v0.16.0 h1:QX4fJ0Rr5cPQCF7O9lh9Se4pmwfwskqZfq5moyldzic=
 golang.org/x/mod v0.16.0/go.mod h1:hTbmBsO62+eylJbnUtE2MGJUyE7QWk4xUqPFrRgJ+7c=
 golang.org/x/net v0.17.0 h1:pVaXccu2ozPjCXewfr1S7xza/zcXTity9cCdXQYSjIM=

@@ -26,9 +26,9 @@ import { BottomSheet } from "./components/BottomSheet";
 
 // 类型定义
 type SessionMode = "chat" | "plugin";
-export type SessionItem = { key?: string; session_key?: string; root_id?: string; name?: string; type?: SessionMode; agent?: string; scope?: string; purpose?: string; created_at?: string; updated_at?: string; closed_at?: string; related_files?: Array<{ path: string; name?: string }>; exchanges?: Array<{ role?: string; content?: string; timestamp?: string }>; pending?: boolean; };
-type Exchange = { role: string; agent?: string; content?: string; timestamp?: string; toolCall?: any; };
-type PendingSend = { rootId: string; mode: SessionMode; agent: string; message: string; timestamp: string; };
+export type SessionItem = { key?: string; session_key?: string; root_id?: string; name?: string; type?: SessionMode; agent?: string; model?: string; scope?: string; purpose?: string; created_at?: string; updated_at?: string; closed_at?: string; related_files?: Array<{ path: string; name?: string }>; exchanges?: Array<{ role?: string; content?: string; timestamp?: string; model?: string }>; pending?: boolean; };
+type Exchange = { role: string; agent?: string; model?: string; content?: string; timestamp?: string; toolCall?: any; };
+type PendingSend = { rootId: string; mode: SessionMode; agent: string; model?: string; message: string; timestamp: string; };
 type URLState = { root: string; file: string; session: string; cursor: number; pluginQuery: Record<string, string> };
 const PLUGIN_QUERY_STORAGE_PREFIX = "vp-progress:";
 const TREE_SORT_STORAGE_KEY = "mindfs-tree-sort-mode";
@@ -595,7 +595,7 @@ export function App() {
     });
   }, []);
 
-  const updateSessionAgentForKey = useCallback((rootID: string, sessionKey: string, agent: string) => {
+  const updateSessionAgentForKey = useCallback((rootID: string, sessionKey: string, agent: string, model?: string) => {
     if (!rootID || !sessionKey || !agent) return;
     const cacheKey = rootSessionKey(rootID, sessionKey);
     const cached = sessionCacheRef.current[cacheKey];
@@ -603,6 +603,7 @@ export function App() {
       sessionCacheRef.current[cacheKey] = {
         ...(cached as any),
         agent,
+        model: model || "",
         updated_at: new Date().toISOString(),
       } as Session;
     }
@@ -610,11 +611,11 @@ export function App() {
       const prevKey = prev?.key || prev?.session_key;
       const prevRoot = (prev?.root_id as string | undefined) || currentRootIdRef.current;
       if (!prev || prevKey !== sessionKey || prevRoot !== rootID) return prev;
-      return { ...(prev as any), agent } as SessionItem;
+      return { ...(prev as any), agent, model: model || "" } as SessionItem;
     });
     const current = drawerSessionByRootRef.current[rootID];
-    if (current && current.key === sessionKey && current.agent !== agent) {
-      setDrawerSessionForRoot(rootID, { ...(current as any), agent } as Session);
+    if (current && current.key === sessionKey && (current.agent !== agent || (current as any).model !== (model || ""))) {
+      setDrawerSessionForRoot(rootID, { ...(current as any), agent, model: model || "" } as Session);
     }
     bumpCacheVersion();
   }, [rootSessionKey, setDrawerSessionForRoot, bumpCacheVersion]);
@@ -888,14 +889,17 @@ export function App() {
         if (fullSession) applySession(fullSession);
         return;
       }
-      const request = syncSession(targetRoot, key, sessionCacheRef.current[cacheKey])
+      const request = syncSession(targetRoot, key)
         .finally(() => {
           delete loadingSessionRef.current[cacheKey];
         });
       loadingSessionRef.current[cacheKey] = request;
-      const fullSession = await request;
+      const syncResult = await request;
+      const fullSession = !syncResult.hasDelta && sessionCacheRef.current[cacheKey]
+        ? sessionCacheRef.current[cacheKey]
+        : syncResult.session;
       if (fullSession) {
-        applySession(fullSession);
+        applySession(fullSession as Session);
         loadedSessionRef.current[cacheKey] = true;
         void sessionService.markSessionReady(targetRoot, key);
       }
@@ -950,7 +954,7 @@ export function App() {
     handleSelectSessionRef.current = handleSelectSession;
   }, [handleSelectSession]);
 
-  const handleSendMessage = useCallback(async (message: string, mode: SessionMode, agent: string) => {
+  const handleSendMessage = useCallback(async (message: string, mode: SessionMode, agent: string, model?: string) => {
     const activeRoot = currentRootIdRef.current;
     if (!activeRoot) return;
     const selected = selectedSessionRef.current;
@@ -980,14 +984,17 @@ export function App() {
         session = sessionCacheRef.current[rootSessionKey(activeRoot, sendSessionKey)] || ({ ...selected, key: selectedKey } as Session);
       }
     }
-    let effectiveMode = mode, effectiveAgent = agent;
+    let effectiveMode = mode, effectiveAgent = agent, effectiveModel = model || "";
     if (sendSessionKey && session) {
+      const previousAgent = session.agent || "";
       effectiveMode = normalizeMode(session.type as any);
-      effectiveAgent = agent || session.agent || "";
-      updateSessionAgentForKey(activeRoot, sendSessionKey, effectiveAgent);
+      effectiveAgent = agent || previousAgent || "";
+      effectiveModel = model || (effectiveAgent === previousAgent ? session.model || "" : "");
+      updateSessionAgentForKey(activeRoot, sendSessionKey, effectiveAgent, effectiveModel);
       session = {
         ...(session as any),
         agent: effectiveAgent,
+        model: effectiveModel,
       } as Session;
       setBoundSessionForRoot(activeRoot, sendSessionKey);
       setSelectedPendingByKey(sendSessionKey, true);
@@ -995,7 +1002,7 @@ export function App() {
     } else {
       sendSessionKey = undefined;
       const tempKey = `pending-${Date.now()}`;
-      session = { key: tempKey, type: mode, agent, name: "新会话", pending: true } as any;
+      session = { key: tempKey, type: mode, agent, model: effectiveModel, name: "新会话", pending: true } as any;
     }
     const now = new Date().toISOString();
     const userEx: Exchange = { role: "user", content: message, timestamp: now };
@@ -1010,7 +1017,7 @@ export function App() {
       } as Session;
       bumpCacheVersion();
     } else {
-      pendingDraftRef.current = { rootId: activeRoot, mode: effectiveMode, agent: effectiveAgent, message, timestamp: now };
+      pendingDraftRef.current = { rootId: activeRoot, mode: effectiveMode, agent: effectiveAgent, model: effectiveModel, message, timestamp: now };
       session = {
         ...(session as any),
         exchanges: [userEx],
@@ -1026,7 +1033,7 @@ export function App() {
       currentPath: explicitFileContext ? undefined : (fileRef.current?.path ?? selectedDirRef.current ?? undefined),
       pluginCatalog: effectiveMode === "plugin" ? getViewModeSystemPrompt() : undefined,
     });
-    const sent = await sessionService.sendMessage(activeRoot, sendSessionKey, message, effectiveMode, effectiveAgent, context);
+    const sent = await sessionService.sendMessage(activeRoot, sendSessionKey, message, effectiveMode, effectiveAgent, effectiveModel || undefined, context);
     if (!sent && sendSessionKey) {
       setSelectedPendingByKey(sendSessionKey, false);
       const latest = drawerSessionByRootRef.current[activeRoot];
@@ -1446,7 +1453,10 @@ export function App() {
           sessionCacheRef.current[cacheKey] = persisted;
         }
       }
-      const fullSession = await syncSession(rootID, sessionKey, sessionCacheRef.current[cacheKey]);
+      const syncResult = await syncSession(rootID, sessionKey);
+      const fullSession = !syncResult.hasDelta && sessionCacheRef.current[cacheKey]
+        ? sessionCacheRef.current[cacheKey]
+        : syncResult.session;
       if (!fullSession || cancelled) return;
       const normalized = { ...(fullSession as any), key: sessionKey } as Session;
       sessionCacheRef.current[cacheKey] = normalized;
@@ -1486,11 +1496,12 @@ export function App() {
       if (!boundKey || (typeof boundKey === "string" && boundKey.startsWith("pending-"))) {
         setBoundSessionForRoot(activeRoot, streamKey);
         if (pending) {
-          const userEx = { role: "user", content: pending.message, timestamp: pending.timestamp };
+          const userEx = { role: "user", content: pending.message, timestamp: pending.timestamp, model: pending.model };
           const cached = sessionCacheRef.current[ck] || ({
             key: streamKey,
             type: pending.mode,
             agent: pending.agent,
+            model: pending.model,
             name: "",
             created_at: pending.timestamp,
             updated_at: pending.timestamp,
@@ -1618,6 +1629,7 @@ export function App() {
               key: sessionKey,
               type: sessionMeta?.type || "chat",
               agent: sessionMeta?.agent || exchange?.agent || "",
+              model: sessionMeta?.model || exchange?.model || "",
               name: sessionMeta?.name || "新会话",
               created_at: sessionMeta?.created_at || exchange?.timestamp || new Date().toISOString(),
               updated_at: sessionMeta?.updated_at || exchange?.timestamp || new Date().toISOString(),
@@ -1634,9 +1646,11 @@ export function App() {
               ...(sessionMeta || {}),
               key: sessionKey,
               agent: sessionMeta?.agent || exchange?.agent || (cached as any).agent || "",
+              model: sessionMeta?.model || exchange?.model || (cached as any).model || "",
               exchanges: duplicate ? prevExchanges : [...prevExchanges, {
                 role: "user",
                 agent: exchange?.agent || "",
+                model: exchange?.model || "",
                 content: exchange?.content || "",
                 timestamp: exchange?.timestamp || new Date().toISOString(),
               }],
@@ -1657,6 +1671,7 @@ export function App() {
               sessionCacheRef.current[cacheKey] = {
                 ...cached,
                 name: typeof payload.session.name === "string" ? payload.session.name : cached.name,
+                model: typeof payload.session.model === "string" ? payload.session.model : (cached as any).model,
                 updated_at: payload.session.updated_at || cached.updated_at,
               } as Session;
               bumpCacheVersion();
@@ -1665,6 +1680,7 @@ export function App() {
               setSelectedSession((prev) => prev ? ({
                 ...(prev as any),
                 name: typeof payload.session.name === "string" ? payload.session.name : prev.name,
+                model: typeof payload.session.model === "string" ? payload.session.model : (prev as any).model,
                 updated_at: payload.session.updated_at || prev.updated_at,
               } as SessionItem) : prev);
             }

@@ -14,6 +14,7 @@ type Session struct {
 	Key          string         `json:"key"`
 	Type         string         `json:"type"`
 	AgentCtxSeq  map[string]int `json:"agent_ctx_seq,omitempty"`
+	Model        string         `json:"model,omitempty"`
 	Name         string         `json:"name"`
 	Exchanges    []Exchange     `json:"exchanges"`
 	RelatedFiles []RelatedFile  `json:"related_files"`
@@ -26,6 +27,7 @@ type Exchange struct {
 	Seq       int       `json:"seq"`
 	Role      string    `json:"role"`
 	Agent     string    `json:"agent,omitempty"`
+	Model     string    `json:"model,omitempty"`
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
 }

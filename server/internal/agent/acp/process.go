@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,7 @@ type Process struct {
 	sessions     map[string]*sessionState // sessionKey -> state
 	sessionsByID map[string]*sessionState // ACP session id -> state
 	capability   CapabilitySnapshot
+	models       *acp.SessionModelState
 }
 
 type CapabilitySnapshot struct {
@@ -38,6 +40,7 @@ type CapabilitySnapshot struct {
 
 type sessionState struct {
 	ID       acp.SessionId
+	models   *acp.SessionModelState
 	onUpdate func(SessionUpdate)
 	mu       sync.RWMutex
 }
@@ -52,6 +55,18 @@ func (s *sessionState) getOnUpdate() func(SessionUpdate) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.onUpdate
+}
+
+func (s *sessionState) setModels(models *acp.SessionModelState) {
+	s.mu.Lock()
+	s.models = models
+	s.mu.Unlock()
+}
+
+func (s *sessionState) getModels() *acp.SessionModelState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.models
 }
 
 // SessionUpdate is the internal session update type.
@@ -293,9 +308,12 @@ func (p *Process) NewSession(ctx context.Context, sessionKey, cwd string) error 
 	if raw, err := json.Marshal(resp); err == nil {
 		log.Printf("[agent/acp] new_session.resp.raw agent=%s session_key=%s resp=%s", p.agentLabel(), sessionKey, string(raw))
 	}
-
 	sess := &sessionState{
-		ID: resp.SessionId,
+		ID:     resp.SessionId,
+		models: resp.Models,
+	}
+	if resp.Models != nil {
+		p.models = resp.Models
 	}
 	p.sessions[sessionKey] = sess
 	p.sessionsByID[string(resp.SessionId)] = sess
@@ -384,6 +402,41 @@ func (p *Process) SessionID(sessionKey string) string {
 // Capability returns agent capabilities reported by initialize response.
 func (p *Process) Capability() CapabilitySnapshot {
 	return p.capability
+}
+
+func (p *Process) ModelState() *acp.SessionModelState {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.models
+}
+
+func (p *Process) SetModel(ctx context.Context, sessionKey, model string) error {
+	sess := p.getSessionByKey(sessionKey)
+	if sess == nil || strings.TrimSpace(model) == "" {
+		return nil
+	}
+	_, err := p.conn.SetSessionModel(ctx, acp.SetSessionModelRequest{
+		SessionId: sess.ID,
+		ModelId:   acp.ModelId(strings.TrimSpace(model)),
+	})
+	if err == nil {
+		if state := sess.getModels(); state != nil {
+			state.CurrentModelId = acp.ModelId(strings.TrimSpace(model))
+			sess.setModels(state)
+			p.mu.Lock()
+			p.models = state
+			p.mu.Unlock()
+		}
+	}
+	return err
+}
+
+func (p *Process) SessionModelState(sessionKey string) *acp.SessionModelState {
+	sess := p.getSessionByKey(sessionKey)
+	if sess == nil {
+		return nil
+	}
+	return sess.getModels()
 }
 
 func (p *Process) getSessionByKey(sessionKey string) *sessionState {

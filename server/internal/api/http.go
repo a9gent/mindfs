@@ -12,10 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"mindfs/server/internal/api/usecase"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/session"
+
+	"github.com/go-chi/chi/v5"
 )
 
 // HTTPHandler provides REST endpoints for health, tree, file, and action.
@@ -178,6 +179,7 @@ func sessionResponse(s *session.Session, pendingUser *session.Exchange) map[stri
 		"key":           s.Key,
 		"type":          s.Type,
 		"agent":         session.InferAgentFromSession(s),
+		"model":         s.Model,
 		"name":          s.Name,
 		"exchanges":     exchanges,
 		"related_files": s.RelatedFiles,
@@ -195,6 +197,7 @@ func sessionListResponse(s *session.Session) map[string]any {
 		"key":        s.Key,
 		"type":       s.Type,
 		"agent":      session.InferAgentFromSession(s),
+		"model":      s.Model,
 		"name":       s.Name,
 		"created_at": s.CreatedAt,
 		"updated_at": s.UpdatedAt,

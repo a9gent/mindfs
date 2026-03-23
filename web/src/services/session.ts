@@ -8,6 +8,7 @@ export type Session = {
   key: string;
   type: SessionType;
   agent?: string;
+  model?: string;
   name: string;
   created_at: string;
   updated_at: string;
@@ -20,6 +21,7 @@ export type Session = {
     seq?: number;
     role?: string;
     agent?: string;
+    model?: string;
     content?: string;
     timestamp?: string;
     toolCall?: ToolCall;
@@ -61,6 +63,11 @@ export type StreamEvent =
   | { type: "tool_call_update"; data: ToolCall }
   | { type: "message_done"; data?: Record<string, never> }
   | { type: "error"; data: { message: string } };
+
+export type SyncSessionResult = {
+  session: Session | null;
+  hasDelta: boolean;
+};
 
 type SessionEventHandler = {
   onStream?: (event: StreamEvent) => void;
@@ -286,6 +293,7 @@ class SessionService {
     content: string,
     type: SessionType,
     agent: string,
+    model?: string,
     context?: Record<string, unknown>
   ): Promise<boolean> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -302,6 +310,7 @@ class SessionService {
         content,
         type,
         agent,
+        model,
         context: this.compactContext(sessionKey, context),
       },
     };
@@ -548,6 +557,7 @@ function mergeSessionData(base: Session | null | undefined, incoming: Session | 
     ...base,
     ...incoming,
     agent: preferIncomingText(incoming.agent, base.agent),
+    model: preferIncomingText((incoming as any).model, (base as any).model),
     name: preferIncomingText(incoming.name, base.name) || "",
     exchanges,
   };
@@ -568,12 +578,13 @@ async function saveCachedSession(rootId: string, session: Session | null | undef
   if (!rootId || !session?.key) {
     return;
   }
+  const persistentSession = toPersistentSession(session);
   const record: CachedSessionRecord = {
     cacheKey: buildSessionCacheKey(rootId, session.key),
     rootId,
     sessionKey: session.key,
     touchedAt: Date.now(),
-    session,
+    session: persistentSession,
   };
   try {
     await withSessionStore("readwrite", (store) => sessionRequestToPromise(store.put(record)));
@@ -595,22 +606,38 @@ function cloneSession(session: Session): Session {
   };
 }
 
+function toPersistentSession(session: Session): Session {
+  return {
+    ...session,
+    exchanges: Array.isArray(session.exchanges)
+      ? session.exchanges.filter((exchange) => {
+          const seq = Number((exchange as any)?.seq || 0);
+          return Number.isFinite(seq) && seq > 0;
+        })
+      : [],
+  };
+}
+
 export async function getCachedSession(rootId: string, sessionKey: string): Promise<Session | null> {
   const cached = await loadCachedSession(rootId, sessionKey);
   return cached ? cloneSession(cached) : null;
 }
 
-export async function syncSession(rootId: string, sessionKey: string, seed?: Session | null): Promise<Session | null> {
-  const base = seed ? cloneSession(seed) : await getCachedSession(rootId, sessionKey);
+export async function syncSession(rootId: string, sessionKey: string): Promise<SyncSessionResult> {
+  const base = await getCachedSession(rootId, sessionKey);
   const seq = getSessionMaxSeq(base);
   const incoming = await sessionService.getSession(rootId, sessionKey, seq);
   if (!incoming) {
-    return base;
+    return { session: base, hasDelta: false };
   }
+  const incomingExchanges = Array.isArray(incoming.exchanges) ? incoming.exchanges : [];
   const merged = mergeSessionData(base, { ...incoming, key: sessionKey });
   if (!merged) {
-    return null;
+    return { session: null, hasDelta: false };
   }
   await saveCachedSession(rootId, merged);
-  return cloneSession(merged);
+  return {
+    session: cloneSession(merged),
+    hasDelta: incomingExchanges.length > 0,
+  };
 }

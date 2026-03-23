@@ -24,17 +24,18 @@ const (
 	sessionDBPath    = "sessions/session-list.db"
 	exchangeFileTpl  = "sessions/%s.jsonl"
 	selectSessionSQL = `
-SELECT key, type, name, related_files_json, created_at, updated_at, closed_at
+SELECT key, type, model, name, related_files_json, created_at, updated_at, closed_at
 FROM sessions`
 	deleteSessionSQL = `
 DELETE FROM sessions
 WHERE key = ?`
 	upsertSessionMetaSQL = `
 INSERT INTO sessions (
-	key, type, name, related_files_json, created_at, updated_at, closed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?)
+	key, type, model, name, related_files_json, created_at, updated_at, closed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(key) DO UPDATE SET
 	type = excluded.type,
+	model = excluded.model,
 	name = excluded.name,
 	related_files_json = excluded.related_files_json,
 	created_at = excluded.created_at,
@@ -44,6 +45,7 @@ ON CONFLICT(key) DO UPDATE SET
 CREATE TABLE IF NOT EXISTS sessions (
 	key TEXT PRIMARY KEY,
 	type TEXT NOT NULL,
+	model TEXT NOT NULL DEFAULT '',
 	name TEXT NOT NULL,
 	related_files_json TEXT NOT NULL,
 	created_at TEXT NOT NULL,
@@ -69,6 +71,7 @@ type CreateInput struct {
 	Key   string
 	Type  string
 	Agent string
+	Model string
 	Name  string
 }
 
@@ -141,6 +144,7 @@ func (m *Manager) Create(_ context.Context, input CreateInput) (*Session, error)
 		Key:          key,
 		Type:         input.Type,
 		AgentCtxSeq:  agentCtxSeq,
+		Model:        strings.TrimSpace(input.Model),
 		Name:         name,
 		Exchanges:    []Exchange{},
 		RelatedFiles: []RelatedFile{},
@@ -189,6 +193,7 @@ func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role,
 		Seq:       nextSeq,
 		Role:      role,
 		Agent:     resolvedAgent,
+		Model:     session.Model,
 		Content:   content,
 		Timestamp: m.now().UTC(),
 	}
@@ -299,6 +304,25 @@ func (m *Manager) Rename(_ context.Context, key, name string) (*Session, error) 
 		return nil, err
 	}
 	return session, nil
+}
+
+func (m *Manager) UpdateModel(_ context.Context, session *Session, model string) error {
+	if session == nil || strings.TrimSpace(session.Key) == "" {
+		return errors.New("session required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, err := m.getSessionUnsafe(session.Key, 0)
+	if err != nil {
+		return err
+	}
+	model = strings.TrimSpace(model)
+	if current.Model == model {
+		return nil
+	}
+	current.Model = model
+	current.UpdatedAt = m.now().UTC()
+	return m.upsertSessionMetaUnsafe(current)
 }
 
 func (m *Manager) closeSessionUnsafe(key string) (*Session, error) {
@@ -655,6 +679,10 @@ func (m *Manager) ensureSessionMetaDBUnsafe() (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	if _, err := db.Exec(`ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		db.Close()
+		return nil, err
+	}
 	m.db = db
 	return m.db, nil
 }
@@ -674,6 +702,7 @@ func sessionMetaUpsertArgs(session *Session) ([]any, error) {
 	return []any{
 		session.Key,
 		session.Type,
+		session.Model,
 		session.Name,
 		string(relatedFilesJSON),
 		session.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -690,6 +719,7 @@ func scanSessionMetaRow(scanner rowScanner) (*Session, error) {
 	var (
 		key              string
 		typ              string
+		model            string
 		name             string
 		relatedFilesJSON string
 		createdAtRaw     string
@@ -699,6 +729,7 @@ func scanSessionMetaRow(scanner rowScanner) (*Session, error) {
 	if err := scanner.Scan(
 		&key,
 		&typ,
+		&model,
 		&name,
 		&relatedFilesJSON,
 		&createdAtRaw,
@@ -710,6 +741,7 @@ func scanSessionMetaRow(scanner rowScanner) (*Session, error) {
 	session := &Session{
 		Key:          key,
 		Type:         typ,
+		Model:        model,
 		Name:         name,
 		Exchanges:    []Exchange{},
 		RelatedFiles: []RelatedFile{},

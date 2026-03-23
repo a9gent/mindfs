@@ -24,6 +24,7 @@ const (
 type OpenOptions struct {
 	AgentName  string
 	SessionKey string
+	Model      string
 	RootPath   string
 	Command    string
 	Args       []string
@@ -52,6 +53,9 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 	}
 	if strings.TrimSpace(opts.Command) != "" {
 		optionList = append(optionList, claudeagent.WithCLIPath(opts.Command))
+	}
+	if strings.TrimSpace(opts.Model) != "" {
+		optionList = append(optionList, claudeagent.WithModel(strings.TrimSpace(opts.Model)))
 	}
 
 	client, err := claudeagent.NewClient(optionList...)
@@ -127,6 +131,28 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 		log.Printf("[agent/claude] send.error session=%s session_id=%s err=%v", s.sessionKey, s.SessionID(), turnCtx.Err())
 		return turnCtx.Err()
 	}
+}
+
+func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
+	_ = ctx
+	if s.client == nil {
+		return types.ModelList{}, errors.New("claude session not initialized")
+	}
+	supported := s.client.SupportedModelsFromInit()
+	models := make([]types.ModelInfo, 0, len(supported))
+	for _, model := range supported {
+		name := strings.TrimSpace(model.DisplayName)
+		if name == "" {
+			name = strings.TrimSpace(model.Value)
+		}
+		models = append(models, types.ModelInfo{
+			ID:          model.Value,
+			Name:        name,
+			Description: model.Description,
+		})
+	}
+	log.Printf("[agent/claude] models.cached session=%s session_id=%s count=%d", s.sessionKey, s.SessionID(), len(models))
+	return types.ModelList{Models: models}, nil
 }
 
 func (s *session) OnUpdate(onUpdate func(types.Event)) {

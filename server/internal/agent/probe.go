@@ -15,16 +15,26 @@ import (
 )
 
 type Status struct {
-	Name      string    `json:"name"`
-	Available bool      `json:"available"`
-	Version   string    `json:"version,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	LastProbe time.Time `json:"last_probe"`
+	Name           string                 `json:"name"`
+	Available      bool                   `json:"available"`
+	Version        string                 `json:"version,omitempty"`
+	Error          string                 `json:"error,omitempty"`
+	LastProbe      time.Time              `json:"last_probe"`
+	CurrentModelID string                 `json:"current_model_id,omitempty"`
+	Models         []agenttypes.ModelInfo `json:"models,omitempty"`
+	ModelsError    string                 `json:"models_error,omitempty"`
 }
+
+const (
+	probeSessionTimeout     = 45 * time.Second
+	probeInteractionTimeout = 3 * time.Minute
+	probeModelListTimeout   = 30 * time.Second
+)
 
 // Prober 管理 Agent 可用性探测
 type Prober struct {
 	cfg           *Config
+	pool          *Pool
 	statuses      map[string]Status
 	mu            sync.RWMutex
 	probeInterval time.Duration
@@ -32,12 +42,13 @@ type Prober struct {
 	listeners     []func(Status)
 }
 
-func NewProber(cfg *Config, probeInterval time.Duration) *Prober {
+func NewProber(cfg *Config, pool *Pool, probeInterval time.Duration) *Prober {
 	if probeInterval <= 0 {
 		probeInterval = 5 * time.Minute
 	}
 	p := &Prober{
 		cfg:           cfg,
+		pool:          pool,
 		statuses:      make(map[string]Status),
 		probeInterval: probeInterval,
 		stopCh:        make(chan struct{}),
@@ -46,12 +57,7 @@ func NewProber(cfg *Config, probeInterval time.Duration) *Prober {
 	if cfg != nil {
 		now := time.Now().UTC()
 		for _, def := range cfg.Agents {
-			p.statuses[def.Name] = Status{
-				Name:      def.Name,
-				Available: false,
-				Error:     "probing",
-				LastProbe: now,
-			}
+			p.statuses[def.Name] = unavailableStatus(def.Name, "probing", now)
 		}
 	}
 	return p
@@ -97,7 +103,7 @@ func (p *Prober) ProbeAll(ctx context.Context) []Status {
 
 	statuses := make([]Status, 0, len(p.cfg.Agents))
 	for _, def := range p.cfg.Agents {
-		status := ProbeAgent(ctx, def.Name, def)
+		status := p.probeAgent(ctx, def.Name, def)
 		statuses = append(statuses, status)
 		p.setStatus(status)
 	}
@@ -107,15 +113,15 @@ func (p *Prober) ProbeAll(ctx context.Context) []Status {
 // ProbeOne 探测单个 Agent 并更新缓存
 func (p *Prober) ProbeOne(ctx context.Context, name string) Status {
 	if p.cfg == nil {
-		return Status{Name: name, Available: false, Error: "config not loaded", LastProbe: time.Now().UTC()}
+		return unavailableStatus(name, "config not loaded", time.Now().UTC())
 	}
 
 	def, ok := p.cfg.GetAgent(name)
 	if !ok {
-		return Status{Name: name, Available: false, Error: "agent not configured", LastProbe: time.Now().UTC()}
+		return unavailableStatus(name, "agent not configured", time.Now().UTC())
 	}
 
-	status := ProbeAgent(ctx, name, def)
+	status := p.probeAgent(ctx, name, def)
 	p.setStatus(status)
 
 	return status
@@ -127,12 +133,7 @@ func (p *Prober) ReportFailure(name string, err error) {
 	if err != nil {
 		msg = err.Error()
 	}
-	p.setStatus(Status{
-		Name:      name,
-		Available: false,
-		Error:     msg,
-		LastProbe: time.Now().UTC(),
-	})
+	p.setStatus(unavailableStatus(name, msg, time.Now().UTC()))
 }
 
 // ReportSuccess marks an agent as available due to successful runtime interaction.
@@ -197,7 +198,15 @@ func (p *Prober) IsAvailable(name string) bool {
 
 // ProbeAgent 探测单个 Agent
 func ProbeAgent(ctx context.Context, name string, def Definition) Status {
-	status := Status{Name: name, Available: false, LastProbe: time.Now().UTC()}
+	return probeAgentWithPool(ctx, name, def, nil)
+}
+
+func (p *Prober) probeAgent(ctx context.Context, name string, def Definition) Status {
+	return probeAgentWithPool(ctx, name, def, p.pool)
+}
+
+func probeAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool) Status {
+	status := unavailableStatus(name, "", time.Now().UTC())
 	if def.Command == "" {
 		status.Error = "command required"
 		return status
@@ -207,9 +216,6 @@ func ProbeAgent(ctx context.Context, name string, def Definition) Status {
 		return status
 	}
 
-	probeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-
 	tmpRoot, err := os.MkdirTemp("", "mindfs-agent-probe-*")
 	if err != nil {
 		status.Error = err.Error()
@@ -217,15 +223,19 @@ func ProbeAgent(ctx context.Context, name string, def Definition) Status {
 	}
 	defer os.RemoveAll(tmpRoot)
 
-	pool := NewPool(Config{
-		Agents: []Definition{def},
-	})
-	defer pool.CloseAll()
+	pool, ownsPool := resolveProbePool(def, pool)
+	if ownsPool {
+		defer pool.CloseAll()
+	}
 
 	sessionKey := "probe-" + time.Now().UTC().Format("20060102-150405")
-	sess, err := pool.GetOrCreate(probeCtx, agenttypes.OpenSessionInput{
+	defer pool.Close(sessionKey)
+	sessionCtx, sessionCancel := context.WithTimeout(ctx, probeSessionTimeout)
+	defer sessionCancel()
+	sess, err := pool.GetOrCreate(sessionCtx, agenttypes.OpenSessionInput{
 		SessionKey: sessionKey,
 		AgentName:  name,
+		Probe:      true,
 		RootPath:   tmpRoot,
 	})
 	if err != nil {
@@ -233,12 +243,15 @@ func ProbeAgent(ctx context.Context, name string, def Definition) Status {
 		return status
 	}
 
-	if err := VerifySessionInteraction(probeCtx, sess); err != nil {
+	interactionCtx, interactionCancel := context.WithTimeout(ctx, probeInteractionTimeout)
+	defer interactionCancel()
+	if err := VerifySessionInteraction(interactionCtx, sess); err != nil {
 		status.Error = err.Error()
 		return status
 	}
 
 	status.Available = true
+	populateProbeModels(ctx, sess, &status)
 	return status
 }
 
@@ -254,7 +267,7 @@ func (p *Prober) probeFailedOnly(ctx context.Context) {
 		if ok && st.Available {
 			continue
 		}
-		status := ProbeAgent(ctx, name, def)
+		status := p.probeAgent(ctx, name, def)
 		p.setStatus(status)
 	}
 }
@@ -282,10 +295,25 @@ func statusChanged(prev Status, next Status) bool {
 	if prev.Error != next.Error {
 		return true
 	}
+	if prev.CurrentModelID != next.CurrentModelID {
+		return true
+	}
+	if prev.ModelsError != next.ModelsError {
+		return true
+	}
+	if len(prev.Models) != len(next.Models) {
+		return true
+	}
+	for i := range prev.Models {
+		if prev.Models[i] != next.Models[i] {
+			return true
+		}
+	}
 	return false
 }
 
 func (p *Prober) setStatus(status Status) {
+	status = normalizeStatus(status)
 	p.mu.Lock()
 	prev, hadPrev := p.statuses[status.Name]
 	p.statuses[status.Name] = status
@@ -298,6 +326,45 @@ func (p *Prober) setStatus(status Status) {
 	for _, listener := range listeners {
 		listener(status)
 	}
+}
+
+func unavailableStatus(name, errMsg string, ts time.Time) Status {
+	return Status{
+		Name:      name,
+		Available: false,
+		Error:     errMsg,
+		LastProbe: ts,
+	}
+}
+
+func resolveProbePool(def Definition, shared *Pool) (*Pool, bool) {
+	if shared != nil {
+		return shared, false
+	}
+	return NewPool(Config{Agents: []Definition{def}}), true
+}
+
+func populateProbeModels(ctx context.Context, sess agenttypes.Session, status *Status) {
+	modelsCtx, modelsCancel := context.WithTimeout(ctx, probeModelListTimeout)
+	defer modelsCancel()
+
+	models, err := sess.ListModels(modelsCtx)
+	if err != nil {
+		status.ModelsError = err.Error()
+		return
+	}
+	status.CurrentModelID = models.CurrentModelID
+	status.Models = models.Models
+}
+
+func normalizeStatus(status Status) Status {
+	if status.Available {
+		return status
+	}
+	status.CurrentModelID = ""
+	status.Models = nil
+	status.ModelsError = ""
+	return status
 }
 
 // VerifySessionInteraction sends a deterministic ping prompt and verifies the response contains the token.

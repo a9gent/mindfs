@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -12,6 +13,7 @@ import (
 type OpenOptions struct {
 	AgentName  string
 	SessionKey string
+	Model      string
 	RootPath   string
 	Command    string
 	Args       []string
@@ -44,7 +46,35 @@ func (r *Runtime) OpenSession(_ context.Context, opts OpenOptions) (types.Sessio
 	if err := proc.NewSession(r.processCtx, opts.SessionKey, opts.RootPath); err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(opts.Model) != "" {
+		if err := proc.SetModel(r.processCtx, opts.SessionKey, opts.Model); err != nil {
+			proc.CloseSession(opts.SessionKey)
+			return nil, err
+		}
+	}
 	return &session{proc: proc, sessionKey: opts.SessionKey}, nil
+}
+
+func mapModelState(state *acpsdk.SessionModelState) types.ModelList {
+	if state == nil {
+		return types.ModelList{}
+	}
+	models := make([]types.ModelInfo, 0, len(state.AvailableModels))
+	for _, model := range state.AvailableModels {
+		description := ""
+		if model.Description != nil {
+			description = *model.Description
+		}
+		models = append(models, types.ModelInfo{
+			ID:          string(model.ModelId),
+			Name:        model.Name,
+			Description: description,
+		})
+	}
+	return types.ModelList{
+		CurrentModelID: string(state.CurrentModelId),
+		Models:         models,
+	}
 }
 
 func (r *Runtime) CloseSession(sessionKey string) {
@@ -117,6 +147,13 @@ type session struct {
 
 func (s *session) SendMessage(ctx context.Context, content string) error {
 	return s.proc.SendMessage(ctx, s.sessionKey, content)
+}
+
+func (s *session) ListModels(_ context.Context) (types.ModelList, error) {
+	if s == nil || s.proc == nil {
+		return types.ModelList{}, errors.New("acp session not initialized")
+	}
+	return mapModelState(s.proc.SessionModelState(s.sessionKey)), nil
 }
 
 func (s *session) CancelCurrentTurn() error {
