@@ -388,6 +388,9 @@ export function ActionBar({
   const hasBoundSession = !!currentSession;
   const showCancel = !!currentSession?.pending && !!currentSession?.key;
   const isModeLocked = !!currentSession;
+  const inputPlaceholder = currentSession && !currentSession.pending
+    ? "左滑蓝环开始新会话..."
+    : modePlaceholders[mode];
   const editorRightInset = isMultiLine ? 14 : isMobile ? 124 : 148;
   const editorBottomInset = isMultiLine ? 44 : 12;
   const editorMinHeight = 44;
@@ -431,7 +434,7 @@ export function ActionBar({
           >
             <TokenEditor
               ref={editorRef}
-              placeholder={modePlaceholders[mode]}
+              placeholder={inputPlaceholder}
               disabled={sending}
               isDark={isDark}
               rightInset={editorRightInset}
