@@ -142,9 +142,9 @@ func (c *mindfsClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 			if params.Update.AgentMessageChunk != nil && params.Update.AgentMessageChunk.Content.Text != nil {
 				content = params.Update.AgentMessageChunk.Content.Text.Text
 			}
-			log.Printf("[agent/acp] session.update agent=%s session_id=%s type=%s content=%q", c.proc.agentLabel(), internalUpdate.SessionID, internalUpdate.Type, content)
+			log.Printf("[agent/acp] session.update agent=%s type=%s content=%q", c.proc.agentLabel(), internalUpdate.Type, content)
 		default:
-			log.Printf("[agent/acp] session.update agent=%s session_id=%s type=%s", c.proc.agentLabel(), internalUpdate.SessionID, internalUpdate.Type)
+			log.Printf("[agent/acp] session.update agent=%s type=%s", c.proc.agentLabel(), internalUpdate.Type)
 		}
 		handler(internalUpdate)
 	}
@@ -364,7 +364,7 @@ func (p *Process) SendMessage(ctx context.Context, sessionKey, content string) e
 	if sess == nil {
 		return nil
 	}
-	log.Printf("[agent/acp] send.begin agent=%s session_key=%s session_id=%s prompt_chars=%d content=%q", p.agentLabel(), sessionKey, sess.ID, len(content), content)
+	log.Printf("[agent/acp] send.begin agent=%s session_key=%s content=%q", p.agentLabel(), sessionKey, content)
 
 	promptCtx, promptCancel := context.WithCancel(ctx)
 	promptID := time.Now().UnixNano()
@@ -391,7 +391,7 @@ func (p *Process) SendMessage(ctx context.Context, sessionKey, content string) e
 			SessionID: string(sess.ID),
 		})
 	}
-	log.Printf("[agent/acp] send.done agent=%s session_key=%s session_id=%s duration_ms=%d", p.agentLabel(), sessionKey, sess.ID, time.Since(start).Milliseconds())
+	log.Printf("[agent/acp] send.done agent=%s session_key=%s duration_ms=%d", p.agentLabel(), sessionKey, time.Since(start).Milliseconds())
 
 	return nil
 }
@@ -582,10 +582,10 @@ func configureProcessCommand(cmd *exec.Cmd, env map[string]string) {
 
 func (p *Process) wrapPromptError(sessionKey, sessionID string, err error) error {
 	if hint, ok := p.recentStderrHint(); ok {
-		log.Printf("[agent/acp] send.error agent=%s session_key=%s session_id=%s err=%v hint=%q", p.agentLabel(), sessionKey, sessionID, err, hint)
+		log.Printf("[agent/acp] send.error agent=%s session_key=%s err=%v hint=%q", p.agentLabel(), sessionKey, err, hint)
 		return errors.New(hint)
 	}
-	log.Printf("[agent/acp] send.error agent=%s session_key=%s session_id=%s err=%v", p.agentLabel(), sessionKey, sessionID, err)
+	log.Printf("[agent/acp] send.error agent=%s session_key=%s err=%v", p.agentLabel(), sessionKey, err)
 	return err
 }
 

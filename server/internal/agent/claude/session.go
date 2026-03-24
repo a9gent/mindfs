@@ -110,25 +110,25 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 	}
 	turnCtx, turnID := s.turn.Begin(ctx)
 	defer s.turn.End(turnID)
-	log.Printf("[agent/claude] input session=%s session_id=%s chars=%d content=%q", s.sessionKey, s.SessionID(), len(content), preview(content))
+	log.Printf("[agent/claude] input session=%s content=%q", s.sessionKey, preview(content))
 
 	waiter := make(chan error, 1)
 	s.enqueueTurn(waiter)
 	if err := s.stream.Send(turnCtx, content); err != nil {
 		s.dequeueTurn(waiter)
-		log.Printf("[agent/claude] send.error session=%s session_id=%s err=%v", s.sessionKey, s.SessionID(), err)
+		log.Printf("[agent/claude] send.error session=%s err=%v", s.sessionKey, err)
 		return err
 	}
 
 	select {
 	case err := <-waiter:
 		if err != nil {
-			log.Printf("[agent/claude] send.error session=%s session_id=%s err=%v", s.sessionKey, s.SessionID(), err)
+			log.Printf("[agent/claude] send.error session=%s err=%v", s.sessionKey, err)
 		}
 		return err
 	case <-turnCtx.Done():
 		s.dequeueTurn(waiter)
-		log.Printf("[agent/claude] send.error session=%s session_id=%s err=%v", s.sessionKey, s.SessionID(), turnCtx.Err())
+		log.Printf("[agent/claude] send.error session=%s err=%v", s.sessionKey, turnCtx.Err())
 		return turnCtx.Err()
 	}
 }
@@ -151,7 +151,7 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 			Description: model.Description,
 		})
 	}
-	log.Printf("[agent/claude] models.cached session=%s session_id=%s count=%d", s.sessionKey, s.SessionID(), len(models))
+	log.Printf("[agent/claude] models.cached session=%s count=%d", s.sessionKey, len(models))
 	return types.ModelList{Models: models}, nil
 }
 
@@ -217,7 +217,7 @@ func (s *session) consumeMessages() {
 			s.emitToolUpdate(m.ToolUseID, m.ToolName)
 		case claudeagent.ResultMessage:
 			s.flushAllDeltas()
-			log.Printf("[agent/claude] output.done session=%s session_id=%s status=%s subtype=%s", s.sessionKey, s.SessionID(), m.Status, m.Subtype)
+			log.Printf("[agent/claude] output.done session=%s status=%s subtype=%s", s.sessionKey, m.Status, m.Subtype)
 			s.emit(types.Event{Type: types.EventTypeMessageDone, SessionID: s.SessionID()})
 			s.completeTurn(resultErr(m))
 			s.sawDelta = false
@@ -282,7 +282,6 @@ func (s *session) emitThoughtChunk(content string) {
 	if strings.TrimSpace(content) == "" {
 		return
 	}
-	log.Printf("[agent/claude] output.thought session=%s session_id=%s chars=%d content=%q", s.sessionKey, s.SessionID(), len(content), preview(content))
 	s.emit(types.Event{
 		Type:      types.EventTypeThoughtChunk,
 		SessionID: s.SessionID(),
@@ -301,7 +300,7 @@ func (s *session) handleAssistantMessage(msg claudeagent.AssistantMessage, sawDe
 		case "thinking":
 			s.emitThoughtChunk(block.Text)
 		case "tool_use":
-			log.Printf("[agent/claude] output.tool_call session=%s session_id=%s tool=%s status=running", s.sessionKey, s.SessionID(), block.Name)
+			log.Printf("[agent/claude] output.tool_call session=%s tool=%s status=running", s.sessionKey, block.Name)
 			s.emit(types.Event{
 				Type:      types.EventTypeToolCall,
 				SessionID: s.SessionID(),
@@ -321,7 +320,6 @@ func (s *session) handleAssistantMessage(msg claudeagent.AssistantMessage, sawDe
 }
 
 func (s *session) emitMessageChunk(content string) {
-	log.Printf("[agent/claude] output.chunk session=%s session_id=%s chars=%d content=%q", s.sessionKey, s.SessionID(), len(content), preview(content))
 	s.emit(types.Event{
 		Type:      types.EventTypeMessageChunk,
 		SessionID: s.SessionID(),
@@ -330,7 +328,7 @@ func (s *session) emitMessageChunk(content string) {
 }
 
 func (s *session) emitToolUpdate(callID, name string) {
-	log.Printf("[agent/claude] output.tool_update session=%s session_id=%s tool=%s status=running", s.sessionKey, s.SessionID(), name)
+	log.Printf("[agent/claude] output.tool_update session=%s tool=%s status=running", s.sessionKey, name)
 	s.emit(types.Event{
 		Type:      types.EventTypeToolUpdate,
 		SessionID: s.SessionID(),

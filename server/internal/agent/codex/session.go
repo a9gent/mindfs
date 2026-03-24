@@ -117,10 +117,10 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 	}
 	turnCtx, turnID := s.turn.Begin(ctx)
 	defer s.turn.End(turnID)
-	log.Printf("[agent/codex] input session=%s thread_id=%s chars=%d content=%q", s.sessionKey, s.SessionID(), len(content), preview(content))
+	log.Printf("[agent/codex] input session=%s content=%q", s.sessionKey, preview(content))
 	streamed, err := s.thread.RunStreamed(content, codexsdk.TurnOptions{Context: turnCtx})
 	if err != nil {
-		log.Printf("[agent/codex] send.error session=%s thread_id=%s err=%v", s.sessionKey, s.SessionID(), err)
+		log.Printf("[agent/codex] send.error session=%s err=%v", s.sessionKey, err)
 		return err
 	}
 
@@ -156,19 +156,18 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 			if thought, ok := e.Item.(*codexsdk.ReasoningItem); ok {
 				summary := strings.TrimSpace(strings.Join(thought.Summary, "\n"))
 				if summary != "" {
-					log.Printf("[agent/codex] output.thought session=%s thread_id=%s chars=%d content=%q", s.sessionKey, s.SessionID(), len(summary), preview(summary))
 					s.emit(types.Event{Type: types.EventTypeThoughtChunk, SessionID: s.SessionID(), Data: types.ThoughtChunk{Content: summary}})
 				}
 			}
 		case *codexsdk.TurnCompletedEvent:
 			s.updateThreadIDFromThread()
-			log.Printf("[agent/codex] output.done session=%s thread_id=%s", s.sessionKey, s.SessionID())
+			log.Printf("[agent/codex] output.done session=%s", s.sessionKey)
 			s.emit(types.Event{Type: types.EventTypeMessageDone, SessionID: s.SessionID()})
 		case *codexsdk.TurnFailedEvent:
-			log.Printf("[agent/codex] send.error session=%s thread_id=%s err=%s", s.sessionKey, s.SessionID(), e.Error.Message)
+			log.Printf("[agent/codex] send.error session=%s err=%s", s.sessionKey, e.Error.Message)
 			return errors.New("codex turn failed: " + e.Error.Message)
 		case *codexsdk.ThreadErrorEvent:
-			log.Printf("[agent/codex] send.error session=%s thread_id=%s err=%s", s.sessionKey, s.SessionID(), e.Message)
+			log.Printf("[agent/codex] send.error session=%s err=%s", s.sessionKey, e.Message)
 			return errors.New("codex thread error: " + e.Message)
 		}
 	}
@@ -214,7 +213,6 @@ func (s *session) emitMessageDelta(msg *codexsdk.AgentMessageItem, textByID map[
 	if delta == "" {
 		return
 	}
-	log.Printf("[agent/codex] output.chunk session=%s thread_id=%s chars=%d content=%q", s.sessionKey, s.SessionID(), len(delta), preview(delta))
 	s.emit(types.Event{Type: types.EventTypeMessageChunk, SessionID: s.SessionID(), Data: types.MessageChunk{Content: delta}})
 }
 
@@ -223,7 +221,7 @@ func (s *session) emitTool(eventType types.EventType, toolCall types.ToolCall) {
 	if eventType == types.EventTypeToolCall {
 		logLabel = "output.tool_call"
 	}
-	log.Printf("[agent/codex] %s session=%s thread_id=%s tool=%s status=%s", logLabel, s.sessionKey, s.SessionID(), toolCallLabel(toolCall), toolCall.Status)
+	log.Printf("[agent/codex] %s session=%s tool=%s status=%s", logLabel, s.sessionKey, toolCallLabel(toolCall), toolCall.Status)
 	s.emit(types.Event{Type: eventType, SessionID: s.SessionID(), Data: toolCall})
 }
 

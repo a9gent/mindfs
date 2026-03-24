@@ -708,7 +708,7 @@ func (s *Service) ensureAgentSession(
 		log.Printf("[session/model] open.error session=%s agent=%s model=%q pool_session=%s err=%v", current.Key, agentName, nextModel, poolSessionKey, err)
 		return nil, err
 	}
-	log.Printf("[session/model] open.done session=%s agent=%s model=%q runtime_session=%s pool_session=%s", current.Key, agentName, nextModel, sess.SessionID(), poolSessionKey)
+	log.Printf("[session/model] open.done session=%s agent=%s model=%q pool_session=%s", current.Key, agentName, nextModel, poolSessionKey)
 	return sess, nil
 }
 
