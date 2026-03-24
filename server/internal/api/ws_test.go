@@ -11,8 +11,8 @@ func TestParseClientContext(t *testing.T) {
 			"current_path": "docs/readme.md",
 			"selection": map[string]any{
 				"file_path": "docs/readme.md",
-				"start":     1,
-				"end":       3,
+				"start_line": 1,
+				"end_line":   3,
 				"text":      "abc",
 			},
 		},

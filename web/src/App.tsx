@@ -29,6 +29,19 @@ type SessionMode = "chat" | "plugin";
 export type SessionItem = { key?: string; session_key?: string; root_id?: string; name?: string; type?: SessionMode; agent?: string; model?: string; scope?: string; purpose?: string; created_at?: string; updated_at?: string; closed_at?: string; related_files?: Array<{ path: string; name?: string }>; exchanges?: Array<{ role?: string; content?: string; timestamp?: string; model?: string }>; pending?: boolean; };
 type Exchange = { role: string; agent?: string; model?: string; content?: string; timestamp?: string; toolCall?: any; };
 type PendingSend = { rootId: string; mode: SessionMode; agent: string; model?: string; message: string; timestamp: string; };
+type ViewerSelection = {
+  filePath: string;
+  text?: string;
+  startLine?: number;
+  endLine?: number;
+};
+type AttachedFileContext = {
+  filePath: string;
+  fileName: string;
+  startLine?: number;
+  endLine?: number;
+  text?: string;
+};
 type URLState = { root: string; file: string; session: string; cursor: number; pluginQuery: Record<string, string> };
 type ManagedRootPayload = {
   id: string;
@@ -266,6 +279,13 @@ function dirnameOfPath(path: string): string {
   return parts.slice(0, -1).join("/");
 }
 
+function basenameOfPath(path: string): string {
+  const normalized = normalizePath(path);
+  if (!normalized) return "";
+  const parts = normalized.split("/").filter(Boolean);
+  return parts[parts.length - 1] || normalized;
+}
+
 function mapManagedRootsToEntries(dirs: ManagedRootPayload[]): FileEntry[] {
   return dirs.map((dir) => ({
     name: dir.display_name || dir.id.split("/").filter(Boolean).pop() || dir.id,
@@ -317,6 +337,9 @@ export function App() {
   const drawerOpenByRootRef = useRef<Record<string, boolean>>({});
   const fileCursorRef = useRef<number>(0);
   const fileScrollPositionsRef = useRef<Record<string, number>>(loadPersistedFileScrollPositions());
+  const viewerSelectionRef = useRef<ViewerSelection | null>(null);
+  const lastViewerSelectionRef = useRef<ViewerSelection | null>(null);
+  const dismissedSelectionFileRef = useRef<string | null>(null);
   const lastPluginResetFileKeyRef = useRef<string>("");
   const pluginBypassRef = useRef<boolean>(false);
   const fileOpenRequestRef = useRef(0);
@@ -378,6 +401,8 @@ export function App() {
   });
   const [status, setStatus] = useState("Disconnected");
   const [file, setFile] = useState<FilePayload | null>(null);
+  const [viewerSelection, setViewerSelection] = useState<ViewerSelection | null>(null);
+  const [attachedFileContext, setAttachedFileContext] = useState<AttachedFileContext | null>(null);
   const [pluginVersion, setPluginVersion] = useState(0);
   const [pluginLoading, setPluginLoading] = useState(false);
   const [pluginBypass, setPluginBypass] = useState(false);
@@ -465,6 +490,7 @@ export function App() {
   useEffect(() => { selectedDirRef.current = selectedDir; }, [selectedDir]);
   useEffect(() => { entriesByPathRef.current = entriesByPath; }, [entriesByPath]);
   useEffect(() => { fileRef.current = file; }, [file]);
+  useEffect(() => { viewerSelectionRef.current = viewerSelection; }, [viewerSelection]);
   useEffect(() => { pluginQueryRef.current = pluginQuery; }, [pluginQuery]);
   useEffect(() => {
     if (!file?.path || !currentRootId) return;
@@ -1048,9 +1074,20 @@ export function App() {
     if (!isBoundInMain) { setInteractionMode("drawer"); setDrawerOpenForRoot(activeRoot, true); }
     setDrawerSessionForRoot(activeRoot, { ...(session as any), pending: true } as Session);
     const explicitFileContext = hasExplicitFileContext(message);
+    const selection = explicitFileContext || !attachedFileContext
+      ? undefined
+      : {
+          filePath: attachedFileContext.filePath,
+          startLine: attachedFileContext.startLine,
+          endLine: attachedFileContext.endLine,
+          text: attachedFileContext.text,
+        };
     const context = buildClientContext({
       currentRoot: activeRoot,
-      currentPath: explicitFileContext ? undefined : (fileRef.current?.path ?? selectedDirRef.current ?? undefined),
+      currentPath: explicitFileContext
+        ? undefined
+        : (selection ? undefined : (fileRef.current?.path ?? selectedDirRef.current ?? undefined)),
+      selection,
       pluginCatalog: effectiveMode === "plugin" ? getViewModeSystemPrompt() : undefined,
     });
     const sent = await sessionService.sendMessage(activeRoot, sendSessionKey, message, effectiveMode, effectiveAgent, effectiveModel || undefined, context);
@@ -1061,7 +1098,7 @@ export function App() {
         setDrawerSessionForRoot(activeRoot, { ...(latest as any), pending: false } as Session);
       }
     }
-  }, [activeBoundSessionKey, rootSessionKey, setSelectedPendingByKey, bumpCacheVersion, setBoundSessionForRoot, setDrawerOpenForRoot, setDrawerSessionForRoot, updateSessionAgentForKey]);
+  }, [activeBoundSessionKey, attachedFileContext, rootSessionKey, setSelectedPendingByKey, bumpCacheVersion, setBoundSessionForRoot, setDrawerOpenForRoot, setDrawerSessionForRoot, updateSessionAgentForKey]);
 
   const handleCancelCurrentTurn = useCallback(async (sessionKey: string) => {
     const activeRoot = currentRootIdRef.current;
@@ -1081,6 +1118,88 @@ export function App() {
     setDrawerSessionForRoot(rootID, null);
     setInteractionMode("main"); setDrawerOpenForRoot(rootID, false);
   }, [setBoundSessionForRoot, setDrawerOpenForRoot, setDrawerSessionForRoot]);
+
+  const buildAttachedFileContext = useCallback((currentFile: FilePayload | null, selection: ViewerSelection | null): AttachedFileContext | null => {
+    if (!currentFile?.path) {
+      return null;
+    }
+    const matchesCurrentFile = selection?.filePath === currentFile.path;
+    return {
+      filePath: currentFile.path,
+      fileName: currentFile.name || basenameOfPath(currentFile.path),
+      startLine: matchesCurrentFile ? selection?.startLine : undefined,
+      endLine: matchesCurrentFile ? selection?.endLine : undefined,
+      text: matchesCurrentFile ? selection?.text : undefined,
+    };
+  }, []);
+
+  const handleRequestFileContext = useCallback(() => {
+    const currentFile = fileRef.current;
+    if (dismissedSelectionFileRef.current && dismissedSelectionFileRef.current === currentFile?.path) {
+      return;
+    }
+    const liveSelection = viewerSelectionRef.current;
+    const fallbackSelection = lastViewerSelectionRef.current;
+    const nextSelection = liveSelection?.filePath === currentFile?.path
+      ? liveSelection
+      : fallbackSelection?.filePath === currentFile?.path
+      ? fallbackSelection
+      : null;
+    const next = buildAttachedFileContext(currentFile, nextSelection);
+    setAttachedFileContext(next);
+  }, [buildAttachedFileContext]);
+
+  const handleClearFileContext = useCallback(() => {
+    dismissedSelectionFileRef.current = fileRef.current?.path || null;
+    lastViewerSelectionRef.current = null;
+    setAttachedFileContext(null);
+  }, []);
+
+  const handleViewerSelectionChange = useCallback((next: ViewerSelection | null) => {
+    setViewerSelection(next);
+    if (next?.filePath) {
+      dismissedSelectionFileRef.current = null;
+      lastViewerSelectionRef.current = next;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!file?.path) {
+      dismissedSelectionFileRef.current = null;
+      lastViewerSelectionRef.current = null;
+      setViewerSelection(null);
+      setAttachedFileContext(null);
+      return;
+    }
+    if (dismissedSelectionFileRef.current && dismissedSelectionFileRef.current !== file.path) {
+      dismissedSelectionFileRef.current = null;
+    }
+    if (lastViewerSelectionRef.current?.filePath !== file.path) {
+      lastViewerSelectionRef.current = null;
+    }
+    setViewerSelection((prev) => (prev?.filePath === file.path ? prev : null));
+    setAttachedFileContext((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      if (prev.filePath !== file.path) {
+        return null;
+      }
+      return prev;
+    });
+  }, [file?.path]);
+
+  useEffect(() => {
+    setAttachedFileContext((prev) => {
+      if (!prev || prev.filePath !== file?.path) {
+        return prev;
+      }
+      if (!viewerSelection || viewerSelection.filePath !== file?.path) {
+        return prev;
+      }
+      return buildAttachedFileContext(file, viewerSelection);
+    });
+  }, [buildAttachedFileContext, file, viewerSelection]);
 
   const rememberCurrentFileScroll = useCallback(() => {
     const currentFile = fileRef.current;
@@ -2100,6 +2219,7 @@ export function App() {
           <FileViewer
             file={file}
             isVisible={!selectedSession}
+            onSelectionChange={handleViewerSelectionChange}
             initialScrollTop={fileScrollPositionsRef.current[currentFileScrollKey] || 0}
             onScrollTopChange={(scrollTop) => {
               if (!currentFileScrollKey) return;
@@ -2242,7 +2362,7 @@ export function App() {
           </div>
         </div>
       }
-      footer={<ActionBar status={status} agentsVersion={agentsVersion} currentRootId={currentRootId} currentSession={actionBarSession} canOpenSessionDrawer={canOpenSessionDrawer} onSendMessage={handleSendMessage} onCancelCurrentTurn={handleCancelCurrentTurn} onNewSession={handleNewSession} onToggleLeftSidebar={() => setIsLeftOpen((v) => !v)} onToggleRightSidebar={() => setIsRightOpen((v) => !v)} onSessionClick={() => {
+      footer={<ActionBar status={status} agentsVersion={agentsVersion} currentRootId={currentRootId} currentSession={actionBarSession} attachedFileContext={attachedFileContext} canOpenSessionDrawer={canOpenSessionDrawer} onSendMessage={handleSendMessage} onCancelCurrentTurn={handleCancelCurrentTurn} onNewSession={handleNewSession} onRequestFileContext={handleRequestFileContext} onClearFileContext={handleClearFileContext} onToggleLeftSidebar={() => setIsLeftOpen((v) => !v)} onToggleRightSidebar={() => setIsRightOpen((v) => !v)} onSessionClick={() => {
         const rootID = currentRootIdRef.current;
         if (!activeBoundSessionKey) return;
         const selectedKey = selectedSession?.key || selectedSession?.session_key;

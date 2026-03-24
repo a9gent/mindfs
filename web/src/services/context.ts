@@ -4,9 +4,9 @@ export type ClientContext = {
   plugin_catalog?: string;
   selection?: {
     file_path: string;
-    start: number;
-    end: number;
-    text: string;
+    start_line?: number;
+    end_line?: number;
+    text?: string;
   };
 };
 
@@ -16,9 +16,9 @@ type ContextInput = {
   pluginCatalog?: string | null;
   selection?: {
     filePath: string;
-    start: number;
-    end: number;
-    text: string;
+    startLine?: number;
+    endLine?: number;
+    text?: string;
   } | null;
 };
 
@@ -35,8 +35,8 @@ export function buildClientContext(input: ContextInput): ClientContext {
   if (input.selection) {
     ctx.selection = {
       file_path: input.selection.filePath,
-      start: input.selection.start,
-      end: input.selection.end,
+      start_line: input.selection.startLine,
+      end_line: input.selection.endLine,
       text: input.selection.text,
     };
   }

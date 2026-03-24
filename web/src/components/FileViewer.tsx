@@ -1,6 +1,6 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MarkdownViewer } from "./MarkdownViewer";
-import { CodeViewer } from "./CodeViewer";
+import { CodeViewer, supportsLineSelection } from "./CodeViewer";
 import { ImageViewer } from "./ImageViewer";
 import { BinaryViewer } from "./BinaryViewer";
 
@@ -39,10 +39,50 @@ type FileViewerProps = {
   onSessionClick?: (sessionKey: string) => void;
   onPathClick?: (path: string) => void;
   onFileClick?: (path: string) => void;
+  onSelectionChange?: (selection: {
+    filePath: string;
+    text?: string;
+    startLine?: number;
+    endLine?: number;
+  } | null) => void;
   initialScrollTop?: number;
   onScrollTopChange?: (scrollTop: number) => void;
   isVisible?: boolean;
 };
+
+function isSelectionInside(root: Node, range: Range): boolean {
+  return root.contains(range.commonAncestorContainer)
+    || root.contains(range.startContainer)
+    || root.contains(range.endContainer);
+}
+
+function countLineAtOffset(content: string, offset: number): number {
+  let line = 1;
+  const limit = Math.max(0, Math.min(offset, content.length));
+  for (let i = 0; i < limit; i += 1) {
+    if (content.charCodeAt(i) === 10) {
+      line += 1;
+    }
+  }
+  return line;
+}
+
+function getSelectionOffsets(root: Node, range: Range): { start: number; end: number } | null {
+  try {
+    const startRange = document.createRange();
+    startRange.selectNodeContents(root);
+    startRange.setEnd(range.startContainer, range.startOffset);
+    const endRange = document.createRange();
+    endRange.selectNodeContents(root);
+    endRange.setEnd(range.endContainer, range.endOffset);
+    return {
+      start: startRange.toString().length,
+      end: endRange.toString().length,
+    };
+  } catch {
+    return null;
+  }
+}
 
 function Breadcrumbs({ root, path, onPathClick }: { root?: string; path: string; onPathClick?: (path: string) => void }) {
   const parts = path.split('/').filter(Boolean);
@@ -80,9 +120,11 @@ function Breadcrumbs({ root, path, onPathClick }: { root?: string; path: string;
   );
 }
 
-export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, initialScrollTop = 0, onScrollTopChange, isVisible = true }: FileViewerProps) {
+export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onSelectionChange, initialScrollTop = 0, onScrollTopChange, isVisible = true }: FileViewerProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const restoredScrollKeyRef = useRef("");
+  const contentRootRef = useRef<HTMLDivElement | null>(null);
+  const codeContentRef = useRef<HTMLElement | null>(null);
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.innerWidth <= 768;
@@ -137,6 +179,77 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, ini
     return () => node.removeEventListener("scroll", handleScroll);
   }, [fileScrollKey, onScrollTopChange]);
 
+  const ext = file?.ext || (file?.path.includes(".") ? `.${file.path.split(".").pop()}` : "");
+  const usesMarkdownViewer = ext === ".md" || ext === ".markdown";
+  const lineSelectionEnabled = !!file
+    && !usesMarkdownViewer
+    && file.encoding !== "binary"
+    && supportsLineSelection(ext);
+
+  const updateSelection = useCallback(() => {
+    if (!file || !onSelectionChange) {
+      return;
+    }
+    if (file.encoding === "binary" || file.mime?.startsWith("image/")) {
+      onSelectionChange(null);
+      return;
+    }
+    const root = (usesMarkdownViewer ? contentRootRef.current : codeContentRef.current) as Node | null;
+    const selection = window.getSelection();
+    if (!root || !selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      onSelectionChange(null);
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    if (!isSelectionInside(root, range)) {
+      onSelectionChange(null);
+      return;
+    }
+    const text = selection.toString();
+    if (!text.trim()) {
+      onSelectionChange(null);
+      return;
+    }
+    if (lineSelectionEnabled) {
+      const offsets = getSelectionOffsets(root, range);
+      if (!offsets) {
+        onSelectionChange(null);
+        return;
+      }
+      const startLine = countLineAtOffset(file.content, offsets.start);
+      const endLine = countLineAtOffset(file.content, Math.max(offsets.start, offsets.end - 1));
+      onSelectionChange({
+        filePath: file.path,
+        text,
+        startLine,
+        endLine,
+      });
+      return;
+    }
+    onSelectionChange({
+      filePath: file.path,
+      text,
+    });
+  }, [file, onSelectionChange, lineSelectionEnabled, usesMarkdownViewer]);
+
+  useEffect(() => {
+    if (!onSelectionChange) {
+      return;
+    }
+    if (!file || file.encoding === "binary" || file.mime?.startsWith("image/")) {
+      onSelectionChange(null);
+      return;
+    }
+    const handleSelectionChange = () => {
+      updateSelection();
+    };
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => {
+      document.removeEventListener("selectionchange", handleSelectionChange);
+      onSelectionChange(null);
+    };
+  }, [file, onSelectionChange, updateSelection]);
+
   if (!file) {
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", flexDirection: "column", gap: "12px" }}>
@@ -146,8 +259,6 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, ini
     );
   }
 
-  const ext = file.ext || (file.path.includes(".") ? `.${file.path.split(".").pop()}` : "");
-  
   const normalizeRelatedSessions = (raw: unknown): RelatedSession[] => {
     if (!raw) return [];
     const list = Array.isArray(raw) ? raw : [raw];
@@ -271,13 +382,14 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, ini
             <div style={{ padding: "24px 16px" }}><ImageViewer path={file.path} root={file.root} /></div>
           ) : file.encoding === "binary" ? (
             <div style={{ padding: "24px 16px" }}><BinaryViewer /></div>
-          ) : ext === ".md" || ext === ".markdown" ? (
-            <div style={{ padding: "24px 16px" }}>
+          ) : usesMarkdownViewer ? (
+            <div ref={contentRootRef} style={{ padding: "24px 16px" }}>
               <MarkdownViewer
                 content={file.content}
                 currentPath={file.path}
                 onFileClick={onFileClick}
                 targetLine={file.targetLine}
+                contentRef={contentRootRef}
               />
             </div>
           ) : (
@@ -286,6 +398,7 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, ini
               ext={ext}
               targetLine={file.targetLine}
               targetColumn={file.targetColumn}
+              contentRef={codeContentRef}
             />
           )}
         </div>

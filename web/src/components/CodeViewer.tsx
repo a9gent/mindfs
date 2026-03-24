@@ -40,7 +40,23 @@ const languageByExt: Record<string, string> = {
   ".md": "markdown",
 };
 
-export const CodeViewer = memo(function CodeViewer({ content, ext, targetLine }: { content: string; ext?: string; targetLine?: number; targetColumn?: number }) {
+export function supportsLineSelection(ext?: string): boolean {
+  if (!ext) return false;
+  return Object.prototype.hasOwnProperty.call(languageByExt, ext.toLowerCase());
+}
+
+export const CodeViewer = memo(function CodeViewer({
+  content,
+  ext,
+  targetLine,
+  contentRef,
+}: {
+  content: string;
+  ext?: string;
+  targetLine?: number;
+  targetColumn?: number;
+  contentRef?: React.RefObject<HTMLElement | null>;
+}) {
   const language = languageByExt[ext ?? ""] ?? "markup";
   const lineRefs = useRef<Array<HTMLDivElement | null>>([]);
   
@@ -133,6 +149,11 @@ export const CodeViewer = memo(function CodeViewer({ content, ext, targetLine }:
           }}
         >
         <code 
+          ref={(node) => {
+            if (contentRef) {
+              contentRef.current = node;
+            }
+          }}
           style={{ whiteSpace: "pre", display: "block", border: "none", background: "transparent" }}
           dangerouslySetInnerHTML={{ __html: html }} 
         />

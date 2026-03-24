@@ -26,15 +26,34 @@ type PendingAttachment = {
   isImage: boolean;
 };
 
+type AttachedFileContext = {
+  filePath: string;
+  fileName: string;
+  startLine?: number;
+  endLine?: number;
+  text?: string;
+};
+
+function getSelectionPreview(text?: string): string {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) {
+    return "...";
+  }
+  return `${Array.from(trimmed).slice(0, 3).join("")}...`;
+}
+
 type ActionBarProps = {
   status?: string;
   agentsVersion?: number;
   currentRootId?: string | null;
   currentSession?: SessionInfo | null;
+  attachedFileContext?: AttachedFileContext | null;
   canOpenSessionDrawer?: boolean;
   onSendMessage?: (message: string, mode: SessionMode, agent: string, model?: string) => void | Promise<void>;
   onCancelCurrentTurn?: (sessionKey: string) => void;
   onNewSession?: () => void;
+  onRequestFileContext?: () => void;
+  onClearFileContext?: () => void;
   onSessionClick?: () => void;
   onToggleLeftSidebar?: () => void;
   onToggleRightSidebar?: () => void;
@@ -65,10 +84,13 @@ export function ActionBar({
   agentsVersion = 0,
   currentRootId,
   currentSession,
+  attachedFileContext,
   canOpenSessionDrawer = false,
   onSendMessage,
   onCancelCurrentTurn,
   onNewSession,
+  onRequestFileContext,
+  onClearFileContext,
   onSessionClick,
   onToggleLeftSidebar,
   onToggleRightSidebar,
@@ -440,7 +462,13 @@ export function ActionBar({
               rightInset={editorRightInset}
               bottomInset={editorBottomInset}
               onChange={handleEditorChange}
-              onFocusChange={setIsFocused}
+              onFocusChange={(focused) => {
+                setIsFocused(focused);
+                if (focused) {
+                  onRequestFileContext?.();
+                }
+              }}
+              onPointerDown={onRequestFileContext}
               onKeyDown={handleKeyDown}
               onEnter={handleEditorEnter}
               onCompositionStart={() => {
@@ -685,6 +713,56 @@ export function ActionBar({
             </button>
           ) : null}
         </div>
+        {attachedFileContext ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", padding: isMobile ? "6px 4px 0" : "0 4px" }}>
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+                minWidth: 0,
+                maxWidth: "100%",
+                padding: "4px 8px",
+                borderRadius: "999px",
+                background: isDark ? "rgba(59,130,246,0.14)" : "rgba(59,130,246,0.08)",
+                color: "var(--text-primary)",
+                fontSize: "12px",
+              }}
+            >
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: isMobile ? "96px" : "140px" }}>
+                {attachedFileContext.fileName}
+              </span>
+              {typeof attachedFileContext.startLine === "number" && typeof attachedFileContext.endLine === "number" ? (
+                <span style={{ color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+                  {attachedFileContext.startLine}-{attachedFileContext.endLine}
+                </span>
+              ) : attachedFileContext.text ? (
+                <span style={{ color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+                  {getSelectionPreview(attachedFileContext.text)}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={onClearFileContext}
+                onMouseDown={(event) => event.preventDefault()}
+                onTouchStart={(event) => event.preventDefault()}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                  padding: 0,
+                  lineHeight: 1,
+                  fontSize: "14px",
+                }}
+                aria-label={`移除文件上下文 ${attachedFileContext.fileName}`}
+                title={`移除 ${attachedFileContext.fileName}`}
+              >
+                ×
+              </button>
+            </span>
+          </div>
+        ) : null}
         {pendingAttachments.length > 0 ? (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px", padding: isMobile ? "6px 4px 0" : "0 4px" }}>
             {pendingAttachments.some((attachment) => attachment.isImage) ? (

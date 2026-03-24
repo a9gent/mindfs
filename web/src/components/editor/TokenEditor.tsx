@@ -45,6 +45,7 @@ type TokenEditorProps = {
   bottomInset?: number;
   onChange: (payload: { serializedText: string; displayText: string; activeToken: ActiveToken | null }) => void;
   onFocusChange?: (focused: boolean) => void;
+  onPointerDown?: () => void;
   onKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
   onEnter?: (event: KeyboardEvent | null) => boolean;
   onCompositionStart?: () => void;
@@ -327,11 +328,12 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
     isDark = false,
     rightInset = 120,
     bottomInset = 12,
-    onChange,
-    onFocusChange,
-    onKeyDown,
-    onEnter,
-    onCompositionStart,
+  onChange,
+  onFocusChange,
+  onPointerDown,
+  onKeyDown,
+  onEnter,
+  onCompositionStart,
     onCompositionEnd,
   },
   ref
@@ -491,6 +493,8 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
 
   return (
     <div
+      onMouseDown={onPointerDown}
+      onTouchStart={onPointerDown}
       style={{
         position: "relative",
         width: "100%",

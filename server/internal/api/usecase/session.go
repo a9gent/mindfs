@@ -23,10 +23,10 @@ type ClientContext struct {
 }
 
 type Selection struct {
-	FilePath string `json:"file_path"`
-	Start    int    `json:"start"`
-	End      int    `json:"end"`
-	Text     string `json:"text"`
+	FilePath  string `json:"file_path"`
+	StartLine int    `json:"start_line,omitempty"`
+	EndLine   int    `json:"end_line,omitempty"`
+	Text      string `json:"text,omitempty"`
 }
 
 type ListSessionsInput struct {
@@ -156,12 +156,6 @@ type BuildPromptInput struct {
 
 func (s *Service) BuildPrompt(in BuildPromptInput) string {
 	clientCtx := in.ClientContext
-	if !in.IsInitial {
-		clientCtx = ClientContext{
-			PluginCatalog: in.ClientContext.PluginCatalog,
-			Selection:     in.ClientContext.Selection,
-		}
-	}
 	prompt := buildUserPrompt(in.Message, clientCtx)
 	if strings.TrimSpace(clientCtx.PluginCatalog) != "" {
 		prompt = buildPluginPrompt(clientCtx.PluginCatalog, in.Message, in.IsInitial)
@@ -492,14 +486,14 @@ func buildUserPrompt(message string, clientCtx ClientContext) string {
 			selectedPath = clientCtx.Selection.FilePath
 		}
 		if selectedPath != "" {
-			lines = append(lines, "文件: "+selectedPath)
+			lines = append(lines, "file: "+selectedPath)
 		}
 
-		if clientCtx.Selection != nil && (clientCtx.Selection.Start > 0 || clientCtx.Selection.End > 0) {
-			lines = append(lines, "范围: "+strconv.Itoa(clientCtx.Selection.Start)+"-"+strconv.Itoa(clientCtx.Selection.End))
+		if clientCtx.Selection != nil && (clientCtx.Selection.StartLine > 0 || clientCtx.Selection.EndLine > 0) {
+			lines = append(lines, "line range: "+strconv.Itoa(clientCtx.Selection.StartLine)+"-"+strconv.Itoa(clientCtx.Selection.EndLine))
 		}
-		if clientCtx.Selection != nil {
-			lines = append(lines, "选中内容: "+clientCtx.Selection.Text)
+		if clientCtx.Selection != nil && strings.TrimSpace(clientCtx.Selection.Text) != "" {
+			lines = append(lines, "selected text: "+clientCtx.Selection.Text)
 		}
 	}
 	return "[USER_INPUT]\n" + strings.Join(lines, "\n")

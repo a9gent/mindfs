@@ -70,11 +70,13 @@ function MarkdownViewerInner({
   currentPath = "",
   onFileClick,
   targetLine,
+  contentRef,
 }: {
   content: string;
   currentPath?: string;
   onFileClick?: (path: string) => void;
   targetLine?: number;
+  contentRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const onFileClickRef = useRef(onFileClick);
@@ -86,6 +88,12 @@ function MarkdownViewerInner({
   useEffect(() => {
     onFileClickRef.current = onFileClick;
   }, [onFileClick]);
+
+  useEffect(() => {
+    if (contentRef) {
+      contentRef.current = containerRef.current;
+    }
+  }, [contentRef, content]);
 
   useEffect(() => {
     if (!targetLine || targetLine < 1 || !containerRef.current || !sourceLineSelector) {

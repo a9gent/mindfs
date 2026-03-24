@@ -161,10 +161,10 @@ class SessionService {
     if (!selection || typeof selection !== "object") return "";
     const raw = selection as Record<string, unknown>;
     const filePath = typeof raw.file_path === "string" ? raw.file_path : "";
-    const start = typeof raw.start === "number" ? raw.start : -1;
-    const end = typeof raw.end === "number" ? raw.end : -1;
+    const startLine = typeof raw.start_line === "number" ? raw.start_line : -1;
+    const endLine = typeof raw.end_line === "number" ? raw.end_line : -1;
     const text = typeof raw.text === "string" ? raw.text : "";
-    return `${filePath}:${start}:${end}:${text}`;
+    return `${filePath}:${startLine}:${endLine}:${text}`;
   }
 
   private compactContext(
