@@ -150,6 +150,16 @@ func buildSessionMetaUpdatedResponse(rootID string, sess *session.Session) WSRes
 	}
 }
 
+func buildRootChangedResponse(action, rootID string) WSResponse {
+	return WSResponse{
+		Type: "root.changed",
+		Payload: map[string]any{
+			"action":  action,
+			"root_id": rootID,
+		},
+	}
+}
+
 func (h *StreamHub) ensurePendingSessionLocked(sessionKey string) *SessionPendingState {
 	state := h.pendingSessions[sessionKey]
 	if state == nil {
@@ -393,6 +403,10 @@ func (h *StreamHub) BroadcastSessionUserMessage(
 
 func (h *StreamHub) BroadcastSessionMetaUpdated(rootID string, sess *session.Session) {
 	h.BroadcastAll(buildSessionMetaUpdatedResponse(rootID, sess))
+}
+
+func (h *StreamHub) BroadcastRootChanged(action, rootID string) {
+	h.BroadcastAll(buildRootChangedResponse(action, rootID))
 }
 
 func (h *StreamHub) WriteJSON(conn *websocket.Conn, value any) error {

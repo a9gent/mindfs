@@ -49,6 +49,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Delete("/api/sessions/{key}", h.handleSessionDelete)
 	r.Get("/api/dirs", h.handleDirs)
 	r.Post("/api/dirs", h.handleAddDir)
+	r.Delete("/api/dirs", h.handleRemoveDir)
 	r.Post("/api/relay/bind", h.handleRelayBind)
 
 	// Agent status API
@@ -512,7 +513,43 @@ func (h *HTTPHandler) handleAddDir(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
+	if h.AppContext != nil {
+		h.AppContext.GetSessionStreamHub().BroadcastRootChanged("added", out.Dir.ID)
+	}
 	respondJSON(w, http.StatusOK, managedDirResponse(out.Dir))
+}
+
+func (h *HTTPHandler) handleRemoveDir(w http.ResponseWriter, r *http.Request) {
+	path := readManagedDirPath(r)
+	uc := h.service()
+	out, err := uc.RemoveManagedDir(r.Context(), usecase.RemoveManagedDirInput{Path: path})
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "root not found") {
+			status = http.StatusNotFound
+		}
+		respondError(w, status, err)
+		return
+	}
+	if h.AppContext != nil {
+		h.AppContext.GetSessionStreamHub().BroadcastRootChanged("removed", out.Dir.ID)
+	}
+	respondJSON(w, http.StatusOK, managedDirResponse(out.Dir))
+}
+
+func readManagedDirPath(r *http.Request) string {
+	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	if path != "" {
+		return path
+	}
+
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(req.Path)
 }
 
 func (h *HTTPHandler) handleRelayBind(w http.ResponseWriter, r *http.Request) {

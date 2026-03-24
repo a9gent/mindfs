@@ -287,6 +287,10 @@ func (uploadTestRegistry) UpsertRoot(string) (rootfs.RootInfo, error) {
 	return rootfs.RootInfo{}, nil
 }
 
+func (uploadTestRegistry) RemoveRoot(string) (rootfs.RootInfo, error) {
+	return rootfs.RootInfo{}, nil
+}
+
 func (uploadTestRegistry) ListRoots() []rootfs.RootInfo {
 	return nil
 }

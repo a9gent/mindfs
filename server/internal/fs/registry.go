@@ -137,3 +137,35 @@ func (r *Registry) Upsert(root string) (RootInfo, error) {
 	r.dirs[name] = dir
 	return dir, r.saveLocked()
 }
+
+func (r *Registry) Remove(root string) (RootInfo, error) {
+	if root == "" {
+		return RootInfo{}, errors.New("root required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cleaned := filepath.Clean(root)
+	name := filepath.Base(cleaned)
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return RootInfo{}, errors.New("invalid directory name")
+	}
+	dir, ok := r.dirs[name]
+	if !ok {
+		return RootInfo{}, errors.New("root not found")
+	}
+	if filepath.Clean(dir.RootPath) != cleaned {
+		return RootInfo{}, errors.New("root not found")
+	}
+	delete(r.dirs, name)
+	nextOrder := make([]string, 0, len(r.order))
+	for _, id := range r.order {
+		if id != name {
+			nextOrder = append(nextOrder, id)
+		}
+	}
+	r.order = nextOrder
+	if err := r.saveLocked(); err != nil {
+		return RootInfo{}, err
+	}
+	return dir, nil
+}

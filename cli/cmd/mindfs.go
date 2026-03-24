@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -27,6 +28,7 @@ func main() {
 	webDir := flag.String("web-dir", "web", "web project directory")
 	staticDir := flag.String("static-dir", "web/dist", "directory for serving built web assets on the backend port")
 	bindCode := flag.String("bind-code", "", "relay bind code for activation/binding")
+	remove := flag.Bool("remove", false, "remove the managed directory")
 	flag.Parse()
 
 	root := "."
@@ -37,6 +39,15 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
+	}
+
+	if *remove {
+		if err := handleRemoveRoot(*addr, absRoot); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stdout, "removed managed directory:", absRoot)
+		return
 	}
 
 	if serverRunning(*addr) {
@@ -129,6 +140,40 @@ func addManagedDir(addr, path string) error {
 		return nil
 	}
 	return fmt.Errorf("failed to add managed directory: %s", resp.Status)
+}
+
+func removeManagedDir(addr, path string) error {
+	endpoint := addrToURL(addr, "/api/dirs?path="+url.QueryEscape(path))
+	req, err := http.NewRequest(http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	message := strings.TrimSpace(string(payload))
+	if message == "" {
+		message = resp.Status
+	}
+	return fmt.Errorf("failed to remove managed directory: %s", message)
+}
+
+func removeManagedDirFromRegistry(path string) error {
+	return app.RemoveManagedDirFromRegistry(path)
+}
+
+func handleRemoveRoot(addr, path string) error {
+	if serverRunning(addr) {
+		return removeManagedDir(addr, path)
+	}
+	return removeManagedDirFromRegistry(path)
 }
 
 func bindRelay(addr, bindCode string) error {

@@ -161,6 +161,24 @@ func (s *AppContext) UpsertRoot(path string) (fs.RootInfo, error) {
 	return s.Dirs.Upsert(path)
 }
 
+func (s *AppContext) RemoveRoot(path string) (fs.RootInfo, error) {
+	if s.Dirs == nil {
+		return fs.RootInfo{}, errors.New("registry not configured")
+	}
+	dir, err := s.Dirs.Remove(path)
+	if err != nil {
+		return fs.RootInfo{}, err
+	}
+	s.mu.Lock()
+	rootCtx := s.roots[dir.ID]
+	delete(s.roots, dir.ID)
+	s.mu.Unlock()
+	if rootCtx != nil && rootCtx.Watcher != nil {
+		rootCtx.Watcher.Close()
+	}
+	return dir, nil
+}
+
 func (s *AppContext) ListRoots() []fs.RootInfo {
 	if s.Dirs == nil {
 		return []fs.RootInfo{}

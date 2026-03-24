@@ -86,3 +86,15 @@ func resolveStaticDir(staticDir string) string {
 	}
 	return ""
 }
+
+func RemoveManagedDirFromRegistry(path string) error {
+	registry, err := fs.NewDefaultRegistry()
+	if err != nil {
+		return err
+	}
+	if err := registry.Load(); err != nil {
+		return err
+	}
+	_, err = registry.Remove(path)
+	return err
+}

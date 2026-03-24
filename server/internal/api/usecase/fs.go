@@ -433,6 +433,31 @@ func (s *Service) AddManagedDir(_ context.Context, in AddManagedDirInput) (AddMa
 	return AddManagedDirOutput{Dir: dir}, nil
 }
 
+type RemoveManagedDirInput struct {
+	Path string
+}
+
+type RemoveManagedDirOutput struct {
+	Dir fs.RootInfo
+}
+
+func (s *Service) RemoveManagedDir(_ context.Context, in RemoveManagedDirInput) (RemoveManagedDirOutput, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return RemoveManagedDirOutput{}, err
+	}
+	if in.Path == "" {
+		return RemoveManagedDirOutput{}, errors.New("path required")
+	}
+	if !filepath.IsAbs(in.Path) {
+		return RemoveManagedDirOutput{}, errors.New("path must be absolute")
+	}
+	dir, err := s.Registry.RemoveRoot(filepath.Clean(in.Path))
+	if err != nil {
+		return RemoveManagedDirOutput{}, err
+	}
+	return RemoveManagedDirOutput{Dir: dir}, nil
+}
+
 func (s *Service) ensureFileWatcher(rootID string) {
 	if strings.TrimSpace(rootID) == "" {
 		return

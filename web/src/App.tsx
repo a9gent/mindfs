@@ -30,6 +30,12 @@ export type SessionItem = { key?: string; session_key?: string; root_id?: string
 type Exchange = { role: string; agent?: string; model?: string; content?: string; timestamp?: string; toolCall?: any; };
 type PendingSend = { rootId: string; mode: SessionMode; agent: string; model?: string; message: string; timestamp: string; };
 type URLState = { root: string; file: string; session: string; cursor: number; pluginQuery: Record<string, string> };
+type ManagedRootPayload = {
+  id: string;
+  display_name?: string;
+  size?: number;
+  mtime?: string;
+};
 const PLUGIN_QUERY_STORAGE_PREFIX = "vp-progress:";
 const TREE_SORT_STORAGE_KEY = "mindfs-tree-sort-mode";
 const DIRECTORY_SORT_OVERRIDES_STORAGE_KEY = "mindfs-directory-sort-overrides";
@@ -257,6 +263,16 @@ function dirnameOfPath(path: string): string {
   const parts = normalized.split("/").filter(Boolean);
   if (parts.length <= 1) return ".";
   return parts.slice(0, -1).join("/");
+}
+
+function mapManagedRootsToEntries(dirs: ManagedRootPayload[]): FileEntry[] {
+  return dirs.map((dir) => ({
+    name: dir.display_name || dir.id.split("/").filter(Boolean).pop() || dir.id,
+    path: dir.id,
+    is_dir: true,
+    size: typeof dir.size === "number" ? dir.size : undefined,
+    mtime: typeof dir.mtime === "string" ? dir.mtime : undefined,
+  }));
 }
 
 function hasExplicitFileContext(message: string): boolean {
@@ -1259,6 +1275,40 @@ export function App() {
     actionHandlersRef.current = actionHandlers;
   }, [actionHandlers]);
 
+  const refreshManagedRoots = useCallback(async () => {
+    const response = await fetch(appPath("/api/dirs"));
+    const dirs = await response.json() as ManagedRootPayload[];
+    const nextDirs = Array.isArray(dirs) ? dirs : [];
+    const nextRootIds = nextDirs.map((dir) => dir.id).filter(Boolean);
+
+    managedRootIdsRef.current = new Set(nextRootIds);
+    setManagedRootIds(nextRootIds);
+    setRootEntries(mapManagedRootsToEntries(nextDirs));
+
+    if (nextRootIds.length === 0) {
+      setCurrentRootId(null);
+      setSelectedDir(null);
+      setMainEntries([]);
+      setFile(null);
+      setSelectedSession(null);
+      setSessions([]);
+      setCurrentSession(null);
+      setActiveBoundSessionKey(null);
+      setInteractionMode("main");
+      setIsDrawerOpen(false);
+      replaceURLState({ root: "", file: "", session: "", cursor: 0, pluginQuery: {} });
+      return;
+    }
+
+    const currentRoot = currentRootIdRef.current;
+    if (currentRoot && nextRootIds.includes(currentRoot)) {
+      return;
+    }
+
+    const nextRoot = nextRootIds[0];
+    await actionHandlersRef.current.open_dir({ path: nextRoot, root: nextRoot, preservePluginQuery: true });
+  }, [replaceURLState]);
+
   const ensurePluginsLoaded = useCallback(async (rootId: string) => {
     if (!rootId || pluginsLoadedByRootRef.current[rootId]) {
       return;
@@ -1595,6 +1645,7 @@ export function App() {
       switch (event.type) {
         case "ws.reconnected":
         case "ws.connected":
+          void refreshManagedRoots();
           if (currentRootIdRef.current) {
             const newest = sessionsRef.current[0]?.updated_at || "";
             void loadSessions(currentRootIdRef.current, newest ? { afterTime: newest } : { replace: true });
@@ -1603,6 +1654,9 @@ export function App() {
               void reloadSessionForReplay(currentRootIdRef.current, boundKey);
             }
           }
+          break;
+        case "root.changed":
+          void refreshManagedRoots();
           break;
         case "session.stream": handleSessionStream(payload); break;
         case "session.done": {
@@ -1703,7 +1757,7 @@ export function App() {
       cancelled = true;
       unsubscribeEvents();
     };
-  }, [currentRootId, mergeSessionItems, rootSessionKey, resolveRootForSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot, refreshTreeDir, refreshCurrentFileContent]);
+  }, [currentRootId, mergeSessionItems, rootSessionKey, resolveRootForSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot, refreshTreeDir, refreshCurrentFileContent, refreshManagedRoots]);
 
   useEffect(() => {
     if (!currentRootId) return;
@@ -1736,16 +1790,9 @@ export function App() {
     let cancelled = false;
     fetch(appPath("/api/dirs")).then(r => r.json()).then(async dirs => {
       if (cancelled || !dirs.length) return;
-      const dirByID = new Map<string, any>(dirs.map((dir: any) => [dir.id, dir]));
-      const ids = dirs.map((d: any) => d.id);
+      const ids = dirs.map((d: ManagedRootPayload) => d.id);
       managedRootIdsRef.current = new Set(ids); setManagedRootIds(ids);
-      setRootEntries(ids.map((id: string) => ({
-        name: dirByID.get(id)?.display_name || id.split("/").filter(Boolean).pop() || id,
-        path: id,
-        is_dir: true,
-        size: typeof dirByID.get(id)?.size === "number" ? dirByID.get(id).size : undefined,
-        mtime: typeof dirByID.get(id)?.mtime === "string" ? dirByID.get(id).mtime : undefined,
-      })));
+      setRootEntries(mapManagedRootsToEntries(dirs as ManagedRootPayload[]));
       const urlState = readURLState();
       const preferredRoot = urlState.root && ids.includes(urlState.root) ? urlState.root : ids[0];
       setCurrentRootId(preferredRoot);

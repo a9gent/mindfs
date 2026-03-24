@@ -12,6 +12,7 @@ type Registry interface {
 	GetRoot(rootID string) (fs.RootInfo, error)
 	GetSessionManager(rootID string) (*session.Manager, error)
 	UpsertRoot(path string) (fs.RootInfo, error)
+	RemoveRoot(path string) (fs.RootInfo, error)
 	ListRoots() []fs.RootInfo
 	GetAgentPool() *agent.Pool
 	GetProber() *agent.Prober
