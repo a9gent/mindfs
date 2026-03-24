@@ -19,6 +19,7 @@ type DefaultListViewProps = {
   onPathClick?: (path: string) => void;
   onSortModeChange?: (mode: DirectorySortControlValue) => void;
   onUploadFiles?: (files: File[]) => void | Promise<void>;
+  onRemoveRoot?: () => void;
 };
 
 function formatCompactTime(value?: string): string {
@@ -122,6 +123,7 @@ export function DefaultListView({
   onPathClick,
   onSortModeChange,
   onUploadFiles,
+  onRemoveRoot,
 }: DefaultListViewProps) {
   const inputRef = React.useRef<HTMLInputElement>(null);
   const menuRef = React.useRef<HTMLDivElement | null>(null);
@@ -131,6 +133,7 @@ export function DefaultListView({
     return sortDirectoryEntries(visibleEntries, sortMode);
   }, [entries, showHiddenFiles, sortMode]);
   const showCompactMeta = sortMode === "mtime-desc" || sortMode === "mtime-asc" || sortMode === "size-desc" || sortMode === "size-asc";
+  const isRootView = !!root && (!!path ? path === root : true);
 
   React.useEffect(() => {
     if (!isMenuOpen) {
@@ -263,6 +266,38 @@ export function DefaultListView({
                   );
                 })}
                 <div style={{ height: "1px", background: "var(--border-color)", margin: "6px 4px" }} />
+                {isRootView ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onRemoveRoot?.();
+                        setIsMenuOpen(false);
+                      }}
+                      style={{
+                        width: "100%",
+                        border: "none",
+                        background: "transparent",
+                        color: "#dc2626",
+                        borderRadius: "8px",
+                        padding: "8px 10px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        textAlign: "left",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                      }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.2a2 2 0 0 1 1.4.58l1.82 1.84A2 2 0 0 0 13.84 6H20a2 2 0 0 1 2 2z" />
+                        <path d="M9 14h6" />
+                      </svg>
+                      <span>移除项目</span>
+                    </button>
+                    <div style={{ height: "1px", background: "var(--border-color)", margin: "6px 4px" }} />
+                  </>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {

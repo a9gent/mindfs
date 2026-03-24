@@ -33,6 +33,7 @@ type URLState = { root: string; file: string; session: string; cursor: number; p
 type ManagedRootPayload = {
   id: string;
   display_name?: string;
+  root_path?: string;
   size?: number;
   mtime?: string;
 };
@@ -342,7 +343,10 @@ export function App() {
   const [currentRootId, setCurrentRootId] = useState<string | null>(null);
   const currentRootIdRef = useRef<string | null>(null);
   const [managedRootIds, setManagedRootIds] = useState<string[]>([]);
+  const managedRootByIdRef = useRef<Record<string, ManagedRootPayload>>({});
   const [rootEntries, setRootEntries] = useState<FileEntry[]>([]);
+  const [creatingRootName, setCreatingRootName] = useState<string | null>(null);
+  const [creatingRootBusy, setCreatingRootBusy] = useState(false);
   const [entriesByPath, setEntriesByPath] = useState<Record<string, FileEntry[]>>({});
   const entriesByPathRef = useRef<Record<string, FileEntry[]>>({});
   const [expanded, setExpanded] = useState<string[]>([]);
@@ -1280,6 +1284,7 @@ export function App() {
     const dirs = await response.json() as ManagedRootPayload[];
     const nextDirs = Array.isArray(dirs) ? dirs : [];
     const nextRootIds = nextDirs.map((dir) => dir.id).filter(Boolean);
+    managedRootByIdRef.current = Object.fromEntries(nextDirs.filter((dir) => !!dir.id).map((dir) => [dir.id, dir]));
 
     managedRootIdsRef.current = new Set(nextRootIds);
     setManagedRootIds(nextRootIds);
@@ -1308,6 +1313,88 @@ export function App() {
     const nextRoot = nextRootIds[0];
     await actionHandlersRef.current.open_dir({ path: nextRoot, root: nextRoot, preservePluginQuery: true });
   }, [replaceURLState]);
+
+  const handleCreateRootStart = useCallback(() => {
+    if (creatingRootBusy) {
+      return;
+    }
+    const existing = new Set(managedRootIdsRef.current);
+    let nextName = "new-root";
+    let suffix = 2;
+    while (existing.has(nextName)) {
+      nextName = `new-root-${suffix}`;
+      suffix += 1;
+    }
+    setCreatingRootName(nextName);
+  }, [creatingRootBusy]);
+
+  const handleCreateRootCancel = useCallback(() => {
+    if (creatingRootBusy) {
+      return;
+    }
+    setCreatingRootName(null);
+  }, [creatingRootBusy]);
+
+  const handleCreateRootSubmit = useCallback(async () => {
+    const name = String(creatingRootName || "").trim();
+    if (!name) {
+      setCreatingRootName(null);
+      return;
+    }
+    if (creatingRootBusy) {
+      return;
+    }
+    setCreatingRootBusy(true);
+    try {
+      const response = await fetch(appPath("/api/dirs"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: name, create: true }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(String(payload?.message || payload?.error || "新建项目失败"));
+      }
+      const created = payload as ManagedRootPayload;
+      setCreatingRootName(null);
+      await refreshManagedRoots();
+      if (created?.id) {
+        await actionHandlersRef.current.open_dir({ path: created.id, root: created.id });
+      }
+    } catch (err) {
+      reportError("root.create_failed", String((err as Error)?.message || "新建项目失败"));
+    } finally {
+      setCreatingRootBusy(false);
+    }
+  }, [creatingRootBusy, creatingRootName, refreshManagedRoots]);
+
+  const handleRemoveCurrentRoot = useCallback(async () => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID) {
+      return;
+    }
+    const rootInfo = managedRootByIdRef.current[rootID];
+    const rootPath = rootInfo?.root_path || "";
+    if (!rootPath) {
+      reportError("root.delete_failed", "当前项目缺少路径信息，无法移除");
+      return;
+    }
+    if (!window.confirm(`确认移除项目“${rootID}”？`)) {
+      return;
+    }
+    try {
+      const response = await fetch(appURL("/api/dirs", new URLSearchParams({ path: rootPath })), {
+        method: "DELETE",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(String(payload?.message || payload?.error || "移除项目失败"));
+      }
+      await refreshManagedRoots();
+    } catch (err) {
+      reportError("root.delete_failed", String((err as Error)?.message || "移除项目失败"));
+    }
+  }, [refreshManagedRoots]);
 
   const ensurePluginsLoaded = useCallback(async (rootId: string) => {
     if (!rootId || pluginsLoadedByRootRef.current[rootId]) {
@@ -1790,9 +1877,11 @@ export function App() {
     let cancelled = false;
     fetch(appPath("/api/dirs")).then(r => r.json()).then(async dirs => {
       if (cancelled || !dirs.length) return;
-      const ids = dirs.map((d: ManagedRootPayload) => d.id);
+      const nextDirs = dirs as ManagedRootPayload[];
+      const ids = nextDirs.map((d) => d.id);
+      managedRootByIdRef.current = Object.fromEntries(nextDirs.filter((dir) => !!dir.id).map((dir) => [dir.id, dir]));
       managedRootIdsRef.current = new Set(ids); setManagedRootIds(ids);
-      setRootEntries(mapManagedRootsToEntries(dirs as ManagedRootPayload[]));
+      setRootEntries(mapManagedRootsToEntries(nextDirs));
       const urlState = readURLState();
       const preferredRoot = urlState.root && ids.includes(urlState.root) ? urlState.root : ids[0];
       setCurrentRootId(preferredRoot);
@@ -2052,6 +2141,7 @@ export function App() {
           });
         }}
         onUploadFiles={handleTreeUpload}
+        onRemoveRoot={handleRemoveCurrentRoot}
         onItemClick={(e) => e.is_dir ? actionHandlers.open_dir({ path: e.path }) : actionHandlers.open({ path: e.path })}
         onPathClick={handleDirectoryPathClick}
       />
@@ -2134,7 +2224,7 @@ export function App() {
     <AppShell
       leftOpen={isLeftOpen} rightOpen={isRightOpen}
       onCloseLeft={() => setIsLeftOpen(false)} onCloseRight={() => setIsRightOpen(false)}
-      sidebar={<FileTree entries={rootEntries} childrenByPath={entriesByPath} expanded={expanded} sortMode={treeSortMode} showHiddenFiles={showHiddenFiles} onSortModeChange={setTreeSortMode} onShowHiddenFilesChange={setShowHiddenFiles} selectedDir={selectedDir} selectedPath={file?.path} rootId={currentRootId} managedRoots={managedRootIds} onSelectFile={(e, r) => { actionHandlers.open({path: e.path, root: r}); if (isMobile) setIsLeftOpen(false); }} onToggleDir={(e, r) => actionHandlers.open_dir({path: e.path, root: r, toggle: true})} />}
+      sidebar={<FileTree entries={rootEntries} childrenByPath={entriesByPath} expanded={expanded} sortMode={treeSortMode} showHiddenFiles={showHiddenFiles} onSortModeChange={setTreeSortMode} onShowHiddenFilesChange={setShowHiddenFiles} selectedDir={selectedDir} selectedPath={file?.path} rootId={currentRootId} managedRoots={managedRootIds} creatingRootName={creatingRootName} creatingRootBusy={creatingRootBusy} onCreateRootStart={handleCreateRootStart} onCreateRootNameChange={setCreatingRootName} onCreateRootSubmit={() => { void handleCreateRootSubmit(); }} onCreateRootCancel={handleCreateRootCancel} onSelectFile={(e, r) => { actionHandlers.open({path: e.path, root: r}); if (isMobile) setIsLeftOpen(false); }} onToggleDir={(e, r) => actionHandlers.open_dir({path: e.path, root: r, toggle: true})} />}
       rightSidebar={<SessionList sessions={sessions} selectedKey={selectedSession?.key} onSelect={(s) => { handleSelectSession(s); if (isMobile) setIsRightOpen(false); }} onDelete={handleDeleteSession} onLoadOlder={handleLoadOlderSessions} loadingOlder={loadingOlderSessions} hasMore={hasMoreSessions} />}
       main={
         <div style={{ width: "100%", flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", position: "relative" }}>

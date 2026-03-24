@@ -27,6 +27,12 @@ type FileTreeProps = {
   onShowHiddenFilesChange?: (show: boolean) => void;
   onSelectFile?: (entry: FileEntry, rootId: string) => void;
   onToggleDir?: (entry: FileEntry, rootId: string) => void;
+  creatingRootName?: string | null;
+  creatingRootBusy?: boolean;
+  onCreateRootStart?: () => void;
+  onCreateRootNameChange?: (name: string) => void;
+  onCreateRootSubmit?: () => void;
+  onCreateRootCancel?: () => void;
 };
 
 const ChevronRight = ({ isOpen }: { isOpen: boolean }) => (
@@ -99,11 +105,32 @@ export function FileTree({
   onShowHiddenFilesChange,
   onSelectFile,
   onToggleDir,
+  creatingRootName = null,
+  creatingRootBusy = false,
+  onCreateRootStart,
+  onCreateRootNameChange,
+  onCreateRootSubmit,
+  onCreateRootCancel,
 }: FileTreeProps) {
   const expandedSet = new Set(expanded);
   const managedSet = new Set(managedRoots);
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   const menuRef = React.useRef<HTMLDivElement | null>(null);
+  const createInputRef = React.useRef<HTMLInputElement | null>(null);
+  const previousCreatingRootNameRef = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    if (!creatingRootName) {
+      previousCreatingRootNameRef.current = creatingRootName;
+      return;
+    }
+    const enteredCreateMode = previousCreatingRootNameRef.current === null;
+    createInputRef.current?.focus();
+    if (enteredCreateMode) {
+      createInputRef.current?.select();
+    }
+    previousCreatingRootNameRef.current = creatingRootName;
+  }, [creatingRootName]);
 
   React.useEffect(() => {
     if (!isMenuOpen) {
@@ -132,6 +159,60 @@ export function FileTree({
 
   const renderEntries = (items: FileEntry[], depth: number, branchRoot: string) => (
     <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+      {depth === 0 && creatingRootName !== null ? (
+        <li key="__draft_root__">
+          <div
+            style={{
+              padding: "6px 8px",
+              paddingLeft: 8,
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              width: "100%",
+              color: "var(--accent-color)",
+              fontSize: "13px",
+              borderRadius: "6px",
+              background: "var(--selection-bg)",
+              boxSizing: "border-box",
+            }}
+          >
+            <div style={{ width: 20, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <ChevronRight isOpen={false} />
+            </div>
+            <input
+              ref={createInputRef}
+              value={creatingRootName}
+              disabled={creatingRootBusy}
+              onChange={(event) => onCreateRootNameChange?.(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  onCreateRootSubmit?.();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  onCreateRootCancel?.();
+                }
+              }}
+              onBlur={() => {
+                if (!creatingRootBusy) {
+                  onCreateRootSubmit?.();
+                }
+              }}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                border: "none",
+                background: "transparent",
+                color: "var(--text-primary)",
+                fontSize: "13px",
+                fontWeight: 600,
+                outline: "none",
+                padding: 0,
+              }}
+            />
+          </div>
+        </li>
+      ) : null}
       {sortDirectoryEntries(visibleEntries(items), sortMode).map((entry) => {
         const entryRoot = managedSet.has(entry.path) ? entry.path : branchRoot;
         const expandedKey = managedSet.has(entry.path) ? entry.path : `${entryRoot}:${entry.path}`;
@@ -238,8 +319,36 @@ export function FileTree({
                 zIndex: 20,
               }}
             >
-              <div style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)" }}>全局排序</div>
-              {DIRECTORY_SORT_OPTIONS.map((option) => {
+                <div style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)" }}>全局排序</div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCreateRootStart?.();
+                    setIsMenuOpen(false);
+                  }}
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    background: "transparent",
+                    color: "var(--text-primary)",
+                    borderRadius: "8px",
+                    padding: "8px 10px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    textAlign: "left",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                    <path d="M12 5v14" />
+                    <path d="M5 12h14" />
+                  </svg>
+                  <span>新建项目</span>
+                </button>
+                <div style={{ height: "1px", background: "var(--border-color)", margin: "6px 4px" }} />
+                {DIRECTORY_SORT_OPTIONS.map((option) => {
                 const active = option.value === sortMode;
                 return (
                   <button

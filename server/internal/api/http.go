@@ -501,14 +501,15 @@ func (h *HTTPHandler) handleDirs(w http.ResponseWriter, _ *http.Request) {
 
 func (h *HTTPHandler) handleAddDir(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path string `json:"path"`
+		Path   string `json:"path"`
+		Create bool   `json:"create"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json"))
 		return
 	}
 	uc := h.service()
-	out, err := uc.AddManagedDir(r.Context(), usecase.AddManagedDirInput{Path: req.Path})
+	out, err := uc.AddManagedDir(r.Context(), usecase.AddManagedDirInput{Path: req.Path, Create: req.Create})
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err)
 		return
@@ -580,6 +581,7 @@ func managedDirResponse(dir fs.RootInfo) map[string]any {
 	resp := map[string]any{
 		"id":           dir.ID,
 		"display_name": dir.Name,
+		"root_path":    dir.RootPath,
 		"created_at":   dir.CreatedAt,
 		"updated_at":   dir.UpdatedAt,
 	}

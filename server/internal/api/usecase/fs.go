@@ -400,7 +400,8 @@ func (s *Service) ListManagedDirs(_ context.Context) (ListManagedDirsOutput, err
 }
 
 type AddManagedDirInput struct {
-	Path string
+	Path   string
+	Create bool
 }
 
 type AddManagedDirOutput struct {
@@ -414,13 +415,9 @@ func (s *Service) AddManagedDir(_ context.Context, in AddManagedDirInput) (AddMa
 	if in.Path == "" {
 		return AddManagedDirOutput{}, errors.New("path required")
 	}
-	if !filepath.IsAbs(in.Path) {
-		return AddManagedDirOutput{}, errors.New("path must be absolute")
-	}
-	abs := filepath.Clean(in.Path)
-	info, err := os.Stat(abs)
-	if err != nil || !info.IsDir() {
-		return AddManagedDirOutput{}, errors.New("path must be a directory")
+	abs, err := resolveManagedDirPath(s.Registry, in.Path, in.Create)
+	if err != nil {
+		return AddManagedDirOutput{}, err
 	}
 	name := filepath.Base(abs)
 	if _, err := fs.NewRootInfo(name, name, abs).EnsureMetaDir(); err != nil {
@@ -431,6 +428,69 @@ func (s *Service) AddManagedDir(_ context.Context, in AddManagedDirInput) (AddMa
 		return AddManagedDirOutput{}, err
 	}
 	return AddManagedDirOutput{Dir: dir}, nil
+}
+
+func resolveManagedDirPath(registry Registry, raw string, create bool) (string, error) {
+	if create {
+		return createManagedDir(registry, raw)
+	}
+	if !filepath.IsAbs(raw) {
+		return "", errors.New("path must be absolute")
+	}
+	abs := filepath.Clean(raw)
+	info, err := os.Stat(abs)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("path must be a directory")
+	}
+	return abs, nil
+}
+
+func createManagedDir(registry Registry, name string) (string, error) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return "", errors.New("path required")
+	}
+	if trimmed == "." || trimmed == ".." {
+		return "", errors.New("invalid root name")
+	}
+	if strings.Contains(trimmed, "/") || strings.Contains(trimmed, "\\") {
+		return "", errors.New("root name must not contain path separators")
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	baseDir := filepath.Join(homeDir, "mindfs")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		return "", err
+	}
+
+	rootPath := filepath.Join(baseDir, trimmed)
+	cleanRootPath := filepath.Clean(rootPath)
+	for _, existing := range registry.ListRoots() {
+		existingPath := filepath.Clean(existing.RootPath)
+		if existing.ID == trimmed && existingPath != cleanRootPath {
+			return "", errors.New("root name already exists")
+		}
+		if existingPath == cleanRootPath {
+			return "", errors.New("root already exists")
+		}
+	}
+
+	if info, err := os.Stat(rootPath); err == nil {
+		if info.IsDir() {
+			return cleanRootPath, nil
+		}
+		return "", errors.New("root path already exists and is not a directory")
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+
+	if err := os.Mkdir(rootPath, 0o755); err != nil {
+		return "", err
+	}
+	return cleanRootPath, nil
 }
 
 type RemoveManagedDirInput struct {
