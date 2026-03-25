@@ -99,6 +99,7 @@ type session struct {
 	turn      types.TurnCanceler
 
 	sawDelta        bool
+	sawMessageText  bool
 	pendingText     strings.Builder
 	pendingThinking strings.Builder
 
@@ -115,6 +116,7 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 	}
 	turnCtx, turnID := s.turn.Begin(ctx)
 	defer s.turn.End(turnID)
+	s.sawMessageText = false
 	log.Printf("[agent/claude] input session=%s content=%q", s.sessionKey, preview(content))
 
 	waiter := make(chan error, 1)
@@ -158,6 +160,28 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 	}
 	log.Printf("[agent/claude] models.cached session=%s count=%d", s.sessionKey, len(models))
 	return types.ModelList{Models: models}, nil
+}
+
+func (s *session) ListCommands(ctx context.Context) (types.CommandList, error) {
+	_ = ctx
+	if s.client == nil {
+		return types.CommandList{}, errors.New("claude session not initialized")
+	}
+	supported := s.client.InitializationInfo().Commands
+	commands := make([]types.CommandInfo, 0, len(supported))
+	for _, command := range supported {
+		name := strings.TrimSpace(command.Name)
+		if name == "" || strings.EqualFold(name, "keybindings-help") {
+			continue
+		}
+		commands = append(commands, types.CommandInfo{
+			Name:         name,
+			Description:  strings.TrimSpace(command.Description),
+			ArgumentHint: strings.TrimSpace(command.ArgumentHint),
+		})
+	}
+	log.Printf("[agent/claude] commands.cached session=%s count=%d", s.sessionKey, len(commands))
+	return types.CommandList{Commands: commands}, nil
 }
 
 func (s *session) OnUpdate(onUpdate func(types.Event)) {
@@ -228,11 +252,15 @@ func (s *session) consumeMessages() {
 			s.logRawMessage(raw)
 		case claudeagent.ResultMessage:
 			s.flushAllDeltas()
+			if !s.sawMessageText && strings.TrimSpace(m.Result) != "" {
+				s.emitMessageChunk(m.Result)
+			}
 			s.logRawMessage(raw)
 			log.Printf("[agent/claude] output.done session=%s status=%s subtype=%s", s.sessionKey, m.Status, m.Subtype)
 			s.emit(types.Event{Type: types.EventTypeMessageDone, SessionID: s.SessionID()})
 			s.completeTurn(resultErr(m))
 			s.sawDelta = false
+			s.sawMessageText = false
 		default:
 			s.logRawMessage(raw)
 		}
@@ -520,6 +548,9 @@ func decodeToolResult(raw any, out any) bool {
 }
 
 func (s *session) emitMessageChunk(content string) {
+	if strings.TrimSpace(content) != "" {
+		s.sawMessageText = true
+	}
 	s.emit(types.Event{
 		Type:      types.EventTypeMessageChunk,
 		SessionID: s.SessionID(),

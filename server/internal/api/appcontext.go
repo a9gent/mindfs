@@ -220,6 +220,12 @@ func (s *AppContext) GetCandidateRegistry() *usecase.CandidateRegistry {
 		registry := usecase.NewCandidateRegistry()
 		registry.Register(usecase.NewFileCandidateProvider())
 		registry.Register(usecase.NewSkillCandidateProvider())
+		registry.Register(usecase.NewSlashCommandCandidateProvider(func(agentName string) (agent.Status, bool) {
+			if s.Prober == nil {
+				return agent.Status{}, false
+			}
+			return s.Prober.GetStatus(agentName)
+		}))
 		s.candidateRegistry = registry
 	}
 	return s.candidateRegistry

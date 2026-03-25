@@ -15,6 +15,9 @@ type Session interface {
 	// ListModels returns the models visible to the current session/runtime.
 	ListModels(ctx context.Context) (ModelList, error)
 
+	// ListCommands returns the commands visible to the current session/runtime.
+	ListCommands(ctx context.Context) (CommandList, error)
+
 	// CancelCurrentTurn cancels the in-flight turn, if any.
 	CancelCurrentTurn() error
 
@@ -46,6 +49,16 @@ type ModelInfo struct {
 type ModelList struct {
 	CurrentModelID string      `json:"current_model_id,omitempty"`
 	Models         []ModelInfo `json:"models,omitempty"`
+}
+
+type CommandInfo struct {
+	Name         string `json:"name"`
+	Description  string `json:"description,omitempty"`
+	ArgumentHint string `json:"argument_hint,omitempty"`
+}
+
+type CommandList struct {
+	Commands []CommandInfo `json:"commands,omitempty"`
 }
 
 // EventType defines the type of a session event.

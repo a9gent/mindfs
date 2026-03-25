@@ -77,6 +77,25 @@ func mapModelState(state *acpsdk.SessionModelState) types.ModelList {
 	}
 }
 
+func mapCommandState(commands []acpsdk.AvailableCommand) types.CommandList {
+	if len(commands) == 0 {
+		return types.CommandList{}
+	}
+	items := make([]types.CommandInfo, 0, len(commands))
+	for _, command := range commands {
+		argumentHint := ""
+		if command.Input != nil && command.Input.UnstructuredCommandInput != nil {
+			argumentHint = strings.TrimSpace(command.Input.UnstructuredCommandInput.Hint)
+		}
+		items = append(items, types.CommandInfo{
+			Name:         command.Name,
+			Description:  command.Description,
+			ArgumentHint: argumentHint,
+		})
+	}
+	return types.CommandList{Commands: items}
+}
+
 func (r *Runtime) CloseSession(sessionKey string) {
 	for _, proc := range r.listProcesses() {
 		proc.CloseSession(sessionKey)
@@ -165,6 +184,13 @@ func (s *session) ListModels(_ context.Context) (types.ModelList, error) {
 		return types.ModelList{}, errors.New("acp session not initialized")
 	}
 	return mapModelState(s.proc.SessionModelState(s.sessionKey)), nil
+}
+
+func (s *session) ListCommands(_ context.Context) (types.CommandList, error) {
+	if s == nil || s.proc == nil {
+		return types.CommandList{}, errors.New("acp session not initialized")
+	}
+	return mapCommandState(s.proc.SessionCommands(s.sessionKey)), nil
 }
 
 func (s *session) CancelCurrentTurn() error {

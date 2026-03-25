@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"mindfs/server/internal/agent"
 	rootfs "mindfs/server/internal/fs"
 
 	"gopkg.in/yaml.v3"
@@ -17,8 +18,9 @@ import (
 type CandidateType string
 
 const (
-	CandidateTypeFile  CandidateType = "file"
-	CandidateTypeSkill CandidateType = "skill"
+	CandidateTypeFile         CandidateType = "file"
+	CandidateTypeSkill        CandidateType = "skill"
+	CandidateTypeSlashCommand CandidateType = "slash_command"
 )
 
 type CandidateItem struct {
@@ -37,6 +39,8 @@ type SearchCandidatesInput struct {
 type SearchCandidatesOutput struct {
 	Items []CandidateItem
 }
+
+const maxCandidateItems = 20
 
 type CandidateProvider interface {
 	Type() CandidateType
@@ -73,22 +77,52 @@ func (s *Service) SearchCandidates(ctx context.Context, in SearchCandidatesInput
 	if err := s.ensureRegistry(); err != nil {
 		return SearchCandidatesOutput{}, err
 	}
-	if in.Type != CandidateTypeFile && in.Type != CandidateTypeSkill {
-		return SearchCandidatesOutput{}, errors.New("invalid candidate type")
-	}
-	if in.Type == CandidateTypeSkill && strings.TrimSpace(in.Agent) == "" {
-		return SearchCandidatesOutput{}, errors.New("agent required for skill candidates")
+	if err := validateSearchCandidatesInput(in); err != nil {
+		return SearchCandidatesOutput{}, err
 	}
 	root, err := s.Registry.GetRoot(in.RootID)
 	if err != nil {
 		return SearchCandidatesOutput{}, err
 	}
 	registry := s.Registry.GetCandidateRegistry()
+	if in.Type == CandidateTypeSkill {
+		skillItems, err := registry.Search(ctx, CandidateTypeSkill, root, in.Agent, in.Query)
+		if err != nil {
+			return SearchCandidatesOutput{}, err
+		}
+		slashItems, err := registry.Search(ctx, CandidateTypeSlashCommand, root, in.Agent, in.Query)
+		if err != nil {
+			return SearchCandidatesOutput{}, err
+		}
+		return SearchCandidatesOutput{Items: mergeCandidateItemsPreferSlash(slashItems, skillItems, in.Query)}, nil
+	}
 	items, err := registry.Search(ctx, in.Type, root, in.Agent, in.Query)
 	if err != nil {
 		return SearchCandidatesOutput{}, err
 	}
 	return SearchCandidatesOutput{Items: items}, nil
+}
+
+func mergeCandidateItemsPreferSlash(primary []CandidateItem, secondary []CandidateItem, query string) []CandidateItem {
+	items := make([]CandidateItem, 0, len(primary)+len(secondary))
+	seen := make(map[string]struct{}, len(primary)+len(secondary))
+	appendUnique := func(list []CandidateItem) {
+		for _, item := range list {
+			normalizedName := normalizeCandidateName(item.Name)
+			if normalizedName == "" {
+				continue
+			}
+			if _, ok := seen[normalizedName]; ok {
+				continue
+			}
+			seen[normalizedName] = struct{}{}
+			items = append(items, item)
+		}
+	}
+	appendUnique(primary)
+	appendUnique(secondary)
+	sortCandidateItems(items, query)
+	return limitCandidateItems(items)
 }
 
 type FileCandidateProvider struct{}
@@ -149,10 +183,7 @@ func (p *FileCandidateProvider) Search(ctx context.Context, root rootfs.RootInfo
 		return nil, err
 	}
 	sortCandidateItems(items, query)
-	if len(items) > 20 {
-		items = items[:20]
-	}
-	return items, nil
+	return limitCandidateItems(items), nil
 }
 
 type SkillCandidateProvider struct{}
@@ -208,10 +239,74 @@ func (p *SkillCandidateProvider) Search(ctx context.Context, root rootfs.RootInf
 		}
 	}
 	sortCandidateItems(items, query)
-	if len(items) > 20 {
-		items = items[:20]
+	return limitCandidateItems(items), nil
+}
+
+type SlashCommandCandidateProvider struct {
+	getStatus func(agentName string) (agent.Status, bool)
+}
+
+func NewSlashCommandCandidateProvider(getStatus func(agentName string) (agent.Status, bool)) *SlashCommandCandidateProvider {
+	return &SlashCommandCandidateProvider{getStatus: getStatus}
+}
+
+func (p *SlashCommandCandidateProvider) Type() CandidateType {
+	return CandidateTypeSlashCommand
+}
+
+func (p *SlashCommandCandidateProvider) Search(ctx context.Context, _ rootfs.RootInfo, agentName, query string) ([]CandidateItem, error) {
+	if p == nil || p.getStatus == nil {
+		return nil, nil
 	}
-	return items, nil
+	status, ok := p.getStatus(strings.TrimSpace(agentName))
+	if !ok || len(status.Commands) == 0 {
+		return nil, nil
+	}
+	query = strings.TrimSpace(strings.ToLower(query))
+	items := make([]CandidateItem, 0, len(status.Commands))
+	for _, command := range status.Commands {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		name := strings.TrimSpace(command.Name)
+		if name == "" || !matchesCandidateName(name, query) {
+			continue
+		}
+		items = append(items, CandidateItem{
+			Type:        CandidateTypeSlashCommand,
+			Name:        name,
+			Description: strings.TrimSpace(command.Description),
+		})
+	}
+	sortCandidateItems(items, query)
+	return limitCandidateItems(items), nil
+}
+
+func validateSearchCandidatesInput(in SearchCandidatesInput) error {
+	switch in.Type {
+	case CandidateTypeFile:
+		return nil
+	case CandidateTypeSkill, CandidateTypeSlashCommand:
+		if strings.TrimSpace(in.Agent) == "" {
+			return errors.New("agent required for skill candidates")
+		}
+		return nil
+	default:
+		return errors.New("invalid candidate type")
+	}
+}
+
+func normalizeCandidateName(name string) string {
+	return strings.TrimSpace(strings.ToLower(name))
+}
+
+func limitCandidateItems(items []CandidateItem) []CandidateItem {
+	if len(items) > maxCandidateItems {
+		return items[:maxCandidateItems]
+	}
+	return items
 }
 
 func shouldIgnoreCandidatePath(relPath string, isDir bool) bool {

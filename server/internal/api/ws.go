@@ -105,6 +105,8 @@ func (h *WSHandler) broadcastAgentStatusChange(status agent.Status) {
 			"current_model_id": status.CurrentModelID,
 			"models":           status.Models,
 			"models_error":     status.ModelsError,
+			"commands":         status.Commands,
+			"commands_error":   status.CommandsError,
 		},
 	}
 	h.broadcastWS(resp)

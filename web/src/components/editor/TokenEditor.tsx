@@ -23,10 +23,12 @@ import {
   TextNode,
 } from "lexical";
 
-type CandidateType = "file" | "skill";
+type TokenType = "file" | "skill";
+type CandidateType = TokenType | "slash_command";
+type ActiveTokenType = "file" | "slash";
 
 type ActiveToken = {
-  type: CandidateType;
+  type: ActiveTokenType;
   query: string;
 };
 
@@ -55,7 +57,7 @@ type TokenEditorProps = {
 type SerializedTokenNode = Spread<
   {
     type: "token";
-    tokenType: CandidateType;
+    tokenType: TokenType;
     tokenValue: string;
     label: string;
     version: 1;
@@ -64,7 +66,7 @@ type SerializedTokenNode = Spread<
 >;
 
 class TokenNode extends TextNode {
-  __tokenType: CandidateType;
+  __tokenType: TokenType;
   __tokenValue: string;
   __label: string;
 
@@ -84,7 +86,7 @@ class TokenNode extends TextNode {
     );
   }
 
-  constructor(tokenType: CandidateType, tokenValue: string, label: string, key?: NodeKey) {
+  constructor(tokenType: TokenType, tokenValue: string, label: string, key?: NodeKey) {
     super(label, key);
     this.__tokenType = tokenType;
     this.__tokenValue = tokenValue;
@@ -135,7 +137,7 @@ class TokenNode extends TextNode {
     };
   }
 
-  getTokenType(): CandidateType {
+  getTokenType(): TokenType {
     return this.__tokenType;
   }
 
@@ -160,7 +162,7 @@ class TokenNode extends TextNode {
   }
 }
 
-function $createTokenNode(type: CandidateType, value: string, label: string): TokenNode {
+function $createTokenNode(type: TokenType, value: string, label: string): TokenNode {
   return new TokenNode(type, value, label);
 }
 
@@ -168,7 +170,7 @@ function $isTokenNode(node: unknown): node is TokenNode {
   return node instanceof TokenNode;
 }
 
-function createLabel(type: CandidateType, value: string): string {
+function createLabel(type: TokenType, value: string): string {
   if (type === "file") {
     const parts = value.replace(/\\/g, "/").split("/");
     return parts[parts.length - 1] || value;
@@ -249,7 +251,7 @@ function parseActiveToken(displayText: string, cursorPos: number): ActiveToken |
         }
       }
       return {
-        type: ch === "@" ? "file" : "skill",
+        type: ch === "@" ? "file" : "slash",
         query: displayText.slice(start + 1, end),
       };
     }
@@ -259,6 +261,20 @@ function parseActiveToken(displayText: string, cursorPos: number): ActiveToken |
     start--;
   }
   return null;
+}
+
+function expectedActiveTokenType(candidateType: CandidateType): ActiveTokenType {
+  if (candidateType === "file") {
+    return "file";
+  }
+  return "slash";
+}
+
+function triggerChar(tokenType: ActiveTokenType): "@" | "/" {
+  if (tokenType === "file") {
+    return "@";
+  }
+  return "/";
 }
 
 function EditorBridge({
@@ -328,12 +344,12 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
     isDark = false,
     rightInset = 120,
     bottomInset = 12,
-  onChange,
-  onFocusChange,
-  onPointerDown,
-  onKeyDown,
-  onEnter,
-  onCompositionStart,
+    onChange,
+    onFocusChange,
+    onPointerDown,
+    onKeyDown,
+    onEnter,
+    onCompositionStart,
     onCompositionEnd,
   },
   ref
@@ -371,7 +387,6 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
     insertCandidate(type: CandidateType, value: string) {
       const editor = editorRef.current;
       if (!editor) return;
-      const label = createLabel(type, value);
       editor.update(() => {
         const selection = $getSelection();
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) {
@@ -384,11 +399,12 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
         const text = anchorNode.getTextContent();
         const offset = selection.anchor.offset;
         const token = parseActiveToken(text, offset);
-        if (!token || token.type !== type) {
+        const expectedType = expectedActiveTokenType(type);
+        if (!token || token.type !== expectedType) {
           return;
         }
         let start = offset - 1;
-        while (start >= 0 && text[start] !== (type === "file" ? "@" : "/")) {
+        while (start >= 0 && text[start] !== triggerChar(token.type)) {
           start--;
         }
         if (start < 0) {
@@ -406,7 +422,11 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
         const suffix = text.slice(end);
         const replacementNodes = [];
         if (prefix) replacementNodes.push($createTextNode(prefix));
-        replacementNodes.push($createTokenNode(type, value, label));
+        if (type === "slash_command") {
+          replacementNodes.push($createTextNode(`/${value}`));
+        } else {
+          replacementNodes.push($createTokenNode(type, value, createLabel(type, value)));
+        }
         const tailNode = $createTextNode(" ");
         replacementNodes.push(tailNode);
         if (suffix) replacementNodes.push($createTextNode(suffix));

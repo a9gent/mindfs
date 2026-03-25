@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"mindfs/server/internal/agent"
 	agenttypes "mindfs/server/internal/agent/types"
@@ -17,7 +18,6 @@ import (
 
 type ClientContext struct {
 	CurrentRoot   string     `json:"current_root"`
-	CurrentPath   string     `json:"current_path,omitempty"`
 	PluginCatalog string     `json:"plugin_catalog,omitempty"`
 	Selection     *Selection `json:"selection,omitempty"`
 }
@@ -362,8 +362,7 @@ func (s *Service) SuggestSessionName(ctx context.Context, in SuggestSessionNameI
 		return nil, nil
 	}
 	message := normalizeSessionNameCandidate(in.FirstMessage)
-	messageLen := len([]rune(message))
-	if messageLen < sessionNameMinMessageLen {
+	if sessionNameScore(message) < sessionNameMinMessageLen {
 		return nil, nil
 	}
 
@@ -457,6 +456,41 @@ func normalizeSessionNameCandidate(raw string) string {
 	return cleaned
 }
 
+func sessionNameScore(message string) int {
+	score := 0
+	tokenRun := 0
+
+	flushTokenRun := func() {
+		if tokenRun == 0 {
+			return
+		}
+		score++
+		tokenRun = 0
+	}
+
+	for _, r := range message {
+		switch {
+		case isSessionNameTokenRune(r):
+			tokenRun++
+		default:
+			flushTokenRun()
+			if unicode.IsSpace(r) || unicode.IsPunct(r) {
+				continue
+			}
+			score++
+		}
+	}
+	flushTokenRun()
+	return score
+}
+
+func isSessionNameTokenRune(r rune) bool {
+	if r > unicode.MaxASCII {
+		return false
+	}
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
 func isCanceledTurnError(err error) bool {
 	if err == nil {
 		return false
@@ -478,25 +512,19 @@ func contextLineCount(exchanges []session.Exchange) int {
 
 func buildUserPrompt(message string, clientCtx ClientContext) string {
 	lines := []string{strings.TrimSpace(message)}
-	if clientCtx.CurrentPath != "" || clientCtx.Selection != nil {
+	if clientCtx.Selection != nil {
 		lines = append(lines, "[USER_SELECTION]")
-
-		selectedPath := clientCtx.CurrentPath
-		if selectedPath == "" && clientCtx.Selection != nil {
-			selectedPath = clientCtx.Selection.FilePath
+		if clientCtx.Selection.FilePath != "" {
+			lines = append(lines, "file: "+clientCtx.Selection.FilePath)
 		}
-		if selectedPath != "" {
-			lines = append(lines, "file: "+selectedPath)
-		}
-
-		if clientCtx.Selection != nil && (clientCtx.Selection.StartLine > 0 || clientCtx.Selection.EndLine > 0) {
+		if clientCtx.Selection.StartLine > 0 || clientCtx.Selection.EndLine > 0 {
 			lines = append(lines, "line range: "+strconv.Itoa(clientCtx.Selection.StartLine)+"-"+strconv.Itoa(clientCtx.Selection.EndLine))
 		}
-		if clientCtx.Selection != nil && strings.TrimSpace(clientCtx.Selection.Text) != "" {
+		if strings.TrimSpace(clientCtx.Selection.Text) != "" {
 			lines = append(lines, "selected text: "+clientCtx.Selection.Text)
 		}
 	}
-	return "[USER_INPUT]\n" + strings.Join(lines, "\n")
+	return strings.Join(lines, "\n")
 }
 
 func buildPluginPrompt(catalogPrompt, userMessage string, isInitial bool) string {

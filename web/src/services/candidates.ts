@@ -1,9 +1,10 @@
 import { appURL } from "./base";
 
 export type CandidateType = "file" | "skill";
+export type CandidateItemType = CandidateType | "slash_command";
 
 export type CandidateItem = {
-  type: CandidateType;
+  type: CandidateItemType;
   name: string;
   description?: string;
 };

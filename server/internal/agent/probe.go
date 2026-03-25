@@ -16,21 +16,24 @@ import (
 )
 
 type Status struct {
-	Name           string                 `json:"name"`
-	Installed      bool                   `json:"installed"`
-	Available      bool                   `json:"available"`
-	Version        string                 `json:"version,omitempty"`
-	Error          string                 `json:"error,omitempty"`
-	LastProbe      time.Time              `json:"last_probe"`
-	CurrentModelID string                 `json:"current_model_id,omitempty"`
-	Models         []agenttypes.ModelInfo `json:"models,omitempty"`
-	ModelsError    string                 `json:"models_error,omitempty"`
+	Name           string                   `json:"name"`
+	Installed      bool                     `json:"installed"`
+	Available      bool                     `json:"available"`
+	Version        string                   `json:"version,omitempty"`
+	Error          string                   `json:"error,omitempty"`
+	LastProbe      time.Time                `json:"last_probe"`
+	CurrentModelID string                   `json:"current_model_id,omitempty"`
+	Models         []agenttypes.ModelInfo   `json:"models,omitempty"`
+	ModelsError    string                   `json:"models_error,omitempty"`
+	Commands       []agenttypes.CommandInfo `json:"commands,omitempty"`
+	CommandsError  string                   `json:"commands_error,omitempty"`
 }
 
 const (
 	probeSessionTimeout     = 45 * time.Second
 	probeInteractionTimeout = 3 * time.Minute
 	probeModelListTimeout   = 30 * time.Second
+	probeCommandListTimeout = 30 * time.Second
 	maxProbeConcurrency     = 4
 )
 
@@ -255,6 +258,7 @@ func probeInstalledAgentWithPool(ctx context.Context, name string, def Definitio
 	status.Available = true
 	status.Error = ""
 	populateProbeModels(ctx, sess, &status)
+	populateProbeCommands(ctx, sess, &status)
 	return status
 }
 
@@ -316,11 +320,22 @@ func statusChanged(prev Status, next Status) bool {
 	if prev.ModelsError != next.ModelsError {
 		return true
 	}
+	if prev.CommandsError != next.CommandsError {
+		return true
+	}
 	if len(prev.Models) != len(next.Models) {
 		return true
 	}
 	for i := range prev.Models {
 		if prev.Models[i] != next.Models[i] {
+			return true
+		}
+	}
+	if len(prev.Commands) != len(next.Commands) {
+		return true
+	}
+	for i := range prev.Commands {
+		if prev.Commands[i] != next.Commands[i] {
 			return true
 		}
 	}
@@ -388,6 +403,18 @@ func populateProbeModels(ctx context.Context, sess agenttypes.Session, status *S
 	status.Models = models.Models
 }
 
+func populateProbeCommands(ctx context.Context, sess agenttypes.Session, status *Status) {
+	commandsCtx, commandsCancel := context.WithTimeout(ctx, probeCommandListTimeout)
+	defer commandsCancel()
+
+	commands, err := sess.ListCommands(commandsCtx)
+	if err != nil {
+		status.CommandsError = err.Error()
+		return
+	}
+	status.Commands = commands.Commands
+}
+
 func normalizeStatus(status Status) Status {
 	if status.Available {
 		return status
@@ -395,6 +422,8 @@ func normalizeStatus(status Status) Status {
 	status.CurrentModelID = ""
 	status.Models = nil
 	status.ModelsError = ""
+	status.Commands = nil
+	status.CommandsError = ""
 	return status
 }
 

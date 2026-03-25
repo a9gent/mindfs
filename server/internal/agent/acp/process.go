@@ -38,6 +38,7 @@ type Process struct {
 	sessionsByID map[string]*sessionState // ACP session id -> state
 	capability   CapabilitySnapshot
 	models       *acp.SessionModelState
+	commands     []acp.AvailableCommand
 	stderrHint   stderrHintState
 	activePrompt activePromptState
 }
@@ -66,6 +67,7 @@ var stderrMessagePattern = regexp.MustCompile(`"message"\s*:\s*"([^"]+)"`)
 type sessionState struct {
 	ID       acp.SessionId
 	models   *acp.SessionModelState
+	commands []acp.AvailableCommand
 	onUpdate func(SessionUpdate)
 	mu       sync.RWMutex
 }
@@ -92,6 +94,25 @@ func (s *sessionState) getModels() *acp.SessionModelState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.models
+}
+
+func (s *sessionState) setCommands(commands []acp.AvailableCommand) {
+	s.mu.Lock()
+	if len(commands) == 0 {
+		s.commands = nil
+	} else {
+		s.commands = append([]acp.AvailableCommand(nil), commands...)
+	}
+	s.mu.Unlock()
+}
+
+func (s *sessionState) getCommands() []acp.AvailableCommand {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.commands) == 0 {
+		return nil
+	}
+	return append([]acp.AvailableCommand(nil), s.commands...)
 }
 
 // SessionUpdate is the internal session update type.
@@ -135,6 +156,14 @@ func (c *mindfsClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 	}
 
 	internalUpdate := wrapSessionUpdate(string(params.SessionId), params.Update)
+	if params.Update.AvailableCommandsUpdate != nil {
+		session.setCommands(params.Update.AvailableCommandsUpdate.AvailableCommands)
+		c.proc.mu.Lock()
+		c.proc.commands = append([]acp.AvailableCommand(nil), params.Update.AvailableCommandsUpdate.AvailableCommands...)
+		c.proc.mu.Unlock()
+	}
+	raw, _ := json.Marshal(params.Update)
+	log.Printf("[agent/acp] session.update agent=%s session_id=%s type=%s raw=%s", c.proc.agentLabel(), string(params.SessionId), internalUpdate.Type, string(raw))
 	if internalUpdate.Type != "" {
 		switch internalUpdate.Type {
 		case UpdateTypeToolCall, UpdateTypeToolUpdate:
@@ -504,6 +533,14 @@ func (p *Process) SessionModelState(sessionKey string) *acp.SessionModelState {
 		return nil
 	}
 	return sess.getModels()
+}
+
+func (p *Process) SessionCommands(sessionKey string) []acp.AvailableCommand {
+	sess := p.getSessionByKey(sessionKey)
+	if sess == nil {
+		return nil
+	}
+	return sess.getCommands()
 }
 
 func (p *Process) RecentStderrHint() (string, bool) {

@@ -97,7 +97,7 @@ class SessionService {
   private readonly clientId = this.generateClientId();
   private contextCache = new Map<
     string,
-    { currentPath: string; selectionKey: string }
+    { selectionKey: string }
   >();
 
   private generateClientId(): string {
@@ -173,12 +173,6 @@ class SessionService {
   ): Record<string, unknown> | undefined {
     if (!context) return undefined;
     const next = { ...context };
-    const currentPath =
-      typeof next.currentPath === "string"
-        ? next.currentPath
-        : typeof next.current_path === "string"
-        ? (next.current_path as string)
-        : "";
     const selection =
       next.selection && typeof next.selection === "object"
         ? (next.selection as Record<string, unknown>)
@@ -187,14 +181,10 @@ class SessionService {
 
     if (sessionKey) {
       const prev = this.contextCache.get(sessionKey);
-      if (prev && prev.currentPath === currentPath) {
-        delete next.currentPath;
-        delete next.current_path;
-      }
       if (prev && prev.selectionKey === selectionKey) {
         delete next.selection;
       }
-      this.contextCache.set(sessionKey, { currentPath, selectionKey });
+      this.contextCache.set(sessionKey, { selectionKey });
     }
     return next;
   }

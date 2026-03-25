@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"mindfs/server/internal/agent"
+	agenttypes "mindfs/server/internal/agent/types"
 	rootfs "mindfs/server/internal/fs"
 	"mindfs/server/internal/session"
 )
@@ -149,6 +150,94 @@ func TestSkillCandidateProviderSearch(t *testing.T) {
 	}
 	if got := descriptionByName["review"]; got != "Shared review skill" {
 		t.Fatalf("unexpected review description: %q", got)
+	}
+}
+
+func TestCommandCandidatesFromStatus(t *testing.T) {
+	provider := NewSlashCommandCandidateProvider(func(agentName string) (agent.Status, bool) {
+		if agentName != "claude" {
+			return agent.Status{}, false
+		}
+		return agent.Status{
+			Name: "claude",
+			Commands: []agenttypes.CommandInfo{
+				{Name: "review", Description: "Review current changes"},
+				{Name: "memory", Description: "Manage memory"},
+			},
+		}, true
+	})
+	items, err := provider.Search(context.Background(), rootfs.RootInfo{}, "claude", "re")
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 command candidate, got %d: %#v", len(items), items)
+	}
+	if items[0].Type != CandidateTypeSlashCommand {
+		t.Fatalf("expected slash command candidate, got %#v", items[0])
+	}
+	if items[0].Name != "review" {
+		t.Fatalf("expected review command, got %#v", items[0])
+	}
+}
+
+func TestMergeCandidateItemsPreferSlash(t *testing.T) {
+	items := mergeCandidateItemsPreferSlash([]CandidateItem{
+		{Type: CandidateTypeSlashCommand, Name: "review", Description: "Slash review"},
+	}, []CandidateItem{
+		{Type: CandidateTypeSkill, Name: "review", Description: "Skill review"},
+		{Type: CandidateTypeSkill, Name: "refactor", Description: "Skill refactor"},
+	}, "")
+	if len(items) != 2 {
+		t.Fatalf("expected 2 unique candidates, got %d: %#v", len(items), items)
+	}
+	if items[0].Type != CandidateTypeSlashCommand || items[0].Name != "review" {
+		t.Fatalf("expected slash command to win dedupe, got %#v", items[0])
+	}
+	if items[1].Name != "refactor" {
+		t.Fatalf("expected refactor to remain, got %#v", items[1])
+	}
+}
+
+func TestBuildUserPromptSelectionOnly(t *testing.T) {
+	got := buildUserPrompt("hello", ClientContext{})
+	if strings.Contains(got, "[USER_SELECTION]") {
+		t.Fatalf("did not expect user selection block without selection: %q", got)
+	}
+
+	got = buildUserPrompt("hello", ClientContext{
+		Selection: &Selection{
+			FilePath:  "design/README.md",
+			StartLine: 1,
+			EndLine:   3,
+			Text:      "abc",
+		},
+	})
+	if !strings.Contains(got, "[USER_SELECTION]\nfile: design/README.md") {
+		t.Fatalf("expected user selection block, got %q", got)
+	}
+}
+
+func TestSessionNameScore(t *testing.T) {
+	testCases := []struct {
+		name    string
+		message string
+		want    int
+	}{
+		{name: "empty", message: "", want: 0},
+		{name: "chinese", message: "请帮我排查会话列表刷新问题", want: 12},
+		{name: "english token counts once", message: "abcdefghijkl", want: 1},
+		{name: "mixed", message: "修复 session list refresh", want: 5},
+		{name: "punctuation ignored", message: "fix, bug!", want: 2},
+		{name: "digits join token", message: "fix v2 api", want: 3},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sessionNameScore(tc.message); got != tc.want {
+				t.Fatalf("sessionNameScore(%q) = %d, want %d", tc.message, got, tc.want)
+			}
+		})
 	}
 }
 

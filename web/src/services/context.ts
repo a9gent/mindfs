@@ -1,6 +1,5 @@
 export type ClientContext = {
   current_root: string;
-  current_path?: string;
   plugin_catalog?: string;
   selection?: {
     file_path: string;
@@ -12,7 +11,6 @@ export type ClientContext = {
 
 type ContextInput = {
   currentRoot: string;
-  currentPath?: string | null;
   pluginCatalog?: string | null;
   selection?: {
     filePath: string;
@@ -26,9 +24,6 @@ export function buildClientContext(input: ContextInput): ClientContext {
   const ctx: ClientContext = {
     current_root: input.currentRoot,
   };
-  if (input.currentPath) {
-    ctx.current_path = input.currentPath;
-  }
   if (input.pluginCatalog) {
     ctx.plugin_catalog = input.pluginCatalog;
   }

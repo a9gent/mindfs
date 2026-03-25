@@ -208,6 +208,14 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 	}, nil
 }
 
+func (s *session) ListCommands(ctx context.Context) (types.CommandList, error) {
+	_ = ctx
+	if s == nil || s.client == nil {
+		return types.CommandList{}, errors.New("codex session not initialized")
+	}
+	return types.CommandList{}, nil
+}
+
 func (s *session) emitMessageDelta(msg *codexsdk.AgentMessageItem, textByID map[string]string) {
 	delta := messageDelta(textByID[msg.ID], msg.Text)
 	textByID[msg.ID] = msg.Text

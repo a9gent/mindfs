@@ -12,6 +12,8 @@ export type AgentStatus = {
   current_model_id?: string;
   models?: AgentModelInfo[];
   models_error?: string;
+  commands?: AgentCommandInfo[];
+  commands_error?: string;
 };
 
 export type AgentModelInfo = {
@@ -19,6 +21,12 @@ export type AgentModelInfo = {
   name: string;
   description?: string;
   hidden?: boolean;
+};
+
+export type AgentCommandInfo = {
+  name: string;
+  description?: string;
+  argument_hint?: string;
 };
 
 let cachedAgents: AgentStatus[] = [];

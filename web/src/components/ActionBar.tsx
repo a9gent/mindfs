@@ -79,6 +79,17 @@ function useResponsive() {
   return { isMobile };
 }
 
+function candidateNameColor(candidateType: CandidateItem["type"], isDark: boolean): string {
+  switch (candidateType) {
+    case "slash_command":
+      return isDark ? "#93c5fd" : "#1d4ed8";
+    case "skill":
+      return isDark ? "#c4b5fd" : "#7c3aed";
+    default:
+      return "var(--text-primary)";
+  }
+}
+
 export function ActionBar({
   status = "Disconnected",
   agentsVersion = 0,
@@ -100,7 +111,7 @@ export function ActionBar({
   const [model, setModel] = useState("");
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [serializedInput, setSerializedInput] = useState("");
-  const [activeToken, setActiveToken] = useState<{ type: "file" | "skill"; query: string } | null>(null);
+  const [activeToken, setActiveToken] = useState<{ type: "file" | "slash"; query: string } | null>(null);
   const [dragX, setDragX] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [sending, setSending] = useState(false);
@@ -163,11 +174,12 @@ export function ActionBar({
   useEffect(() => {
     if (currentSession || agents.length === 0) return;
     if (agents.some((a) => a.name === agent)) return;
-      const preferred = agents.find((a) => a.available) ?? agents[0];
-      if (preferred) {
-        setAgent(preferred.name);
-        setModel("");
-      }
+    const preferred = agents.find((a) => a.available) ?? agents[0];
+    if (!preferred) {
+      return;
+    }
+    setAgent(preferred.name);
+    setModel("");
   }, [agent, agents, currentSession]);
 
   useEffect(() => {
@@ -197,7 +209,7 @@ export function ActionBar({
   }, []);
 
   useEffect(() => {
-    if (!activeToken || !currentRootId || (activeToken.type === "skill" && !agent)) {
+    if (!activeToken || !currentRootId || (activeToken.type === "slash" && !agent)) {
       candidateAbortRef.current?.abort();
       setCandidates([]);
       setActiveCandidateIndex(0);
@@ -208,9 +220,9 @@ export function ActionBar({
     candidateAbortRef.current = controller;
     fetchCandidates({
       rootId: currentRootId,
-      type: activeToken.type,
+      type: activeToken.type === "file" ? "file" : "skill",
       query: activeToken.query,
-      agent: activeToken.type === "skill" ? agent : undefined,
+      agent: activeToken.type === "slash" ? agent : undefined,
       signal: controller.signal,
     })
       .then((items) => {
@@ -245,7 +257,7 @@ export function ActionBar({
 
   const handleEditorChange = useCallback((payload: {
     serializedText: string;
-    activeToken: { type: "file" | "skill"; query: string } | null;
+    activeToken: { type: "file" | "slash"; query: string } | null;
   }) => {
     setSerializedInput(payload.serializedText);
     setActiveToken(payload.activeToken);
@@ -525,7 +537,7 @@ export function ActionBar({
                       textAlign: "left",
                     }}
                   >
-                    <span style={{ fontSize: "13px", fontWeight: 500 }}>
+                    <span style={{ fontSize: "13px", fontWeight: 500, color: candidateNameColor(candidate.type, isDark) }}>
                       {candidate.type === "file" ? `@${candidate.name}` : `/${candidate.name}`}
                     </span>
                     {candidate.description ? (

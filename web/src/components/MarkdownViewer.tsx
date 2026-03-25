@@ -144,7 +144,7 @@ function MarkdownViewerInner({
             <h3 style={{ fontSize: "17px", marginTop: "1.25em" }} {...getSourceLineProps(node)} {...props} />
           ),
           p: ({ node, ...props }: any) => (
-            <p style={{ margin: "0 0 1em", whiteSpace: "normal" }} {...getSourceLineProps(node)} {...props} />
+            <p style={{ margin: "0 0 1em", whiteSpace: "pre-wrap" }} {...getSourceLineProps(node)} {...props} />
           ),
           ul: ({ node, ...props }: any) => (
             <ul style={{ margin: "0 0 1em", paddingLeft: "1.4em" }} {...getSourceLineProps(node)} {...props} />
@@ -153,7 +153,7 @@ function MarkdownViewerInner({
             <ol style={{ margin: "0 0 1em", paddingLeft: "1.4em" }} {...getSourceLineProps(node)} {...props} />
           ),
           li: (props) => (
-            <li style={{ margin: "0.2em 0" }} {...props} />
+            <li style={{ margin: "0.2em 0", whiteSpace: "pre-wrap" }} {...props} />
           ),
           a: ({ href = "", children, ...props }) => {
             if (!href || href.startsWith("#") || isExternalHref(href) || !onFileClick) {

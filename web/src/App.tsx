@@ -300,6 +300,16 @@ function hasExplicitFileContext(message: string): boolean {
   return READ_FILE_TOKEN_PATTERN.test(message);
 }
 
+function hasExplicitSelectionContext(context: AttachedFileContext | null | undefined): boolean {
+  if (!context?.filePath) {
+    return false;
+  }
+  if (typeof context.startLine === "number" && typeof context.endLine === "number") {
+    return true;
+  }
+  return typeof context.text === "string" && context.text.trim().length > 0;
+}
+
 // Hook for responsive detection
 function useResponsive() {
   const [isMobile, setIsMobile] = useState(false);
@@ -472,12 +482,12 @@ export function App() {
       oscillator.frequency.setValueAtTime(880, now);
       oscillator.frequency.exponentialRampToValueAtTime(1174, now + 0.09);
       gainNode.gain.setValueAtTime(0.0001, now);
-      gainNode.gain.exponentialRampToValueAtTime(0.06, now + 0.01);
-      gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+      gainNode.gain.exponentialRampToValueAtTime(0.24, now + 0.012);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
       oscillator.connect(gainNode);
       gainNode.connect(audioContext.destination);
       oscillator.start(now);
-      oscillator.stop(now + 0.16);
+      oscillator.stop(now + 0.2);
     } catch (error) {
       if (completionAudioUnlockedRef.current) {
         console.error("Failed to play completion sound:", error);
@@ -1074,7 +1084,7 @@ export function App() {
     if (!isBoundInMain) { setInteractionMode("drawer"); setDrawerOpenForRoot(activeRoot, true); }
     setDrawerSessionForRoot(activeRoot, { ...(session as any), pending: true } as Session);
     const explicitFileContext = hasExplicitFileContext(message);
-    const selection = explicitFileContext || !attachedFileContext
+    const selection = explicitFileContext || !hasExplicitSelectionContext(attachedFileContext)
       ? undefined
       : {
           filePath: attachedFileContext.filePath,
@@ -1084,9 +1094,6 @@ export function App() {
         };
     const context = buildClientContext({
       currentRoot: activeRoot,
-      currentPath: explicitFileContext
-        ? undefined
-        : (selection ? undefined : (fileRef.current?.path ?? selectedDirRef.current ?? undefined)),
       selection,
       pluginCatalog: effectiveMode === "plugin" ? getViewModeSystemPrompt() : undefined,
     });
