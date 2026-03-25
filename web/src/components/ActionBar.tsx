@@ -49,6 +49,7 @@ type ActionBarProps = {
   currentSession?: SessionInfo | null;
   attachedFileContext?: AttachedFileContext | null;
   canOpenSessionDrawer?: boolean;
+  detachedBoundSession?: boolean;
   onSendMessage?: (message: string, mode: SessionMode, agent: string, model?: string) => void | Promise<void>;
   onCancelCurrentTurn?: (sessionKey: string) => void;
   onNewSession?: () => void;
@@ -97,6 +98,7 @@ export function ActionBar({
   currentSession,
   attachedFileContext,
   canOpenSessionDrawer = false,
+  detachedBoundSession = false,
   onSendMessage,
   onCancelCurrentTurn,
   onNewSession,
@@ -132,6 +134,11 @@ export function ActionBar({
   const { isMobile } = useResponsive();
   const isConnected = status === "Connected";
   const DRAG_THRESHOLD = -40;
+  const boundRingColor = detachedBoundSession ? "#f59e0b" : "#2563eb";
+  const boundRingShadow = detachedBoundSession
+    ? "0 0 0 1px rgba(245,158,11,0.18)"
+    : "0 0 0 1px rgba(37,99,235,0.08)";
+  const boundArrowColor = detachedBoundSession ? "#f59e0b" : "#2563eb";
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -590,8 +597,8 @@ export function ActionBar({
                       height: "14px",
                       borderRadius: "50%",
                       background: "transparent",
-                      border: "2px solid #2563eb",
-                      boxShadow: "0 0 0 1px rgba(37,99,235,0.08)",
+                      border: `2px solid ${boundRingColor}`,
+                      boxShadow: boundRingShadow,
                     }}
                   />
                 )}
@@ -605,7 +612,7 @@ export function ActionBar({
                       position: "absolute",
                       inset: 0,
                       margin: "auto",
-                      color: "#2563eb",
+                      color: boundArrowColor,
                       pointerEvents: "none",
                     }}
                     aria-hidden="true"

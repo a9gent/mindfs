@@ -2068,6 +2068,11 @@ export function App() {
     && selectedKey === activeBoundSessionKey
     && interactionMode !== "drawer";
   const canOpenSessionDrawer = !!activeBoundSessionKey && !isBoundSessionInMain;
+  const detachedBoundSession = !!activeBoundSessionKey
+    && selectedInCurrentRoot
+    && !!selectedKey
+    && selectedKey !== activeBoundSessionKey
+    && !isDrawerOpen;
 
   const matchedPlugin = useMemo(() => {
     if (!currentRootId || !file) return null;
@@ -2359,7 +2364,7 @@ export function App() {
           </div>
         </div>
       }
-      footer={<ActionBar status={status} agentsVersion={agentsVersion} currentRootId={currentRootId} currentSession={actionBarSession} attachedFileContext={attachedFileContext} canOpenSessionDrawer={canOpenSessionDrawer} onSendMessage={handleSendMessage} onCancelCurrentTurn={handleCancelCurrentTurn} onNewSession={handleNewSession} onRequestFileContext={handleRequestFileContext} onClearFileContext={handleClearFileContext} onToggleLeftSidebar={() => setIsLeftOpen((v) => !v)} onToggleRightSidebar={() => setIsRightOpen((v) => !v)} onSessionClick={() => {
+      footer={<ActionBar status={status} agentsVersion={agentsVersion} currentRootId={currentRootId} currentSession={actionBarSession} attachedFileContext={attachedFileContext} canOpenSessionDrawer={canOpenSessionDrawer} detachedBoundSession={detachedBoundSession} onSendMessage={handleSendMessage} onCancelCurrentTurn={handleCancelCurrentTurn} onNewSession={handleNewSession} onRequestFileContext={handleRequestFileContext} onClearFileContext={handleClearFileContext} onToggleLeftSidebar={() => setIsLeftOpen((v) => !v)} onToggleRightSidebar={() => setIsRightOpen((v) => !v)} onSessionClick={() => {
         const rootID = currentRootIdRef.current;
         if (!activeBoundSessionKey) return;
         const selectedKey = selectedSession?.key || selectedSession?.session_key;
