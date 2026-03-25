@@ -84,8 +84,8 @@ func mapCommandState(commands []acpsdk.AvailableCommand) types.CommandList {
 	items := make([]types.CommandInfo, 0, len(commands))
 	for _, command := range commands {
 		argumentHint := ""
-		if command.Input != nil && command.Input.UnstructuredCommandInput != nil {
-			argumentHint = strings.TrimSpace(command.Input.UnstructuredCommandInput.Hint)
+		if command.Input != nil && command.Input.Unstructured != nil {
+			argumentHint = strings.TrimSpace(command.Input.Unstructured.Hint)
 		}
 		items = append(items, types.CommandInfo{
 			Name:         command.Name,

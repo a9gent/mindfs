@@ -300,16 +300,6 @@ function hasExplicitFileContext(message: string): boolean {
   return READ_FILE_TOKEN_PATTERN.test(message);
 }
 
-function hasExplicitSelectionContext(context: AttachedFileContext | null | undefined): boolean {
-  if (!context?.filePath) {
-    return false;
-  }
-  if (typeof context.startLine === "number" && typeof context.endLine === "number") {
-    return true;
-  }
-  return typeof context.text === "string" && context.text.trim().length > 0;
-}
-
 // Hook for responsive detection
 function useResponsive() {
   const [isMobile, setIsMobile] = useState(false);
@@ -1084,7 +1074,7 @@ export function App() {
     if (!isBoundInMain) { setInteractionMode("drawer"); setDrawerOpenForRoot(activeRoot, true); }
     setDrawerSessionForRoot(activeRoot, { ...(session as any), pending: true } as Session);
     const explicitFileContext = hasExplicitFileContext(message);
-    const selection = explicitFileContext || !hasExplicitSelectionContext(attachedFileContext)
+    const selection = explicitFileContext || !attachedFileContext?.filePath
       ? undefined
       : {
           filePath: attachedFileContext.filePath,

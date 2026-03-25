@@ -207,6 +207,15 @@ func TestBuildUserPromptSelectionOnly(t *testing.T) {
 
 	got = buildUserPrompt("hello", ClientContext{
 		Selection: &Selection{
+			FilePath: "design/README.md",
+		},
+	})
+	if !strings.Contains(got, "[USER_SELECTION]\nfile: design/README.md") {
+		t.Fatalf("expected file-only user selection block, got %q", got)
+	}
+
+	got = buildUserPrompt("hello", ClientContext{
+		Selection: &Selection{
 			FilePath:  "design/README.md",
 			StartLine: 1,
 			EndLine:   3,

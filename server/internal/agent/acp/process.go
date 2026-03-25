@@ -72,6 +72,15 @@ type sessionState struct {
 	mu       sync.RWMutex
 }
 
+type qwenSlashCommandNotification struct {
+	SessionID   string `json:"sessionId"`
+	Command     string `json:"command"`
+	MessageType string `json:"messageType"`
+	Message     string `json:"message"`
+}
+
+type sessionUpdateHandler func(SessionUpdate)
+
 func (s *sessionState) setOnUpdate(onUpdate func(SessionUpdate)) {
 	s.mu.Lock()
 	s.onUpdate = onUpdate
@@ -143,6 +152,14 @@ func (p *Process) agentLabel() string {
 		return "unknown"
 	}
 	return p.agentName
+}
+
+func (p *Process) getSessionUpdateHandler(sessionID string) sessionUpdateHandler {
+	session := p.getSessionByID(sessionID)
+	if session == nil {
+		return nil
+	}
+	return session.getOnUpdate()
 }
 
 func (c *mindfsClient) SessionUpdate(ctx context.Context, params acp.SessionNotification) error {
@@ -269,6 +286,54 @@ func (c *mindfsClient) KillTerminalCommand(ctx context.Context, params acp.KillT
 	return acp.KillTerminalCommandResponse{}, nil
 }
 
+func (c *mindfsClient) HandleExtensionMethod(_ context.Context, method string, params json.RawMessage) (any, error) {
+	switch method {
+	case "_qwencode/slash_command":
+		return nil, c.handleQwenSlashCommandNotification(params)
+	default:
+		return nil, acp.NewMethodNotFound(method)
+	}
+}
+
+func (c *mindfsClient) handleQwenSlashCommandNotification(params json.RawMessage) error {
+	var notif qwenSlashCommandNotification
+	if err := json.Unmarshal(params, &notif); err != nil {
+		return acp.NewInvalidParams(map[string]any{"error": err.Error()})
+	}
+	if strings.TrimSpace(notif.SessionID) == "" {
+		return acp.NewInvalidParams(map[string]any{"error": "sessionId required"})
+	}
+	handler := c.proc.getSessionUpdateHandler(notif.SessionID)
+	if handler == nil {
+		return nil
+	}
+	content := strings.TrimSpace(notif.Message)
+	if content == "" {
+		return nil
+	}
+	log.Printf("[agent/acp] ext.notification agent=%s method=_qwencode/slash_command session_id=%s command=%q message_type=%s", c.proc.agentLabel(), notif.SessionID, notif.Command, notif.MessageType)
+	handler(newMessageChunkUpdate(notif.SessionID, content, map[string]any{
+		"source":       "_qwencode/slash_command",
+		"command":      notif.Command,
+		"message_type": notif.MessageType,
+	}))
+	return nil
+}
+
+func newMessageChunkUpdate(sessionID, content string, meta map[string]any) SessionUpdate {
+	return SessionUpdate{
+		Type:      UpdateTypeMessageChunk,
+		SessionID: sessionID,
+		Raw: acp.SessionUpdate{
+			AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{
+				Content:       acp.TextBlock(content),
+				SessionUpdate: "agent_message_chunk",
+				Meta:          meta,
+			},
+		},
+	}
+}
+
 // Start spawns an agent process with ACP mode.
 func Start(ctx context.Context, agentName, command string, args []string, cwd string, env map[string]string) (*Process, error) {
 	cmd := exec.CommandContext(ctx, command, args...)
@@ -307,7 +372,6 @@ func Start(ctx context.Context, agentName, command string, args []string, cwd st
 		proc.waitCh <- cmd.Wait()
 	}()
 
-	// Create ACP connection - coder/acp-go-sdk uses io.Writer and io.Reader directly
 	proc.conn = acp.NewClientSideConnection(proc.client, stdin, stdout)
 
 	return proc, nil
@@ -511,9 +575,9 @@ func (p *Process) SetModel(ctx context.Context, sessionKey, model string) error 
 	if sess == nil || strings.TrimSpace(model) == "" {
 		return nil
 	}
-	_, err := p.conn.SetSessionModel(ctx, acp.SetSessionModelRequest{
+	_, err := p.conn.UnstableSetSessionModel(ctx, acp.UnstableSetSessionModelRequest{
 		SessionId: sess.ID,
-		ModelId:   acp.ModelId(strings.TrimSpace(model)),
+		ModelId:   acp.UnstableModelId(strings.TrimSpace(model)),
 	})
 	if err == nil {
 		if state := sess.getModels(); state != nil {
