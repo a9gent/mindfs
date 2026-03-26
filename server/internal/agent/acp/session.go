@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 	types "mindfs/server/internal/agent/types"
@@ -25,12 +26,14 @@ type Runtime struct {
 	processCtx context.Context
 	mu         sync.Mutex
 	processes  map[string]*Process
+	closeHints map[string]string
 }
 
 func NewRuntime(processCtx context.Context) *Runtime {
 	return &Runtime{
 		processCtx: processCtx,
 		processes:  make(map[string]*Process),
+		closeHints: make(map[string]string),
 	}
 }
 
@@ -102,15 +105,53 @@ func (r *Runtime) CloseSession(sessionKey string) {
 	}
 }
 
-func (r *Runtime) CloseProcess(agentName string) *Process {
+func (r *Runtime) Close(agentName string) {
 	if strings.TrimSpace(agentName) == "" {
-		return nil
+		return
 	}
 	r.mu.Lock()
 	proc := r.processes[agentName]
 	delete(r.processes, agentName)
+	delete(r.closeHints, agentName)
 	r.mu.Unlock()
-	return proc
+	if proc != nil {
+		_ = proc.Close()
+		if hint, ok := waitForRecentStderrHint(proc, 750*time.Millisecond); ok {
+			r.mu.Lock()
+			r.closeHints[agentName] = hint
+			r.mu.Unlock()
+		}
+	}
+}
+
+func (r *Runtime) RecentCloseHint(agentName string) (string, bool) {
+	if strings.TrimSpace(agentName) == "" {
+		return "", false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	hint, ok := r.closeHints[agentName]
+	if !ok || strings.TrimSpace(hint) == "" {
+		return "", false
+	}
+	delete(r.closeHints, agentName)
+	return hint, true
+}
+
+func waitForRecentStderrHint(proc *Process, wait time.Duration) (string, bool) {
+	if proc == nil {
+		return "", false
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		if hint, ok := proc.RecentStderrHint(); ok {
+			return hint, true
+		}
+		if time.Now().After(deadline) {
+			return "", false
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func (r *Runtime) CloseAll() {

@@ -123,6 +123,7 @@ function MarkdownViewerInner({
   return (
     <div
       ref={containerRef}
+      className="markdown-viewer"
       style={{
         padding: "0", // 移除内层 padding，由 FileViewer 统一控制
         color: "var(--text-primary)",
@@ -153,7 +154,7 @@ function MarkdownViewerInner({
             <ol style={{ margin: "0 0 1em", paddingLeft: "1.4em" }} {...getSourceLineProps(node)} {...props} />
           ),
           li: (props) => (
-            <li style={{ margin: "0.2em 0", whiteSpace: "pre-wrap" }} {...props} />
+            <li style={{ margin: "0.2em 0" }} {...props} />
           ),
           a: ({ href = "", children, ...props }) => {
             if (!href || href.startsWith("#") || isExternalHref(href) || !onFileClick) {

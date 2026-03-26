@@ -122,6 +122,7 @@ func (p *Pool) openSession(ctx context.Context, protocol Protocol, def Definitio
 }
 
 func (p *Pool) KillAgentProcess(agentName string, wait time.Duration) (string, bool) {
+	_ = wait
 	def, ok := p.cfg.GetAgent(agentName)
 	if !ok {
 		return "", false
@@ -131,40 +132,32 @@ func (p *Pool) KillAgentProcess(agentName string, wait time.Duration) (string, b
 	if protocol == "" {
 		protocol = DefaultProtocol(agentName)
 	}
-	if protocol != ProtocolACP {
-		return "", false
-	}
-
-	p.mu.Lock()
-	for key, entry := range p.sessions {
-		if entry == nil || entry.agentName != agentName || entry.protocol != ProtocolACP {
-			continue
-		}
-		if entry.session != nil {
-			_ = entry.session.Close()
-		}
-		delete(p.sessions, key)
-	}
-	p.mu.Unlock()
-
-	proc := p.acp.CloseProcess(agentName)
-	if proc == nil {
-		return "", false
-	}
-	proc.Close()
-
-	deadline := time.Now().Add(wait)
-	for {
-		if hint, ok := proc.RecentStderrHint(); ok {
+	switch protocol {
+	case ProtocolCodexSDK:
+		p.closeSessionsForAgent(agentName, ProtocolCodexSDK)
+		_ = p.codex.Close(agentName)
+		log.Printf("[agent/pool] kill_agent_process.codex_closed agent=%s", agentName)
+		return "", true
+	case ProtocolACP:
+		p.closeSessionsForAgent(agentName, ProtocolACP)
+		p.acp.Close(agentName)
+		if hint, ok := p.acp.RecentCloseHint(agentName); ok {
 			log.Printf("[agent/pool] kill_agent_process.hint agent=%s hint=%q", agentName, hint)
 			return hint, true
 		}
-		if time.Now().After(deadline) {
-			log.Printf("[agent/pool] kill_agent_process.no_hint agent=%s wait_ms=%d", agentName, wait.Milliseconds())
-			return "", false
-		}
-		time.Sleep(25 * time.Millisecond)
+		log.Printf("[agent/pool] kill_agent_process.no_hint agent=%s", agentName)
+		return "", false
+	default:
+		return "", false
 	}
+}
+
+func (p *Pool) closeSessionsForAgent(agentName string, protocol Protocol) {
+	p.closeSessions(
+		p.takeSessions(func(entry *sessionEntry) bool {
+			return entry.agentName == agentName && entry.protocol == protocol
+		}),
+	)
 }
 
 func cloneEnv(env map[string]string) map[string]string {
@@ -180,21 +173,41 @@ func cloneEnv(env map[string]string) map[string]string {
 
 // Close closes a session (not the underlying runtime pool).
 func (p *Pool) Close(sessionKey string) {
-	p.mu.Lock()
-	entry, ok := p.sessions[sessionKey]
-	if ok {
-		delete(p.sessions, sessionKey)
-	}
-	p.mu.Unlock()
-
-	if !ok {
+	entries := p.takeSessions(func(entry *sessionEntry) bool {
+		return entry.sessionKey == sessionKey
+	})
+	if len(entries) == 0 {
 		return
 	}
-	if entry.session != nil {
-		entry.session.Close()
+	p.closeSessions(entries)
+	for _, entry := range entries {
+		if entry.protocol == ProtocolACP {
+			p.acp.CloseSession(sessionKey)
+		}
 	}
-	if entry.protocol == ProtocolACP {
-		p.acp.CloseSession(sessionKey)
+}
+
+func (p *Pool) takeSessions(match func(*sessionEntry) bool) []*sessionEntry {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	var entries []*sessionEntry
+	for key, entry := range p.sessions {
+		if entry == nil || !match(entry) {
+			continue
+		}
+		entries = append(entries, entry)
+		delete(p.sessions, key)
+	}
+	return entries
+}
+
+func (p *Pool) closeSessions(entries []*sessionEntry) {
+	for _, entry := range entries {
+		if entry == nil || entry.session == nil {
+			continue
+		}
+		_ = entry.session.Close()
 	}
 }
 

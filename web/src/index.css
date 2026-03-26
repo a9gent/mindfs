@@ -290,6 +290,16 @@ body[data-plugin-theme="1"] [data-slot="drawer-content"] {
   content: "";
 }
 
+.markdown-viewer li > p {
+  margin: 0;
+}
+
+.markdown-viewer li > ul,
+.markdown-viewer li > ol {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;

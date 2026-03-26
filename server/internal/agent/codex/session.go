@@ -40,16 +40,12 @@ func (r *Runtime) OpenSession(_ context.Context, opts OpenOptions) (types.Sessio
 	client := r.getOrCreateClient(opts)
 	threadOptions := codexsdk.ThreadOptions{
 		Model:            strings.TrimSpace(opts.Model),
+		SandboxMode:      codexsdk.SandboxModeFullAccess,
 		WorkingDirectory: opts.RootPath,
-	}
-	if !opts.Probe {
-		threadOptions.SandboxMode = codexsdk.SandboxModeWorkspaceWrite
-		// CLI mode should work for non-git workspaces too.
-		threadOptions.SkipGitRepoCheck = true
-		threadOptions.ApprovalPolicy = codexsdk.ApprovalModeNever
-		threadOptions.ApprovalHandler = func(_ codexsdk.ApprovalRequest) (codexsdk.ApprovalDecision, error) {
+		ApprovalPolicy:   codexsdk.ApprovalModeNever,
+		ApprovalHandler: func(_ codexsdk.ApprovalRequest) (codexsdk.ApprovalDecision, error) {
 			return codexsdk.ApprovalDecisionApproved, nil
-		}
+		},
 	}
 
 	thread := client.StartThread(threadOptions)
@@ -68,37 +64,53 @@ func (r *Runtime) OpenSession(_ context.Context, opts OpenOptions) (types.Sessio
 
 func (r *Runtime) CloseAll() {
 	r.mu.Lock()
+	clients := r.clients
 	r.clients = make(map[string]*codexsdk.Codex)
 	r.mu.Unlock()
+
+	for _, client := range clients {
+		if client != nil {
+			_ = client.Close()
+		}
+	}
+}
+
+func (r *Runtime) Close(agentName string) error {
+	r.mu.Lock()
+	client, ok := r.clients[agentName]
+	if ok {
+		delete(r.clients, agentName)
+	}
+	r.mu.Unlock()
+
+	if !ok || client == nil {
+		return nil
+	}
+	return client.Close()
 }
 
 func (r *Runtime) getOrCreateClient(opts OpenOptions) *codexsdk.Codex {
-	if opts.Probe {
-		codexOptions := codexsdk.CodexOptions{
-			Transport:             codexsdk.TransportAppServer,
-			AppServerPathOverride: opts.Command,
-			Env:                   opts.Env,
-			Verbose:               true,
-		}
-		if len(opts.Args) > 0 {
-			codexOptions.AppServerArgs = append([]string{}, opts.Args...)
-		}
-		return codexsdk.NewCodex(codexOptions)
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if client, ok := r.clients[opts.AgentName]; ok {
 		return client
 	}
-	codexOptions := codexsdk.CodexOptions{
-		Transport:         codexsdk.TransportCLI,
-		CodexPathOverride: opts.Command,
-		Env:               opts.Env,
-		Verbose:           true,
-	}
-	client := codexsdk.NewCodex(codexOptions)
+	client := newClient(opts)
 	r.clients[opts.AgentName] = client
 	return client
+}
+
+func newClient(opts OpenOptions) *codexsdk.Codex {
+	codexOptions := codexsdk.CodexOptions{
+		Transport:             codexsdk.TransportAppServer,
+		AppServerPathOverride: opts.Command,
+		Env:                   opts.Env,
+		Verbose:               true,
+	}
+	if len(opts.Args) > 0 {
+		codexOptions.AppServerArgs = append([]string{}, opts.Args...)
+	}
+	return codexsdk.NewCodex(codexOptions)
 }
 
 type session struct {
@@ -213,7 +225,21 @@ func (s *session) ListCommands(ctx context.Context) (types.CommandList, error) {
 	if s == nil || s.client == nil {
 		return types.CommandList{}, errors.New("codex session not initialized")
 	}
-	return types.CommandList{}, nil
+	supported := s.client.SupportedSlashCommands()
+	commands := make([]types.CommandInfo, 0, len(supported))
+	for _, command := range supported {
+		name := strings.TrimSpace(command.Name)
+		if name == "" {
+			continue
+		}
+		commands = append(commands, types.CommandInfo{
+			Name:         name,
+			Description:  strings.TrimSpace(command.Description),
+			ArgumentHint: strings.TrimSpace(command.ArgumentHint),
+		})
+	}
+	log.Printf("[agent/codex] commands.cached session=%s count=%d", s.sessionKey, len(commands))
+	return types.CommandList{Commands: commands}, nil
 }
 
 func (s *session) emitMessageDelta(msg *codexsdk.AgentMessageItem, textByID map[string]string) {
