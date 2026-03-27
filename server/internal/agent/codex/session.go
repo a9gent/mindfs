@@ -373,7 +373,12 @@ func mapToolItem(item codexsdk.ThreadItem, started bool) (types.ToolCall, bool) 
 			}
 			locations = append(locations, types.ToolCallLocation{Path: change.Path})
 			if strings.TrimSpace(change.Diff) != "" {
-				content = append(content, types.ToolCallContentItem{Type: "text", Text: change.Diff})
+				content = append(content, types.ToolCallContentItem{
+					Type:       "text",
+					Text:       change.Diff,
+					Path:       change.Path,
+					ChangeKind: string(change.Kind.Type),
+				})
 			}
 		}
 		if strings.TrimSpace(v.Output) != "" {

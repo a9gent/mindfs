@@ -37,12 +37,15 @@ export type ToolCallContentItem =
   | {
       type: "text";
       text?: string;
+      path?: string;
+      changeKind?: string;
     }
   | {
       type: "diff";
       path?: string;
       oldText?: string;
       newText?: string;
+      changeKind?: string;
     };
 
 export type ToolCall = {

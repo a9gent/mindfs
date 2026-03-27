@@ -282,6 +282,14 @@ function renderStructuredDiff(path: string, oldText?: string, newText?: string):
   return `~~~diff\n${lines.join("\n")}\n~~~`;
 }
 
+function renderAddedText(path: string, text: string): string {
+  return renderStructuredDiff(path, undefined, text);
+}
+
+function renderDeletedText(path: string, text: string): string {
+  return renderStructuredDiff(path, text, undefined);
+}
+
 function isDiffLikeText(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
@@ -329,8 +337,19 @@ function buildDetailSections(content?: ToolCallContentItem[], locations?: ToolCa
       continue;
     }
     if (item.type === "text" && item.text?.trim()) {
+      const fallbackPath = normalizeDisplayPath(locations?.[locationIndex]?.path || "(unknown)", rootPath);
+      const path = normalizeDisplayPath(item.path || fallbackPath, rootPath);
+      if (item.changeKind === "add") {
+        sections.push({ type: "diff", path, markdown: renderAddedText(path, item.text) });
+        locationIndex += 1;
+        continue;
+      }
+      if (item.changeKind === "delete") {
+        sections.push({ type: "diff", path, markdown: renderDeletedText(path, item.text) });
+        locationIndex += 1;
+        continue;
+      }
       if (isDiffLikeText(item.text)) {
-        const fallbackPath = normalizeDisplayPath(locations?.[locationIndex]?.path || "(unknown)", rootPath);
         sections.push({
           type: "diff",
           path: normalizeDisplayPath(extractDiffPath(item.text, fallbackPath), rootPath),

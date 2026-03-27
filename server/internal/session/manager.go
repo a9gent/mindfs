@@ -88,7 +88,7 @@ func NewManager(root fs.RootInfo, opts ...Option) *Manager {
 		now:             time.Now,
 		idleInterval:    1 * time.Minute,
 		idleFor:         10 * time.Minute,
-		closeFor:        30 * time.Minute,
+		closeFor:        7 * 24 * time.Hour,
 		maxIdleSessions: 3,
 	}
 	for _, opt := range opts {
@@ -335,7 +335,6 @@ func (m *Manager) closeSessionUnsafe(key string) (*Session, error) {
 	}
 	now := m.now().UTC()
 	session.ClosedAt = &now
-	session.UpdatedAt = now
 	if err := m.upsertSessionMetaUnsafe(session); err != nil {
 		return nil, err
 	}
