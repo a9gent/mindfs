@@ -307,9 +307,14 @@ function mapManagedRootsToEntries(dirs: ManagedRootPayload[]): FileEntry[] {
     name: dir.display_name || dir.id.split("/").filter(Boolean).pop() || dir.id,
     path: dir.id,
     is_dir: true,
+    is_root: true,
     size: typeof dir.size === "number" ? dir.size : undefined,
     mtime: typeof dir.mtime === "string" ? dir.mtime : undefined,
   }));
+}
+
+function buildDirectorySelectionKey(root: string, path: string, isRoot: boolean): string {
+  return isRoot ? root : `${root}:${path}`;
 }
 
 function hasExplicitFileContext(message: string): boolean {
@@ -390,6 +395,7 @@ export function App() {
   const entriesByPathRef = useRef<Record<string, FileEntry[]>>({});
   const [expanded, setExpanded] = useState<string[]>([]);
   const [selectedDir, setSelectedDir] = useState<string | null>(null);
+  const [selectedDirKey, setSelectedDirKey] = useState<string | null>(null);
   const [mainEntries, setMainEntries] = useState<FileEntry[]>([]);
   const [treeSortMode, setTreeSortMode] = useState<DirectorySortMode>(() => {
     if (typeof window === "undefined") {
@@ -1369,13 +1375,12 @@ export function App() {
       fileOpenRequestRef.current += 1;
       const path = params.path, rootParam = params.root || currentRootIdRef.current, isToggle = !!params.toggle;
       if (!path || !rootParam) return;
-      const isActuallyRoot = managedRootIdsRef.current.has(path);
+      const isActuallyRoot = params.isRoot === true;
       const root = isActuallyRoot ? path : rootParam;
       const expandedKey = isActuallyRoot ? path : `${root}:${path}`;
       const preserveQuery = !!params.preservePluginQuery;
       const nextPluginQuery = preserveQuery ? parsePluginQuery(window.location.search) : {};
-      const loadDirectoryView = async (targetPath: string) => {
-        const targetIsRoot = managedRootIdsRef.current.has(targetPath);
+      const loadDirectoryView = async (targetPath: string, targetIsRoot: boolean) => {
         const apiDir = targetIsRoot ? "." : targetPath;
         if (currentRootIdRef.current !== root) {
           setCurrentRootId(root);
@@ -1392,6 +1397,7 @@ export function App() {
           setEntriesByPath((prev) => ({ ...prev, [`${root}:${apiDir}`]: parsed.entries }));
           setMainEntries(parsed.entries);
           setSelectedDir(targetPath);
+          setSelectedDirKey(buildDirectorySelectionKey(root, targetPath, targetIsRoot));
           setFile(null);
           setSelectedSession(null);
           fileCursorRef.current = 0;
@@ -1404,12 +1410,12 @@ export function App() {
         if (!isActuallyRoot) {
           const parentDir = dirnameOfPath(path);
           const parentPath = parentDir === "." ? root : parentDir;
-          await loadDirectoryView(parentPath);
+          await loadDirectoryView(parentPath, parentDir === ".");
         }
         return;
       }
       if (isActuallyRoot) { setCurrentRootId(path); setExpanded((prev) => Array.from(new Set([...prev, path]))); } else { setExpanded((prev) => Array.from(new Set([...prev, expandedKey]))); }
-      await loadDirectoryView(path);
+      await loadDirectoryView(path, isActuallyRoot);
     }
   }), [isMobile, normalizeTreeResponse, setDrawerOpenForRoot, replaceURLState, rememberCurrentFileScroll]);
   const actionHandlersRef = useRef(actionHandlers);
@@ -1431,6 +1437,7 @@ export function App() {
     if (nextRootIds.length === 0) {
       setCurrentRootId(null);
       setSelectedDir(null);
+      setSelectedDirKey(null);
       setMainEntries([]);
       setFile(null);
       setSelectedSession(null);
@@ -1449,7 +1456,7 @@ export function App() {
     }
 
     const nextRoot = nextRootIds[0];
-    await actionHandlersRef.current.open_dir({ path: nextRoot, root: nextRoot, preservePluginQuery: true });
+    await actionHandlersRef.current.open_dir({ path: nextRoot, root: nextRoot, preservePluginQuery: true, isRoot: true });
   }, [replaceURLState]);
 
   const handleCreateRootStart = useCallback(() => {
@@ -1497,7 +1504,7 @@ export function App() {
       setCreatingRootName(null);
       await refreshManagedRoots();
       if (created?.id) {
-        await actionHandlersRef.current.open_dir({ path: created.id, root: created.id });
+        await actionHandlersRef.current.open_dir({ path: created.id, root: created.id, isRoot: true });
       }
     } catch (err) {
       reportError("root.create_failed", String((err as Error)?.message || "新建项目失败"));
@@ -1633,7 +1640,7 @@ export function App() {
 
         if (!nextState.file) {
           if (nextState.root) {
-            await actionHandlers.open_dir({ path: nextState.root, root: nextState.root, preservePluginQuery: true });
+            await actionHandlers.open_dir({ path: nextState.root, root: nextState.root, preservePluginQuery: true, isRoot: true });
           }
           return;
         }
@@ -1670,7 +1677,7 @@ export function App() {
     if (!file) return;
     const root = file.root || currentRootIdRef.current;
     if (!root) return;
-    actionHandlers.open_dir({ path: path === "." ? root : path, root });
+    actionHandlers.open_dir({ path: path === "." ? root : path, root, isRoot: path === "." });
   }, [file, actionHandlers]);
 
   const handleFileViewerFileClick = useCallback((path: string) => {
@@ -1683,7 +1690,7 @@ export function App() {
   const handleDirectoryPathClick = useCallback((path: string) => {
     const root = currentRootIdRef.current;
     if (!root) return;
-    actionHandlers.open_dir({ path: path === "." ? root : path, root });
+    actionHandlers.open_dir({ path: path === "." ? root : path, root, isRoot: path === "." });
   }, [actionHandlers]);
 
   const visibleMainEntries = useMemo(
@@ -2032,7 +2039,7 @@ export function App() {
         if (cancelled) return;
         actionHandlersRef.current.open({ path: urlState.file, root: preferredRoot, cursor: urlState.cursor, preservePluginQuery: true });
       } else {
-        actionHandlersRef.current.open_dir({ path: preferredRoot, root: preferredRoot, preservePluginQuery: true });
+        actionHandlersRef.current.open_dir({ path: preferredRoot, root: preferredRoot, preservePluginQuery: true, isRoot: true });
       }
     });
     return () => { cancelled = true; };
@@ -2066,7 +2073,7 @@ export function App() {
         return;
       }
       if (fileRef.current) {
-        actionHandlers.open_dir({ path: state.root, root: state.root, preservePluginQuery: true });
+        actionHandlers.open_dir({ path: state.root, root: state.root, preservePluginQuery: true, isRoot: true });
       }
     }
 
@@ -2369,7 +2376,7 @@ export function App() {
     <AppShell
       leftOpen={isLeftOpen} rightOpen={isRightOpen}
       onCloseLeft={() => setIsLeftOpen(false)} onCloseRight={() => setIsRightOpen(false)}
-      sidebar={<FileTree entries={rootEntries} childrenByPath={entriesByPath} expanded={expanded} sortMode={treeSortMode} showHiddenFiles={showHiddenFiles} onSortModeChange={setTreeSortMode} onShowHiddenFilesChange={setShowHiddenFiles} selectedDir={selectedDir} selectedPath={file?.path} rootId={currentRootId} managedRoots={managedRootIds} creatingRootName={creatingRootName} creatingRootBusy={creatingRootBusy} onCreateRootStart={handleCreateRootStart} onCreateRootNameChange={setCreatingRootName} onCreateRootSubmit={() => { void handleCreateRootSubmit(); }} onCreateRootCancel={handleCreateRootCancel} onSelectFile={(e, r) => { actionHandlers.open({path: e.path, root: r}); if (isMobile) setIsLeftOpen(false); }} onToggleDir={(e, r) => actionHandlers.open_dir({path: e.path, root: r, toggle: true})} />}
+      sidebar={<FileTree entries={rootEntries} childrenByPath={entriesByPath} expanded={expanded} sortMode={treeSortMode} showHiddenFiles={showHiddenFiles} onSortModeChange={setTreeSortMode} onShowHiddenFilesChange={setShowHiddenFiles} selectedDirKey={selectedDirKey} selectedPath={file?.path} rootId={currentRootId} creatingRootName={creatingRootName} creatingRootBusy={creatingRootBusy} onCreateRootStart={handleCreateRootStart} onCreateRootNameChange={setCreatingRootName} onCreateRootSubmit={() => { void handleCreateRootSubmit(); }} onCreateRootCancel={handleCreateRootCancel} onSelectFile={(e, r) => { actionHandlers.open({path: e.path, root: r}); if (isMobile) setIsLeftOpen(false); }} onToggleDir={(e, r) => actionHandlers.open_dir({path: e.path, root: r, toggle: true, isRoot: e.is_root === true})} />}
       rightSidebar={<SessionList sessions={sessions} selectedKey={selectedSession?.key} onSelect={(s) => { handleSelectSession(s); if (isMobile) setIsRightOpen(false); }} onDelete={handleDeleteSession} onLoadOlder={handleLoadOlderSessions} loadingOlder={loadingOlderSessions} hasMore={hasMoreSessions} />}
       main={
         <div style={{ width: "100%", flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", position: "relative" }}>

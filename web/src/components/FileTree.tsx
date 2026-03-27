@@ -24,10 +24,9 @@ type FileTreeProps = {
   expanded: string[];
   sortMode: DirectorySortMode;
   showHiddenFiles?: boolean;
-  selectedDir?: string | null;
+  selectedDirKey?: string | null;
   selectedPath?: string | null;
   rootId?: string | null;
-  managedRoots?: string[];
   fileMetas?: Record<string, FileMeta>;
   activeSessionKey?: string | null;
   onSortModeChange?: (mode: DirectorySortMode) => void;
@@ -102,10 +101,9 @@ export function FileTree({
   expanded,
   sortMode,
   showHiddenFiles = false,
-  selectedDir,
+  selectedDirKey,
   selectedPath,
   rootId,
-  managedRoots = [],
   fileMetas = {},
   activeSessionKey,
   onSortModeChange,
@@ -120,7 +118,6 @@ export function FileTree({
   onCreateRootCancel,
 }: FileTreeProps) {
   const expandedSet = new Set(expanded);
-  const managedSet = new Set(managedRoots);
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = React.useState<BeforeInstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = React.useState(false);
@@ -309,7 +306,7 @@ export function FileTree({
   }, [isMenuOpen]);
 
   const childKeyFor = (entry: FileEntry, entryRoot: string) => {
-    if (managedSet.has(entry.path)) return `${entry.path}:.`;
+    if (entry.is_root) return `${entry.path}:.`;
     return `${entryRoot}:${entry.path}`;
   };
 
@@ -377,24 +374,26 @@ export function FileTree({
         </li>
       ) : null}
       {sortDirectoryEntries(visibleEntries(items), sortMode).map((entry) => {
-        const entryRoot = managedSet.has(entry.path) ? entry.path : branchRoot;
-        const expandedKey = managedSet.has(entry.path) ? entry.path : `${entryRoot}:${entry.path}`;
+        const isManagedRootNode = entry.is_root === true;
+        const entryRoot = isManagedRootNode ? entry.path : branchRoot;
+        const expandedKey = isManagedRootNode ? entry.path : `${entryRoot}:${entry.path}`;
         const isOpen = expandedSet.has(expandedKey);
-        
+
         const cKey = childKeyFor(entry, entryRoot);
-        const children = childrenByPath[cKey] ?? childrenByPath[entry.path] ?? [];
+        const children = childrenByPath[cKey] ?? [];
         
         // 关键修复：增加 rootId 匹配校验，防止不同 root 下同名目录同时高亮
-        const isSelected = 
-          entry.path === (entry.is_dir ? selectedDir : selectedPath) && 
-          entryRoot === rootId;
+        const isSelected =
+          entry.is_dir
+            ? selectedDirKey === expandedKey
+            : entry.path === selectedPath && entryRoot === rootId;
 
         const meta = fileMetas[entry.path];
         const hasSessionLink = !entry.is_dir && meta?.source_session;
         const isFromActiveSession = hasSessionLink && meta.source_session === activeSessionKey;
 
         return (
-          <li key={entry.path}>
+          <li key={expandedKey}>
             <button
               type="button"
               onClick={() => entry.is_dir ? onToggleDir?.(entry, entryRoot) : onSelectFile?.(entry, entryRoot)}

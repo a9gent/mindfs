@@ -2,6 +2,7 @@ export type FileEntry = {
   name: string;
   path: string;
   is_dir: boolean;
+  is_root?: boolean;
   size?: number;
   mtime?: string;
 };
