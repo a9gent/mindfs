@@ -486,7 +486,15 @@ function getSessionMaxSeq(session: Session | null | undefined): number {
   }, 0);
 }
 
-export function mergeSessionData(base: Session | null | undefined, incoming: Session | null | undefined): Session | null {
+function preferIncomingText(next?: string, prev?: string) {
+  const normalizedNext = (next || "").trim();
+  if (normalizedNext) {
+    return next;
+  }
+  return prev;
+}
+
+function withSessionMeta(base: Session | null | undefined, incoming: Session | null | undefined): Session | null {
   if (!base && !incoming) {
     return null;
   }
@@ -496,63 +504,26 @@ export function mergeSessionData(base: Session | null | undefined, incoming: Ses
   if (!incoming) {
     return { ...base, exchanges: Array.isArray(base.exchanges) ? [...base.exchanges] : [] };
   }
-  const baseExchanges = Array.isArray(base.exchanges) ? base.exchanges : [];
-  const incomingExchanges = Array.isArray(incoming.exchanges) ? incoming.exchanges : [];
-  const preferIncomingText = (next?: string, prev?: string) => {
-    const normalizedNext = (next || "").trim();
-    if (normalizedNext) {
-      return next;
-    }
-    return prev;
-  };
-  const mergedBySeq = new Map<number, NonNullable<Session["exchanges"]>[number]>();
-  const extras: NonNullable<Session["exchanges"]> = [];
-  const normalizeRole = (role?: string) => (role || "").trim().toLowerCase();
-  const normalizeText = (value?: string) => (value || "").trim();
-  const toolCallID = (exchange: NonNullable<Session["exchanges"]>[number]) => {
-    const toolCall = (exchange as any)?.toolCall;
-    if (!toolCall) {
-      return "";
-    }
-    return String((toolCall as ToolCall & { toolCallId?: string; tool_call_id?: string }).callId || (toolCall as any).toolCallId || (toolCall as any).tool_call_id || "").trim();
-  };
-  const sameExchange = (left: NonNullable<Session["exchanges"]>[number], right: NonNullable<Session["exchanges"]>[number]) => {
-    const leftRole = normalizeRole((left as any)?.role);
-    const rightRole = normalizeRole((right as any)?.role);
-    if (!leftRole || leftRole !== rightRole) {
-      return false;
-    }
-    if (leftRole === "tool") {
-      const leftCallID = toolCallID(left);
-      const rightCallID = toolCallID(right);
-      return !!leftCallID && leftCallID === rightCallID;
-    }
-    return normalizeText((left as any)?.content) !== "" &&
-      normalizeText((left as any)?.content) === normalizeText((right as any)?.content) &&
-      normalizeText((left as any)?.agent) === normalizeText((right as any)?.agent);
-  };
-  const push = (exchange: NonNullable<Session["exchanges"]>[number]) => {
-    const seq = Number((exchange as any)?.seq || 0);
-    if (Number.isFinite(seq) && seq > 0) {
-      mergedBySeq.set(seq, { ...(mergedBySeq.get(seq) || {}), ...exchange });
-      return;
-    }
-    extras.push(exchange);
-  };
-  baseExchanges.forEach(push);
-  incomingExchanges.forEach(push);
-  const seqValues = Array.from(mergedBySeq.values());
-  const exchanges = Array.from(mergedBySeq.entries())
-    .sort((a, b) => a[0] - b[0])
-    .map(([, exchange]) => exchange)
-    .concat(extras.filter((extra) => !seqValues.some((entry) => sameExchange(extra, entry))));
   return {
     ...base,
     ...incoming,
     agent: preferIncomingText(incoming.agent, base.agent),
     model: preferIncomingText((incoming as any).model, (base as any).model),
     name: preferIncomingText(incoming.name, base.name) || "",
-    exchanges,
+    exchanges: Array.isArray(incoming.exchanges) ? [...incoming.exchanges] : [],
+  };
+}
+
+function appendSessionDelta(base: Session | null | undefined, incoming: Session | null | undefined): Session | null {
+  const baseWithMeta = withSessionMeta(base, incoming);
+  if (!baseWithMeta) {
+    return null;
+  }
+  const baseExchanges = Array.isArray(base?.exchanges) ? base.exchanges.filter((exchange) => Number((exchange as any)?.seq || 0) > 0) : [];
+  const incomingExchanges = Array.isArray(incoming?.exchanges) ? incoming.exchanges.filter((exchange) => Number((exchange as any)?.seq || 0) > 0) : [];
+  return {
+    ...baseWithMeta,
+    exchanges: [...baseExchanges, ...incomingExchanges],
   };
 }
 
@@ -624,13 +595,27 @@ export async function syncSession(rootId: string, sessionKey: string): Promise<S
     return { session: base, hasDelta: false };
   }
   const incomingExchanges = Array.isArray(incoming.exchanges) ? incoming.exchanges : [];
-  const merged = mergeSessionData(base, { ...incoming, key: sessionKey });
-  if (!merged) {
+  const persistedDelta = incomingExchanges.filter((exchange) => {
+    const exchangeSeq = Number((exchange as any)?.seq || 0);
+    return Number.isFinite(exchangeSeq) && exchangeSeq > 0;
+  });
+  const transientTail = incomingExchanges.filter((exchange) => Number((exchange as any)?.seq || 0) === 0);
+  const persistedSession = appendSessionDelta(base, {
+    ...incoming,
+    key: sessionKey,
+    exchanges: persistedDelta,
+  });
+  if (!persistedSession) {
     return { session: null, hasDelta: false };
   }
-  await saveCachedSession(rootId, merged);
+  await saveCachedSession(rootId, persistedSession);
+  const displaySession = withSessionMeta(persistedSession, {
+    ...incoming,
+    key: sessionKey,
+    exchanges: [...(persistedSession.exchanges || []), ...transientTail],
+  });
   return {
-    session: cloneSession(merged),
-    hasDelta: incomingExchanges.length > 0,
+    session: displaySession ? cloneSession(displaySession) : null,
+    hasDelta: persistedDelta.length > 0,
   };
 }

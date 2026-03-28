@@ -137,11 +137,6 @@ func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-	clientID := strings.TrimSpace(r.URL.Query().Get("client_id"))
-	if h.AppContext != nil {
-		streamHub := h.AppContext.GetSessionStreamHub()
-		streamHub.BindSessionClient(key, clientID)
-	}
 	var pendingUser *session.Exchange
 	if h.AppContext != nil {
 		pendingUser = h.AppContext.GetSessionStreamHub().GetPendingUserExchange(key)
@@ -173,7 +168,7 @@ func sessionResponse(s *session.Session, pendingUser *session.Exchange) map[stri
 	}
 	exchanges := append([]session.Exchange{}, s.Exchanges...)
 	if pendingUser != nil {
-		pendingUser.Seq = len(exchanges) + 1
+		pendingUser.Seq = 0
 		exchanges = append(exchanges, *pendingUser)
 	}
 	return map[string]any{

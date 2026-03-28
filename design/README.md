@@ -31,7 +31,8 @@
 - **[13-frontend-services.md](./13-frontend-services.md)** - 前端服务层、状态管理、WebSocket Hook
 - **[19-input-candidates.md](./19-input-candidates.md)** - Slash / File Reference 候选集、统一补全框架
 - **[20-upload-and-attachments.md](./20-upload-and-attachments.md)** - 目录上传、输入附件上传、图片附件展示
-- **[21-relay-mode.md](./21-relay-mode.md)** - Relay / 隧道模式、现成方案选型、自研边界
+- **[21-relay-website.md](./21-relay-website.md)** - Relay 网站、节点管理、控制面 API、绑定流程
+- **[22-relay-bind-refactor.md](./22-relay-bind-refactor.md)** - 现有 bind-code 流程改造为 pending-code 轮询绑定
 
 ---
 
@@ -63,7 +64,7 @@
 - **前端如何组织** → 13-frontend-services.md
 - **输入候选如何组织** → 19-input-candidates.md
 - **文件上传与附件如何组织** → 20-upload-and-attachments.md
-- **远程访问 relay 怎么做** → 21-relay-mode.md
+- **远程访问 relay 怎么做** → 21-relay-website.md / 22-relay-bind-refactor.md
 
 ---
 

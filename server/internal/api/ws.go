@@ -237,6 +237,7 @@ func (h *WSHandler) handleSessionReady(clientID string, req WSRequest) {
 		return
 	}
 	streamHub := h.AppContext.GetSessionStreamHub()
+	streamHub.BindSessionClient(key, clientID)
 	streamHub.ReplayPending(clientID, key)
 }
 

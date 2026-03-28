@@ -1729,26 +1729,28 @@ export function App() {
     const reloadSessionForReplay = async (rootID: string, sessionKey: string) => {
       if (!rootID || !sessionKey) return;
       const cacheKey = rootSessionKey(rootID, sessionKey);
-      delete loadedSessionRef.current[cacheKey];
-      const persisted = await getCachedSession(rootID, sessionKey);
+      const currentInMemory = sessionCacheRef.current[cacheKey];
+      const inflight = loadingSessionRef.current[cacheKey];
+      const request = inflight || syncSession(rootID, sessionKey).finally(() => {
+        delete loadingSessionRef.current[cacheKey];
+      });
+      if (!inflight) {
+        loadingSessionRef.current[cacheKey] = request;
+      }
+      const syncResult = await request;
       if (cancelled) return;
-      if (persisted) {
-        sessionCacheRef.current[cacheKey] = { ...(persisted as any), key: sessionKey } as Session;
-      } else {
-        delete sessionCacheRef.current[cacheKey];
-      }
-      const syncResult = await syncSession(rootID, sessionKey);
-      const fullSession = syncResult.session;
-      if (!fullSession || cancelled) return;
-      const normalized = { ...(fullSession as any), key: sessionKey } as Session;
-      sessionCacheRef.current[cacheKey] = normalized;
-      loadedSessionRef.current[cacheKey] = true;
-      bumpCacheVersion();
-      if ((selectedSessionRef.current?.key || selectedSessionRef.current?.session_key) === sessionKey) {
-        setSelectedSession((prev) => prev ? ({ ...(prev as any), ...(normalized as any) } as SessionItem) : prev);
-      }
-      if (boundSessionByRootRef.current[rootID] === sessionKey) {
-        setDrawerSessionForRoot(rootID, normalized);
+      const shouldApply = !!syncResult.session && (syncResult.hasDelta || !currentInMemory);
+      if (shouldApply && syncResult.session) {
+        const normalized = { ...(syncResult.session as any), key: sessionKey } as Session;
+        sessionCacheRef.current[cacheKey] = normalized;
+        loadedSessionRef.current[cacheKey] = true;
+        bumpCacheVersion();
+        if ((selectedSessionRef.current?.key || selectedSessionRef.current?.session_key) === sessionKey) {
+          setSelectedSession((prev) => prev ? ({ ...(prev as any), ...(normalized as any) } as SessionItem) : prev);
+        }
+        if (boundSessionByRootRef.current[rootID] === sessionKey) {
+          setDrawerSessionForRoot(rootID, normalized);
+        }
       }
       await sessionService.markSessionReady(rootID, sessionKey);
     };
@@ -1875,8 +1877,14 @@ export function App() {
     const unsubscribeEvents = sessionService.subscribeEvents((event) => {
       const payload = (event.payload || {}) as any;
       switch (event.type) {
-        case "ws.reconnected":
         case "ws.connected":
+          void refreshManagedRoots();
+          if (currentRootIdRef.current) {
+            const newest = sessionsRef.current[0]?.updated_at || "";
+            void loadSessions(currentRootIdRef.current, newest ? { afterTime: newest } : { replace: true });
+          }
+          break;
+        case "ws.reconnected":
           void refreshManagedRoots();
           if (currentRootIdRef.current) {
             const newest = sessionsRef.current[0]?.updated_at || "";
