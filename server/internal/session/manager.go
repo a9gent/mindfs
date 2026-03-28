@@ -177,6 +177,9 @@ func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role,
 	if session == nil || strings.TrimSpace(session.Key) == "" {
 		return errors.New("session required")
 	}
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	current, err := m.getSessionUnsafe(session.Key, 0)

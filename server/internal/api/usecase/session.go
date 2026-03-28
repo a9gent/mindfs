@@ -182,13 +182,6 @@ func prependSwitchHint(in BuildPromptInput, prompt string) string {
 	return readHint + prompt
 }
 
-func (s *Service) appendAgentReply(ctx context.Context, manager *session.Manager, sess *session.Session, agent, content string) error {
-	if content == "" || manager == nil {
-		return nil
-	}
-	return manager.AddExchangeForAgent(ctx, sess, "agent", content, agent)
-}
-
 type SendMessageInput struct {
 	RootID    string
 	Key       string
@@ -829,6 +822,10 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	if err := manager.AddExchangeForAgent(ctx, current, "user", in.Content, in.Agent); err != nil {
 		return err
 	}
+	if err := manager.AddExchangeForAgent(ctx, current, "agent", responseText, in.Agent); err != nil {
+		return err
+	}
+	manager.UpdateAgentState(ctx, current, in.Agent, contextLineCount(current.Exchanges))
 
 	prober := s.Registry.GetProber()
 	if sendErr != nil && !isCanceledTurnError(sendErr) {
@@ -840,11 +837,6 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		prober.ReportSuccess(in.Agent)
 	}
 
-	err = s.appendAgentReply(ctx, manager, current, in.Agent, responseText)
-	if err != nil {
-		return err
-	}
-	manager.UpdateAgentState(ctx, current, in.Agent, contextLineCount(current.Exchanges))
 	return nil
 }
 

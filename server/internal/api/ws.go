@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"mindfs/server/internal/agent"
 	agenttypes "mindfs/server/internal/agent/types"
@@ -19,8 +18,6 @@ import (
 )
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-
-const sessionMessageTimeout = 10 * time.Minute
 
 // WSHandler manages JSON-RPC over WebSocket.
 type WSHandler struct {
@@ -188,11 +185,7 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 	}
 	clientCtx := parseClientContext(req.Payload, rootID)
 	streamHub := h.AppContext.GetSessionStreamHub()
-	parentCtx := context.Background()
-	if agentPool := h.AppContext.GetAgentPool(); agentPool != nil {
-		parentCtx = agentPool.Context()
-	}
-	msgCtx, cancel := context.WithTimeout(parentCtx, sessionMessageTimeout)
+	msgCtx, cancel := h.sessionMessageContext()
 	defer cancel()
 
 	err := uc.SendMessage(msgCtx, usecase.SendMessageInput{
@@ -239,6 +232,16 @@ func (h *WSHandler) handleSessionReady(clientID string, req WSRequest) {
 	streamHub := h.AppContext.GetSessionStreamHub()
 	streamHub.BindSessionClient(key, clientID)
 	streamHub.ReplayPending(clientID, key)
+}
+
+func (h *WSHandler) sessionMessageContext() (context.Context, context.CancelFunc) {
+	parentCtx := context.Background()
+	if h != nil && h.AppContext != nil {
+		if agentPool := h.AppContext.GetAgentPool(); agentPool != nil {
+			parentCtx = agentPool.Context()
+		}
+	}
+	return context.WithCancel(parentCtx)
 }
 
 func (h *WSHandler) handleSessionCancel(ctx context.Context, conn *websocket.Conn, _ string, req WSRequest) {
