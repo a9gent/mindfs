@@ -6,7 +6,7 @@ set -euo pipefail
 
 REPO="a9gent/mindfs"
 VERSION=""
-PREFIX="/usr/local"
+PREFIX="${HOME}/.local"
 
 # ── Parse arguments ────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -96,11 +96,60 @@ if [[ -d "${PKG_DIR}/web" ]]; then
   echo "  Web     -> ${WEB_DEST}"
 fi
 
+# ── Ensure PATH contains the user bin directory ─────────────────────────────
+ensure_path_entry() {
+  local bin_dir="$1"
+  case ":${PATH}:" in
+    *":${bin_dir}:"*) return 0 ;;
+  esac
+
+  local shell_name rc_file line
+  shell_name="$(basename "${SHELL:-}")"
+  line="export PATH=\"${bin_dir}:\$PATH\""
+
+  case "$shell_name" in
+    zsh)
+      rc_file="${HOME}/.zshrc"
+      ;;
+    bash)
+      if [[ "$(uname -s)" == "Darwin" ]]; then
+        rc_file="${HOME}/.bash_profile"
+      else
+        rc_file="${HOME}/.bashrc"
+      fi
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  touch "$rc_file"
+  if grep -Fqs "$line" "$rc_file"; then
+    return 0
+  fi
+
+  {
+    printf '\n'
+    printf '%s\n' "$line"
+  } >>"$rc_file"
+
+  echo "  PATH    -> added ${bin_dir} to ${rc_file}"
+  echo "            Reload your shell or run: source ${rc_file}"
+  return 0
+}
+
 # ── Verify ──────────────────────────────────────────────────────────────────
 echo
+if ensure_path_entry "${PREFIX}/bin"; then
+  :
+else
+  echo "PATH was not updated automatically for shell: $(basename "${SHELL:-unknown}")"
+  echo "  Add this line to your shell profile:"
+  echo "    export PATH=\"${PREFIX}/bin:\$PATH\""
+fi
+
 if command -v mindfs &>/dev/null; then
   echo "Done. mindfs is available at: $(command -v mindfs)"
 else
-  echo "Done. Make sure ${PREFIX}/bin is in your PATH."
-  echo "  Add to your shell profile:  export PATH=\"${PREFIX}/bin:\$PATH\""
+  echo "Done. Open a new terminal or ensure ${PREFIX}/bin is in your PATH."
 fi

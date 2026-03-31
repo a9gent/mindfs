@@ -12,10 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -539,12 +537,7 @@ func killProcess(proc *os.Process) error {
 	if proc == nil {
 		return nil
 	}
-	if runtime.GOOS != "windows" {
-		if err := syscall.Kill(-proc.Pid, syscall.SIGKILL); err == nil {
-			return nil
-		}
-	}
-	return proc.Kill()
+	return killProcessTree(proc)
 }
 
 // SessionID returns the ACP session ID for a MindFS session key.
@@ -661,9 +654,7 @@ func configureProcessCommand(cmd *exec.Cmd, env map[string]string) {
 	if cmd == nil {
 		return
 	}
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
+	configurePlatformProcessCommand(cmd)
 	if len(env) == 0 {
 		return
 	}

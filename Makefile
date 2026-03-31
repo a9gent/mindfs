@@ -1,10 +1,11 @@
-.PHONY: help dev dev-backend dev-web build-web build build-all start start-server test dist-clean release tag
+.PHONY: help dev dev-backend dev-web build-web build install uninstall build-all start start-server test dist-clean release tag
 
 GO ?= go
 NPM ?= npm
 WEB_DIR ?= web
 ADDR ?= :7331
 ROOT ?= .
+PREFIX ?= $(HOME)/.local
 
 help:
 	@printf "%s\n" \
@@ -14,6 +15,8 @@ help:
 		"  make dev-web      # Vite dev server only" \
 		"  make build-web    # build web assets into web/dist" \
 		"  make build        # build web assets and CLI binary" \
+		"  make install      # install binary and built static assets into $(PREFIX)" \
+		"  make uninstall    # remove installed binary and static assets from $(PREFIX)" \
 		"  make build-all    # cross-compile for all platforms into dist/" \
 		"  make dist-clean   # remove dist/ directory" \
 		"  make start        # single-port run with built static assets" \
@@ -36,6 +39,17 @@ build-web:
 
 build: build-web
 	$(GO) build -ldflags "-X main.version=$(VERSION)" -o mindfs ./cli/cmd
+
+install: build
+	install -d "$(PREFIX)/bin"
+	install -d "$(PREFIX)/share/mindfs"
+	install -m 0755 mindfs "$(PREFIX)/bin/mindfs"
+	rm -rf "$(PREFIX)/share/mindfs/web"
+	cp -R "$(WEB_DIR)/dist" "$(PREFIX)/share/mindfs/web"
+
+uninstall:
+	rm -f "$(PREFIX)/bin/mindfs"
+	rm -rf "$(PREFIX)/share/mindfs"
 
 start:
 	$(GO) run ./cli/cmd -web=false -addr $(ADDR) $(ROOT)

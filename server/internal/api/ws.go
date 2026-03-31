@@ -13,6 +13,7 @@ import (
 	"mindfs/server/internal/api/usecase"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/session"
+	"mindfs/server/internal/update"
 
 	"github.com/gorilla/websocket"
 )
@@ -123,7 +124,7 @@ func (h *WSHandler) broadcastWS(resp WSResponse) {
 	h.AppContext.GetSessionStreamHub().BroadcastAll(resp)
 }
 
-func (h *WSHandler) broadcastAppUpdate(status any) {
+func (h *WSHandler) broadcastAppUpdate(status update.Status) {
 	resp := WSResponse{
 		Type:    "app.update",
 		Payload: map[string]any{"state": status},
