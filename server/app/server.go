@@ -4,18 +4,22 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"mindfs/server/internal/agent"
 	"mindfs/server/internal/api"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/relay"
+	"mindfs/server/internal/update"
 )
 
 type StartOptions struct {
 	StaticDir    string
 	NoRelayer    bool
 	RelayBaseURL string
+	Version      string
+	Args         []string
 }
 
 // Start boots the HTTP/WS server.
@@ -39,11 +43,15 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	agentPool := agent.NewPool(agentConfig)
 	agentProber := agent.NewProber(&agentConfig, agentPool, 5*time.Minute)
 	agentProber.Start(ctx)
+	executable, _ := os.Executable()
+	updateSvc := update.NewService("a9gent/mindfs", opts.Version, executable, opts.Args, time.Hour)
+	updateSvc.Start(ctx)
 
 	services := &api.AppContext{
 		Dirs:   registry,
 		Agents: agentPool,
 		Prober: agentProber,
+		Update: updateSvc,
 	}
 	httpHandler := &api.HTTPHandler{
 		AppContext: services,
@@ -83,11 +91,17 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 }
 
 func resolveStaticDir(staticDir string) string {
-	if staticDir == "" {
-		return ""
+	if staticDir != "" {
+		if info, err := os.Stat(staticDir); err == nil && info.IsDir() {
+			return staticDir
+		}
 	}
-	if info, err := os.Stat(staticDir); err == nil && info.IsDir() {
-		return staticDir
+	if exe, err := os.Executable(); err == nil {
+		prefix := filepath.Dir(filepath.Dir(exe))
+		candidate := filepath.Join(prefix, "share", "mindfs", "web")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
 	}
 	return ""
 }

@@ -24,6 +24,7 @@ type WSHandler struct {
 	AppContext *AppContext
 	fileOnce   sync.Once
 	proberOnce sync.Once
+	updateOnce sync.Once
 }
 
 type StreamEvent struct {
@@ -43,6 +44,11 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.AppContext.GetProber().AddListener(h.broadcastAgentStatusChange)
 		}
 	})
+	h.updateOnce.Do(func() {
+		if h.AppContext != nil && h.AppContext.GetUpdateService() != nil {
+			h.AppContext.GetUpdateService().AddListener(h.broadcastAppUpdate)
+		}
+	})
 	clientID := strings.TrimSpace(r.URL.Query().Get("client_id"))
 	if clientID == "" {
 		http.Error(w, "client_id required", http.StatusBadRequest)
@@ -54,6 +60,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.AppContext != nil {
 		h.AppContext.GetSessionStreamHub().RegisterClient(clientID, conn)
+		h.pushInitialAppUpdate(clientID)
 	}
 	defer func() {
 		if h.AppContext != nil {
@@ -114,6 +121,24 @@ func (h *WSHandler) broadcastWS(resp WSResponse) {
 		return
 	}
 	h.AppContext.GetSessionStreamHub().BroadcastAll(resp)
+}
+
+func (h *WSHandler) broadcastAppUpdate(status any) {
+	resp := WSResponse{
+		Type:    "app.update",
+		Payload: map[string]any{"state": status},
+	}
+	h.broadcastWS(resp)
+}
+
+func (h *WSHandler) pushInitialAppUpdate(clientID string) {
+	if h.AppContext == nil || h.AppContext.GetUpdateService() == nil {
+		return
+	}
+	h.AppContext.GetSessionStreamHub().SendToClient(clientID, WSResponse{
+		Type:    "app.update",
+		Payload: map[string]any{"state": h.AppContext.GetUpdateService().GetStatus()},
+	})
 }
 
 func (h *WSHandler) handleWSRequest(ctx context.Context, conn *websocket.Conn, clientID string, req WSRequest) {

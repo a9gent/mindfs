@@ -51,6 +51,8 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/dirs", h.handleAddDir)
 	r.Delete("/api/dirs", h.handleRemoveDir)
 	r.Get("/api/relay/status", h.handleRelayStatus)
+	r.Get("/api/app/update", h.handleAppUpdateGet)
+	r.Post("/api/app/update", h.handleAppUpdatePost)
 
 	// Agent status API
 	r.Get("/api/agents", h.handleAgentsList)
@@ -208,6 +210,28 @@ func (h *HTTPHandler) handleAgentsList(w http.ResponseWriter, r *http.Request) {
 	}
 	statuses := h.AppContext.GetProber().GetInstalledStatuses()
 	respondJSON(w, http.StatusOK, statuses)
+}
+
+func (h *HTTPHandler) handleAppUpdateGet(w http.ResponseWriter, r *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetUpdateService() == nil {
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status": "idle",
+		})
+		return
+	}
+	respondJSON(w, http.StatusOK, h.AppContext.GetUpdateService().GetStatus())
+}
+
+func (h *HTTPHandler) handleAppUpdatePost(w http.ResponseWriter, r *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetUpdateService() == nil {
+		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("update service not configured"))
+		return
+	}
+	if err := h.AppContext.GetUpdateService().TriggerUpdate(r.Context()); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest(err.Error()))
+		return
+	}
+	respondJSON(w, http.StatusOK, h.AppContext.GetUpdateService().GetStatus())
 }
 
 func (h *HTTPHandler) handleFrontend(w http.ResponseWriter, r *http.Request) {

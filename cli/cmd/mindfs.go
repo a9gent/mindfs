@@ -23,6 +23,8 @@ import (
 	"mindfs/server/app"
 )
 
+var version = "dev"
+
 func main() {
 	flag.Usage = func() {
 		out := flag.CommandLine.Output()
@@ -89,6 +91,8 @@ func main() {
 		errCh <- app.Start(ctx, *addr, app.StartOptions{
 			StaticDir: *staticDir,
 			NoRelayer: *noRelayer,
+			Version:   version,
+			Args:      os.Args[1:],
 		})
 	}()
 	if err := waitForServer(*addr, 8*time.Second); err != nil {

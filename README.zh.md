@@ -52,6 +52,23 @@
 
 ## 快速上手
 
+### 前置条件
+
+MindFS 本身不包含 AI 模型，需要在本机安装至少一个 Agent CLI。按需选择：
+
+| Agent | 安装 |
+|-------|------|
+| **Claude Code** | https://claude.ai/code |
+| **OpenAI Codex** | https://github.com/openai/codex |
+| **Gemini CLI** | https://github.com/google-gemini/gemini-cli |
+| **Cursor** | https://www.cursor.com |
+| **GitHub Copilot** | https://github.com/features/copilot |
+| **Cline** | https://github.com/clinebot/cline |
+| **Kimi** | https://kimi.moonshot.cn |
+| **Qwen** | https://github.com/QwenLM/qwen-agent |
+
+安装好 Agent 后，即可启动 MindFS 并通过浏览器与之交互。
+
 ### 安装
 
 **macOS / Linux**
@@ -116,4 +133,4 @@ Flags:
 
 ## 许可证
 
-[MIT](LICENSE)
+[AGPL v3](LICENSE)

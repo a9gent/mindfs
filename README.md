@@ -52,6 +52,23 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 
 ## Quick Start
 
+### Prerequisites
+
+MindFS does not include any AI model — you need at least one Agent CLI installed locally. Choose what works for you:
+
+| Agent | Install |
+|-------|---------|
+| **Claude Code** | https://claude.ai/code |
+| **OpenAI Codex** | https://github.com/openai/codex |
+| **Gemini CLI** | https://github.com/google-gemini/gemini-cli |
+| **Cursor** | https://www.cursor.com |
+| **GitHub Copilot** | https://github.com/features/copilot |
+| **Cline** | https://github.com/clinebot/cline |
+| **Kimi** | https://kimi.moonshot.cn |
+| **Qwen** | https://github.com/QwenLM/qwen-agent |
+
+Once an agent is installed, start MindFS and interact with it through the browser.
+
 ### Install
 
 **macOS / Linux**
@@ -117,4 +134,4 @@ Pull requests are welcome. For larger changes, please open an issue first to dis
 
 ## License
 
-[MIT](LICENSE)
+[AGPL v3](LICENSE)

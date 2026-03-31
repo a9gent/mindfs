@@ -10,6 +10,7 @@ import (
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/relay"
 	"mindfs/server/internal/session"
+	"mindfs/server/internal/update"
 )
 
 type RootContext struct {
@@ -23,6 +24,7 @@ type AppContext struct {
 	Agents *agent.Pool
 	Prober *agent.Prober
 	Relay  *relay.Manager
+	Update *update.Service
 
 	mu                  sync.RWMutex
 	roots               map[string]*RootContext // root id -> root context
@@ -152,6 +154,10 @@ func (s *AppContext) GetDirRegistry() *fs.Registry {
 
 func (s *AppContext) GetRelayManager() *relay.Manager {
 	return s.Relay
+}
+
+func (s *AppContext) GetUpdateService() *update.Service {
+	return s.Update
 }
 
 func (s *AppContext) UpsertRoot(path string) (fs.RootInfo, error) {

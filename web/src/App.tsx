@@ -13,6 +13,7 @@ import {
 import { uploadFiles } from "./services/upload";
 import { PluginManager, loadAllPlugins, type PluginInput } from "./plugins/manager";
 import { appPath, appURL, isRelayNodePage } from "./services/base";
+import { triggerUpdate, type UpdateState } from "./services/update";
 
 // 直接导入标准组件
 import { AppShell } from "./layout/AppShell";
@@ -66,6 +67,46 @@ const TREE_SORT_STORAGE_KEY = "mindfs-tree-sort-mode";
 const DIRECTORY_SORT_OVERRIDES_STORAGE_KEY = "mindfs-directory-sort-overrides";
 const FILE_SCROLL_STORAGE_KEY = "mindfs-file-scroll-positions";
 const READ_FILE_TOKEN_PATTERN = /\[read file:\s*[^\]]+\]/i;
+
+function normalizeUpdateState(input: UpdateState | null | undefined): UpdateState {
+  return {
+    current_version: input?.current_version || "",
+    latest_version: input?.latest_version || "",
+    has_update: input?.has_update === true,
+    status: input?.status || "idle",
+    message: input?.message || "",
+    release_url: input?.release_url || "",
+    published_at: input?.published_at || "",
+    last_checked_at: input?.last_checked_at || "",
+    auto_update_supported: input?.auto_update_supported === true,
+  };
+}
+
+function updateButtonLabel(state: UpdateState): string {
+  const status = (state.status || "idle").toLowerCase();
+  switch (status) {
+    case "available":
+      return state.latest_version ? `Update to ${state.latest_version}` : "Update available";
+    case "downloading":
+      return "Downloading...";
+    case "installing":
+      return "Installing...";
+    case "restarting":
+      return "Restarting...";
+    case "failed":
+      return "Update failed";
+    default:
+      return "Up to date";
+  }
+}
+
+function shouldShowUpdateButton(state: UpdateState): boolean {
+  const status = (state.status || "idle").toLowerCase();
+  if (status === "downloading" || status === "installing" || status === "restarting" || status === "failed") {
+    return true;
+  }
+  return state.auto_update_supported === true && state.has_update === true;
+}
 
 function buildFileScrollKey(rootId: string | null | undefined, path: string | null | undefined): string {
   if (!rootId || !path) {
@@ -473,6 +514,8 @@ export function App() {
   const [pluginQuery, setPluginQuery] = useState<Record<string, string>>(() => readURLState().pluginQuery);
   const pluginQueryRef = useRef<Record<string, string>>(readURLState().pluginQuery);
   const [showHiddenFiles, setShowHiddenFiles] = useState(false);
+  const [updateState, setUpdateState] = useState<UpdateState>(() => normalizeUpdateState(null));
+  const [updateSubmitting, setUpdateSubmitting] = useState(false);
 
   const ensureCompletionAudioContext = useCallback((): AudioContext | null => {
     if (typeof window === "undefined") {
@@ -518,6 +561,33 @@ export function App() {
       window.removeEventListener("touchstart", unlockAudio);
     };
   }, [ensureCompletionAudioContext]);
+
+  const handleStartUpdate = useCallback(async () => {
+    const next = normalizeUpdateState(updateState);
+    const status = (next.status || "idle").toLowerCase();
+    if (status === "downloading" || status === "installing" || status === "restarting") {
+      return;
+    }
+    if (next.has_update && status === "available") {
+      const target = next.latest_version ? `v${next.latest_version}` : "the latest version";
+      if (!window.confirm(`Install ${target} now? MindFS will restart after the update finishes.`)) {
+        return;
+      }
+    }
+    setUpdateSubmitting(true);
+    try {
+      setUpdateState(normalizeUpdateState(await triggerUpdate()));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to start update";
+      setUpdateState((prev) => normalizeUpdateState({
+        ...prev,
+        status: "failed",
+        message,
+      }));
+    } finally {
+      setUpdateSubmitting(false);
+    }
+  }, [updateState]);
 
   const playCompletionSound = useCallback(() => {
     const audioContext = ensureCompletionAudioContext();
@@ -2101,6 +2171,9 @@ export function App() {
           break;
         case "file.changed": handleFileChanged(payload); break;
         case "agent.status.changed": setAgentsVersion(v => v + 1); break;
+        case "app.update":
+          setUpdateState(normalizeUpdateState(payload?.state as UpdateState));
+          break;
       }
     });
     void loadSessions(currentRootId, { replace: true });
@@ -2567,8 +2640,12 @@ export function App() {
   }, [relayStatus]);
 
   const relayActionDisabled = !currentRootId || (!relayStatus?.relay_bound && (!relayStatus?.pending_code || !relayStatus?.relay_base_url));
+  const showUpdateButton = shouldShowUpdateButton(updateState);
+  const updateBusy = updateSubmitting || ["downloading", "installing", "restarting"].includes((updateState.status || "").toLowerCase());
+  const updateLabel = updateButtonLabel(updateState);
 
   return (
+    <>
     <AppShell
       leftOpen={isLeftOpen} rightOpen={isRightOpen}
       onCloseLeft={() => setIsLeftOpen(false)} onCloseRight={() => setIsRightOpen(false)}
@@ -2576,6 +2653,43 @@ export function App() {
       rightSidebar={<SessionList sessions={sessions} selectedKey={selectedSession?.key} onSelect={(s) => { handleSelectSession(s); if (isMobile) setIsRightOpen(false); }} onDelete={handleDeleteSession} onLoadOlder={handleLoadOlderSessions} loadingOlder={loadingOlderSessions} hasMore={hasMoreSessions} />}
       main={
         <div style={{ width: "100%", flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", position: "relative" }}>
+          {showUpdateButton ? (
+            <div style={{ position: "absolute", top: "10px", right: "10px", zIndex: 120, display: "flex", alignItems: "center", gap: "8px" }}>
+              <button
+                type="button"
+                onClick={() => { void handleStartUpdate(); }}
+                disabled={updateBusy}
+                title={updateState.message || ""}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  padding: "8px 12px",
+                  borderRadius: "999px",
+                  border: "1px solid rgba(37, 99, 235, 0.25)",
+                  background: updateBusy ? "rgba(37, 99, 235, 0.12)" : "#2563eb",
+                  color: updateBusy ? "#1d4ed8" : "#fff",
+                  boxShadow: "0 10px 24px rgba(15, 23, 42, 0.12)",
+                  cursor: updateBusy ? "default" : "pointer",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                }}
+              >
+                {updateBusy ? (
+                  <span style={{
+                    width: "12px",
+                    height: "12px",
+                    borderRadius: "50%",
+                    border: "2px solid currentColor",
+                    borderRightColor: "transparent",
+                    display: "inline-block",
+                    animation: "mindfs-update-spin 0.9s linear infinite",
+                  }} />
+                ) : null}
+                <span>{updateLabel}</span>
+              </button>
+            </div>
+          ) : null}
           {!isMobile && <div style={{ position: "absolute", top: "10px", left: isMobile ? "10px" : (isLeftOpen ? "-40px" : "10px"), right: isMobile ? "10px" : (isRightOpen ? "-40px" : "10px"), display: "flex", justifyContent: "space-between", pointerEvents: "none", zIndex: 100 }}>
             <button onClick={() => setIsLeftOpen(!isLeftOpen)} style={{ pointerEvents: "auto", background: "var(--content-bg)", border: "1px solid var(--border-color)", borderRadius: "8px", width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: isLeftOpen && !isMobile ? 0 : 1 }}>📁</button>
             <button onClick={() => setIsRightOpen(!isRightOpen)} style={{ pointerEvents: "auto", background: "var(--content-bg)", border: "1px solid var(--border-color)", borderRadius: "8px", width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: isRightOpen && !isMobile ? 0 : 1 }}>🕒</button>
@@ -2601,5 +2715,7 @@ export function App() {
       }} />}
       drawer={<BottomSheet isOpen={isDrawerOpen} onClose={() => setDrawerOpenForRoot(currentRootIdRef.current, false)} onExpand={() => { handleSelectSession(currentSession); setDrawerOpenForRoot(currentRootIdRef.current, false); }}>{drawerSessionSnapshot ? <SessionViewer session={drawerSessionSnapshot} rootId={currentRootId} rootPath={managedRootByIdRef.current[currentRootId || ""]?.root_path || null} interactionMode="drawer" onFileClick={handleDrawerSessionFileClick} /> : <div style={{ padding: "40px", textAlign: "center" }}>点击蓝点或发消息开始</div>}</BottomSheet>}
     />
+    <style>{`@keyframes mindfs-update-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+    </>
   );
 }

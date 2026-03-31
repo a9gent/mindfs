@@ -35,7 +35,7 @@ build-web:
 	cd $(WEB_DIR) && $(NPM) run build
 
 build: build-web
-	$(GO) build -o mindfs ./cli/cmd
+	$(GO) build -ldflags "-X main.version=$(VERSION)" -o mindfs ./cli/cmd
 
 start:
 	$(GO) run ./cli/cmd -web=false -addr $(ADDR) $(ROOT)
