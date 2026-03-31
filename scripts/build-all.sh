@@ -53,6 +53,9 @@ for PLATFORM in "${PLATFORMS[@]}"; do
   if [[ -d "${ROOT}/web/dist" ]]; then
     cp -r "${ROOT}/web/dist" "${ROOT}/${OUT_DIR}/web"
   fi
+  if [[ -f "${ROOT}/agents.json" ]]; then
+    cp "${ROOT}/agents.json" "${ROOT}/${OUT_DIR}/agents.json"
+  fi
 done
 
 # Produce archives

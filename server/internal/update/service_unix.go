@@ -8,7 +8,8 @@ import (
 	"syscall"
 )
 
-func startReplacementProcess(exe string, args []string, stdout, stderr io.Writer) error {
+func startReplacementProcess(currentPID int, exe string, args []string, stdout, stderr io.Writer, pkgDir, prefix string) error {
+	_, _, _ = currentPID, pkgDir, prefix
 	cmdArgs := append([]string{"-c", "sleep 1; exec \"$@\"", "mindfs-restart", exe}, args...)
 	cmd := exec.Command("/bin/sh", cmdArgs...)
 	cmd.Env = append(cmd.Environ(), "MINDFS_INTERNAL_RESTART=1")

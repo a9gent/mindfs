@@ -74,6 +74,15 @@ try {
     Copy-Item -Force $BinSrc (Join-Path $BinDir "mindfs.exe")
     Write-Host "  Binary  -> $(Join-Path $BinDir 'mindfs.exe')"
 
+    # ── Install default agent config ───────────────────────────────────────
+    $AgentsSrc = Join-Path $PkgDir "agents.json"
+    if (Test-Path $AgentsSrc -PathType Leaf) {
+        $ShareDir = Join-Path $Prefix "share\mindfs"
+        New-Item -ItemType Directory -Force -Path $ShareDir | Out-Null
+        Copy-Item -Force $AgentsSrc (Join-Path $ShareDir "agents.json")
+        Write-Host "  Agents  -> $(Join-Path $ShareDir 'agents.json')"
+    }
+
     # ── Install web assets (optional) ───────────────────────────────────────
     $WebSrc = Join-Path $PkgDir "web"
     if (Test-Path $WebSrc -PathType Container) {

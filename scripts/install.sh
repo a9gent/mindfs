@@ -87,6 +87,13 @@ mkdir -p "${PREFIX}/bin"
 install -m 0755 "${PKG_DIR}/mindfs" "${PREFIX}/bin/mindfs"
 echo "  Binary  -> ${PREFIX}/bin/mindfs"
 
+# ── Install default agent config ────────────────────────────────────────────
+if [[ -f "${PKG_DIR}/agents.json" ]]; then
+  mkdir -p "${PREFIX}/share/mindfs"
+  install -m 0644 "${PKG_DIR}/agents.json" "${PREFIX}/share/mindfs/agents.json"
+  echo "  Agents  -> ${PREFIX}/share/mindfs/agents.json"
+fi
+
 # ── Install web assets (optional) ───────────────────────────────────────────
 if [[ -d "${PKG_DIR}/web" ]]; then
   WEB_DEST="${PREFIX}/share/mindfs/web"

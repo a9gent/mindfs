@@ -53,9 +53,20 @@ func LoadConfig(path string) (Config, error) {
 	payload, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return defaultConfig(), nil
+			if fallbackPath, fallbackErr := installedDefaultConfigPath(); fallbackErr == nil {
+				if fallbackPayload, readErr := os.ReadFile(fallbackPath); readErr == nil {
+					payload = fallbackPayload
+				} else if !os.IsNotExist(readErr) {
+					return Config{}, readErr
+				} else {
+					return defaultConfig(), nil
+				}
+			} else {
+				return defaultConfig(), nil
+			}
+		} else {
+			return Config{}, err
 		}
-		return Config{}, err
 	}
 	var cfg Config
 	if err := json.Unmarshal(payload, &cfg); err != nil {
@@ -82,6 +93,14 @@ func defaultConfigPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(configDir, "agents.json"), nil
+}
+
+func installedDefaultConfigPath() (string, error) {
+	installDir, err := configpkg.MindFSInstallDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(installDir, "agents.json"), nil
 }
 
 // defaultConfig returns built-in agent definitions.

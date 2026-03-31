@@ -753,9 +753,7 @@ export function FileTree({
                   style={{
                     width: "34px",
                     border: "none",
-                    background: isUpdateNotesOpen
-                      ? (updateActionDisabled ? "rgba(148, 163, 184, 0.12)" : "rgba(255, 255, 255, 0.14)")
-                      : "transparent",
+                    background: "transparent",
                     color: "inherit",
                     display: "flex",
                     alignItems: "center",

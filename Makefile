@@ -44,6 +44,7 @@ install: build
 	install -d "$(PREFIX)/bin"
 	install -d "$(PREFIX)/share/mindfs"
 	install -m 0755 mindfs "$(PREFIX)/bin/mindfs"
+	install -m 0644 agents.json "$(PREFIX)/share/mindfs/agents.json"
 	rm -rf "$(PREFIX)/share/mindfs/web"
 	cp -R "$(WEB_DIR)/dist" "$(PREFIX)/share/mindfs/web"
 

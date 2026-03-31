@@ -14,3 +14,14 @@ func MindFSConfigDir() (string, error) {
 	}
 	return filepath.Join(base, "mindfs"), nil
 }
+
+// MindFSInstallDir returns the installed shared-data directory for MindFS
+// when the executable lives under PREFIX/bin.
+func MindFSInstallDir() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	prefix := filepath.Dir(filepath.Dir(exe))
+	return filepath.Join(prefix, "share", "mindfs"), nil
+}

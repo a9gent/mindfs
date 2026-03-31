@@ -97,7 +97,7 @@ func main() {
 		return
 	}
 	if *stop {
-		if err := stopService(pidPath); err != nil {
+		if err := stopService(*addr, pidPath); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				fmt.Fprintln(os.Stdout, "mindfs service already stopped")
 				return
@@ -109,7 +109,7 @@ func main() {
 		return
 	}
 	if *restart {
-		if err := stopService(pidPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := stopService(*addr, pidPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
@@ -216,11 +216,11 @@ func main() {
 }
 
 func ensureStateDir() (string, error) {
-	home, err := os.UserHomeDir()
+	base, err := platformStateDir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".local", "share", "mindfs")
+	dir := filepath.Join(base, "mindfs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
@@ -278,7 +278,11 @@ func startBackgroundProcess(logPath string) error {
 }
 
 func writePIDFile(pidPath string) error {
-	return os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644)
+	return writePIDValue(pidPath, os.Getpid())
+}
+
+func writePIDValue(pidPath string, pid int) error {
+	return os.WriteFile(pidPath, []byte(strconv.Itoa(pid)+"\n"), 0o644)
 }
 
 func removePIDFile(pidPath string) {
@@ -300,8 +304,8 @@ func readPIDFile(pidPath string) (int, error) {
 	return pid, nil
 }
 
-func stopService(pidPath string) error {
-	pid, err := readPIDFile(pidPath)
+func stopService(addr, pidPath string) error {
+	pid, err := resolveServicePID(addr, pidPath)
 	if err != nil {
 		return err
 	}
@@ -309,7 +313,11 @@ func stopService(pidPath string) error {
 	if err != nil {
 		return err
 	}
-	if err := proc.Signal(syscall.SIGTERM); err != nil {
+	if err := stopProcess(proc, pid); err != nil {
+		if errors.Is(err, os.ErrProcessDone) {
+			_ = os.Remove(pidPath)
+			return nil
+		}
 		return err
 	}
 	for i := 0; i < 50; i++ {
@@ -323,19 +331,13 @@ func stopService(pidPath string) error {
 }
 
 func printServiceStatus(addr, pidPath, logPath string) error {
-	pid, err := readPIDFile(pidPath)
+	pid, err := resolveServicePID(addr, pidPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintln(os.Stdout, "mindfs status: stopped")
 			return nil
 		}
 		return err
-	}
-	running := processExists(pid) && serverRunning(addr)
-	if !running {
-		fmt.Fprintf(os.Stdout, "mindfs status: stale pid file (%d)\n", pid)
-		fmt.Fprintf(os.Stdout, "log file: %s\n", logPath)
-		return nil
 	}
 	fmt.Fprintln(os.Stdout, "mindfs status: running")
 	fmt.Fprintf(os.Stdout, "pid: %d\n", pid)
@@ -344,16 +346,42 @@ func printServiceStatus(addr, pidPath, logPath string) error {
 	return nil
 }
 
+func resolveServicePID(addr, pidPath string) (int, error) {
+	pid, err := readPIDFile(pidPath)
+	if err == nil {
+		if processExists(pid) {
+			return pid, nil
+		}
+		_ = os.Remove(pidPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return 0, err
+	}
+
+	if strings.TrimSpace(addr) == "" || !serverRunning(addr) {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return 0, err
+		}
+		return 0, os.ErrNotExist
+	}
+
+	pid, err = findListeningMindfsPID(addr)
+	if err != nil {
+		return 0, err
+	}
+	if pid <= 0 {
+		return 0, os.ErrNotExist
+	}
+	if writeErr := writePIDValue(pidPath, pid); writeErr != nil {
+		return 0, writeErr
+	}
+	return pid, nil
+}
+
 func processExists(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = proc.Signal(syscall.Signal(0))
-	return err == nil
+	return processExistsPlatform(pid)
 }
 
 func serverRunning(addr string) bool {

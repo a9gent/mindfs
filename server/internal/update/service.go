@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -155,7 +156,7 @@ func (s *Service) CheckNow(ctx context.Context) {
 	}
 	latest := normalizeVersion(release.TagName)
 	current := normalizeVersion(s.current)
-	hasUpdate := latest != "" && latest != current
+	hasUpdate := isNewerVersion(latest, current)
 	log.Printf("[update] check.result repo=%s current=%s latest=%s has_update=%t", s.repo, current, latest, hasUpdate)
 	s.updateStatus(func(st *Status) {
 		st.CurrentVersion = s.current
@@ -254,6 +255,16 @@ func (s *Service) runUpdate(ctx context.Context, version string) {
 		s.fail(err)
 		return
 	}
+	if runtime.GOOS == "windows" {
+		s.updateStatus(func(st *Status) {
+			st.Status = "restarting"
+			st.Message = "Restarting service..."
+		})
+		if err := s.restartInstalledBinary(pkgDir); err != nil {
+			s.fail(err)
+		}
+		return
+	}
 	if err := s.installPackage(pkgDir); err != nil {
 		s.fail(err)
 		return
@@ -263,7 +274,7 @@ func (s *Service) runUpdate(ctx context.Context, version string) {
 		st.Status = "restarting"
 		st.Message = "Restarting service..."
 	})
-	if err := s.restartInstalledBinary(); err != nil {
+	if err := s.restartInstalledBinary(""); err != nil {
 		s.fail(err)
 		return
 	}
@@ -376,6 +387,9 @@ func (s *Service) installPackage(pkgDir string) error {
 	if _, err := os.Stat(srcBin); err != nil {
 		return fmt.Errorf("updated binary missing: %w", err)
 	}
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	dstBin := filepath.Join(prefix, "bin", binName)
 	if err := os.MkdirAll(filepath.Dir(dstBin), 0o755); err != nil {
 		return err
@@ -393,19 +407,30 @@ func (s *Service) installPackage(pkgDir string) error {
 			return err
 		}
 	}
+	srcAgents := filepath.Join(pkgDir, "agents.json")
+	if info, err := os.Stat(srcAgents); err == nil && !info.IsDir() {
+		dstAgents := filepath.Join(prefix, "share", "mindfs", "agents.json")
+		if err := os.MkdirAll(filepath.Dir(dstAgents), 0o755); err != nil {
+			return err
+		}
+		if err := replaceFile(srcAgents, dstAgents, 0o644); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func (s *Service) restartInstalledBinary() error {
-	if runtime.GOOS == "windows" {
-		return errors.New("auto restart is not supported on windows")
-	}
+func (s *Service) restartInstalledBinary(pkgDir string) error {
 	exe := s.executable
 	if strings.TrimSpace(exe) == "" {
 		return errors.New("current executable path unavailable")
 	}
+	prefix, err := s.installPrefix()
+	if err != nil {
+		return err
+	}
 	log.Printf("[update] restart.begin exe=%s args=%q", exe, s.args)
-	if err := startReplacementProcess(exe, s.args, os.Stdout, os.Stderr); err != nil {
+	if err := startReplacementProcess(os.Getpid(), exe, s.args, os.Stdout, os.Stderr, pkgDir, prefix); err != nil {
 		return err
 	}
 	go func() {
@@ -416,9 +441,6 @@ func (s *Service) restartInstalledBinary() error {
 }
 
 func (s *Service) canAutoUpdate() bool {
-	if runtime.GOOS == "windows" {
-		return false
-	}
 	if strings.TrimSpace(s.executable) == "" {
 		return false
 	}
@@ -431,9 +453,6 @@ func (s *Service) canAutoUpdate() bool {
 }
 
 func (s *Service) unsupportedMessage() string {
-	if runtime.GOOS == "windows" {
-		return "Auto update is currently unsupported on Windows."
-	}
 	base := strings.ToLower(filepath.Base(s.executable))
 	if base != "mindfs" && base != "mindfs.exe" {
 		return "Auto update is only available for installed mindfs release binaries."
@@ -457,6 +476,73 @@ func normalizeVersion(v string) string {
 	v = strings.TrimSpace(v)
 	v = strings.TrimPrefix(v, "v")
 	return v
+}
+
+func isNewerVersion(latest, current string) bool {
+	latestParts, latestOK := parseVersionParts(latest)
+	if !latestOK {
+		return false
+	}
+	currentParts, currentOK := parseVersionParts(current)
+	if !currentOK {
+		return true
+	}
+	maxLen := len(latestParts)
+	if len(currentParts) > maxLen {
+		maxLen = len(currentParts)
+	}
+	for i := 0; i < maxLen; i++ {
+		var latestPart, currentPart int
+		if i < len(latestParts) {
+			latestPart = latestParts[i]
+		}
+		if i < len(currentParts) {
+			currentPart = currentParts[i]
+		}
+		if latestPart > currentPart {
+			return true
+		}
+		if latestPart < currentPart {
+			return false
+		}
+	}
+	return false
+}
+
+func parseVersionParts(v string) ([]int, bool) {
+	v = normalizeVersion(v)
+	if v == "" {
+		return nil, false
+	}
+	end := 0
+	for end < len(v) {
+		ch := v[end]
+		if (ch >= '0' && ch <= '9') || ch == '.' {
+			end++
+			continue
+		}
+		break
+	}
+	if end == 0 {
+		return nil, false
+	}
+	core := strings.Trim(v[:end], ".")
+	if core == "" {
+		return nil, false
+	}
+	segments := strings.Split(core, ".")
+	parts := make([]int, 0, len(segments))
+	for _, segment := range segments {
+		if segment == "" {
+			return nil, false
+		}
+		value, err := strconv.Atoi(segment)
+		if err != nil {
+			return nil, false
+		}
+		parts = append(parts, value)
+	}
+	return parts, len(parts) > 0
 }
 
 func firstNonEmpty(values ...string) string {
