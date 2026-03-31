@@ -9,21 +9,21 @@ ROOT ?= .
 help:
 	@printf "%s\n" \
 		"Targets:" \
-		"  make dev          # backend + Vite dev server (dual port)" \
+		"  make dev          # backend + Vite dev server (development mode)" \
 		"  make dev-backend  # backend only on $(ADDR)" \
 		"  make dev-web      # Vite dev server only" \
 		"  make build-web    # build web assets into web/dist" \
-		"  make build        # build web assets and backend binary" \
+		"  make build        # build web assets and CLI binary" \
 		"  make build-all    # cross-compile for all platforms into dist/" \
 		"  make dist-clean   # remove dist/ directory" \
-		"  make start        # single-port run with built web assets" \
-		"  make start-server # single-port run via backend entrypoint" \
+		"  make start        # single-port run with built static assets" \
+		"  make start-server # backend entrypoint serving built static assets" \
 		"  make test         # run Go tests" \
 		"  make tag TAG=v1.2.3  # create and push a git tag" \
 		"  make release         # build-all then create GitHub release (requires gh)"
 
 dev:
-	$(GO) run ./cli/cmd -addr $(ADDR) $(ROOT)
+	$(GO) run ./cli/cmd -web=true -addr $(ADDR) $(ROOT)
 
 dev-backend:
 	$(GO) run ./server/cmd/mindfs-server -addr $(ADDR)
@@ -71,6 +71,7 @@ dist-clean:
 tag:
 	@test -n "$(TAG)" || (echo "Usage: make tag TAG=v1.2.3" >&2; exit 1)
 	@echo "Tagging $(TAG)"
+	git push origin main
 	git tag $(TAG)
 	git push origin $(TAG)
 

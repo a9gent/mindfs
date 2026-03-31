@@ -37,13 +37,13 @@ func main() {
 		fmt.Fprintf(out, "\nExamples:\n")
 		fmt.Fprintf(out, "  mindfs\n")
 		fmt.Fprintf(out, "  mindfs /path/to/project\n")
-		fmt.Fprintf(out, "  mindfs -web=false\n")
+		fmt.Fprintf(out, "  mindfs -web=true\n")
 		fmt.Fprintf(out, "  mindfs -addr :9000 /path/to/project\n")
 		fmt.Fprintf(out, "  mindfs -remove /path/to/project\n")
 	}
 
 	addr := flag.String("addr", ":7331", "listen address")
-	web := flag.Bool("web", true, "start web dev server")
+	web := flag.Bool("web", false, "start the web dev server (development only)")
 	webDir := flag.String("web-dir", "web", "web project directory")
 	staticDir := flag.String("static-dir", "web/dist", "directory for serving built web assets on the backend port")
 	noRelayer := flag.Bool("no-relayer", false, "disable relay integration")
