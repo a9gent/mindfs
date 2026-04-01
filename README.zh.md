@@ -6,6 +6,17 @@
 
 ---
 
+## 界面预览
+
+<p align="center">
+  <img src="docs/images/mindfs-desktop.png" alt="MindFS 桌面端界面" width="72%" />
+</p>
+<p align="center">
+  <img src="docs/images/mindfs-mobile.png" alt="MindFS 移动端界面" width="28%" />
+</p>
+
+---
+
 ## 特性
 
 ### Agent 会话

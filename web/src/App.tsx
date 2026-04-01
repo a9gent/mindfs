@@ -139,6 +139,38 @@ function hasSessionExchanges(session: Session | null | undefined): boolean {
   return Array.isArray(session?.exchanges) && session.exchanges.length > 0;
 }
 
+function openPendingPopup(): Window | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const popup = window.open("", "_blank");
+  if (!popup) {
+    return null;
+  }
+  try {
+    popup.document.title = "Opening Relayer...";
+    popup.document.body.innerHTML = "<p style=\"font-family: system-ui, sans-serif; padding: 16px; color: #111827;\">Opening Relayer...</p>";
+  } catch {
+  }
+  return popup;
+}
+
+function navigatePopup(popup: Window | null, url: string): void {
+  if (!popup || popup.closed) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  try {
+    popup.opener = null;
+  } catch {
+  }
+  try {
+    popup.location.replace(url);
+  } catch {
+    popup.location.href = url;
+  }
+}
+
 function relayNodeIdFromPathname(pathname: string): string {
   const match = /^\/n\/([^/]+)/.exec(String(pathname || ""));
   return match?.[1] || "";
@@ -2619,22 +2651,25 @@ export function App() {
     if (!currentRootId) {
       return;
     }
+    const pendingPopup = openPendingPopup();
     const latestStatus = await refreshRelayStatus();
     const nextStatus = latestStatus || relayStatus;
     if (!nextStatus) {
+      pendingPopup?.close();
       return;
     }
     const nodeURL = String(nextStatus?.node_url || "");
     if (nextStatus?.relay_bound && nodeURL) {
       const target = new URL(nodeURL, window.location.origin);
       target.searchParams.set("root", currentRootId);
-      window.open(target.toString(), "_blank", "noopener,noreferrer");
+      navigatePopup(pendingPopup, target.toString());
       return;
     }
     const pendingCode = String(nextStatus?.pending_code || "");
     const nodeName = String(nextStatus?.node_name || "");
     const relayBaseURL = String(nextStatus?.relay_base_url || "");
     if (!pendingCode || !relayBaseURL) {
+      pendingPopup?.close();
       return;
     }
     const target = new URL("/bind", relayBaseURL);
@@ -2643,7 +2678,7 @@ export function App() {
     if (nodeName) {
       target.searchParams.set("node_name", nodeName);
     }
-    window.open(target.toString(), "_blank", "noopener,noreferrer");
+    navigatePopup(pendingPopup, target.toString());
   }, [currentRootId, refreshRelayStatus, relayStatus]);
 
   const relayActionLabel = useMemo(() => {

@@ -71,7 +71,6 @@ const footerStyle: React.CSSProperties = {
   justifyContent: "center",
   background: "var(--content-bg)",
   zIndex: 100,
-  paddingBottom: "env(safe-area-inset-bottom, 0px)",
   minWidth: 0,
 };
 
@@ -123,6 +122,7 @@ export function AppShell({
     position: "relative",
     overflow: "hidden",
     isolation: "isolate",
+    boxSizing: "border-box",
     transition: "grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
   };
 
@@ -191,7 +191,6 @@ export function AppShell({
             ? {
                 ...footerStyle,
                 flexShrink: 0,
-                paddingBottom: "env(safe-area-inset-bottom, 0px)",
               }
             : footerStyle
         }
