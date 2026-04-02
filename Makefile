@@ -10,7 +10,7 @@ PREFIX ?= $(HOME)/.local
 help:
 	@printf "%s\n" \
 		"Targets:" \
-		"  make dev          # backend + Vite dev server (development mode)" \
+		"  make dev          # run mindfs on $(ADDR)" \
 		"  make dev-backend  # backend only on $(ADDR)" \
 		"  make dev-web      # Vite dev server only" \
 		"  make build-web    # build web assets into web/dist" \
@@ -19,14 +19,14 @@ help:
 		"  make uninstall    # remove installed binary and static assets from $(PREFIX)" \
 		"  make build-all    # cross-compile for all platforms into dist/" \
 		"  make dist-clean   # remove dist/ directory" \
-		"  make start        # single-port run with built static assets" \
+		"  make start        # run mindfs on $(ADDR) with built static assets" \
 		"  make start-server # backend entrypoint serving built static assets" \
 		"  make test         # run Go tests" \
 		"  make tag TAG=v1.2.3  # create and push a git tag" \
 		"  make release TAG=v1.2.3  # build-all then create GitHub release using release-notes/TAG.md"
 
 dev:
-	$(GO) run ./cli/cmd -web=true -addr $(ADDR) $(ROOT)
+	$(GO) run ./cli/cmd -addr $(ADDR) $(ROOT)
 
 dev-backend:
 	$(GO) run ./server/cmd/mindfs-server -addr $(ADDR)
@@ -53,7 +53,7 @@ uninstall:
 	rm -rf "$(PREFIX)/share/mindfs"
 
 start:
-	$(GO) run ./cli/cmd -web=false -addr $(ADDR) $(ROOT)
+	$(GO) run ./cli/cmd -addr $(ADDR) $(ROOT)
 
 start-server:
 	$(GO) run ./server/cmd/mindfs-server -addr $(ADDR)

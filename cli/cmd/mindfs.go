@@ -30,6 +30,8 @@ var version = "dev"
 const (
 	daemonEnvKey          = "MINDFS_DAEMON"
 	internalRestartEnvKey = "MINDFS_INTERNAL_RESTART"
+	maxLogSizeBytes       = 10 * 1024 * 1024
+	maxLogBackups         = 3
 )
 
 func main() {
@@ -47,15 +49,11 @@ func main() {
 		fmt.Fprintf(out, "  mindfs --foreground\n")
 		fmt.Fprintf(out, "  mindfs --status\n")
 		fmt.Fprintf(out, "  mindfs --stop\n")
-		fmt.Fprintf(out, "  mindfs -web=true\n")
 		fmt.Fprintf(out, "  mindfs -addr :9000 /path/to/project\n")
 		fmt.Fprintf(out, "  mindfs -remove /path/to/project\n")
 	}
 
 	addr := flag.String("addr", ":7331", "listen address")
-	web := flag.Bool("web", false, "start the web dev server (development only)")
-	webDir := flag.String("web-dir", "web", "web project directory")
-	staticDir := flag.String("static-dir", "web/dist", "directory for serving built web assets on the backend port")
 	noRelayer := flag.Bool("no-relayer", false, "disable relay integration")
 	foreground := flag.Bool("foreground", false, "run in the foreground instead of as a background service")
 	stop := flag.Bool("stop", false, "stop the background mindfs service")
@@ -132,7 +130,7 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
-		if err := openTarget(*addr, *web, rootInfo.ID); err != nil {
+		if err := openTarget(*addr, rootInfo.ID); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 		}
 		return
@@ -154,7 +152,7 @@ func main() {
 		}
 		fmt.Fprintln(os.Stdout, "mindfs service started")
 		fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
-		if err := openTarget(*addr, *web, rootInfo.ID); err != nil {
+		if err := openTarget(*addr, rootInfo.ID); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 		}
 		fmt.Fprintf(os.Stdout, "logs: %s\n", logPath)
@@ -172,7 +170,6 @@ func main() {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- app.Start(ctx, *addr, app.StartOptions{
-			StaticDir: *staticDir,
 			NoRelayer: *noRelayer,
 			Version:   version,
 			Args:      os.Args[1:],
@@ -191,15 +188,8 @@ func main() {
 	}
 	fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
 
-	if *web {
-		if err := startWeb(ctx, *webDir); err != nil {
-			cancel()
-			fmt.Fprintln(os.Stderr, err.Error())
-			os.Exit(1)
-		}
-	}
 	if !internalRestart && (*foreground || !daemonMode) {
-		if err := openTarget(*addr, *web, rootInfo.ID); err != nil {
+		if err := openTarget(*addr, rootInfo.ID); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 		}
 	}
@@ -233,7 +223,7 @@ func servicePaths(stateDir, addr string) (string, string, error) {
 		return "", "", err
 	}
 	key := sanitizeAddrForFile(addr)
-	return filepath.Join(stateDir, "mindfs-"+key+".pid"), filepath.Join(logDir, "mindfs-"+key+".log"), nil
+	return filepath.Join(stateDir, "mindfs-"+key+".pid"), filepath.Join(logDir, "mindfs.log"), nil
 }
 
 func sanitizeAddrForFile(addr string) string {
@@ -260,6 +250,9 @@ func startBackgroundProcess(logPath string) error {
 	if err != nil {
 		return err
 	}
+	if err := rotateLogIfNeeded(logPath, maxLogSizeBytes, maxLogBackups); err != nil {
+		return err
+	}
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
@@ -275,6 +268,41 @@ func startBackgroundProcess(logPath string) error {
 		return err
 	}
 	return logFile.Close()
+}
+
+func rotateLogIfNeeded(path string, maxSize int64, backups int) error {
+	if strings.TrimSpace(path) == "" || maxSize <= 0 || backups < 1 {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if info.Size() < maxSize {
+		return nil
+	}
+	oldest := rotatedLogPath(path, backups)
+	if err := os.Remove(oldest); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for i := backups - 1; i >= 1; i-- {
+		src := rotatedLogPath(path, i)
+		dst := rotatedLogPath(path, i+1)
+		if err := os.Rename(src, dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if err := os.Rename(path, rotatedLogPath(path, 1)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func rotatedLogPath(path string, index int) string {
+	return fmt.Sprintf("%s.%d", path, index)
 }
 
 func writePIDFile(pidPath string) error {
@@ -496,7 +524,7 @@ func fetchRelayStatus(addr string) (relayStatusResponse, error) {
 	return out, nil
 }
 
-func openTarget(addr string, web bool, rootID string) error {
+func openTarget(addr string, rootID string) error {
 	status, err := fetchRelayStatus(addr)
 	if err != nil {
 		return err
@@ -514,16 +542,13 @@ func openTarget(addr string, web bool, rootID string) error {
 		}
 		target = u.String()
 	} else {
-		target = localOpenURL(addr, web, rootID)
+		target = localOpenURL(addr, rootID)
 	}
 	return openBrowser(target)
 }
 
-func localOpenURL(addr string, web bool, rootID string) string {
+func localOpenURL(addr string, rootID string) string {
 	base := addrToURL(addr, "")
-	if web {
-		base = "http://localhost:5173"
-	}
 	u, err := url.Parse(base)
 	if err != nil {
 		return base
@@ -579,19 +604,4 @@ func waitForServer(addr string, timeout time.Duration) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return fmt.Errorf("server did not become ready on %s within %s", addr, timeout)
-}
-
-func startWeb(ctx context.Context, dir string) error {
-	cmd := exec.CommandContext(ctx, "npm", "run", "dev")
-	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go func() {
-		_ = cmd.Wait()
-	}()
-	return nil
 }

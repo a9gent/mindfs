@@ -387,7 +387,7 @@ func (s *Service) SuggestSessionName(ctx context.Context, in SuggestSessionNameI
 	if err != nil {
 		log.Printf("[session-name] suggest.error root=%s session=%s agent=%s err=%v", in.RootID, in.SessionKey, agentName, err)
 		if prober := s.Registry.GetProber(); prober != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-			prober.ReportFailure(agentName, err)
+			prober.ReportRuntimeFailure(agentName, err)
 		}
 		return nil, nil
 	}
@@ -719,7 +719,7 @@ func (s *Service) ensureAgentSession(
 	sess, err := pool.GetOrCreate(openCtx, openInput)
 	if err != nil {
 		if prober := s.Registry.GetProber(); prober != nil {
-			prober.ReportFailure(agentName, err)
+			prober.ReportRuntimeFailure(agentName, err)
 		}
 		log.Printf("[session/model] open.error session=%s agent=%s model=%q pool_session=%s err=%v", current.Key, agentName, nextModel, poolSessionKey, err)
 		return nil, err
@@ -830,7 +830,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	prober := s.Registry.GetProber()
 	if sendErr != nil && !isCanceledTurnError(sendErr) {
 		if prober != nil {
-			prober.ReportFailure(in.Agent, sendErr)
+			prober.ReportRuntimeFailure(in.Agent, sendErr)
 		}
 		return sendErr
 	} else if prober != nil {

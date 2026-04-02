@@ -21,6 +21,8 @@ type Status struct {
 	Available      bool                     `json:"available"`
 	Version        string                   `json:"version,omitempty"`
 	Error          string                   `json:"error,omitempty"`
+	RuntimeError   string                   `json:"-"`
+	ProbeError     string                   `json:"-"`
 	LastProbe      time.Time                `json:"last_probe"`
 	CurrentModelID string                   `json:"current_model_id,omitempty"`
 	Models         []agenttypes.ModelInfo   `json:"models,omitempty"`
@@ -35,6 +37,13 @@ const (
 	probeModelListTimeout   = 30 * time.Second
 	probeCommandListTimeout = 30 * time.Second
 	maxProbeConcurrency     = 4
+)
+
+type probePhase string
+
+const (
+	probePhaseInitial    probePhase = "initial"
+	probePhaseBackground probePhase = "background"
 )
 
 // Prober 管理 Agent 可用性探测
@@ -116,8 +125,8 @@ func (p *Prober) ProbeAll(ctx context.Context) []Status {
 	return statuses
 }
 
-// ReportFailure marks an agent as unavailable due to runtime interaction/probe failure.
-func (p *Prober) ReportFailure(name string, err error) {
+// ReportRuntimeFailure marks an agent as unavailable due to a real user-facing runtime failure.
+func (p *Prober) ReportRuntimeFailure(name string, err error) {
 	msg := "unknown failure"
 	if err != nil {
 		msg = err.Error()
@@ -127,7 +136,25 @@ func (p *Prober) ReportFailure(name string, err error) {
 	if ok {
 		installed = current.Installed
 	}
-	p.setStatus(unavailableStatus(name, installed, msg, time.Now().UTC()))
+	status := unavailableStatus(name, installed, current.ProbeError, time.Now().UTC())
+	status.RuntimeError = msg
+	p.setStatus(status)
+}
+
+// ReportProbeFailure marks an agent as unavailable due to background probe failure.
+func (p *Prober) ReportProbeFailure(name string, err error) {
+	msg := "unknown failure"
+	if err != nil {
+		msg = err.Error()
+	}
+	installed := true
+	current, ok := p.GetStatus(name)
+	if ok {
+		installed = current.Installed
+	}
+	status := unavailableStatus(name, installed, msg, time.Now().UTC())
+	status.RuntimeError = current.RuntimeError
+	p.setStatus(status)
 }
 
 // ReportSuccess marks an agent as available due to successful runtime interaction.
@@ -137,6 +164,8 @@ func (p *Prober) ReportSuccess(name string) {
 	st.Installed = true
 	st.Available = true
 	st.Error = ""
+	st.RuntimeError = ""
+	st.ProbeError = ""
 	st.LastProbe = time.Now().UTC()
 	p.setStatus(st)
 }
@@ -207,15 +236,15 @@ func probeConfiguredAgentWithPool(ctx context.Context, name string, def Definiti
 	if !status.Installed {
 		return status
 	}
-	return probeInstalledAgentWithPool(ctx, name, def, pool, status)
+	return probeInstalledAgentWithPool(ctx, name, def, pool, status, probePhaseInitial)
 }
 
-func probeInstalledAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, status Status) Status {
+func probeInstalledAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, status Status, phase probePhase) Status {
 	status.Installed = true
 
 	tmpRoot, err := os.MkdirTemp("", "mindfs-agent-probe-*")
 	if err != nil {
-		status.Error = err.Error()
+		status.ProbeError = err.Error()
 		return status
 	}
 	defer os.RemoveAll(tmpRoot)
@@ -231,32 +260,41 @@ func probeInstalledAgentWithPool(ctx context.Context, name string, def Definitio
 		time.Now().UTC().Format("20060102-150405"),
 	)
 	defer pool.Close(sessionKey)
-	sessionCtx, sessionCancel := context.WithTimeout(ctx, probeSessionTimeout)
+	openCtx := ctx
+	sessionCancel := func() {}
+	if phase == probePhaseInitial {
+		openCtx, sessionCancel = context.WithTimeout(ctx, probeSessionTimeout)
+	}
 	defer sessionCancel()
-	sess, err := pool.GetOrCreate(sessionCtx, agenttypes.OpenSessionInput{
+	sess, err := pool.GetOrCreate(openCtx, agenttypes.OpenSessionInput{
 		SessionKey: sessionKey,
 		AgentName:  name,
 		Probe:      true,
 		RootPath:   tmpRoot,
 	})
 	if err != nil {
-		status.Error = err.Error()
+		status.ProbeError = err.Error()
 		return status
 	}
 
-	interactionCtx, interactionCancel := context.WithTimeout(ctx, probeInteractionTimeout)
+	interactionCtx := ctx
+	interactionCancel := func() {}
+	if phase == probePhaseInitial {
+		interactionCtx, interactionCancel = context.WithTimeout(ctx, probeInteractionTimeout)
+	}
 	defer interactionCancel()
 	if err := VerifySessionInteraction(interactionCtx, sess); err != nil {
 		if hint, ok := pool.KillAgentProcess(name, 750*time.Millisecond); ok {
-			status.Error = hint
+			status.ProbeError = hint
 			return status
 		}
-		status.Error = err.Error()
+		status.ProbeError = err.Error()
 		return status
 	}
 
 	status.Available = true
 	status.Error = ""
+	status.ProbeError = ""
 	populateProbeModels(ctx, sess, &status)
 	populateProbeCommands(ctx, sess, &status)
 	return status
@@ -314,6 +352,12 @@ func statusChanged(prev Status, next Status) bool {
 	if prev.Error != next.Error {
 		return true
 	}
+	if prev.RuntimeError != next.RuntimeError {
+		return true
+	}
+	if prev.ProbeError != next.ProbeError {
+		return true
+	}
 	if prev.CurrentModelID != next.CurrentModelID {
 		return true
 	}
@@ -360,26 +404,27 @@ func (p *Prober) setStatus(status Status) {
 
 func unavailableStatus(name string, installed bool, errMsg string, ts time.Time) Status {
 	return Status{
-		Name:      name,
-		Installed: installed,
-		Available: false,
-		Error:     errMsg,
-		LastProbe: ts,
+		Name:       name,
+		Installed:  installed,
+		Available:  false,
+		Error:      errMsg,
+		ProbeError: errMsg,
+		LastProbe:  ts,
 	}
 }
 
 func probeInstallStatus(name string, def Definition, ts time.Time) Status {
 	status := unavailableStatus(name, false, "", ts)
 	if def.Command == "" {
-		status.Error = "command required"
+		status.ProbeError = "command required"
 		return status
 	}
 	if _, err := exec.LookPath(def.Command); err != nil {
-		status.Error = err.Error()
+		status.ProbeError = err.Error()
 		return status
 	}
 	status.Installed = true
-	status.Error = "probe pending"
+	status.ProbeError = "probe pending"
 	return status
 }
 
@@ -416,6 +461,16 @@ func populateProbeCommands(ctx context.Context, sess agenttypes.Session, status 
 }
 
 func normalizeStatus(status Status) Status {
+	status.RuntimeError = strings.TrimSpace(status.RuntimeError)
+	status.ProbeError = strings.TrimSpace(status.ProbeError)
+	switch {
+	case status.RuntimeError != "":
+		status.Error = status.RuntimeError
+	case status.ProbeError != "":
+		status.Error = status.ProbeError
+	default:
+		status.Error = strings.TrimSpace(status.Error)
+	}
 	if status.Available {
 		return status
 	}
@@ -476,7 +531,7 @@ func (p *Prober) probeInstalledAgents(ctx context.Context, defs []Definition) {
 	}
 
 	p.runDefinitionsConcurrently(defs, func(_ int, def Definition) {
-		status := probeInstalledAgentWithPool(ctx, def.Name, def, p.pool, probeInstallStatus(def.Name, def, time.Now().UTC()))
+		status := probeInstalledAgentWithPool(ctx, def.Name, def, p.pool, probeInstallStatus(def.Name, def, time.Now().UTC()), probePhaseBackground)
 		p.setStatus(status)
 	})
 }

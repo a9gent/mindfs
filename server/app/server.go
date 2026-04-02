@@ -15,7 +15,6 @@ import (
 )
 
 type StartOptions struct {
-	StaticDir    string
 	NoRelayer    bool
 	RelayBaseURL string
 	Version      string
@@ -55,7 +54,7 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	}
 	httpHandler := &api.HTTPHandler{
 		AppContext: services,
-		StaticDir:  resolveStaticDir(opts.StaticDir),
+		StaticDir:  resolveStaticDir(),
 	}
 	wsHandler := &api.WSHandler{AppContext: services}
 
@@ -90,10 +89,11 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	return server.ListenAndServe()
 }
 
-func resolveStaticDir(staticDir string) string {
-	if staticDir != "" {
-		if info, err := os.Stat(staticDir); err == nil && info.IsDir() {
-			return staticDir
+func resolveStaticDir() string {
+	candidates := []string{"web/dist"}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
 		}
 	}
 	if exe, err := os.Executable(); err == nil {

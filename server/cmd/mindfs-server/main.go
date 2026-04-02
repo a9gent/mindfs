@@ -15,7 +15,6 @@ var version = "dev"
 
 func main() {
 	addr := flag.String("addr", ":7331", "listen address")
-	staticDir := flag.String("static-dir", "web/dist", "directory for serving built web assets")
 	noRelayer := flag.Bool("no-relayer", false, "disable relay integration")
 	flag.Parse()
 
@@ -23,7 +22,6 @@ func main() {
 	defer cancel()
 
 	if err := app.Start(ctx, *addr, app.StartOptions{
-		StaticDir: *staticDir,
 		NoRelayer: *noRelayer,
 		Version:   version,
 		Args:      os.Args[1:],

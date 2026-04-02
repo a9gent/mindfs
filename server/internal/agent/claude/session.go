@@ -285,7 +285,7 @@ func (s *session) consumeMessages() {
 		}
 	}
 
-	s.failPendingTurns(errors.New("claude stream ended"))
+	s.failPendingTurns(errors.New("response stream ended unexpectedly"))
 }
 
 func (s *session) handlePartialAssistantMessage(rawEvent json.RawMessage) {
@@ -764,7 +764,7 @@ func resultErr(msg claudeagent.ResultMessage) error {
 	if len(msg.Errors) > 0 {
 		return errors.New(strings.Join(msg.Errors, "; "))
 	}
-	if strings.TrimSpace(msg.Result) != "" && strings.EqualFold(msg.Status, "error") {
+	if strings.TrimSpace(msg.Result) != "" && (msg.IsError || strings.EqualFold(msg.Status, "error")) {
 		return errors.New(msg.Result)
 	}
 	if strings.TrimSpace(msg.Subtype) != "" {
