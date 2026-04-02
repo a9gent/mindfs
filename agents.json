@@ -1,5 +1,5 @@
 {
-  "relayBaseURL": "https://relay.mindfs.com",
+  "relayBaseURL": "https://relay.a9gent.com",
   "agents": [
     {
       "name": "gemini",
