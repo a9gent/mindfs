@@ -1,5 +1,7 @@
 # MindFS
 
+[English](./README.md) | [简体中文](./README.zh.md)
+
 > **AI Agent 远程访问网关 · 结果可视化**
 
 通过 MindFS 随时随地访问个人 ai agent 和工作站数据。
@@ -9,10 +11,10 @@
 ## 界面预览
 
 <p align="center">
-  <img src="docs/images/mindfs-desktop.png" alt="MindFS 桌面端界面" width="72%" />
+  <img src="docs/images/mindfs-desktop.webp" alt="MindFS 桌面端界面" width="72%" />
 </p>
 <p align="center">
-  <img src="docs/images/mindfs-mobile.png" alt="MindFS 移动端界面" width="28%" />
+  <img src="docs/images/mindfs-mobile.webp" alt="MindFS 移动端界面" width="28%" />
 </p>
 
 ---

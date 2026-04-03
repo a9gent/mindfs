@@ -73,6 +73,16 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.ctx = nil
 		return err
 	}
+	if relayBaseMismatch(m.relayBase, creds.Relay.Endpoint) {
+		if clearErr := m.service.store.Clear(); clearErr != nil {
+			m.started = false
+			m.ctx = nil
+			return clearErr
+		}
+		log.Printf("[relay] configured relay base changed, clearing stored credentials and requiring rebind")
+		m.lastError = "relay base changed, rebinding required"
+		creds = Credentials{}
+	}
 	if m.noRelayer {
 		return nil
 	}
@@ -253,6 +263,15 @@ func (m *Manager) resolveRelayBaseLocked() string {
 		return ""
 	}
 	return endpointBaseURL(creds.Relay.Endpoint)
+}
+
+func relayBaseMismatch(configuredBase, endpoint string) bool {
+	configuredBase = strings.TrimSuffix(strings.TrimSpace(configuredBase), "/")
+	endpointBase := strings.TrimSuffix(strings.TrimSpace(endpointBaseURL(endpoint)), "/")
+	if configuredBase == "" || endpointBase == "" {
+		return false
+	}
+	return configuredBase != endpointBase
 }
 
 func defaultIfEmpty(value, fallback string) string {

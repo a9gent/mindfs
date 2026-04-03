@@ -1,5 +1,7 @@
 # MindFS
 
+[English](./README.md) | [简体中文](./README.zh.md)
+
 > **AI Agent Remote Access Gateway · Result Visualization**
 
 Access your personal AI agents and workstation data anywhere, anytime through MindFS.
@@ -9,10 +11,10 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 ## Screenshots
 
 <p align="center">
-  <img src="docs/images/mindfs-desktop.png" alt="MindFS desktop UI" width="72%" />
+  <img src="docs/images/mindfs-desktop.webp" alt="MindFS desktop UI" width="72%" />
 </p>
 <p align="center">
-  <img src="docs/images/mindfs-mobile.png" alt="MindFS mobile UI" width="28%" />
+  <img src="docs/images/mindfs-mobile.webp" alt="MindFS mobile UI" width="28%" />
 </p>
 
 ---

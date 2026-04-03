@@ -27,24 +27,31 @@ function Get-Arch {
 $OS   = "windows"
 $Arch = Get-Arch
 
+function Normalize-Tag([string]$Tag) {
+    if (-not $Tag) { return "" }
+    return "v" + ($Tag -replace '^v', '')
+}
+
 # ── Resolve version from GitHub API if not specified ───────────────────────
 if (-not $Version) {
     Write-Host "Fetching latest release version..."
     $apiUrl  = "https://api.github.com/repos/$Repo/releases/latest"
     $release = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing
-    $Version = $release.tag_name -replace '^v', ''
+    $Version = $release.tag_name
     if (-not $Version) {
         Write-Error "Could not determine latest version. Use -Version to specify."
         exit 1
     }
 }
 
-Write-Host "Installing mindfs v$Version for $OS/$Arch"
+$Version = Normalize-Tag $Version
+
+Write-Host "Installing mindfs $Version for $OS/$Arch"
 Write-Host "  Prefix: $Prefix"
 
 # ── Download ────────────────────────────────────────────────────────────────
 $Filename = "mindfs_${Version}_${OS}_${Arch}.zip"
-$Url      = "https://github.com/$Repo/releases/download/v$Version/$Filename"
+$Url      = "https://github.com/$Repo/releases/download/$Version/$Filename"
 $TmpDir   = Join-Path $env:TEMP ("mindfs_install_" + [System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
 

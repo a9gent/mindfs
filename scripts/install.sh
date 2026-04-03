@@ -41,15 +41,25 @@ detect_arch() {
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
 
+extract_tag_name() {
+  sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1
+}
+
+normalize_tag() {
+  local value="${1:-}"
+  value="${value#v}"
+  printf 'v%s' "$value"
+}
+
 # ── Resolve version from GitHub API if not specified ───────────────────────
 if [[ -z "$VERSION" ]]; then
   echo "Fetching latest release version..."
   if command -v curl &>/dev/null; then
     VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-      | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\?\([^"]*\)".*/\1/')"
+      | extract_tag_name)"
   elif command -v wget &>/dev/null; then
     VERSION="$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" \
-      | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\?\([^"]*\)".*/\1/')"
+      | extract_tag_name)"
   else
     echo "Error: curl or wget is required." >&2; exit 1
   fi
@@ -58,12 +68,14 @@ if [[ -z "$VERSION" ]]; then
   fi
 fi
 
-echo "Installing mindfs v${VERSION} for ${OS}/${ARCH}"
+VERSION="$(normalize_tag "$VERSION")"
+
+echo "Installing mindfs ${VERSION} for ${OS}/${ARCH}"
 echo "  Prefix: ${PREFIX}"
 
 # ── Download ────────────────────────────────────────────────────────────────
 FILENAME="mindfs_${VERSION}_${OS}_${ARCH}.tar.gz"
-URL="https://github.com/${REPO}/releases/download/v${VERSION}/${FILENAME}"
+URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
