@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -205,10 +206,12 @@ func sessionListResponse(s *session.Session) map[string]any {
 
 func (h *HTTPHandler) handleAgentsList(w http.ResponseWriter, r *http.Request) {
 	if h.AppContext == nil || h.AppContext.GetProber() == nil {
+		log.Printf("[http] agents.list.short_circuit returning_empty_array")
 		respondJSON(w, http.StatusOK, []map[string]any{})
 		return
 	}
 	statuses := h.AppContext.GetProber().GetInstalledStatuses()
+	log.Printf("[http] agents.list count=%d", len(statuses))
 	respondJSON(w, http.StatusOK, statuses)
 }
 

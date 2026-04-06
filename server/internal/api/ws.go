@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"mindfs/server/internal/agent"
 	agenttypes "mindfs/server/internal/agent/types"
@@ -16,6 +17,11 @@ import (
 	"mindfs/server/internal/update"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	wsPingInterval = 25 * time.Second
+	wsPongWait     = 35 * time.Second
 )
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
@@ -59,6 +65,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	log.Printf("[ws] connected client=%s remote=%s path=%s", clientID, r.RemoteAddr, r.URL.Path)
 	if h.AppContext != nil {
 		h.AppContext.GetSessionStreamHub().RegisterClient(clientID, conn)
 		h.pushInitialAppUpdate(clientID)
@@ -67,12 +74,34 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.AppContext != nil {
 			h.AppContext.GetSessionStreamHub().UnregisterClient(clientID, conn)
 		}
+		log.Printf("[ws] disconnected client=%s remote=%s path=%s", clientID, r.RemoteAddr, r.URL.Path)
 		conn.Close()
+	}()
+
+	conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		return nil
+	})
+
+	go func() {
+		ticker := time.NewTicker(wsPingInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+				return
+			}
+		}
 	}()
 
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
+			if closeErr, ok := err.(*websocket.CloseError); ok {
+				log.Printf("[ws] read.closed client=%s remote=%s path=%s code=%d text=%q", clientID, r.RemoteAddr, r.URL.Path, closeErr.Code, closeErr.Text)
+			} else {
+				log.Printf("[ws] read.error client=%s remote=%s path=%s err=%v", clientID, r.RemoteAddr, r.URL.Path, err)
+			}
 			return
 		}
 		var req WSRequest

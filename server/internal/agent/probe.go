@@ -73,7 +73,7 @@ func NewProber(cfg *Config, pool *Pool, probeInterval time.Duration) *Prober {
 	if cfg != nil {
 		now := time.Now().UTC()
 		for _, def := range cfg.Agents {
-			p.statuses[def.Name] = unavailableStatus(def.Name, false, "probing", now)
+			p.statuses[def.Name] = normalizeStatus(probeInstallStatus(def.Name, def, now))
 		}
 	}
 	return p
