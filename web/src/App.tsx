@@ -5,6 +5,7 @@ import { deleteCachedSession, getCachedSession, sessionService, setCachedSession
 import { buildClientContext } from "./services/context";
 import { reportError } from "./services/error";
 import { fetchFile, getCachedFile, invalidateFileCache, type FilePayload } from "./services/file";
+import { fetchGitDiff, fetchGitStatus, type GitDiffPayload, type GitStatusItem, type GitStatusPayload } from "./services/git";
 import {
   DEFAULT_DIRECTORY_SORT_MODE,
   type DirectorySortMode,
@@ -19,6 +20,8 @@ import { triggerUpdate, type UpdateState } from "./services/update";
 import { AppShell } from "./layout/AppShell";
 import { FileTree } from "./components/FileTree";
 import { FileViewer } from "./components/FileViewer";
+import { GitDiffViewer } from "./components/GitDiffViewer";
+import { GitStatusPanel } from "./components/GitStatusPanel";
 import { SessionViewer } from "./components/SessionViewer";
 import { DefaultListView } from "./components/DefaultListView";
 import { SessionList } from "./components/SessionList";
@@ -42,6 +45,11 @@ type AttachedFileContext = {
   startLine?: number;
   endLine?: number;
   text?: string;
+};
+type GitFileStat = {
+  status: string;
+  additions: number;
+  deletions: number;
 };
 type URLState = { root: string; file: string; session: string; cursor: number; pluginQuery: Record<string, string> };
 type ManagedRootPayload = {
@@ -133,6 +141,22 @@ function buildFileScrollKey(rootId: string | null | undefined, path: string | nu
     return "";
   }
   return `${rootId}::${path}`;
+}
+
+function trimGitPathPrefix(path: string, prefix: string): string {
+  const normalizedPath = String(path || "").replace(/^\/+|\/+$/g, "");
+  const normalizedPrefix = String(prefix || "").replace(/^\/+|\/+$/g, "");
+  if (!normalizedPrefix) {
+    return normalizedPath;
+  }
+  if (normalizedPath === normalizedPrefix) {
+    return ".";
+  }
+  const matchPrefix = `${normalizedPrefix}/`;
+  if (normalizedPath.startsWith(matchPrefix)) {
+    return normalizedPath.slice(matchPrefix.length);
+  }
+  return normalizedPath;
 }
 
 function hasSessionExchanges(session: Session | null | undefined): boolean {
@@ -532,6 +556,9 @@ export function App() {
   const [selectedDir, setSelectedDir] = useState<string | null>(null);
   const [selectedDirKey, setSelectedDirKey] = useState<string | null>(null);
   const [mainEntries, setMainEntries] = useState<FileEntry[]>([]);
+  const [gitStatus, setGitStatus] = useState<GitStatusPayload | null>(null);
+  const [gitStatusLoading, setGitStatusLoading] = useState(false);
+  const [gitDiff, setGitDiff] = useState<GitDiffPayload | null>(null);
   const [treeSortMode, setTreeSortMode] = useState<DirectorySortMode>(() => {
     if (typeof window === "undefined") {
       return DEFAULT_DIRECTORY_SORT_MODE;
@@ -1090,6 +1117,49 @@ export function App() {
     }
   }, []);
 
+  const refreshGitStatus = useCallback(async (rootID: string) => {
+    if (!rootID) {
+      setGitStatus(null);
+      return null;
+    }
+    setGitStatusLoading(true);
+    try {
+      const next = await fetchGitStatus(rootID);
+      setGitStatus(next);
+      return next;
+    } catch (err) {
+      console.error("[git.status] failed", { rootID, err });
+      const fallback = { available: false, dirty_count: 0, items: [] } as GitStatusPayload;
+      setGitStatus(fallback);
+      return fallback;
+    } finally {
+      setGitStatusLoading(false);
+    }
+  }, []);
+
+  const openGitDiff = useCallback(async (rootID: string, item: GitStatusItem) => {
+    if (!rootID || !item?.path) {
+      return;
+    }
+    fileOpenRequestRef.current += 1;
+    setSelectedSession(null);
+    setFile(null);
+    setGitDiff(null);
+    replaceURLState({ root: rootID, file: "", session: "", cursor: 0, pluginQuery: {} });
+    try {
+      const next = await fetchGitDiff(rootID, item.path);
+      setGitDiff(next);
+      if (currentRootIdRef.current !== rootID) {
+        setCurrentRootId(rootID);
+      }
+      if (isMobile) {
+        setIsLeftOpen(false);
+      }
+    } catch (err) {
+      console.error("[git.diff] failed", { rootID, path: item.path, err });
+    }
+  }, [isMobile, replaceURLState]);
+
   const handleTreeUpload = useCallback(async (files: File[]) => {
     const rootID = currentRootIdRef.current;
     if (!rootID || files.length === 0) return;
@@ -1364,14 +1434,30 @@ export function App() {
     setInteractionMode("main"); setDrawerOpenForRoot(rootID, false);
   }, [setBoundSessionForRoot, setDrawerOpenForRoot, setDrawerSessionForRoot]);
 
-  const buildAttachedFileContext = useCallback((currentFile: FilePayload | null, selection: ViewerSelection | null): AttachedFileContext | null => {
-    if (!currentFile?.path) {
+  const currentSelectionSource = useMemo(() => {
+    if (file?.path) {
+      return {
+        path: file.path,
+        name: file.name || basenameOfPath(file.path),
+      };
+    }
+    if (gitDiff?.path) {
+      return {
+        path: gitDiff.path,
+        name: basenameOfPath(gitDiff.path),
+      };
+    }
+    return null;
+  }, [file, gitDiff]);
+
+  const buildAttachedFileContext = useCallback((currentSource: { path: string; name: string } | null, selection: ViewerSelection | null): AttachedFileContext | null => {
+    if (!currentSource?.path) {
       return null;
     }
-    const matchesCurrentFile = selection?.filePath === currentFile.path;
+    const matchesCurrentFile = selection?.filePath === currentSource.path;
     return {
-      filePath: currentFile.path,
-      fileName: currentFile.name || basenameOfPath(currentFile.path),
+      filePath: currentSource.path,
+      fileName: currentSource.name,
       startLine: matchesCurrentFile ? selection?.startLine : undefined,
       endLine: matchesCurrentFile ? selection?.endLine : undefined,
       text: matchesCurrentFile ? selection?.text : undefined,
@@ -1379,26 +1465,26 @@ export function App() {
   }, []);
 
   const handleRequestFileContext = useCallback(() => {
-    const currentFile = fileRef.current;
-    if (dismissedSelectionFileRef.current && dismissedSelectionFileRef.current === currentFile?.path) {
+    const currentSource = currentSelectionSource;
+    if (dismissedSelectionFileRef.current && dismissedSelectionFileRef.current === currentSource?.path) {
       return;
     }
     const liveSelection = viewerSelectionRef.current;
     const fallbackSelection = lastViewerSelectionRef.current;
-    const nextSelection = liveSelection?.filePath === currentFile?.path
+    const nextSelection = liveSelection?.filePath === currentSource?.path
       ? liveSelection
-      : fallbackSelection?.filePath === currentFile?.path
+      : fallbackSelection?.filePath === currentSource?.path
       ? fallbackSelection
       : null;
-    const next = buildAttachedFileContext(currentFile, nextSelection);
+    const next = buildAttachedFileContext(currentSource, nextSelection);
     setAttachedFileContext(next);
-  }, [buildAttachedFileContext]);
+  }, [buildAttachedFileContext, currentSelectionSource]);
 
   const handleClearFileContext = useCallback(() => {
-    dismissedSelectionFileRef.current = fileRef.current?.path || null;
+    dismissedSelectionFileRef.current = currentSelectionSource?.path || null;
     lastViewerSelectionRef.current = null;
     setAttachedFileContext(null);
-  }, []);
+  }, [currentSelectionSource]);
 
   const handleViewerSelectionChange = useCallback((next: ViewerSelection | null) => {
     setViewerSelection(next);
@@ -1409,42 +1495,44 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!file?.path) {
+    const currentPath = currentSelectionSource?.path;
+    if (!currentPath) {
       dismissedSelectionFileRef.current = null;
       lastViewerSelectionRef.current = null;
       setViewerSelection(null);
       setAttachedFileContext(null);
       return;
     }
-    if (dismissedSelectionFileRef.current && dismissedSelectionFileRef.current !== file.path) {
+    if (dismissedSelectionFileRef.current && dismissedSelectionFileRef.current !== currentPath) {
       dismissedSelectionFileRef.current = null;
     }
-    if (lastViewerSelectionRef.current?.filePath !== file.path) {
+    if (lastViewerSelectionRef.current?.filePath !== currentPath) {
       lastViewerSelectionRef.current = null;
     }
-    setViewerSelection((prev) => (prev?.filePath === file.path ? prev : null));
+    setViewerSelection((prev) => (prev?.filePath === currentPath ? prev : null));
     setAttachedFileContext((prev) => {
       if (!prev) {
         return prev;
       }
-      if (prev.filePath !== file.path) {
+      if (prev.filePath !== currentPath) {
         return null;
       }
       return prev;
     });
-  }, [file?.path]);
+  }, [currentSelectionSource?.path]);
 
   useEffect(() => {
+    const currentPath = currentSelectionSource?.path;
     setAttachedFileContext((prev) => {
-      if (!prev || prev.filePath !== file?.path) {
+      if (!prev || prev.filePath !== currentPath) {
         return prev;
       }
-      if (!viewerSelection || viewerSelection.filePath !== file?.path) {
+      if (!viewerSelection || viewerSelection.filePath !== currentPath) {
         return prev;
       }
-      return buildAttachedFileContext(file, viewerSelection);
+      return buildAttachedFileContext(currentSelectionSource, viewerSelection);
     });
-  }, [buildAttachedFileContext, file, viewerSelection]);
+  }, [buildAttachedFileContext, currentSelectionSource, viewerSelection]);
 
   const rememberCurrentFileScroll = useCallback(() => {
     const currentFile = fileRef.current;
@@ -1466,6 +1554,7 @@ export function App() {
       const path = normalizePathForRoot(parsedLocation.path, rootInfo?.root_path);
       if (!path || !root) return;
       rememberCurrentFileScroll();
+      setGitDiff(null);
       const currentFilePath = fileRef.current?.path || "";
       const currentFileRoot = fileRef.current?.root || currentRootIdRef.current || "";
       const isFileSwitch = currentFilePath !== String(path) || currentFileRoot !== String(root);
@@ -1601,6 +1690,7 @@ export function App() {
       fileOpenRequestRef.current += 1;
       const path = params.path, rootParam = params.root || currentRootIdRef.current, isToggle = !!params.toggle;
       if (!path || !rootParam) return;
+      setGitDiff(null);
       const isActuallyRoot = params.isRoot === true;
       const root = isActuallyRoot ? path : rootParam;
       const expandedKey = isActuallyRoot ? path : `${root}:${path}`;
@@ -1911,9 +2001,9 @@ export function App() {
     [actionHandlers, sessions, handleSelectSession, replaceURLState],
   );
 
-  const handleFileViewerSessionClick = useCallback((sessionKey: string) => {
-    if (!sessionKey || !file) return;
-    const root = file.root || currentRootIdRef.current;
+  const handleSessionChipClick = useCallback((sessionKey: string, rootOverride?: string | null) => {
+    if (!sessionKey) return;
+    const root = rootOverride || file?.root || currentRootIdRef.current;
     if (!root) return;
     const matched = sessions.find((item) => {
       const key = item.key || item.session_key;
@@ -1944,6 +2034,13 @@ export function App() {
     actionHandlers.open({ path, root });
   }, [file, actionHandlers]);
 
+  const handleGitDiffPathClick = useCallback((path: string) => {
+    const root = currentRootIdRef.current;
+    if (!root) return;
+    setGitDiff(null);
+    actionHandlers.open_dir({ path: path === "." ? root : path, root, isRoot: path === "." });
+  }, [actionHandlers]);
+
   const handleDirectoryPathClick = useCallback((path: string) => {
     const root = currentRootIdRef.current;
     if (!root) return;
@@ -1955,6 +2052,36 @@ export function App() {
     [mainEntries, showHiddenFiles],
   );
 
+  const gitFileStatsByPath = useMemo<Record<string, GitFileStat>>(() => {
+    const items = gitStatus?.items || [];
+    return Object.fromEntries(items.map((item) => [
+      item.path,
+      { status: item.status, additions: item.additions, deletions: item.deletions },
+    ]));
+  }, [gitStatus]);
+
+  const filteredGitStatus = useMemo<GitStatusPayload | null>(() => {
+    if (!gitStatus) {
+      return null;
+    }
+    const currentDir = selectedDir && selectedDir !== currentRootId ? selectedDir : ".";
+    if (!currentDir || currentDir === ".") {
+      return gitStatus;
+    }
+    const prefix = `${currentDir.replace(/^\/+|\/+$/g, "")}/`;
+    const items = (gitStatus.items || [])
+      .filter((item) => item.path === currentDir || item.path.startsWith(prefix))
+      .map((item) => ({
+        ...item,
+        display_path: trimGitPathPrefix(item.path, currentDir),
+      }));
+    return {
+      ...gitStatus,
+      dirty_count: items.length,
+      items,
+    };
+  }, [currentRootId, gitStatus, selectedDir]);
+
   useEffect(() => {
     if (!currentRootId) return;
     sessionService.connect(currentRootId);
@@ -1964,6 +2091,16 @@ export function App() {
       setStatus("Disconnected");
     };
   }, [currentRootId]);
+
+  useEffect(() => {
+    if (!currentRootId) {
+      setGitStatus(null);
+      setGitDiff(null);
+      return;
+    }
+    void refreshGitStatus(currentRootId);
+    setGitDiff(null);
+  }, [currentRootId, refreshGitStatus]);
 
   useEffect(() => {
     if (!currentRootId) return;
@@ -2133,6 +2270,25 @@ export function App() {
       if (!rootID || !changedPath) return;
       invalidateFileCache(rootID, changedPath);
       void refreshCurrentFileContent(rootID, changedPath);
+      void refreshGitStatus(rootID).then((next) => {
+        if (!next?.available) {
+          if (rootID === currentRootIdRef.current) {
+            setGitDiff(null);
+          }
+          return;
+        }
+        const hasChangedDiff = (gitDiff?.path || "") === changedPath;
+        if (rootID === currentRootIdRef.current && hasChangedDiff) {
+          const target = next.items.find((item) => item.path === changedPath);
+          if (!target) {
+            setGitDiff(null);
+            return;
+          }
+          void fetchGitDiff(rootID, changedPath).then(setGitDiff).catch((err) => {
+            console.error("[git.diff.refresh] failed", { rootID, changedPath, err });
+          });
+        }
+      });
       const parentDir = dirname(changedPath);
       const currentDir = currentDirAPI(rootID);
       const syncMain = rootID === currentRootIdRef.current && parentDir === currentDir;
@@ -2272,7 +2428,7 @@ export function App() {
       cancelled = true;
       unsubscribeEvents();
     };
-  }, [currentRootId, mergeSessionItems, rootSessionKey, resolveRootForSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot, refreshTreeDir, refreshCurrentFileContent, refreshManagedRoots, updateSessionRelatedFilesForKey]);
+  }, [currentRootId, gitDiff?.path, mergeSessionItems, rootSessionKey, resolveRootForSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot, refreshTreeDir, refreshCurrentFileContent, refreshGitStatus, refreshManagedRoots, updateSessionRelatedFilesForKey]);
 
   useEffect(() => {
     if (!currentRootId) return;
@@ -2482,8 +2638,13 @@ export function App() {
   const handleSelectedSessionFileClick = useCallback((path: string) => {
     const root = (selectedSessionRef.current?.root_id as string | undefined) || currentRootIdRef.current;
     if (!root) return;
+    const gitItem = (gitStatus?.items || []).find((item) => item.path === path);
+    if (gitItem) {
+      void openGitDiff(root, gitItem);
+      return;
+    }
     actionHandlers.open({ path, root });
-  }, [actionHandlers]);
+  }, [actionHandlers, gitStatus, openGitDiff]);
 
   const drawerSessionSnapshot = useMemo(
     () => (currentSession ? getSessionSnapshot(currentRootId, currentSession) : null),
@@ -2493,8 +2654,13 @@ export function App() {
   const handleDrawerSessionFileClick = useCallback((path: string) => {
     const root = currentRootIdRef.current;
     if (!root) return;
+    const gitItem = (gitStatus?.items || []).find((item) => item.path === path);
+    if (gitItem) {
+      void openGitDiff(root, gitItem);
+      return;
+    }
     actionHandlers.open({ path, root });
-  }, [actionHandlers]);
+  }, [actionHandlers, gitStatus, openGitDiff]);
 
   const currentFileScrollKey = buildFileScrollKey(file?.root || currentRootId, file?.path);
   const sessionView = (
@@ -2502,12 +2668,25 @@ export function App() {
       session={selectedSessionSnapshot}
       rootId={selectedSession?.root_id || currentRootId}
       rootPath={managedRootByIdRef.current[selectedSession?.root_id || currentRootId || ""]?.root_path || null}
+      gitFileStatsByPath={gitFileStatsByPath}
       onFileClick={handleSelectedSessionFileClick}
     />
   );
 
   let workspaceView: React.ReactNode;
-  if (file) {
+  const showGitStatusPanel = !gitDiff && !file && !!currentRootId;
+  const shouldRenderGitPanel = showGitStatusPanel && (gitStatusLoading || ((filteredGitStatus?.items.length || 0) > 0));
+  if (gitDiff) {
+    workspaceView = (
+      <GitDiffViewer
+        diff={gitDiff}
+        root={currentRootId}
+        onPathClick={handleGitDiffPathClick}
+        onSessionClick={(sessionKey) => handleSessionChipClick(sessionKey, currentRootIdRef.current)}
+        onSelectionChange={handleViewerSelectionChange}
+      />
+    );
+  } else if (file) {
     if (pluginRender && pluginRender.output) {
       workspaceView = (
         <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
@@ -2572,7 +2751,7 @@ export function App() {
               fileScrollPositionsRef.current[currentFileScrollKey] = scrollTop;
               persistFileScrollPositions(fileScrollPositionsRef.current);
             }}
-            onSessionClick={handleFileViewerSessionClick}
+            onSessionClick={(sessionKey) => handleSessionChipClick(sessionKey, file?.root || currentRootIdRef.current)}
             onPathClick={handleFileViewerPathClick}
             onFileClick={handleFileViewerFileClick}
           />
@@ -2582,35 +2761,49 @@ export function App() {
   } else {
     workspaceView = (
       <DefaultListView
-        root={currentRootId || undefined}
-        path={selectedDir || ""}
-        entries={visibleMainEntries}
-        showHiddenFiles={showHiddenFiles}
-        sortMode={currentDirectorySortMode}
-        sortControlValue={currentDirectorySortOverride || "inherit"}
-        onSortModeChange={(nextMode) => {
-          const rootID = currentRootIdRef.current;
-          const nextKey = getDirectorySortKey(rootID, selectedDirRef.current);
-          if (!nextKey) {
-            return;
-          }
-          setDirectorySortOverrides((prev) => {
-            if (nextMode === "inherit") {
-              if (!(nextKey in prev)) {
-                return prev;
-              }
-              const next = { ...prev };
-              delete next[nextKey];
-              return next;
+          root={currentRootId || undefined}
+          path={selectedDir || ""}
+          entries={visibleMainEntries}
+          topContent={shouldRenderGitPanel ? (
+            <GitStatusPanel
+              status={filteredGitStatus}
+              loading={gitStatusLoading}
+              isFiltered={!!selectedDir && selectedDir !== currentRootId}
+              onSelectItem={(item) => {
+                const root = currentRootIdRef.current;
+                if (!root) {
+                  return;
+                }
+                void openGitDiff(root, item);
+              }}
+            />
+          ) : null}
+          showHiddenFiles={showHiddenFiles}
+          sortMode={currentDirectorySortMode}
+          sortControlValue={currentDirectorySortOverride || "inherit"}
+          onSortModeChange={(nextMode) => {
+            const rootID = currentRootIdRef.current;
+            const nextKey = getDirectorySortKey(rootID, selectedDirRef.current);
+            if (!nextKey) {
+              return;
             }
-            return { ...prev, [nextKey]: nextMode };
-          });
-        }}
-        onUploadFiles={handleTreeUpload}
-        onRemoveRoot={handleRemoveCurrentRoot}
-        onItemClick={(e) => e.is_dir ? actionHandlers.open_dir({ path: e.path }) : actionHandlers.open({ path: e.path })}
-        onPathClick={handleDirectoryPathClick}
-      />
+            setDirectorySortOverrides((prev) => {
+              if (nextMode === "inherit") {
+                if (!(nextKey in prev)) {
+                  return prev;
+                }
+                const next = { ...prev };
+                delete next[nextKey];
+                return next;
+              }
+              return { ...prev, [nextKey]: nextMode };
+            });
+          }}
+          onUploadFiles={handleTreeUpload}
+          onRemoveRoot={handleRemoveCurrentRoot}
+          onItemClick={(e) => e.is_dir ? actionHandlers.open_dir({ path: e.path }) : actionHandlers.open({ path: e.path })}
+          onPathClick={handleDirectoryPathClick}
+        />
     );
   }
 
@@ -2772,7 +2965,7 @@ export function App() {
         setInteractionMode("drawer");
         setDrawerOpenForRoot(rootID, !(drawerOpenByRootRef.current[rootID || ""] || false));
       }} />}
-      drawer={<BottomSheet isOpen={isDrawerOpen} onClose={() => setDrawerOpenForRoot(currentRootIdRef.current, false)} onExpand={() => { handleSelectSession(currentSession); setDrawerOpenForRoot(currentRootIdRef.current, false); }}>{drawerSessionSnapshot ? <SessionViewer session={drawerSessionSnapshot} rootId={currentRootId} rootPath={managedRootByIdRef.current[currentRootId || ""]?.root_path || null} interactionMode="drawer" onFileClick={handleDrawerSessionFileClick} /> : <div style={{ padding: "40px", textAlign: "center" }}>点击蓝点或发消息开始</div>}</BottomSheet>}
+      drawer={<BottomSheet isOpen={isDrawerOpen} onClose={() => setDrawerOpenForRoot(currentRootIdRef.current, false)} onExpand={() => { handleSelectSession(currentSession); setDrawerOpenForRoot(currentRootIdRef.current, false); }}>{drawerSessionSnapshot ? <SessionViewer session={drawerSessionSnapshot} rootId={currentRootId} rootPath={managedRootByIdRef.current[currentRootId || ""]?.root_path || null} interactionMode="drawer" gitFileStatsByPath={gitFileStatsByPath} onFileClick={handleDrawerSessionFileClick} /> : <div style={{ padding: "40px", textAlign: "center" }}>点击蓝点或发消息开始</div>}</BottomSheet>}
     />
     </>
   );

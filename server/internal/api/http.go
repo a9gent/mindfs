@@ -56,6 +56,8 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/health", h.handleHealth)
 	r.Get("/api/tree", h.handleTree)
 	r.Get("/api/file", h.handleFile)
+	r.Get("/api/git/status", h.handleGitStatus)
+	r.Get("/api/git/diff", h.handleGitDiff)
 	r.Post("/api/upload", h.handleUpload)
 	r.Get("/api/candidates", h.handleCandidates)
 	r.Get("/api/sessions", h.handleSessions)
@@ -422,6 +424,44 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]any{
 		"file": out.File,
 	})
+}
+
+func (h *HTTPHandler) handleGitStatus(w http.ResponseWriter, r *http.Request) {
+	rootID := strings.TrimSpace(r.URL.Query().Get("root"))
+	if rootID == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("root required"))
+		return
+	}
+	uc := h.service()
+	out, err := uc.GetGitStatus(r.Context(), usecase.GitStatusInput{RootID: rootID})
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, out.Status)
+}
+
+func (h *HTTPHandler) handleGitDiff(w http.ResponseWriter, r *http.Request) {
+	rootID := strings.TrimSpace(r.URL.Query().Get("root"))
+	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	if rootID == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("root required"))
+		return
+	}
+	if path == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("path required"))
+		return
+	}
+	uc := h.service()
+	out, err := uc.GetGitDiff(r.Context(), usecase.GitDiffInput{
+		RootID: rootID,
+		Path:   path,
+	})
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, out.Diff)
 }
 
 func (h *HTTPHandler) handleUpload(w http.ResponseWriter, r *http.Request) {

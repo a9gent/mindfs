@@ -12,6 +12,7 @@ type DefaultListViewProps = {
   root?: string;
   path?: string;
   entries: FileEntry[];
+  topContent?: React.ReactNode;
   showHiddenFiles?: boolean;
   sortMode: DirectorySortMode;
   sortControlValue: DirectorySortControlValue;
@@ -116,6 +117,7 @@ export function DefaultListView({
   root,
   path = "",
   entries,
+  topContent,
   showHiddenFiles = false,
   sortMode,
   sortControlValue,
@@ -346,7 +348,13 @@ export function DefaultListView({
         </div>
       </header>
 
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "24px 16px" }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        {topContent ? (
+          <div style={{ padding: "24px 16px 0" }}>
+            {topContent}
+          </div>
+        ) : null}
+        <div style={{ padding: topContent ? "4px 16px 24px" : "24px 16px" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px", width: "100%" }}>
           {sortedEntries.map((entry) => (
             <div
@@ -412,6 +420,7 @@ export function DefaultListView({
               ) : null}
             </div>
           ))}
+        </div>
         </div>
       </div>
     </div>

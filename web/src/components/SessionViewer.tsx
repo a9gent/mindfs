@@ -26,6 +26,7 @@ type SessionViewerProps = {
   rootId?: string | null;
   rootPath?: string | null;
   interactionMode?: "main" | "drawer";
+  gitFileStatsByPath?: Record<string, { status: string; additions: number; deletions: number }>;
   onFileClick?: (path: string) => void;
 };
 
@@ -118,7 +119,7 @@ function timelineItemSpacing(previous: TimelineItem | null, current: TimelineIte
   return "16px";
 }
 
-function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main", onFileClick }: SessionViewerProps) {
+function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main", gitFileStatsByPath = {}, onFileClick }: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -341,6 +342,12 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
                     <div key={i} onClick={() => onFileClickRef.current?.(file.path)} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "3px 6px", borderRadius: "6px", cursor: "pointer", transition: "background 0.15s" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.04)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
                       <img src={`https://api.iconify.design/lucide:file-text.svg?color=%2394a3b8`} alt="file" style={{ width: 13, height: 13, flexShrink: 0 }} />
                       <div style={{ flex: 1, minWidth: 0, fontSize: "12px", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</div>
+                      {gitFileStatsByPath[file.path] ? (
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>
+                          <span style={{ color: "#15803d", fontVariantNumeric: "tabular-nums" }}>+{gitFileStatsByPath[file.path].additions}</span>
+                          <span style={{ color: "#b91c1c", fontVariantNumeric: "tabular-nums" }}>-{gitFileStatsByPath[file.path].deletions}</span>
+                        </div>
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -364,5 +371,6 @@ export const SessionViewer = memo(SessionViewerInner, (prev, next) => (
   prev.session === next.session &&
   prev.rootId === next.rootId &&
   prev.rootPath === next.rootPath &&
-  prev.interactionMode === next.interactionMode
+  prev.interactionMode === next.interactionMode &&
+  prev.gitFileStatsByPath === next.gitFileStatsByPath
 ));

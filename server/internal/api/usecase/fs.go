@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"mindfs/server/internal/fs"
+	"mindfs/server/internal/gitview"
 	"mindfs/server/internal/session"
 )
 
@@ -190,6 +191,23 @@ type ReadFileOutput struct {
 	File fs.ReadResult
 }
 
+type GitStatusInput struct {
+	RootID string
+}
+
+type GitStatusOutput struct {
+	Status gitview.StatusResult
+}
+
+type GitDiffInput struct {
+	RootID string
+	Path   string
+}
+
+type GitDiffOutput struct {
+	Diff gitview.DiffResult
+}
+
 func (s *Service) ReadFile(ctx context.Context, in ReadFileInput) (ReadFileOutput, error) {
 	if err := s.ensureRegistry(); err != nil {
 		return ReadFileOutput{}, err
@@ -218,6 +236,48 @@ func (s *Service) ReadFile(ctx context.Context, in ReadFileInput) (ReadFileOutpu
 	result.Root = root.ID
 	result.FileMeta = meta
 	return ReadFileOutput{File: result}, nil
+}
+
+func (s *Service) GetGitStatus(ctx context.Context, in GitStatusInput) (GitStatusOutput, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return GitStatusOutput{}, err
+	}
+	root, err := s.Registry.GetRoot(in.RootID)
+	if err != nil {
+		return GitStatusOutput{}, err
+	}
+	status, err := gitview.InspectStatus(ctx, root.RootPath)
+	if err != nil {
+		return GitStatusOutput{}, err
+	}
+	return GitStatusOutput{Status: status}, nil
+}
+
+func (s *Service) GetGitDiff(ctx context.Context, in GitDiffInput) (GitDiffOutput, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return GitDiffOutput{}, err
+	}
+	root, err := s.Registry.GetRoot(in.RootID)
+	if err != nil {
+		return GitDiffOutput{}, err
+	}
+	if strings.TrimSpace(in.Path) == "" {
+		return GitDiffOutput{}, errors.New("path required")
+	}
+	path, err := root.NormalizePath(in.Path)
+	if err != nil {
+		return GitDiffOutput{}, err
+	}
+	diff, err := gitview.ReadDiff(ctx, root.RootPath, path)
+	if err != nil {
+		return GitDiffOutput{}, err
+	}
+	meta, err := root.GetFileMeta(path)
+	if err != nil {
+		meta = nil
+	}
+	diff.FileMeta = fillFileMetaSessionInfo(ctx, s, in.RootID, meta)
+	return GitDiffOutput{Diff: diff}, nil
 }
 
 func resolveUploadDir(root fs.RootInfo, dir string) (string, string, error) {
