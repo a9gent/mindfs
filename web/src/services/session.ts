@@ -115,11 +115,11 @@ class SessionService {
   }
 
   connect(rootId: string) {
-    if (this.ws?.readyState === WebSocket.OPEN && this.rootId === rootId) {
+    this.rootId = rootId;
+    if (this.ws?.readyState === WebSocket.OPEN) {
       return;
     }
 
-    this.rootId = rootId;
     this.disconnect();
 
     this.ws = new WebSocket(this.buildWSUrl());

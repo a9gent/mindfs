@@ -2086,11 +2086,12 @@ export function App() {
     if (!currentRootId) return;
     sessionService.connect(currentRootId);
     setStatus("Connected");
-    return () => {
-      sessionService.disconnect();
-      setStatus("Disconnected");
-    };
   }, [currentRootId]);
+
+  useEffect(() => () => {
+    sessionService.disconnect();
+    setStatus("Disconnected");
+  }, []);
 
   useEffect(() => {
     if (!currentRootId) {
