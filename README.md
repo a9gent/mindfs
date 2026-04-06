@@ -71,14 +71,18 @@ MindFS does not include any AI model — you need at least one Agent CLI install
 
 | Agent | Install |
 |-------|---------|
-| **Claude Code** | https://claude.ai/code |
-| **OpenAI Codex** | https://github.com/openai/codex |
-| **Gemini CLI** | https://github.com/google-gemini/gemini-cli |
-| **Cursor** | https://www.cursor.com |
-| **GitHub Copilot** | https://github.com/features/copilot |
-| **Cline** | https://github.com/clinebot/cline |
-| **Kimi** | https://kimi.moonshot.cn |
-| **Qwen** | https://github.com/QwenLM/qwen-agent |
+| **Claude Code** | https://code.claude.com/docs/en/quickstart |
+| **OpenAI Codex** | https://developers.openai.com/codex/cli |
+| **Gemini CLI** | https://geminicli.com/ |
+| **Cursor** | https://cursor.com/cn/cli |
+| **GitHub Copilot** | https://github.com/features/copilot/cli |
+| **Cline** | https://cline.bot/kanban |
+| **Augment** | https://www.augmentcode.com/product/CLI |
+| **Kiro** | https://kiro.dev/cli/ |
+| **OpenCode** | https://opencode.ai/ |
+| **OpenClaw** | https://docs.openclaw.ai/ |
+| **Kimi** | https://www.kimi.com/code/docs/kimi-cli/guides/getting-started.html |
+| **Qwen** | https://qwen.ai/qwencode |
 
 Once an agent is installed, start MindFS and interact with it through the browser.
 

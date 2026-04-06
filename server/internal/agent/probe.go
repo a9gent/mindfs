@@ -36,7 +36,6 @@ const (
 	probeInteractionTimeout = 3 * time.Minute
 	probeModelListTimeout   = 30 * time.Second
 	probeCommandListTimeout = 30 * time.Second
-	maxProbeConcurrency     = 4
 )
 
 type probePhase string
@@ -52,7 +51,7 @@ type Prober struct {
 	pool          *Pool
 	statuses      map[string]Status
 	mu            sync.RWMutex
-	probeRunMu    sync.Mutex
+	inFlight      map[string]struct{} // per-agent probe 去重，mu 保护
 	probeInterval time.Duration
 	stopCh        chan struct{}
 	listeners     []func(Status)
@@ -66,6 +65,7 @@ func NewProber(cfg *Config, pool *Pool, probeInterval time.Duration) *Prober {
 		cfg:           cfg,
 		pool:          pool,
 		statuses:      make(map[string]Status),
+		inFlight:      make(map[string]struct{}),
 		probeInterval: probeInterval,
 		stopCh:        make(chan struct{}),
 	}
@@ -113,16 +113,11 @@ func (p *Prober) Stop() {
 }
 
 // ProbeAll 探测所有配置的 Agent
-func (p *Prober) ProbeAll(ctx context.Context) []Status {
+func (p *Prober) ProbeAll(ctx context.Context) {
 	if p.cfg == nil {
-		return nil
+		return
 	}
-
-	var statuses []Status
-	p.withProbeRun(func() {
-		statuses = p.probeConfiguredAgents(ctx, p.cfg.Agents)
-	})
-	return statuses
+	p.probeConfiguredAgents(ctx, p.cfg.Agents)
 }
 
 // ReportRuntimeFailure marks an agent as unavailable due to a real user-facing runtime failure.
@@ -304,26 +299,22 @@ func (p *Prober) probeMissingCommands() {
 	if p.cfg == nil {
 		return
 	}
-	p.withProbeRun(func() {
-		defs := p.collectDefinitions(func(st Status, ok bool) bool {
-			return !ok || !st.Installed
-		})
-		log.Printf("[agent/probe] probe_missing_commands count=%d agents=%s", len(defs), definitionNames(defs))
-		p.probeInstallOnly(defs)
+	defs := p.collectDefinitions(func(st Status, ok bool) bool {
+		return !ok || !st.Installed
 	})
+	log.Printf("[agent/probe] probe_missing_commands count=%d agents=%s", len(defs), definitionNames(defs))
+	p.probeInstallOnly(defs)
 }
 
 func (p *Prober) probeFailedInstalledOnly(ctx context.Context) {
 	if p.cfg == nil {
 		return
 	}
-	p.withProbeRun(func() {
-		defs := p.collectDefinitions(func(st Status, ok bool) bool {
-			return ok && st.Installed && !st.Available
-		})
-		log.Printf("[agent/probe] probe_failed_installed count=%d agents=%s", len(defs), definitionNames(defs))
-		p.probeInstalledAgents(ctx, defs)
+	defs := p.collectDefinitions(func(st Status, ok bool) bool {
+		return ok && st.Installed && !st.Available
 	})
+	log.Printf("[agent/probe] probe_failed_installed count=%d agents=%s", len(defs), definitionNames(defs))
+	p.probeInstalledAgents(ctx, defs)
 }
 
 // AddListener registers a callback invoked when an agent status changes.
@@ -482,11 +473,6 @@ func normalizeStatus(status Status) Status {
 	return status
 }
 
-func (p *Prober) withProbeRun(fn func()) {
-	p.probeRunMu.Lock()
-	defer p.probeRunMu.Unlock()
-	fn()
-}
 
 func (p *Prober) collectDefinitions(include func(Status, bool) bool) []Definition {
 	defs := make([]Definition, 0, len(p.cfg.Agents))
@@ -500,18 +486,14 @@ func (p *Prober) collectDefinitions(include func(Status, bool) bool) []Definitio
 	return defs
 }
 
-func (p *Prober) probeConfiguredAgents(ctx context.Context, defs []Definition) []Status {
+func (p *Prober) probeConfiguredAgents(ctx context.Context, defs []Definition) {
 	if len(defs) == 0 {
-		return nil
+		return
 	}
-
-	statuses := make([]Status, len(defs))
-	p.runDefinitionsConcurrently(defs, func(i int, def Definition) {
+	p.runDefinitionsConcurrently(defs, func(_ int, def Definition) {
 		status := probeConfiguredAgentWithPool(ctx, def.Name, def, p.pool)
-		statuses[i] = status
 		p.setStatus(status)
 	})
-	return statuses
 }
 
 func (p *Prober) probeInstallOnly(defs []Definition) {
@@ -537,37 +519,26 @@ func (p *Prober) probeInstalledAgents(ctx context.Context, defs []Definition) {
 }
 
 func (p *Prober) runDefinitionsConcurrently(defs []Definition, fn func(i int, def Definition)) {
-	workerCount := probeWorkerCount(len(defs))
-	if workerCount == 1 {
-		for i, def := range defs {
-			fn(i, def)
-		}
-		return
-	}
-
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, workerCount)
 	for i, def := range defs {
-		wg.Add(1)
-		sem <- struct{}{}
+		p.mu.Lock()
+		if _, running := p.inFlight[def.Name]; running {
+			p.mu.Unlock()
+			continue
+		}
+		p.inFlight[def.Name] = struct{}{}
+		p.mu.Unlock()
+
 		go func(i int, def Definition) {
-			defer wg.Done()
-			defer func() { <-sem }()
+			defer func() {
+				p.mu.Lock()
+				delete(p.inFlight, def.Name)
+				p.mu.Unlock()
+			}()
 			fn(i, def)
 		}(i, def)
 	}
-	wg.Wait()
 }
 
-func probeWorkerCount(total int) int {
-	if total < 1 {
-		return 1
-	}
-	if total > maxProbeConcurrency {
-		return maxProbeConcurrency
-	}
-	return total
-}
 
 func definitionNames(defs []Definition) string {
 	if len(defs) == 0 {
