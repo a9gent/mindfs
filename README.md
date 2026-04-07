@@ -122,6 +122,8 @@ mindfs -addr :9000 /path/to/your/project  # custom port
 
 Open [http://localhost:7331](http://localhost:7331) in your browser.
 
+MindFS automatically detects the availability of installed agents. This usually takes about one minute.
+
 ### Enable Remote Access (Optional)
 
 1. Open MindFS in local mode and click the bind button in the bottom-left corner.

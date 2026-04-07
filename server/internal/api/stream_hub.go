@@ -83,21 +83,23 @@ func cloneUserExchange(msg *PendingUserMessage) *session.Exchange {
 	}
 }
 
-func buildSessionStreamResponse(sessionKey string, event *StreamEvent) WSResponse {
+func buildSessionStreamResponse(rootID, sessionKey string, event *StreamEvent) WSResponse {
 	return WSResponse{
 		Type: "session.stream",
 		Payload: map[string]any{
+			"root_id":     rootID,
 			"session_key": sessionKey,
 			"event":       event,
 		},
 	}
 }
 
-func buildSessionDoneResponse(sessionKey, requestID string) WSResponse {
+func buildSessionDoneResponse(rootID, sessionKey, requestID string) WSResponse {
 	return WSResponse{
 		ID:   requestID,
 		Type: "session.done",
 		Payload: map[string]any{
+			"root_id":     rootID,
 			"session_key": sessionKey,
 		},
 	}
@@ -274,7 +276,7 @@ func (h *StreamHub) AppendReplyEvent(sessionKey string, event StreamEvent) {
 	state.ReplyingList = append(state.ReplyingList, cloneEvent(event))
 }
 
-func (h *StreamHub) ReplayPending(clientID, sessionKey string) {
+func (h *StreamHub) ReplayPending(rootID, clientID, sessionKey string) {
 	h.mu.Lock()
 	h.replayStates[pendingClientKey(clientID, sessionKey)] = &ClientReplayState{
 		Status:      ClientStreamStatusReplay,
@@ -284,7 +286,7 @@ func (h *StreamHub) ReplayPending(clientID, sessionKey string) {
 
 	for {
 		step := h.collectReplayStep(clientID, sessionKey)
-		h.replayStepToClient(clientID, sessionKey, step.events)
+		h.replayStepToClient(rootID, clientID, sessionKey, step.events)
 		if step.live {
 			return
 		}
@@ -335,19 +337,19 @@ func (h *StreamHub) BroadcastAll(resp WSResponse) {
 	}
 }
 
-func (h *StreamHub) BroadcastSessionStream(sessionKey string, event *StreamEvent) {
+func (h *StreamHub) BroadcastSessionStream(rootID, sessionKey string, event *StreamEvent) {
 	if event == nil {
 		return
 	}
 	h.AppendReplyEvent(sessionKey, *event)
-	resp := buildSessionStreamResponse(sessionKey, event)
+	resp := buildSessionStreamResponse(rootID, sessionKey, event)
 	for _, clientID := range h.GetSessionClientIDs(sessionKey, true) {
 		h.SendToClient(clientID, resp)
 	}
 }
 
-func (h *StreamHub) BroadcastSessionDone(sessionKey, requestID string) {
-	resp := buildSessionDoneResponse(sessionKey, requestID)
+func (h *StreamHub) BroadcastSessionDone(rootID, sessionKey, requestID string) {
+	resp := buildSessionDoneResponse(rootID, sessionKey, requestID)
 	for _, clientID := range h.GetSessionClientIDs(sessionKey, false) {
 		h.SendToClient(clientID, resp)
 	}
@@ -428,9 +430,9 @@ func (h *StreamHub) nextReplayStepLocked(clientID, sessionKey string) replayStep
 	return replayStep{events: events}
 }
 
-func (h *StreamHub) replayStepToClient(clientID, sessionKey string, events []StreamEvent) {
+func (h *StreamHub) replayStepToClient(rootID, clientID, sessionKey string, events []StreamEvent) {
 	for i := range events {
-		h.SendToClient(clientID, buildSessionStreamResponse(sessionKey, &events[i]))
+		h.SendToClient(clientID, buildSessionStreamResponse(rootID, sessionKey, &events[i]))
 	}
 }
 

@@ -98,9 +98,11 @@ class SessionService {
   private pendingStreams = new Map<string, StreamEvent[]>();
   private listeners = new Set<(event: SessionServiceEvent) => void>();
   private reconnectTimer: number | null = null;
+  private reconnectDelayMs = 1000;
   private rootId: string | null = null;
   private hasConnected = false;
   private readonly clientId = this.generateClientId();
+  private readonly maxReconnectDelayMs = 30000;
   private contextCache = new Map<
     string,
     { selectionKey: string }
@@ -116,15 +118,19 @@ class SessionService {
 
   connect(rootId: string) {
     this.rootId = rootId;
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
       return;
     }
 
-    this.disconnect();
+    this.clearReconnectTimer();
+    this.closeSocket();
 
-    this.ws = new WebSocket(this.buildWSUrl());
+    const ws = new WebSocket(this.buildWSUrl());
+    this.ws = ws;
 
-    this.ws.onopen = () => {
+    ws.onopen = () => {
+      if (this.ws !== ws) return;
+      this.reconnectDelayMs = 1000;
       if (this.hasConnected) {
         this.emit({ type: "ws.reconnected" });
       } else {
@@ -133,7 +139,8 @@ class SessionService {
       this.hasConnected = true;
     };
 
-    this.ws.onmessage = (event) => {
+    ws.onmessage = (event) => {
+      if (this.ws !== ws) return;
       try {
         const msg = JSON.parse(event.data);
         this.handleMessage(msg);
@@ -142,25 +149,41 @@ class SessionService {
       }
     };
 
-    this.ws.onclose = () => {
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
+      this.ws = null;
       this.scheduleReconnect();
     };
 
-    this.ws.onerror = (err) => {
+    ws.onerror = (err) => {
+      if (this.ws !== ws) return;
       console.error("[Session] WebSocket error:", err);
     };
   }
 
   disconnect() {
+    this.clearReconnectTimer();
+    this.closeSocket();
+    this.contextCache.clear();
+  }
+
+  private clearReconnectTimer() {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+  }
+
+  private closeSocket() {
     if (this.ws) {
-      this.ws.close();
+      const ws = this.ws;
       this.ws = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.onmessage = null;
+      ws.onopen = null;
+      ws.close();
     }
-    this.contextCache.clear();
   }
 
   private buildSelectionKey(selection: unknown): string {
@@ -196,13 +219,16 @@ class SessionService {
   }
 
   private scheduleReconnect() {
+    if (!this.rootId) return;
     if (this.reconnectTimer) return;
+    const delay = this.reconnectDelayMs;
+    this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, this.maxReconnectDelayMs);
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null;
       if (this.rootId) {
         this.connect(this.rootId);
       }
-    }, 3000);
+    }, delay);
   }
 
   private handleMessage(msg: any) {

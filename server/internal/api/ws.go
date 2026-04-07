@@ -296,7 +296,7 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 			if event == nil {
 				return
 			}
-			streamHub.BroadcastSessionStream(key, event)
+			streamHub.BroadcastSessionStream(rootID, key, event)
 		},
 	})
 	if err != nil {
@@ -305,12 +305,12 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 			Type: "error",
 			Data: map[string]string{"message": errorMessage},
 		}
-		streamHub.BroadcastSessionStream(key, event)
+		streamHub.BroadcastSessionStream(rootID, key, event)
 	}
 	streamHub.ClearSessionPending(key)
 
 	log.Printf("[ws] session.done root=%s session=%s request=%s", rootID, key, req.ID)
-	streamHub.BroadcastSessionDone(key, req.ID)
+	streamHub.BroadcastSessionDone(rootID, key, req.ID)
 }
 
 func (h *WSHandler) handleSessionReady(clientID string, req WSRequest) {
@@ -324,7 +324,7 @@ func (h *WSHandler) handleSessionReady(clientID string, req WSRequest) {
 	}
 	streamHub := h.AppContext.GetSessionStreamHub()
 	streamHub.BindSessionClient(key, clientID)
-	streamHub.ReplayPending(clientID, key)
+	streamHub.ReplayPending(rootID, clientID, key)
 }
 
 func (h *WSHandler) sessionMessageContext() (context.Context, context.CancelFunc) {

@@ -90,12 +90,6 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 }
 
 func resolveStaticDir() string {
-	candidates := []string{"web/dist"}
-	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return candidate
-		}
-	}
 	if exe, err := os.Executable(); err == nil {
 		prefix := filepath.Dir(filepath.Dir(exe))
 		candidate := filepath.Join(prefix, "share", "mindfs", "web")

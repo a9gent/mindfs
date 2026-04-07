@@ -2173,7 +2173,10 @@ export function App() {
     };
 
     const handleSessionStream = (payload: any) => {
-      const streamKey = payload.session_key, activeRoot = currentRootIdRef.current;
+      const streamKey = typeof payload?.session_key === "string" ? payload.session_key : "";
+      const activeRoot = typeof payload?.root_id === "string" && payload.root_id
+        ? payload.root_id
+        : (resolveRootForSessionKey(streamKey) || currentRootIdRef.current);
       if (!streamKey || !activeRoot) return;
       const ck = rootSessionKey(activeRoot, streamKey);
       let pending = pendingBySessionRef.current[ck];
@@ -2322,7 +2325,9 @@ export function App() {
         case "session.stream": handleSessionStream(payload); break;
         case "session.done": {
           const sessionKey = typeof payload?.session_key === "string" ? payload.session_key : "";
-          const rootID = resolveRootForSessionKey(sessionKey) || currentRootIdRef.current || "";
+          const rootID = typeof payload?.root_id === "string" && payload.root_id
+            ? payload.root_id
+            : (resolveRootForSessionKey(sessionKey) || currentRootIdRef.current || "");
           if (rootID && sessionKey) {
             handleSessionStreamDone(rootID, sessionKey);
             const newest = sessionsRef.current[0]?.updated_at || "";

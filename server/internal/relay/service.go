@@ -170,7 +170,11 @@ func (s *Service) runSession(ctx context.Context, creds RelayCredentials) error 
 	defer conn.Close()
 
 	wsConn := NewWebSocketNetConn(conn)
-	muxSession, err := yamux.Client(wsConn, nil)
+	yamuxConfig := yamux.DefaultConfig()
+	yamuxConfig.ConnectionWriteTimeout = 60 * time.Second
+	yamuxConfig.EnableKeepAlive = true
+	yamuxConfig.KeepAliveInterval = 30 * time.Second
+	muxSession, err := yamux.Client(wsConn, yamuxConfig)
 	if err != nil {
 		return err
 	}

@@ -122,6 +122,8 @@ mindfs -addr :9000 /path/to/your/project # 指定端口
 
 在浏览器中打开（默认端口） [http://localhost:7331](http://localhost:7331)。
 
+MindFS 会自动探测已安装 Agent 的可用性，通常需要大约一分钟。
+
 ### 通过 relayer远程访问
 
 1. 本地模式打开 mindfs 页面，点击左下角绑定按钮。
