@@ -402,12 +402,11 @@ func (p *Process) Initialize(ctx context.Context) error {
 // NewSession creates a new ACP session for the given MindFS session key.
 func (p *Process) NewSession(ctx context.Context, sessionKey, cwd string) error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Check if session already exists
 	if _, ok := p.sessions[sessionKey]; ok {
+		p.mu.Unlock()
 		return nil
 	}
+	p.mu.Unlock()
 
 	resp, err := p.conn.NewSession(ctx, acp.NewSessionRequest{
 		Cwd:        cwd,
@@ -423,11 +422,17 @@ func (p *Process) NewSession(ctx context.Context, sessionKey, cwd string) error 
 		ID:     resp.SessionId,
 		models: resp.Models,
 	}
+	p.mu.Lock()
+	if _, ok := p.sessions[sessionKey]; ok {
+		p.mu.Unlock()
+		return nil
+	}
 	if resp.Models != nil {
 		p.models = resp.Models
 	}
 	p.sessions[sessionKey] = sess
 	p.sessionsByID[string(resp.SessionId)] = sess
+	p.mu.Unlock()
 	return nil
 }
 

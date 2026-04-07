@@ -94,6 +94,20 @@ func TestPoolCloseAndCloseAll(t *testing.T) {
 	}
 }
 
+func TestPoolGetOrCreateAfterCloseAll(t *testing.T) {
+	pool := NewPool(loadPoolTestConfig(t))
+	pool.CloseAll()
+
+	_, err := pool.GetOrCreate(context.Background(), agenttypes.OpenSessionInput{
+		SessionKey: "s-closed",
+		AgentName:  "gemini",
+		RootPath:   t.TempDir(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "agent pool closed") {
+		t.Fatalf("expected agent pool closed error, got: %v", err)
+	}
+}
+
 func TestPoolConfigReturnsLoadedConfig(t *testing.T) {
 	cfg := loadPoolTestConfig(t)
 	pool := NewPool(cfg)

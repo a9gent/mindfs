@@ -473,7 +473,6 @@ func normalizeStatus(status Status) Status {
 	return status
 }
 
-
 func (p *Prober) collectDefinitions(include func(Status, bool) bool) []Definition {
 	defs := make([]Definition, 0, len(p.cfg.Agents))
 	for _, def := range p.cfg.Agents {
@@ -538,7 +537,6 @@ func (p *Prober) runDefinitionsConcurrently(defs []Definition, fn func(i int, de
 		}(i, def)
 	}
 }
-
 
 func definitionNames(defs []Definition) string {
 	if len(defs) == 0 {

@@ -20,6 +20,7 @@ type Pool struct {
 	cancel     context.CancelFunc
 	mu         sync.Mutex
 	sessions   map[string]*sessionEntry
+	closed     bool
 	acp        *acp.Runtime
 	claude     *claude.Runtime
 	codex      *codex.Runtime
@@ -53,32 +54,53 @@ func (p *Pool) GetOrCreate(ctx context.Context, in agenttypes.OpenSessionInput) 
 	}
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
+	if p.closed {
+		p.mu.Unlock()
+		return nil, errors.New("agent pool closed")
+	}
 	if entry, ok := p.sessions[in.SessionKey]; ok {
+		p.mu.Unlock()
 		return entry.session, nil
 	}
-
 	def, ok := p.cfg.GetAgent(in.AgentName)
 	if !ok {
+		p.mu.Unlock()
 		return nil, errors.New("agent not configured: " + in.AgentName)
 	}
 	protocol := def.Protocol
 	if protocol == "" {
 		protocol = DefaultProtocol(in.AgentName)
 	}
+	p.mu.Unlock()
 
+	// openSession starts subprocesses and can be slow, so keep it outside the pool lock.
 	sess, err := p.openSession(ctx, protocol, def, in)
 	if err != nil {
 		return nil, err
 	}
 
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		_ = sess.Close()
+		return nil, errors.New("agent pool closed")
+	}
+	// Another goroutine may have created the same session while the lock was released.
+	if entry, ok := p.sessions[in.SessionKey]; ok {
+		existing := entry.session
+		p.mu.Unlock()
+		if protocol != ProtocolACP {
+			_ = sess.Close()
+		}
+		return existing, nil
+	}
 	p.sessions[in.SessionKey] = &sessionEntry{
 		agentName:  in.AgentName,
 		sessionKey: in.SessionKey,
 		protocol:   protocol,
 		session:    sess,
 	}
+	p.mu.Unlock()
 	return sess, nil
 }
 
@@ -240,6 +262,7 @@ func (p *Pool) Context() context.Context {
 // CloseAll closes all runtime resources.
 func (p *Pool) CloseAll() {
 	p.mu.Lock()
+	p.closed = true
 	p.sessions = make(map[string]*sessionEntry)
 	cancel := p.cancel
 	p.cancel = nil

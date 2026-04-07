@@ -31,6 +31,7 @@ type Runtime struct {
 	mu         sync.Mutex
 	processes  map[string]*Process
 	closeHints map[string]string
+	closed     bool
 }
 
 func NewRuntime(processCtx context.Context) *Runtime {
@@ -41,7 +42,7 @@ func NewRuntime(processCtx context.Context) *Runtime {
 	}
 }
 
-func (r *Runtime) OpenSession(_ context.Context, opts OpenOptions) (types.Session, error) {
+func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Session, error) {
 	if opts.SessionKey == "" {
 		return nil, errors.New("session key required")
 	}
@@ -50,11 +51,11 @@ func (r *Runtime) OpenSession(_ context.Context, opts OpenOptions) (types.Sessio
 		return nil, err
 	}
 
-	if err := proc.NewSession(r.processCtx, opts.SessionKey, opts.RootPath); err != nil {
+	if err := proc.NewSession(ctx, opts.SessionKey, opts.RootPath); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(opts.Model) != "" {
-		if err := proc.SetModel(r.processCtx, opts.SessionKey, opts.Model); err != nil {
+		if err := proc.SetModel(ctx, opts.SessionKey, opts.Model); err != nil {
 			proc.CloseSession(opts.SessionKey)
 			return nil, err
 		}
@@ -186,12 +187,17 @@ func (r *Runtime) listProcessesAndReset() []*Process {
 	for _, proc := range r.processes {
 		procs = append(procs, proc)
 	}
+	r.closed = true
 	r.processes = make(map[string]*Process)
 	return procs
 }
 
 func (r *Runtime) getOrCreateProcess(opts OpenOptions) (*Process, error) {
 	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return nil, errors.New("agent runtime closed")
+	}
 	if proc, ok := r.processes[opts.AgentName]; ok {
 		r.mu.Unlock()
 		return proc, nil
@@ -209,6 +215,11 @@ func (r *Runtime) getOrCreateProcess(opts OpenOptions) (*Process, error) {
 	}
 
 	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		proc.Close()
+		return nil, errors.New("agent runtime closed")
+	}
 	if existing, ok := r.processes[opts.AgentName]; ok {
 		r.mu.Unlock()
 		proc.Close()
