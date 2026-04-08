@@ -91,18 +91,22 @@ export function AppShell({
   onCloseRight?: () => void;
 }) {
   const { isMobile, isTablet } = useResponsive();
-  const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
+  const [viewportRect, setViewportRect] = useState(() => getVisibleViewportRect());
 
   useEffect(() => {
-    const updateViewportHeight = () => {
-      setViewportHeight(window.innerHeight);
+    const updateViewportRect = () => {
+      setViewportRect(getVisibleViewportRect());
     };
-    updateViewportHeight();
-    window.addEventListener("resize", updateViewportHeight);
-    window.visualViewport?.addEventListener("resize", updateViewportHeight);
+    updateViewportRect();
+    window.addEventListener("resize", updateViewportRect);
+    window.addEventListener("orientationchange", updateViewportRect);
+    window.visualViewport?.addEventListener("resize", updateViewportRect);
+    window.visualViewport?.addEventListener("scroll", updateViewportRect);
     return () => {
-      window.removeEventListener("resize", updateViewportHeight);
-      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
+      window.removeEventListener("resize", updateViewportRect);
+      window.removeEventListener("orientationchange", updateViewportRect);
+      window.visualViewport?.removeEventListener("resize", updateViewportRect);
+      window.visualViewport?.removeEventListener("scroll", updateViewportRect);
     };
   }, []);
   
@@ -115,11 +119,15 @@ export function AppShell({
     gridTemplateColumns: isMobile ? undefined : `${leftOpen ? sidebarWidth : "0px"} 1fr ${rightOpen ? rightWidth : "0px"}`,
     gridTemplateRows: isMobile ? undefined : "1fr auto",
     gridTemplateAreas: isMobile ? undefined : `"sidebar main right" "sidebar footer right"`,
-    minHeight: isMobile ? `${viewportHeight}px` : "100vh",
-    height: isMobile ? `${viewportHeight}px` : "100dvh",
+    minHeight: isMobile ? `${viewportRect.height}px` : "100vh",
+    height: isMobile ? `${viewportRect.height}px` : "100dvh",
     background: "var(--bg-gradient-start, #f3f4f6)",
     color: "var(--text-primary)",
-    position: "relative",
+    position: isMobile ? "fixed" : "relative",
+    top: isMobile ? `${viewportRect.offsetTop}px` : undefined,
+    left: isMobile ? 0 : undefined,
+    right: isMobile ? 0 : undefined,
+    width: isMobile ? "100vw" : undefined,
     overflow: "hidden",
     isolation: "isolate",
     boxSizing: "border-box",
@@ -199,4 +207,15 @@ export function AppShell({
       </footer>
     </div>
   );
+}
+
+function getVisibleViewportRect(): { height: number; offsetTop: number } {
+  const visualViewport = window.visualViewport;
+  if (visualViewport) {
+    return {
+      height: Math.max(320, Math.round(visualViewport.height)),
+      offsetTop: Math.max(0, Math.round(visualViewport.offsetTop)),
+    };
+  }
+  return { height: window.innerHeight, offsetTop: 0 };
 }
