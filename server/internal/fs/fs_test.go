@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -61,5 +62,69 @@ func TestRootInfoListEntriesIncludesSizeAndMTime(t *testing.T) {
 	}
 	if entries[1].MTime == "" {
 		t.Fatalf("file mtime is empty")
+	}
+}
+
+func TestSharedFileWatcherShouldIgnoreLargeGeneratedDirectories(t *testing.T) {
+	rootDir := t.TempDir()
+	root := NewRootInfo("mindfs", "mindfs", rootDir)
+	watcher := &SharedFileWatcher{root: root}
+
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{filepath.Join(rootDir, "node_modules"), true},
+		{filepath.Join(rootDir, "web", "dist"), true},
+		{filepath.Join(rootDir, ".next", "cache"), true},
+		{filepath.Join(rootDir, ".mindfs"), true},
+		{filepath.Join(rootDir, ".mindfs", "state.json"), true},
+		{filepath.Join(rootDir, ".mindfs2"), false},
+		{filepath.Join(rootDir, "src"), false},
+		{filepath.Join(rootDir, "tmpfile"), false},
+	}
+
+	for _, tc := range tests {
+		if got := watcher.shouldIgnore(tc.path); got != tc.want {
+			t.Fatalf("shouldIgnore(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestSharedFileWatcherSkipsRecursiveWatchForHighFanoutDirectory(t *testing.T) {
+	rootDir := t.TempDir()
+	wideDir := filepath.Join(rootDir, "wide")
+	if err := os.Mkdir(wideDir, 0o755); err != nil {
+		t.Fatalf("Mkdir returned error: %v", err)
+	}
+	for i := 0; i <= maxDirectChildDirsRecursiveWatch; i++ {
+		if err := os.Mkdir(filepath.Join(wideDir, fmt.Sprintf("dir-%03d", i)), 0o755); err != nil {
+			t.Fatalf("Mkdir child %d returned error: %v", i, err)
+		}
+	}
+
+	root := NewRootInfo("mindfs", "mindfs", rootDir)
+	watcher := &SharedFileWatcher{root: root}
+	if !watcher.shouldSkipRecursiveWatch(wideDir) {
+		t.Fatalf("shouldSkipRecursiveWatch(%q) = false, want true", wideDir)
+	}
+}
+
+func TestSharedFileWatcherDoesNotCountIgnoredChildrenForFanoutLimit(t *testing.T) {
+	rootDir := t.TempDir()
+	dir := filepath.Join(rootDir, "deps")
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	for i := 0; i < maxDirectChildDirsRecursiveWatch; i++ {
+		if err := os.Mkdir(filepath.Join(dir, fmt.Sprintf("dir-%03d", i)), 0o755); err != nil {
+			t.Fatalf("Mkdir child %d returned error: %v", i, err)
+		}
+	}
+
+	root := NewRootInfo("mindfs", "mindfs", rootDir)
+	watcher := &SharedFileWatcher{root: root}
+	if watcher.shouldSkipRecursiveWatch(dir) {
+		t.Fatalf("shouldSkipRecursiveWatch(%q) = true, want false", dir)
 	}
 }

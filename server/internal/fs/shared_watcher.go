@@ -13,7 +13,40 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-const fileChangeBatchDelay = time.Second
+const (
+	fileChangeBatchDelay             = time.Second
+	maxWatchDirs                     = 1024
+	maxDirectChildDirsRecursiveWatch = 128
+)
+
+var ignoredWatchNames = map[string]struct{}{
+	".DS_Store":     {},
+	".cache":        {},
+	".git":          {},
+	".gradle":       {},
+	".mindfs":       {},
+	".mypy_cache":   {},
+	".next":         {},
+	".nuxt":         {},
+	".output":       {},
+	".parcel-cache": {},
+	".pytest_cache": {},
+	".ruff_cache":   {},
+	".svelte-kit":   {},
+	".turbo":        {},
+	".venv":         {},
+	".vercel":       {},
+	".vite":         {},
+	"__pycache__":   {},
+	"build":         {},
+	"coverage":      {},
+	"dist":          {},
+	"node_modules":  {},
+	"target":        {},
+	"tmp":           {},
+	"vendor":        {},
+	"venv":          {},
+}
 
 // SharedFileWatcher manages file watching for one root shared by multiple sessions.
 type SharedFileWatcher struct {
@@ -378,6 +411,7 @@ func (sw *SharedFileWatcher) addWatchRecursive(startRel string) error {
 	if err != nil {
 		return err
 	}
+	watched := 0
 	return filepath.WalkDir(startAbs, func(entryPath string, d iofs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -389,17 +423,74 @@ func (sw *SharedFileWatcher) addWatchRecursive(startRel string) error {
 			return nil
 		}
 		if d.IsDir() {
-			sw.watcher.Add(entryPath)
+			if watched >= maxWatchDirs {
+				return filepath.SkipDir
+			}
+			if err := sw.watcher.Add(entryPath); err != nil {
+				return err
+			}
+			watched++
+			if sw.shouldSkipRecursiveWatch(entryPath) {
+				return filepath.SkipDir
+			}
 		}
 		return nil
 	})
 }
 
+func (sw *SharedFileWatcher) shouldSkipRecursiveWatch(dirPath string) bool {
+	childDirCount := 0
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		childPath := filepath.Join(dirPath, entry.Name())
+		if sw.shouldIgnore(childPath) {
+			continue
+		}
+		childDirCount++
+		if childDirCount > maxDirectChildDirsRecursiveWatch {
+			return true
+		}
+	}
+	return false
+}
+
 func (sw *SharedFileWatcher) shouldIgnore(path string) bool {
 	metaDir := sw.root.MetaDir()
-	if metaDir != "" && strings.HasPrefix(path, metaDir) {
+	if metaDir != "" && isPathWithin(path, metaDir) {
 		return true
 	}
-	base := filepath.Base(path)
-	return base == ".git" || base == "node_modules" || base == ".DS_Store"
+	checkPath := path
+	if filepath.IsAbs(path) {
+		if rel, err := sw.root.relativeFromAbsolute(path); err == nil {
+			checkPath = rel
+		}
+	}
+	for _, part := range strings.Split(filepath.ToSlash(filepath.Clean(checkPath)), "/") {
+		if part == "" {
+			continue
+		}
+		if _, ignored := ignoredWatchNames[part]; ignored {
+			return true
+		}
+	}
+	return false
+}
+
+func isPathWithin(path, dir string) bool {
+	path = filepath.Clean(path)
+	dir = filepath.Clean(dir)
+	if path == dir {
+		return true
+	}
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

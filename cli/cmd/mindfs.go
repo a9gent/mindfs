@@ -464,7 +464,8 @@ func addManagedDir(addr, path string) (managedDirResponse, error) {
 		}
 		return out, nil
 	}
-	return managedDirResponse{}, fmt.Errorf("failed to add managed directory: %s", resp.Status)
+	message := httpErrorMessage(resp)
+	return managedDirResponse{}, fmt.Errorf("failed to add managed directory: %s", message)
 }
 
 func removeManagedDir(addr, path string) error {
@@ -482,12 +483,23 @@ func removeManagedDir(addr, path string) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
+	message := httpErrorMessage(resp)
+	return fmt.Errorf("failed to remove managed directory: %s", message)
+}
+
+func httpErrorMessage(resp *http.Response) string {
 	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	message := strings.TrimSpace(string(payload))
+	var apiErr struct {
+		Error string `json:"error"`
+	}
+	if message != "" && json.Unmarshal(payload, &apiErr) == nil && strings.TrimSpace(apiErr.Error) != "" {
+		message = strings.TrimSpace(apiErr.Error)
+	}
 	if message == "" {
 		message = resp.Status
 	}
-	return fmt.Errorf("failed to remove managed directory: %s", message)
+	return message
 }
 
 func removeManagedDirFromRegistry(path string) error {
