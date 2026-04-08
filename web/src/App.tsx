@@ -31,8 +31,8 @@ import { BottomSheet } from "./components/BottomSheet";
 // 类型定义
 type SessionMode = "chat" | "plugin";
 export type SessionItem = { key?: string; session_key?: string; root_id?: string; name?: string; type?: SessionMode; agent?: string; model?: string; scope?: string; purpose?: string; created_at?: string; updated_at?: string; closed_at?: string; related_files?: RelatedFile[]; exchanges?: Array<{ role?: string; content?: string; timestamp?: string; model?: string }>; pending?: boolean; };
-type Exchange = { role: string; agent?: string; model?: string; content?: string; timestamp?: string; toolCall?: any; };
-type PendingSend = { rootId: string; mode: SessionMode; agent: string; model?: string; message: string; timestamp: string; };
+type Exchange = { role: string; agent?: string; model?: string; content?: string; timestamp?: string; toolCall?: any; pending_ack?: boolean; };
+type PendingSend = { rootId: string; mode: SessionMode; agent: string; model?: string; message: string; timestamp: string; requestId?: string; sessionKey?: string; tempKey?: string; };
 type ViewerSelection = {
   filePath: string;
   text?: string;
@@ -507,10 +507,12 @@ export function App() {
   const interactionModeRef = useRef<"main" | "drawer">("main");
   const pendingDraftRef = useRef<PendingSend | null>(null);
   const pendingBySessionRef = useRef<Record<string, PendingSend>>({});
+  const pendingRequestRef = useRef<Record<string, PendingSend>>({});
   const cancelRequestedBySessionRef = useRef<Record<string, boolean>>({});
   const sessionCacheRef = useRef<Record<string, Session>>({});
   const loadedSessionRef = useRef<Record<string, boolean>>({});
   const loadingSessionRef = useRef<Record<string, Promise<Session | null>>>({});
+  const invalidTreeCacheKeysRef = useRef<Set<string>>(new Set());
   const boundSessionByRootRef = useRef<Record<string, string | null>>({});
   const drawerSessionByRootRef = useRef<Record<string, Session | null>>({});
   const drawerOpenByRootRef = useRef<Record<string, boolean>>({});
@@ -1065,19 +1067,22 @@ export function App() {
     return { entries: [] };
   }, []);
 
+  const treeCacheKey = useCallback((rootID: string, dirPath: string) => `${rootID}:${dirPath || "."}`, []);
+
   const refreshTreeDir = useCallback(async (rootID: string, dirPath: string, syncMain: boolean) => {
     try {
       const res = await fetch(appURL("/api/tree", new URLSearchParams({ root: rootID, dir: dirPath })));
       if (!res.ok) return;
       const payload = await res.json();
       const parsed = normalizeTreeResponse(payload);
-      setEntriesByPath((prev) => ({ ...prev, [`${rootID}:${dirPath}`]: parsed.entries }));
+      invalidTreeCacheKeysRef.current.delete(treeCacheKey(rootID, dirPath));
+      setEntriesByPath((prev) => ({ ...prev, [treeCacheKey(rootID, dirPath)]: parsed.entries }));
       if (syncMain) {
         setMainEntries(parsed.entries);
       }
     } catch {
     }
-  }, [normalizeTreeResponse]);
+  }, [normalizeTreeResponse, treeCacheKey]);
 
   const refreshCurrentFileContent = useCallback(async (rootID: string, changedPath: string) => {
     const currentFile = fileRef.current;
@@ -1321,6 +1326,9 @@ export function App() {
   const handleSendMessage = useCallback(async (message: string, mode: SessionMode, agent: string, model?: string) => {
     const activeRoot = currentRootIdRef.current;
     if (!activeRoot) return;
+    if (Object.values(pendingRequestRef.current).some((pending) => pending.rootId === activeRoot)) {
+      return;
+    }
     const selected = selectedSessionRef.current;
     const selectedKey = selected?.key || selected?.session_key;
     const isMainSessionView =
@@ -1369,7 +1377,10 @@ export function App() {
       session = { key: tempKey, type: mode, agent, model: effectiveModel, name: "新会话", pending: true } as any;
     }
     const now = new Date().toISOString();
-    const userEx: Exchange = { role: "user", content: message, timestamp: now };
+    const requestId = sessionService.createRequestId("msg");
+    const tempKey = sendSessionKey ? "" : (session?.key || "");
+    const userEx: Exchange = { role: "user", content: message, timestamp: now, pending_ack: true };
+    pendingRequestRef.current[requestId] = { rootId: activeRoot, mode: effectiveMode, agent: effectiveAgent, model: effectiveModel, message, timestamp: now, requestId, sessionKey: sendSessionKey, tempKey };
     if (sendSessionKey) {
       const ck = rootSessionKey(activeRoot, sendSessionKey);
       const cached = sessionCacheRef.current[ck] || ({ ...(session as any) } as Session);
@@ -1379,9 +1390,10 @@ export function App() {
         exchanges: [...prevExchanges, userEx],
         updated_at: now,
       } as Session;
+      session = sessionCacheRef.current[ck];
       bumpCacheVersion();
     } else {
-      pendingDraftRef.current = { rootId: activeRoot, mode: effectiveMode, agent: effectiveAgent, model: effectiveModel, message, timestamp: now };
+      pendingDraftRef.current = { rootId: activeRoot, mode: effectiveMode, agent: effectiveAgent, model: effectiveModel, message, timestamp: now, requestId, tempKey };
       session = {
         ...(session as any),
         exchanges: [userEx],
@@ -1405,7 +1417,10 @@ export function App() {
       selection,
       pluginCatalog: effectiveMode === "plugin" ? getViewModeSystemPrompt() : undefined,
     });
-    const sent = await sessionService.sendMessage(activeRoot, sendSessionKey, message, effectiveMode, effectiveAgent, effectiveModel || undefined, context);
+    const sent = await sessionService.sendMessage(activeRoot, sendSessionKey, message, effectiveMode, effectiveAgent, effectiveModel || undefined, context, requestId);
+    if (!sent) {
+      delete pendingRequestRef.current[requestId];
+    }
     if (!sent && sendSessionKey) {
       setSelectedPendingByKey(sendSessionKey, false);
       const latest = drawerSessionByRootRef.current[activeRoot];
@@ -1590,7 +1605,8 @@ export function App() {
         });
         const toLoad = [".", ...dirs];
         for (const dir of toLoad) {
-          if (entriesByPathRef.current[`${root}:${dir}`]) {
+          const cacheKey = treeCacheKey(String(root), dir);
+          if (Object.prototype.hasOwnProperty.call(entriesByPathRef.current, cacheKey) && !invalidTreeCacheKeysRef.current.has(cacheKey)) {
             continue;
           }
           try {
@@ -1598,7 +1614,8 @@ export function App() {
             if (!res.ok) continue;
             const payload = await res.json();
             const parsed = normalizeTreeResponse(payload);
-            setEntriesByPath((prev) => ({ ...prev, [`${root}:${dir}`]: parsed.entries }));
+            invalidTreeCacheKeysRef.current.delete(cacheKey);
+            setEntriesByPath((prev) => ({ ...prev, [cacheKey]: parsed.entries }));
           } catch {
           }
         }
@@ -1698,6 +1715,7 @@ export function App() {
       const nextPluginQuery = preserveQuery ? parsePluginQuery(window.location.search) : {};
       const loadDirectoryView = async (targetPath: string, targetIsRoot: boolean) => {
         const apiDir = targetIsRoot ? "." : targetPath;
+        const cacheKey = treeCacheKey(root, apiDir);
         if (currentRootIdRef.current !== root) {
           setCurrentRootId(root);
         }
@@ -1706,6 +1724,18 @@ export function App() {
         setMainEntries([]);
         setPluginQuery(nextPluginQuery);
         replaceURLState({ root, file: "", session: "", cursor: 0, pluginQuery: nextPluginQuery });
+        const cachedEntries = entriesByPathRef.current[cacheKey];
+        if (Object.prototype.hasOwnProperty.call(entriesByPathRef.current, cacheKey) && !invalidTreeCacheKeysRef.current.has(cacheKey)) {
+          setMainEntries(cachedEntries || []);
+          setSelectedDir(targetPath);
+          setSelectedDirKey(buildDirectorySelectionKey(root, targetPath, targetIsRoot));
+          setFile(null);
+          setSelectedSession(null);
+          fileCursorRef.current = 0;
+          setDrawerOpenForRoot(root, false);
+          if (isMobile) setIsLeftOpen(false);
+          return;
+        }
         try {
           const res = await fetch(appURL("/api/tree", new URLSearchParams({ root, dir: apiDir })));
           if (!res.ok) {
@@ -1717,7 +1747,8 @@ export function App() {
           }
           const payload = await res.json();
           const parsed = normalizeTreeResponse(payload);
-          setEntriesByPath((prev) => ({ ...prev, [`${root}:${apiDir}`]: parsed.entries }));
+          invalidTreeCacheKeysRef.current.delete(cacheKey);
+          setEntriesByPath((prev) => ({ ...prev, [cacheKey]: parsed.entries }));
           setMainEntries(parsed.entries);
           setSelectedDir(targetPath);
           setSelectedDirKey(buildDirectorySelectionKey(root, targetPath, targetIsRoot));
@@ -1740,7 +1771,7 @@ export function App() {
       if (isActuallyRoot) { setCurrentRootId(path); setExpanded((prev) => Array.from(new Set([...prev, path]))); } else { setExpanded((prev) => Array.from(new Set([...prev, expandedKey]))); }
       await loadDirectoryView(path, isActuallyRoot);
     }
-  }), [handleRelayNavigationFailure, isMobile, normalizeTreeResponse, setDrawerOpenForRoot, replaceURLState, rememberCurrentFileScroll]);
+  }), [handleRelayNavigationFailure, isMobile, normalizeTreeResponse, setDrawerOpenForRoot, replaceURLState, rememberCurrentFileScroll, treeCacheKey]);
   const actionHandlersRef = useRef(actionHandlers);
   useEffect(() => {
     actionHandlersRef.current = actionHandlers;
@@ -2268,12 +2299,39 @@ export function App() {
       if (!selected || selected === rootID) return ".";
       return selected;
     };
-    const handleFileChanged = (payload: any) => {
+    const stringList = (value: unknown): string[] => {
+      if (!Array.isArray(value)) return [];
+      return Array.from(new Set(value.filter((item): item is string => typeof item === "string" && item !== "")));
+    };
+    const handleFileChangedBatch = (payload: any) => {
       const rootID = typeof payload?.root_id === "string" ? payload.root_id : "";
-      const changedPath = typeof payload?.path === "string" ? payload.path : "";
-      if (!rootID || !changedPath) return;
-      invalidateFileCache(rootID, changedPath);
-      void refreshCurrentFileContent(rootID, changedPath);
+      if (!rootID) return;
+
+      const paths = stringList(payload?.paths);
+      const events = Array.isArray(payload?.events) ? payload.events : [];
+      const dirPathSet = new Set(stringList(payload?.dirs));
+      for (const path of paths) {
+	        const parentDir = dirname(path);
+	        dirPathSet.add(parentDir);
+	        const event = events.find((item: any) => item?.path === path);
+	        const op = typeof event?.op === "string" ? event.op : "";
+	        if (event?.is_dir === true || op.includes("REMOVE") || op.includes("RENAME")) {
+	          dirPathSet.add(path);
+	        }
+	      }
+      const dirs = Array.from(dirPathSet);
+      if (paths.length === 0 && dirs.length === 0) return;
+
+      for (const path of paths) {
+        invalidateFileCache(rootID, path);
+      }
+
+      const currentFile = fileRef.current;
+      const currentFileRoot = currentFile?.root || currentRootIdRef.current || "";
+      if (currentFile && currentFileRoot === rootID && paths.includes(currentFile.path)) {
+        void refreshCurrentFileContent(rootID, currentFile.path);
+      }
+
       void refreshGitStatus(rootID).then((next) => {
         if (!next?.available) {
           if (rootID === currentRootIdRef.current) {
@@ -2281,22 +2339,41 @@ export function App() {
           }
           return;
         }
-        const hasChangedDiff = (gitDiff?.path || "") === changedPath;
-        if (rootID === currentRootIdRef.current && hasChangedDiff) {
-          const target = next.items.find((item) => item.path === changedPath);
+        const changedDiffPath = gitDiff?.path || "";
+        if (rootID === currentRootIdRef.current && changedDiffPath && paths.includes(changedDiffPath)) {
+          const target = next.items.find((item) => item.path === changedDiffPath);
           if (!target) {
             setGitDiff(null);
             return;
           }
-          void fetchGitDiff(rootID, changedPath).then(setGitDiff).catch((err) => {
-            console.error("[git.diff.refresh] failed", { rootID, changedPath, err });
+          void fetchGitDiff(rootID, changedDiffPath).then(setGitDiff).catch((err) => {
+            console.error("[git.diff.refresh] failed", { rootID, changedPath: changedDiffPath, err });
           });
         }
       });
-      const parentDir = dirname(changedPath);
+
       const currentDir = currentDirAPI(rootID);
-      const syncMain = rootID === currentRootIdRef.current && parentDir === currentDir;
-      void refreshTreeDir(rootID, parentDir, syncMain);
+      for (const dir of dirs) {
+        invalidTreeCacheKeysRef.current.add(treeCacheKey(rootID, dir));
+        if (rootID === currentRootIdRef.current && dir === currentDir) {
+          void refreshTreeDir(rootID, dir, true);
+        }
+      }
+    };
+    const handleFileChanged = (payload: any) => {
+      const rootID = typeof payload?.root_id === "string" ? payload.root_id : "";
+      const changedPath = typeof payload?.path === "string" ? payload.path : "";
+      if (!rootID || !changedPath) return;
+      const dirs = [dirname(changedPath)];
+      if (payload?.is_dir === true) {
+        dirs.push(changedPath);
+      }
+      handleFileChangedBatch({
+        root_id: rootID,
+        paths: [changedPath],
+        dirs,
+        events: [{ path: changedPath, op: payload?.op, is_dir: payload?.is_dir }],
+      });
     };
     const unsubscribeEvents = sessionService.subscribeEvents((event) => {
       const payload = (event.payload || {}) as any;
@@ -2323,6 +2400,68 @@ export function App() {
           void refreshManagedRoots();
           break;
         case "session.stream": handleSessionStream(payload); break;
+        case "session.accepted": {
+          const requestId = typeof payload?.request_id === "string" ? payload.request_id : "";
+          const pending = pendingRequestRef.current[requestId];
+          if (!requestId || !pending) {
+            break;
+          }
+          delete pendingRequestRef.current[requestId];
+          const markAccepted = (sess: Session | null | undefined): Session | null => {
+            if (!sess) return null;
+            const exchanges = Array.isArray((sess as any).exchanges)
+              ? ((sess as any).exchanges as Exchange[]).map((exchange) =>
+                  exchange.pending_ack === true &&
+                  exchange.content === pending.message &&
+                  exchange.timestamp === pending.timestamp
+                    ? { ...exchange, pending_ack: false }
+                    : exchange
+                )
+              : [];
+            return { ...(sess as any), exchanges } as Session;
+          };
+          if (pending.sessionKey) {
+            const cacheKey = rootSessionKey(pending.rootId, pending.sessionKey);
+            const accepted = markAccepted(sessionCacheRef.current[cacheKey]);
+            if (accepted) {
+              sessionCacheRef.current[cacheKey] = accepted;
+              bumpCacheVersion();
+            }
+          }
+          const latestDrawer = drawerSessionByRootRef.current[pending.rootId];
+          const drawerKey = latestDrawer?.key || "";
+          if (drawerKey && (drawerKey === pending.sessionKey || drawerKey === pending.tempKey)) {
+            const accepted = markAccepted(latestDrawer);
+            if (accepted) {
+              setDrawerSessionForRoot(pending.rootId, accepted);
+            }
+          }
+          break;
+        }
+        case "session.error": {
+          const requestId = typeof payload?.request_id === "string" ? payload.request_id : "";
+          const pending = requestId ? pendingRequestRef.current[requestId] : null;
+          if (!requestId || !pending) {
+            break;
+          }
+          delete pendingRequestRef.current[requestId];
+          const targetKey = pending.tempKey || "";
+          const rootID = pending.rootId;
+          const latestDrawer = drawerSessionByRootRef.current[rootID];
+          if (targetKey && latestDrawer?.key === targetKey) {
+            const exchanges = Array.isArray((latestDrawer as any).exchanges)
+              ? ((latestDrawer as any).exchanges as Exchange[]).map((exchange) =>
+                  exchange.pending_ack === true &&
+                  exchange.content === pending.message &&
+                  exchange.timestamp === pending.timestamp
+                    ? { ...exchange, pending_ack: false }
+                    : exchange
+                )
+              : [];
+            setDrawerSessionForRoot(rootID, { ...(latestDrawer as any), pending: false, exchanges } as Session);
+          }
+          break;
+        }
         case "session.done": {
           const sessionKey = typeof payload?.session_key === "string" ? payload.session_key : "";
           const rootID = typeof payload?.root_id === "string" && payload.root_id
@@ -2373,6 +2512,7 @@ export function App() {
                 model: exchange?.model || "",
                 content: exchange?.content || "",
                 timestamp: exchange?.timestamp || new Date().toISOString(),
+                pending_ack: false,
               }],
               updated_at: sessionMeta?.updated_at || exchange?.timestamp || new Date().toISOString(),
             } as Session;
@@ -2422,6 +2562,7 @@ export function App() {
           }
           break;
         }
+        case "file.changed.batch": handleFileChangedBatch(payload); break;
         case "file.changed": handleFileChanged(payload); break;
         case "agent.status.changed": setAgentsVersion(v => v + 1); break;
         case "app.update":
@@ -2434,7 +2575,7 @@ export function App() {
       cancelled = true;
       unsubscribeEvents();
     };
-  }, [currentRootId, gitDiff?.path, mergeSessionItems, rootSessionKey, resolveRootForSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot, refreshTreeDir, refreshCurrentFileContent, refreshGitStatus, refreshManagedRoots, updateSessionRelatedFilesForKey]);
+  }, [currentRootId, gitDiff?.path, mergeSessionItems, rootSessionKey, resolveRootForSessionKey, appendAgentChunkForSession, appendThoughtChunkForSession, appendToolCallForSession, setSelectedPendingByKey, setBoundSessionForRoot, setDrawerSessionForRoot, refreshTreeDir, refreshCurrentFileContent, refreshGitStatus, refreshManagedRoots, updateSessionRelatedFilesForKey, treeCacheKey]);
 
   useEffect(() => {
     if (!currentRootId) return;

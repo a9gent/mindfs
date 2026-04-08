@@ -21,6 +21,10 @@ import (
 const (
 	wsFrameData  byte = 1
 	wsFrameClose byte = 2
+
+	relayReconnectInitialBackoff = time.Second
+	relayReconnectMaxBackoff     = 30 * time.Second
+	relayReconnectStableDuration = time.Minute
 )
 
 type Service struct {
@@ -73,8 +77,9 @@ func (s *Service) Run(ctx context.Context) error {
 		return err
 	}
 
-	backoff := time.Second
+	backoff := relayReconnectInitialBackoff
 	for {
+		startedAt := time.Now()
 		err := s.runSession(ctx, creds.Relay)
 		if ctx.Err() != nil {
 			return nil
@@ -82,14 +87,20 @@ func (s *Service) Run(ctx context.Context) error {
 		if isPermanentRelayError(err) {
 			return err
 		}
-		log.Printf("[relay] reconnecting after error: %v", err)
+		if time.Since(startedAt) >= relayReconnectStableDuration {
+			backoff = relayReconnectInitialBackoff
+		}
+		log.Printf("[relay] reconnecting after error in %s: %v", backoff, err)
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-time.After(backoff):
 		}
-		if backoff < 30*time.Second {
+		if backoff < relayReconnectMaxBackoff {
 			backoff *= 2
+			if backoff > relayReconnectMaxBackoff {
+				backoff = relayReconnectMaxBackoff
+			}
 		}
 	}
 }

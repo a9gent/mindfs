@@ -28,6 +28,7 @@ export type Session = {
     content?: string;
     timestamp?: string;
     toolCall?: ToolCall;
+    pending_ack?: boolean;
   }>;
 };
 
@@ -92,24 +93,54 @@ type FetchSessionsOptions = {
   afterTime?: string;
 };
 
+type PendingMessage = {
+  id: string;
+  message: Record<string, unknown>;
+};
+
 class SessionService {
   private ws: WebSocket | null = null;
   private handlers = new Map<string, Set<SessionEventHandler>>();
   private pendingStreams = new Map<string, StreamEvent[]>();
+  private pendingMessages = new Map<string, PendingMessage>();
   private listeners = new Set<(event: SessionServiceEvent) => void>();
   private reconnectTimer: number | null = null;
   private reconnectDelayMs = 1000;
+  private fastReconnectUntil = 0;
   private rootId: string | null = null;
   private hasConnected = false;
   private readonly clientId = this.generateClientId();
   private readonly maxReconnectDelayMs = 30000;
+  private readonly fastReconnectDelayMs = 1000;
+  private readonly fastReconnectWindowMs = 10000;
   private contextCache = new Map<
     string,
     { selectionKey: string }
   >();
 
+  constructor() {
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", () => this.reconnectNow());
+      window.addEventListener("pageshow", () => this.reconnectNow());
+    }
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+          this.reconnectNow();
+        }
+      });
+    }
+  }
+
   private generateClientId(): string {
     return `web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  createRequestId(prefix = "msg"): string {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+      return `${prefix}-${crypto.randomUUID()}`;
+    }
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   }
 
   private buildWSUrl(): string {
@@ -137,6 +168,7 @@ class SessionService {
         this.emit({ type: "ws.connected" });
       }
       this.hasConnected = true;
+      this.resendPendingMessages();
     };
 
     ws.onmessage = (event) => {
@@ -152,6 +184,7 @@ class SessionService {
     ws.onclose = () => {
       if (this.ws !== ws) return;
       this.ws = null;
+      this.fastReconnectUntil = Date.now() + this.fastReconnectWindowMs;
       this.scheduleReconnect();
     };
 
@@ -184,6 +217,15 @@ class SessionService {
       ws.onopen = null;
       ws.close();
     }
+  }
+
+  private reconnectNow() {
+    if (!this.rootId) return;
+    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return;
+    this.clearReconnectTimer();
+    this.reconnectDelayMs = 1000;
+    this.fastReconnectUntil = Date.now() + this.fastReconnectWindowMs;
+    this.connect(this.rootId);
   }
 
   private buildSelectionKey(selection: unknown): string {
@@ -221,8 +263,11 @@ class SessionService {
   private scheduleReconnect() {
     if (!this.rootId) return;
     if (this.reconnectTimer) return;
-    const delay = this.reconnectDelayMs;
-    this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, this.maxReconnectDelayMs);
+    const isFastReconnect = Date.now() < this.fastReconnectUntil;
+    const delay = isFastReconnect ? this.fastReconnectDelayMs : this.reconnectDelayMs;
+    if (!isFastReconnect) {
+      this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, this.maxReconnectDelayMs);
+    }
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null;
       if (this.rootId) {
@@ -235,6 +280,15 @@ class SessionService {
     const type = msg.type as string;
     const payload = msg.payload || {};
     const sessionKey = payload.session_key as string;
+    if (type === "session.accepted") {
+      const requestId = typeof payload.request_id === "string" ? payload.request_id : (typeof msg.id === "string" ? msg.id : "");
+      if (requestId) {
+        this.pendingMessages.delete(requestId);
+      }
+    } else if (type === "session.error" && typeof msg.id === "string") {
+      this.pendingMessages.delete(msg.id);
+      payload.request_id = msg.id;
+    }
     this.emit({ type, sessionKey, payload });
 
     if (!sessionKey) return;
@@ -316,7 +370,8 @@ class SessionService {
     type: SessionType,
     agent: string,
     model?: string,
-    context?: Record<string, unknown>
+    context?: Record<string, unknown>,
+    requestId = this.createRequestId("msg")
   ): Promise<boolean> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.error("[Session] WebSocket not connected");
@@ -324,7 +379,7 @@ class SessionService {
     }
 
     const msg = {
-      id: `msg-${Date.now()}`,
+      id: requestId,
       type: "session.message",
       payload: {
         root_id: rootId,
@@ -337,8 +392,18 @@ class SessionService {
       },
     };
 
+    this.pendingMessages.set(requestId, { id: requestId, message: msg });
     this.ws.send(JSON.stringify(msg));
     return true;
+  }
+
+  private resendPendingMessages() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    for (const pending of this.pendingMessages.values()) {
+      this.ws.send(JSON.stringify(pending.message));
+    }
   }
 
   async cancelMessage(rootId: string, sessionKey: string): Promise<boolean> {

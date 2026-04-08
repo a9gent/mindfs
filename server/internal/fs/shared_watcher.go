@@ -5,11 +5,15 @@ import (
 	iofs "io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
+
+const fileChangeBatchDelay = time.Second
 
 // SharedFileWatcher manages file watching for one root shared by multiple sessions.
 type SharedFileWatcher struct {
@@ -17,11 +21,16 @@ type SharedFileWatcher struct {
 	watcher      *fsnotify.Watcher
 	sessionStore SessionFileRecorder
 
-	mu            sync.RWMutex
-	sessions      map[string]*sessionInfo
-	pendingWrites map[string]string
-	onFileChange  func(FileChangeEvent)
-	onRelatedFile func(RelatedFileEvent)
+	mu                sync.RWMutex
+	sessions          map[string]*sessionInfo
+	pendingWrites     map[string]string
+	pendingChanges    map[string]FileChangeEvent
+	pendingChangeDirs map[string]struct{}
+	fileChangeTimer   *time.Timer
+	fileChangeVersion uint64
+	onFileChange      func(FileChangeEvent)
+	onFileChangeBatch func(FileChangeBatchEvent)
+	onRelatedFile     func(RelatedFileEvent)
 
 	done chan struct{}
 }
@@ -41,6 +50,13 @@ type FileChangeEvent struct {
 	IsDir  bool   `json:"is_dir"`
 }
 
+type FileChangeBatchEvent struct {
+	RootID string            `json:"root_id"`
+	Paths  []string          `json:"paths"`
+	Dirs   []string          `json:"dirs"`
+	Events []FileChangeEvent `json:"events"`
+}
+
 type RelatedFileEvent struct {
 	RootID     string `json:"root_id"`
 	SessionKey string `json:"session_key"`
@@ -53,12 +69,14 @@ func NewSharedFileWatcher(root RootInfo, sessions SessionFileRecorder) (*SharedF
 		return nil, err
 	}
 	sw := &SharedFileWatcher{
-		root:          root,
-		watcher:       w,
-		sessionStore:  sessions,
-		sessions:      make(map[string]*sessionInfo),
-		pendingWrites: make(map[string]string),
-		done:          make(chan struct{}),
+		root:              root,
+		watcher:           w,
+		sessionStore:      sessions,
+		sessions:          make(map[string]*sessionInfo),
+		pendingWrites:     make(map[string]string),
+		pendingChanges:    make(map[string]FileChangeEvent),
+		pendingChangeDirs: make(map[string]struct{}),
+		done:              make(chan struct{}),
 	}
 	if err := sw.addWatchRecursive("."); err != nil {
 		if closeErr := w.Close(); closeErr != nil {
@@ -131,6 +149,12 @@ func (sw *SharedFileWatcher) SetOnFileChange(handler func(FileChangeEvent)) {
 	sw.mu.Unlock()
 }
 
+func (sw *SharedFileWatcher) SetOnFileChangeBatch(handler func(FileChangeBatchEvent)) {
+	sw.mu.Lock()
+	sw.onFileChangeBatch = handler
+	sw.mu.Unlock()
+}
+
 func (sw *SharedFileWatcher) SetOnRelatedFile(handler func(RelatedFileEvent)) {
 	sw.mu.Lock()
 	sw.onRelatedFile = handler
@@ -153,6 +177,7 @@ func (sw *SharedFileWatcher) Close() {
 		close(sw.done)
 	}
 	sw.mu.Unlock()
+	sw.flushFileChangeBatch(0)
 	sw.watcher.Close()
 }
 
@@ -235,12 +260,108 @@ func (sw *SharedFileWatcher) resolveSessionKey(relPath string) string {
 }
 
 func (sw *SharedFileWatcher) emitFileChange(change FileChangeEvent) {
-	sw.mu.RLock()
-	handler := sw.onFileChange
-	sw.mu.RUnlock()
-	if handler != nil {
-		handler(change)
+	sw.queueFileChangeBatch(change)
+}
+
+func (sw *SharedFileWatcher) queueFileChangeBatch(change FileChangeEvent) {
+	change.Path = filepath.ToSlash(change.Path)
+	if change.Path == "" {
+		return
 	}
+	sw.mu.Lock()
+	select {
+	case <-sw.done:
+		sw.mu.Unlock()
+		return
+	default:
+	}
+	if sw.pendingChanges == nil {
+		sw.pendingChanges = make(map[string]FileChangeEvent)
+	}
+	if sw.pendingChangeDirs == nil {
+		sw.pendingChangeDirs = make(map[string]struct{})
+	}
+	sw.pendingChanges[change.Path] = change
+	sw.pendingChangeDirs[parentDir(change.Path)] = struct{}{}
+	if change.IsDir || strings.Contains(change.Op, "REMOVE") || strings.Contains(change.Op, "RENAME") {
+		sw.pendingChangeDirs[change.Path] = struct{}{}
+	}
+	sw.fileChangeVersion++
+	version := sw.fileChangeVersion
+	if sw.fileChangeTimer != nil {
+		sw.fileChangeTimer.Stop()
+	}
+	sw.fileChangeTimer = time.AfterFunc(fileChangeBatchDelay, func() {
+		sw.flushFileChangeBatch(version)
+	})
+	sw.mu.Unlock()
+}
+
+func (sw *SharedFileWatcher) flushFileChangeBatch(version uint64) {
+	sw.mu.Lock()
+	if version != 0 && version != sw.fileChangeVersion {
+		sw.mu.Unlock()
+		return
+	}
+	if sw.fileChangeTimer != nil {
+		sw.fileChangeTimer.Stop()
+		sw.fileChangeTimer = nil
+	}
+	if len(sw.pendingChanges) == 0 {
+		sw.mu.Unlock()
+		return
+	}
+	changesByPath := sw.pendingChanges
+	dirsByPath := sw.pendingChangeDirs
+	sw.pendingChanges = make(map[string]FileChangeEvent)
+	sw.pendingChangeDirs = make(map[string]struct{})
+	batchHandler := sw.onFileChangeBatch
+	singleHandler := sw.onFileChange
+	sw.mu.Unlock()
+
+	paths := make([]string, 0, len(changesByPath))
+	for path := range changesByPath {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	dirs := make([]string, 0, len(dirsByPath))
+	for dir := range dirsByPath {
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+
+	events := make([]FileChangeEvent, 0, len(paths))
+	for _, path := range paths {
+		events = append(events, changesByPath[path])
+	}
+
+	if batchHandler != nil {
+		batchHandler(FileChangeBatchEvent{
+			RootID: sw.root.ID,
+			Paths:  paths,
+			Dirs:   dirs,
+			Events: events,
+		})
+		return
+	}
+	if singleHandler != nil {
+		for _, change := range events {
+			singleHandler(change)
+		}
+	}
+}
+
+func parentDir(path string) string {
+	clean := strings.Trim(filepath.ToSlash(path), "/")
+	if clean == "" || clean == "." {
+		return "."
+	}
+	idx := strings.LastIndex(clean, "/")
+	if idx <= 0 {
+		return "."
+	}
+	return clean[:idx]
 }
 
 func (sw *SharedFileWatcher) emitRelatedFile(change RelatedFileEvent) {

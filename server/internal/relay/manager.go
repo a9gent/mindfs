@@ -245,7 +245,6 @@ func (m *Manager) ensurePendingLocked() {
 	}
 	m.pendingCode = generatePendingCode()
 	m.pendingSince = time.Now().UTC()
-	m.lastError = ""
 }
 
 func (m *Manager) resolveRelayBase() string {

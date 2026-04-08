@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	wsPingInterval = 25 * time.Second
-	wsPongWait     = 35 * time.Second
+	wsPingInterval = 30 * time.Second
+	wsPongWait     = 2 * time.Minute
 )
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
@@ -33,6 +33,8 @@ type WSHandler struct {
 	relatedFileOnce sync.Once
 	proberOnce      sync.Once
 	updateOnce      sync.Once
+	requestMu       sync.Mutex
+	requests        map[string]time.Time
 }
 
 type StreamEvent struct {
@@ -45,6 +47,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.fileOnce.Do(func() {
 		if h.AppContext != nil {
 			h.AppContext.AddFileChangeListener(h.broadcastFileChange)
+			h.AppContext.AddFileChangeBatchListener(h.broadcastFileChangeBatch)
 		}
 	})
 	h.relatedFileOnce.Do(func() {
@@ -90,11 +93,20 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
+	done := make(chan struct{})
+	defer close(done)
+
 	go func() {
 		ticker := time.NewTicker(wsPingInterval)
 		defer ticker.Stop()
-		for range ticker.C {
-			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+		for {
+			select {
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					_ = conn.Close()
+					return
+				}
+			case <-done:
 				return
 			}
 		}
@@ -127,6 +139,27 @@ func (h *WSHandler) broadcastFileChange(change fs.FileChangeEvent) {
 			"path":    change.Path,
 			"op":      change.Op,
 			"is_dir":  change.IsDir,
+		},
+	}
+	h.broadcastWS(resp)
+}
+
+func (h *WSHandler) broadcastFileChangeBatch(change fs.FileChangeBatchEvent) {
+	events := make([]map[string]any, 0, len(change.Events))
+	for _, event := range change.Events {
+		events = append(events, map[string]any{
+			"path":   event.Path,
+			"op":     event.Op,
+			"is_dir": event.IsDir,
+		})
+	}
+	resp := WSResponse{
+		Type: "file.changed.batch",
+		Payload: map[string]any{
+			"root_id": change.RootID,
+			"paths":   change.Paths,
+			"dirs":    change.Dirs,
+			"events":  events,
 		},
 	}
 	h.broadcastWS(resp)
@@ -229,12 +262,20 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 	sessionType := getString(req.Payload, "type")
 	agentName := getString(req.Payload, "agent")
 	model := getString(req.Payload, "model")
+	requestID := strings.TrimSpace(req.ID)
 	if content == "" || sessionType == "" || agentName == "" {
 		h.sendWSError(conn, req.ID, "invalid_request", "content, type and agent required")
 		return
 	}
 
 	uc := &usecase.Service{Registry: h.AppContext}
+	streamHub := h.AppContext.GetSessionStreamHub()
+	if requestID != "" {
+		h.sendWSAccepted(conn, requestID, rootID, key)
+		if !h.reserveClientRequest(requestID) {
+			return
+		}
+	}
 	sessionName := ""
 	if key == "" {
 		sessionName = usecase.BuildFallbackSessionName(content)
@@ -274,10 +315,9 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 		}(rootID, key, agentName, content)
 	}
 	if h.AppContext != nil {
-		h.AppContext.GetSessionStreamHub().BindSessionClient(key, clientID)
+		streamHub.BindSessionClient(key, clientID)
 	}
 	clientCtx := parseClientContext(req.Payload, rootID)
-	streamHub := h.AppContext.GetSessionStreamHub()
 	msgCtx, cancel := h.sessionMessageContext()
 	defer cancel()
 
@@ -365,11 +405,50 @@ func (h *WSHandler) sendWSError(conn *websocket.Conn, id, code, message string) 
 		},
 		Payload: map[string]any{},
 	}
-	if h.AppContext != nil {
-		h.AppContext.GetSessionStreamHub().WriteJSON(conn, resp)
-		return
+	_ = h.writeWSJSON(conn, resp)
+}
+
+func (h *WSHandler) sendWSAccepted(conn *websocket.Conn, requestID, rootID, sessionKey string) {
+	resp := WSResponse{
+		ID:   requestID,
+		Type: "session.accepted",
+		Payload: map[string]any{
+			"request_id":  requestID,
+			"root_id":     rootID,
+			"session_key": sessionKey,
+		},
 	}
-	conn.WriteJSON(resp)
+	_ = h.writeWSJSON(conn, resp)
+}
+
+func (h *WSHandler) reserveClientRequest(requestID string) bool {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return true
+	}
+	h.requestMu.Lock()
+	defer h.requestMu.Unlock()
+	if h.requests == nil {
+		h.requests = make(map[string]time.Time)
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for id, seenAt := range h.requests {
+		if seenAt.Before(cutoff) {
+			delete(h.requests, id)
+		}
+	}
+	if _, exists := h.requests[requestID]; exists {
+		return false
+	}
+	h.requests[requestID] = time.Now().UTC()
+	return true
+}
+
+func (h *WSHandler) writeWSJSON(conn *websocket.Conn, resp WSResponse) error {
+	if h.AppContext != nil {
+		return h.AppContext.GetSessionStreamHub().WriteJSON(conn, resp)
+	}
+	return conn.WriteJSON(resp)
 }
 
 func updateToEvent(update agenttypes.Event) *StreamEvent {

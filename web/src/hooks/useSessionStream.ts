@@ -7,10 +7,11 @@ type ExchangeLike = {
   content?: string;
   timestamp?: string;
   toolCall?: ToolCall;
+  pending_ack?: boolean;
 };
 
 export type TimelineItem =
-  | { id: string; type: "user_text" | "assistant_text"; content: string; timestamp?: string; agent?: string }
+  | { id: string; type: "user_text" | "assistant_text"; content: string; timestamp?: string; agent?: string; pendingAck?: boolean }
   | { id: string; type: "thought"; content: string }
   | { id: string; type: "tool"; toolCall: ToolCall };
 
@@ -71,7 +72,7 @@ function buildBaseTimeline(exchanges: ExchangeLike[]): TimelineItem[] {
     const content = ex.content || "";
     if (role === "user") {
       if (!content) continue;
-      out.push({ id: nowID("user"), type: "user_text", content, timestamp: ex.timestamp, agent: ex.agent });
+      out.push({ id: nowID("user"), type: "user_text", content, timestamp: ex.timestamp, agent: ex.agent, pendingAck: ex.pending_ack === true });
       continue;
     }
     if (role === "agent" || role === "assistant") {

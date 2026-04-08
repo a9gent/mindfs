@@ -281,7 +281,23 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
                 <InlineTokenText content={displayContent} isDark={false} variant="inverse" />
               </div>
             ) : null}
-            <span style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, alignSelf: 'flex-end' }}>{time}</span>
+            <span style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, alignSelf: 'flex-end', display: "inline-flex", alignItems: "center", gap: "5px" }}>
+              {item.pendingAck ? (
+                <span
+                  aria-label="发送中"
+                  style={{
+                    width: "8px",
+                    height: "8px",
+                    border: "1px solid var(--text-secondary)",
+                    borderTopColor: "transparent",
+                    borderRadius: "50%",
+                    display: "inline-block",
+                    animation: "spin 0.8s linear infinite",
+                  }}
+                />
+              ) : null}
+              <span>{time}</span>
+            </span>
           </div>
         ) : (
           <div style={{ width: "100%", minWidth: 0, display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
@@ -361,6 +377,9 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
         @keyframes pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.5; }
+        }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
         }
       `}</style>
     </div>

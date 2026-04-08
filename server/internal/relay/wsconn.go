@@ -3,6 +3,7 @@ package relay
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+const wsBridgeWriteTimeout = 15 * time.Second
 
 type WebSocketNetConn struct {
 	conn *websocket.Conn
@@ -113,7 +116,7 @@ func bridgeWebSocketToStream(localConn *websocket.Conn, stream io.Writer, errCh 
 			return
 		}
 		if err := writeWSDataFrame(stream, messageType, payload); err != nil {
-			errCh <- err
+			errCh <- fmt.Errorf("relay local_to_stream write failed: %w", err)
 			return
 		}
 	}
@@ -133,8 +136,9 @@ func bridgeStreamToWebSocket(stream io.Reader, localConn *websocket.Conn, errCh 
 
 		switch frameType {
 		case wsFrameData:
+			_ = localConn.SetWriteDeadline(time.Now().Add(wsBridgeWriteTimeout))
 			if err := localConn.WriteMessage(opcode, payload); err != nil {
-				errCh <- err
+				errCh <- fmt.Errorf("relay stream_to_local websocket write failed: %w", err)
 				return
 			}
 		case wsFrameClose:
@@ -154,6 +158,9 @@ func bridgeStreamToWebSocket(stream io.Reader, localConn *websocket.Conn, errCh 
 }
 
 func writeWSDataFrame(w io.Writer, opcode int, payload []byte) error {
+	if err := setWriteDeadline(w, wsBridgeWriteTimeout); err != nil {
+		return err
+	}
 	header := make([]byte, 6)
 	header[0] = wsFrameData
 	header[1] = byte(opcode)
@@ -169,6 +176,9 @@ func writeWSDataFrame(w io.Writer, opcode int, payload []byte) error {
 }
 
 func writeWSCloseFrame(w io.Writer, code int, reason string) error {
+	if err := setWriteDeadline(w, wsBridgeWriteTimeout); err != nil {
+		return err
+	}
 	reasonBytes := []byte(reason)
 	if len(reasonBytes) > 65535 {
 		reasonBytes = reasonBytes[:65535]
@@ -185,6 +195,16 @@ func writeWSCloseFrame(w io.Writer, code int, reason string) error {
 	}
 	_, err := w.Write(reasonBytes)
 	return err
+}
+
+func setWriteDeadline(w io.Writer, timeout time.Duration) error {
+	deadliner, ok := w.(interface {
+		SetWriteDeadline(time.Time) error
+	})
+	if !ok {
+		return nil
+	}
+	return deadliner.SetWriteDeadline(time.Now().Add(timeout))
 }
 
 func readWSFrame(r io.Reader) (frameType byte, opcode int, payload []byte, closeCode int, closeText string, err error) {

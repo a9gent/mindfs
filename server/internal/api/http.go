@@ -246,7 +246,6 @@ func (h *HTTPHandler) handleAgentsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	statuses := h.AppContext.GetProber().GetInstalledStatuses()
-	log.Printf("[http] agents.list count=%d", len(statuses))
 	respondJSON(w, http.StatusOK, statuses)
 }
 
