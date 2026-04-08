@@ -21,6 +21,7 @@ type StatusItem struct {
 	Status    string `json:"status"`
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
+	IsDir     bool   `json:"is_dir,omitempty"`
 }
 
 type StatusResult struct {
@@ -103,6 +104,9 @@ func ReadDiff(ctx context.Context, rootPath, relPath string) (DiffResult, error)
 
 func loadRepoContext(ctx context.Context, rootPath string) (repoContext, error) {
 	rootPath = filepath.Clean(rootPath)
+	if resolvedRootPath, err := filepath.EvalSymlinks(rootPath); err == nil {
+		rootPath = filepath.Clean(resolvedRootPath)
+	}
 	repoRootOutput, err := runGit(ctx, rootPath, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return repoContext{}, err
@@ -110,6 +114,9 @@ func loadRepoContext(ctx context.Context, rootPath string) (repoContext, error) 
 	repoRoot := strings.TrimSpace(repoRootOutput)
 	if repoRoot == "" {
 		return repoContext{}, errors.New("empty git repo root")
+	}
+	if resolvedRepoRoot, err := filepath.EvalSymlinks(repoRoot); err == nil {
+		repoRoot = filepath.Clean(resolvedRepoRoot)
 	}
 	relPrefix, err := filepath.Rel(repoRoot, rootPath)
 	if err != nil {
@@ -132,7 +139,7 @@ func loadRepoContext(ctx context.Context, rootPath string) (repoContext, error) 
 }
 
 func (r repoContext) statusItems(ctx context.Context) ([]StatusItem, error) {
-	args := []string{"status", "--porcelain=v1", "-z", "--untracked-files=all"}
+	args := []string{"status", "--porcelain=v1", "-z", "--untracked-files=normal"}
 	if r.prefix != "" {
 		args = append(args, "--", r.prefix)
 	}
@@ -166,16 +173,25 @@ func (r repoContext) statusItems(ctx context.Context) ([]StatusItem, error) {
 		if path == "" {
 			continue
 		}
+		path = strings.TrimSuffix(path, "/")
+		if shouldIgnoreStatusPath(path) {
+			continue
+		}
 		oldPath := r.fromRepoPath(item.OldPath)
 
 		var additions, deletions int
+		isDir := false
 		if item.Status == "??" {
 			target := filepath.Join(r.rootPath, filepath.FromSlash(path))
-			lines, err := countFileLines(target)
-			if err != nil {
-				continue
+			if info, err := os.Stat(target); err == nil && info.IsDir() {
+				isDir = true
+			} else {
+				lines, err := countFileLines(target)
+				if err != nil {
+					continue
+				}
+				additions = lines
 			}
-			additions = lines
 		} else {
 			repoPath := r.toRepoPath(path)
 			if stats, ok := numstatCache[repoPath]; ok {
@@ -190,9 +206,19 @@ func (r repoContext) statusItems(ctx context.Context) ([]StatusItem, error) {
 			Status:    item.Status,
 			Additions: additions,
 			Deletions: deletions,
+			IsDir:     isDir,
 		})
 	}
 	return items, nil
+}
+
+func shouldIgnoreStatusPath(path string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(filepath.Clean(path)), "/") {
+		if part == ".mindfs" {
+			return true
+		}
+	}
+	return false
 }
 
 // batchNumstat fetches line stats for all items with one cached and one worktree git call.

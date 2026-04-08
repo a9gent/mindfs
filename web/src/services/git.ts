@@ -10,6 +10,7 @@ export type GitStatusItem = {
   status: GitStatusCode;
   additions: number;
   deletions: number;
+  is_dir?: boolean;
 };
 
 export type GitStatusPayload = {

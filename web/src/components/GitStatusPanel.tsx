@@ -92,7 +92,12 @@ export function GitStatusPanel({ status, loading = false, isFiltered = false, on
             <button
               key={`${item.status}:${item.path}`}
               type="button"
-              onClick={() => onSelectItem?.(item)}
+              disabled={item.is_dir === true}
+              onClick={() => {
+                if (item.is_dir !== true) {
+                  onSelectItem?.(item);
+                }
+              }}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -101,10 +106,11 @@ export function GitStatusPanel({ status, loading = false, isFiltered = false, on
                 border: "none",
                 background: "linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.03))",
                 padding: "6px 10px",
-                cursor: "pointer",
+                cursor: item.is_dir === true ? "default" : "pointer",
                 textAlign: "left",
                 borderRadius: "8px",
                 transition: "background 0.15s",
+                opacity: item.is_dir === true ? 0.72 : 1,
               }}
               onMouseEnter={(e) => { e.currentTarget.style.background = "linear-gradient(180deg, rgba(59, 130, 246, 0.12), rgba(59, 130, 246, 0.05))"; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = "linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.03))"; }}
