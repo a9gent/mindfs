@@ -198,7 +198,10 @@ func (m *Manager) pollLoop(parent context.Context, pendingCode string) {
 			m.mu.Lock()
 			m.lastError = result.Status
 			m.pendingCode = ""
+			m.ensurePendingLocked()
+			nextPendingCode := m.pendingCode
 			m.mu.Unlock()
+			m.startPollingLocked(parent, nextPendingCode)
 			return
 		default:
 			delay = nextDelay(delay)

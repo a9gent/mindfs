@@ -234,6 +234,63 @@ func TestManagerPollConfirmedStartsRelay(t *testing.T) {
 	}
 }
 
+func TestManagerPollTerminalBindStatusRefreshesPendingCode(t *testing.T) {
+	configRoot := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+	t.Setenv("HOME", configRoot)
+
+	manager, err := NewManager(":7331", false, "https://relay.example.com")
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	requests := make(chan string, 4)
+	manager.service.client = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if strings.HasPrefix(req.URL.String(), "https://relay.example.com/api/bind/poll?code=pc_") {
+				requests <- req.URL.String()
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"status":"expired"}`)),
+				}, nil
+			}
+			return nil, context.Canceled
+		}),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	firstPendingCode := manager.Status().PendingCode
+	if firstPendingCode == "" {
+		t.Fatal("expected initial pending code")
+	}
+
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case <-requests:
+			status := manager.Status()
+			if status.LastError != "expired" {
+				continue
+			}
+			if status.PendingCode == "" {
+				t.Fatal("expected refreshed pending code")
+			}
+			if status.PendingCode == firstPendingCode {
+				t.Fatalf("pending code was not refreshed: %q", status.PendingCode)
+			}
+			return
+		case <-timeout:
+			t.Fatal("pending code was not refreshed after expired bind status")
+		}
+	}
+}
+
 func TestManagerDefaultsRelayBaseToLocalhost(t *testing.T) {
 	configRoot := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
