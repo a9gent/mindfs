@@ -11,6 +11,13 @@ type AgentSelectorProps = {
   warnUnavailable?: boolean;
 };
 
+const AGENT_MENU_MAX_BODY_HEIGHT = 344;
+const AGENT_MENU_HEADER_HEIGHT = 34;
+const AGENT_MENU_ROW_HEIGHT = 40;
+const AGENT_MENU_MIN_VISIBLE_ROWS = 3;
+const AGENT_MENU_MIN_BODY_HEIGHT =
+  AGENT_MENU_HEADER_HEIGHT + AGENT_MENU_ROW_HEIGHT * AGENT_MENU_MIN_VISIBLE_ROWS;
+
 function parseAgentErrorMessage(error?: string): string {
   const raw = String(error || "").trim();
   if (!raw) {
@@ -139,7 +146,12 @@ export function AgentSelector({
     if (!node) {
       return;
     }
-    setMenuBodyHeight(Math.min(node.scrollHeight, 344));
+    setMenuBodyHeight(
+      Math.min(
+        AGENT_MENU_MAX_BODY_HEIGHT,
+        Math.max(node.scrollHeight, AGENT_MENU_MIN_BODY_HEIGHT),
+      ),
+    );
   }, [isOpen, submenuAgent, agents.length]);
 
   const handleAgentSelect = useCallback(
@@ -170,7 +182,12 @@ export function AgentSelector({
       setErrorAgent(null);
       const node = agentColumnRef.current;
       if (node) {
-        setMenuBodyHeight(Math.min(node.scrollHeight, 344));
+        setMenuBodyHeight(
+          Math.min(
+            AGENT_MENU_MAX_BODY_HEIGHT,
+            Math.max(node.scrollHeight, AGENT_MENU_MIN_BODY_HEIGHT),
+          ),
+        );
       }
       setSubmenuAgent((prev) => (prev === entry.name ? null : entry.name));
     },
@@ -274,7 +291,7 @@ export function AgentSelector({
               minWidth: "0",
               maxWidth: submenuAgentStatus || errorAgentStatus ? "min(44vw, 180px)" : "min(72vw, 180px)",
               height: menuBodyHeight ? `${menuBodyHeight}px` : "auto",
-              maxHeight: "344px",
+              maxHeight: `${AGENT_MENU_MAX_BODY_HEIGHT}px`,
               overflowY: "auto",
             }}
           >
@@ -432,7 +449,7 @@ export function AgentSelector({
               maxWidth: submenuAgentStatus || errorAgentStatus ? "min(40vw, 180px)" : "0",
               borderLeft: submenuAgentStatus || errorAgentStatus ? "1px solid var(--menu-divider)" : "none",
               height: menuBodyHeight ? `${menuBodyHeight}px` : "auto",
-              maxHeight: "344px",
+              maxHeight: `${AGENT_MENU_MAX_BODY_HEIGHT}px`,
               overflowY: "auto",
               overflowX: "hidden",
               transition: "width 0.16s ease, border-left-color 0.16s ease",
