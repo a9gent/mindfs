@@ -10,6 +10,51 @@ param(
 $ErrorActionPreference = "Stop"
 $Repo = "a9gent/mindfs"
 
+function Add-ToCurrentSessionPath([string]$Dir) {
+    if (-not $Dir) { return }
+    $segments = @($env:Path -split ';' | Where-Object { $_ -and $_.Trim() -ne "" })
+    if ($segments | Where-Object { $_.TrimEnd('\') -ieq $Dir.TrimEnd('\') }) {
+        return
+    }
+    $env:Path = "$Dir;$env:Path"
+}
+
+function Broadcast-EnvironmentChange {
+    try {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class MindFSEnvBroadcast {
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd,
+        uint Msg,
+        UIntPtr wParam,
+        string lParam,
+        uint fuFlags,
+        uint uTimeout,
+        out UIntPtr lpdwResult);
+}
+"@ -ErrorAction SilentlyContinue | Out-Null
+
+        $HWND_BROADCAST = [IntPtr]0xffff
+        $WM_SETTINGCHANGE = 0x001A
+        $SMTO_ABORTIFHUNG = 0x0002
+        $result = [UIntPtr]::Zero
+        [MindFSEnvBroadcast]::SendMessageTimeout(
+            $HWND_BROADCAST,
+            $WM_SETTINGCHANGE,
+            [UIntPtr]::Zero,
+            "Environment",
+            $SMTO_ABORTIFHUNG,
+            5000,
+            [ref]$result
+        ) | Out-Null
+    } catch {
+    }
+}
+
 # ── Detect architecture ────────────────────────────────────────────────────
 function Get-Arch {
     $a = $env:PROCESSOR_ARCHITECTURE
@@ -104,8 +149,13 @@ try {
     $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
     if ($UserPath -notlike "*$BinDir*") {
         [Environment]::SetEnvironmentVariable("Path", "$BinDir;$UserPath", "User")
+        Add-ToCurrentSessionPath $BinDir
+        Broadcast-EnvironmentChange
         Write-Host "  Added $BinDir to your user PATH."
-        Write-Host "  Restart your terminal for the change to take effect."
+        Write-Host "  Current PowerShell session updated."
+        Write-Host "  New terminals should pick up the change automatically."
+    } else {
+        Add-ToCurrentSessionPath $BinDir
     }
 
     Write-Host ""
