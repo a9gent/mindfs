@@ -845,7 +845,9 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	if err := manager.AddExchangeForAgent(ctx, current, "agent", responseText, in.Agent); err != nil {
 		return err
 	}
-	manager.UpdateAgentState(ctx, current, in.Agent, contextLineCount(current.Exchanges))
+	if err := manager.UpdateAgentState(ctx, current, in.Agent, contextLineCount(current.Exchanges), sess.SessionID()); err != nil {
+		return err
+	}
 
 	prober := s.Registry.GetProber()
 	if sendErr != nil && !isCanceledTurnError(sendErr) {

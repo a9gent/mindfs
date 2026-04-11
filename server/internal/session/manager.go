@@ -29,6 +29,9 @@ FROM sessions`
 	deleteSessionSQL = `
 DELETE FROM sessions
 WHERE key = ?`
+	deleteBindingsBySessionSQL = `
+DELETE FROM session_agent_bindings
+WHERE session_key = ?`
 	upsertSessionMetaSQL = `
 INSERT INTO sessions (
 	key, type, model, name, related_files_json, created_at, updated_at, closed_at
@@ -52,6 +55,29 @@ CREATE TABLE IF NOT EXISTS sessions (
 	updated_at TEXT NOT NULL,
 	closed_at TEXT
 );`
+	agentBindingTableSchema = `
+CREATE TABLE IF NOT EXISTS session_agent_bindings (
+	session_key TEXT NOT NULL,
+	agent TEXT NOT NULL,
+	agent_session_id TEXT NOT NULL,
+	agent_ctx_seq INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (session_key, agent)
+);`
+	upsertAgentBindingSQL = `
+INSERT INTO session_agent_bindings (
+	session_key, agent, agent_session_id, agent_ctx_seq
+) VALUES (?, ?, ?, ?)
+ON CONFLICT(session_key, agent) DO UPDATE SET
+	agent_session_id = excluded.agent_session_id,
+	agent_ctx_seq = excluded.agent_ctx_seq`
+	selectAgentBindingSQL = `
+SELECT session_key, agent, agent_session_id, agent_ctx_seq
+FROM session_agent_bindings
+WHERE session_key = ? AND agent = ?`
+	selectAgentBindingsBySessionSQL = `
+SELECT session_key, agent, agent_session_id, agent_ctx_seq
+FROM session_agent_bindings
+WHERE session_key = ?`
 )
 
 type Manager struct {
@@ -73,6 +99,13 @@ type CreateInput struct {
 	Agent string
 	Model string
 	Name  string
+}
+
+type AgentBinding struct {
+	SessionKey     string `json:"session_key"`
+	Agent          string `json:"agent"`
+	AgentSessionID string `json:"agent_session_id"`
+	AgentCtxSeq    int    `json:"agent_ctx_seq"`
 }
 
 type ListOptions struct {
@@ -252,7 +285,7 @@ func (m *Manager) RecordOutputFile(ctx context.Context, key, path string) error 
 	})
 }
 
-func (m *Manager) UpdateAgentState(_ context.Context, session *Session, agent string, lastCtxSeq int) error {
+func (m *Manager) UpdateAgentState(_ context.Context, session *Session, agent string, lastCtxSeq int, agentSessionID string) error {
 	if session == nil || strings.TrimSpace(session.Key) == "" {
 		return errors.New("session required")
 	}
@@ -272,7 +305,98 @@ func (m *Manager) UpdateAgentState(_ context.Context, session *Session, agent st
 	if lastCtxSeq >= 0 {
 		session.AgentCtxSeq[agent] = lastCtxSeq
 	}
-	return nil
+	if strings.TrimSpace(agentSessionID) == "" {
+		return nil
+	}
+	return m.upsertAgentBindingUnsafe(AgentBinding{
+		SessionKey:     strings.TrimSpace(session.Key),
+		Agent:          strings.TrimSpace(agent),
+		AgentSessionID: strings.TrimSpace(agentSessionID),
+		AgentCtxSeq:    lastCtxSeq,
+	})
+}
+
+func (m *Manager) UpsertAgentBinding(_ context.Context, binding AgentBinding) error {
+	if strings.TrimSpace(binding.SessionKey) == "" {
+		return errors.New("session key required")
+	}
+	if strings.TrimSpace(binding.Agent) == "" {
+		return errors.New("agent required")
+	}
+	if strings.TrimSpace(binding.AgentSessionID) == "" {
+		return errors.New("agent session id required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.upsertAgentBindingUnsafe(binding)
+}
+
+func (m *Manager) GetAgentBinding(_ context.Context, sessionKey, agent string) (*AgentBinding, error) {
+	if strings.TrimSpace(sessionKey) == "" {
+		return nil, errors.New("session key required")
+	}
+	if strings.TrimSpace(agent) == "" {
+		return nil, errors.New("agent required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	db, err := m.ensureSessionMetaDBUnsafe()
+	if err != nil {
+		return nil, err
+	}
+	row := db.QueryRow(selectAgentBindingSQL, strings.TrimSpace(sessionKey), strings.TrimSpace(agent))
+	var binding AgentBinding
+	if err := row.Scan(&binding.SessionKey, &binding.Agent, &binding.AgentSessionID, &binding.AgentCtxSeq); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errSessionNotFound
+		}
+		return nil, err
+	}
+	return &binding, nil
+}
+
+func (m *Manager) listAgentBindingsUnsafe(sessionKey string) ([]AgentBinding, error) {
+	db, err := m.ensureSessionMetaDBUnsafe()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.Query(selectAgentBindingsBySessionSQL, strings.TrimSpace(sessionKey))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	bindings := make([]AgentBinding, 0)
+	for rows.Next() {
+		var binding AgentBinding
+		if err := rows.Scan(&binding.SessionKey, &binding.Agent, &binding.AgentSessionID, &binding.AgentCtxSeq); err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, binding)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return bindings, nil
+}
+
+func (m *Manager) upsertAgentBindingUnsafe(binding AgentBinding) error {
+	db, err := m.ensureSessionMetaDBUnsafe()
+	if err != nil {
+		return err
+	}
+	agentCtxSeq := 0
+	if binding.AgentCtxSeq > 0 {
+		agentCtxSeq = binding.AgentCtxSeq
+	}
+	_, err = db.Exec(
+		upsertAgentBindingSQL,
+		strings.TrimSpace(binding.SessionKey),
+		strings.TrimSpace(binding.Agent),
+		strings.TrimSpace(binding.AgentSessionID),
+		agentCtxSeq,
+	)
+	return err
 }
 
 func (m *Manager) Close(ctx context.Context, key string) (*Session, error) {
@@ -362,6 +486,9 @@ func (m *Manager) deleteSessionUnsafe(key string) error {
 	}
 	if rowsAffected == 0 {
 		return errSessionNotFound
+	}
+	if _, err := db.Exec(deleteBindingsBySessionSQL, key); err != nil {
+		return err
 	}
 	delete(m.sessions, key)
 	path, err := m.exchangePath(key)
@@ -561,6 +688,19 @@ func (m *Manager) loadSessionUnsafe(key string, afterSeq int) (*Session, error) 
 	if err != nil {
 		return nil, err
 	}
+	bindings, err := m.listAgentBindingsUnsafe(key)
+	if err != nil {
+		return nil, err
+	}
+	if meta.AgentCtxSeq == nil {
+		meta.AgentCtxSeq = map[string]int{}
+	}
+	for _, binding := range bindings {
+		if strings.TrimSpace(binding.Agent) == "" {
+			continue
+		}
+		meta.AgentCtxSeq[binding.Agent] = binding.AgentCtxSeq
+	}
 	exchanges, _, err := m.loadExchanges(key, afterSeq)
 	if err != nil {
 		return nil, err
@@ -678,6 +818,10 @@ func (m *Manager) ensureSessionMetaDBUnsafe() (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(sessionTableSchema); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(agentBindingTableSchema); err != nil {
 		db.Close()
 		return nil, err
 	}
