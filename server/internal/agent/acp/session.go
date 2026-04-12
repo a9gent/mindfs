@@ -16,14 +16,15 @@ import (
 )
 
 type OpenOptions struct {
-	AgentName  string
-	SessionKey string
-	Model      string
-	RootPath   string
-	Command    string
-	Args       []string
-	Env        map[string]string
-	Cwd        string
+	AgentName       string
+	SessionKey      string
+	Model           string
+	RootPath        string
+	Command         string
+	Args            []string
+	Env             map[string]string
+	Cwd             string
+	ResumeSessionID string
 }
 
 type Runtime struct {
@@ -51,8 +52,14 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 		return nil, err
 	}
 
-	if err := proc.NewSession(ctx, opts.SessionKey, opts.RootPath); err != nil {
-		return nil, err
+	if strings.TrimSpace(opts.ResumeSessionID) != "" {
+		if err := proc.ResumeSession(ctx, opts.SessionKey, opts.ResumeSessionID, opts.Cwd); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := proc.NewSession(ctx, opts.SessionKey, opts.RootPath); err != nil {
+			return nil, err
+		}
 	}
 	if strings.TrimSpace(opts.Model) != "" {
 		if err := proc.SetModel(ctx, opts.SessionKey, opts.Model); err != nil {

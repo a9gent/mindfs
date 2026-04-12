@@ -25,13 +25,14 @@ const (
 )
 
 type OpenOptions struct {
-	AgentName  string
-	SessionKey string
-	Model      string
-	RootPath   string
-	Command    string
-	Args       []string
-	Env        map[string]string
+	AgentName       string
+	SessionKey      string
+	Model           string
+	RootPath        string
+	Command         string
+	Args            []string
+	Env             map[string]string
+	ResumeSessionID string
 }
 
 type Runtime struct{}
@@ -56,6 +57,9 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 	}
 	if strings.TrimSpace(opts.Command) != "" {
 		optionList = append(optionList, claudeagent.WithCLIPath(opts.Command))
+	}
+	if strings.TrimSpace(opts.ResumeSessionID) != "" {
+		optionList = append(optionList, claudeagent.WithResume(strings.TrimSpace(opts.ResumeSessionID)))
 	}
 	if strings.TrimSpace(opts.Model) != "" {
 		optionList = append(optionList, claudeagent.WithModel(strings.TrimSpace(opts.Model)))

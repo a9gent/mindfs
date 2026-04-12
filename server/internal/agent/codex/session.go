@@ -15,14 +15,15 @@ import (
 )
 
 type OpenOptions struct {
-	AgentName  string
-	SessionKey string
-	Model      string
-	Probe      bool
-	RootPath   string
-	Command    string
-	Args       []string
-	Env        map[string]string
+	AgentName       string
+	SessionKey      string
+	Model           string
+	Probe           bool
+	RootPath        string
+	Command         string
+	Args            []string
+	Env             map[string]string
+	ResumeSessionID string
 }
 
 type Runtime struct {
@@ -49,10 +50,17 @@ func (r *Runtime) OpenSession(_ context.Context, opts OpenOptions) (types.Sessio
 		},
 	}
 
-	thread := client.StartThread(threadOptions)
+	var thread *codexsdk.Thread
+	if strings.TrimSpace(opts.ResumeSessionID) != "" {
+		thread = client.ResumeThread(strings.TrimSpace(opts.ResumeSessionID), threadOptions)
+	} else {
+		thread = client.StartThread(threadOptions)
+	}
 
 	threadID := ""
-	if id := thread.ID(); id != nil && strings.TrimSpace(*id) != "" {
+	if strings.TrimSpace(opts.ResumeSessionID) != "" {
+		threadID = strings.TrimSpace(opts.ResumeSessionID)
+	} else if id := thread.ID(); id != nil && strings.TrimSpace(*id) != "" {
 		threadID = strings.TrimSpace(*id)
 	}
 	return &session{

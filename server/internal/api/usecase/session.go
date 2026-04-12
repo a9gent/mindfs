@@ -172,6 +172,7 @@ type BuildPromptInput struct {
 	Agent         string
 	Message       string
 	ClientContext ClientContext
+	AgentCtxSeq   *int
 	IsInitial     bool
 }
 
@@ -193,7 +194,12 @@ func prependSwitchHint(in BuildPromptInput, prompt string) string {
 		return prompt
 	}
 	total := contextLineCount(in.Session.Exchanges)
-	last := in.Session.AgentCtxSeq[currentAgent]
+	last := 0
+	if in.AgentCtxSeq != nil {
+		last = *in.AgentCtxSeq
+	} else {
+		last = in.Session.AgentCtxSeq[currentAgent]
+	}
 	linesToRead := calculateSwitchReadLines(total, last)
 	if linesToRead <= 0 {
 		return prompt
@@ -712,16 +718,20 @@ func buildPluginPromptInitial(catalogPrompt, userMessage string) string {
 func (s *Service) ensureAgentSession(
 	ctx context.Context,
 	pool *agent.Pool,
+	manager *session.Manager,
 	current *session.Session,
 	agentName string,
 	model string,
 	rootAbs string,
-) (agenttypes.Session, error) {
+) (agenttypes.Session, *int, error) {
 	poolSessionKey := agentPoolSessionKey(current.Key, agentName)
-	nextModel := strings.TrimSpace(model)
+	nextModel := resolveRuntimeModel(current, model)
 	currentModel := ""
 	if current != nil {
-		currentModel = strings.TrimSpace(current.Model)
+		currentModel = resolveSessionExchangeModel(current)
+		if currentModel == "" {
+			currentModel = strings.TrimSpace(current.Model)
+		}
 	}
 	if existing, ok := pool.Get(poolSessionKey); ok {
 		if current != nil && currentModel != nextModel {
@@ -731,11 +741,16 @@ func (s *Service) ensureAgentSession(
 					prober.ReportRuntimeFailure(agentName, err)
 				}
 				log.Printf("[session/model] switch.error session=%s agent=%s model=%q pool_session=%s err=%v", current.Key, agentName, nextModel, poolSessionKey, err)
-				return nil, err
+				return nil, nil, err
 			}
 			log.Printf("[session/model] switch.done session=%s agent=%s model=%q pool_session=%s", current.Key, agentName, nextModel, poolSessionKey)
 		}
-		return existing, nil
+		var currentSeq *int
+		if current != nil {
+			last := current.AgentCtxSeq[agentName]
+			currentSeq = &last
+		}
+		return existing, currentSeq, nil
 	}
 
 	openCtx := pool.Context()
@@ -743,23 +758,91 @@ func (s *Service) ensureAgentSession(
 		openCtx = ctx
 	}
 
+	var binding *session.AgentBinding
+	if manager != nil {
+		var err error
+		binding, err = manager.FindAgentBinding(ctx, current.Key, agentName)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
 	openInput := agenttypes.OpenSessionInput{
 		SessionKey: poolSessionKey,
 		AgentName:  agentName,
 		Model:      nextModel,
 		RootPath:   rootAbs,
+		AgentSessionID: strings.TrimSpace(func() string {
+			if binding == nil {
+				return ""
+			}
+			return binding.AgentSessionID
+		}()),
+		AgentCtxSeq: func() int {
+			if binding == nil {
+				return 0
+			}
+			return binding.AgentCtxSeq
+		}(),
 	}
-	log.Printf("[session/model] open session=%s agent=%s model=%q pool_session=%s", current.Key, agentName, nextModel, poolSessionKey)
+	if openInput.AgentSessionID != "" {
+		log.Printf("[session/model] open session=%s agent=%s model=%q pool_session=%s action=resume_runtime_session agent_session_id=%s agent_ctx_seq=%d", current.Key, agentName, nextModel, poolSessionKey, openInput.AgentSessionID, openInput.AgentCtxSeq)
+	} else {
+		log.Printf("[session/model] open session=%s agent=%s model=%q pool_session=%s action=open_new_runtime_session", current.Key, agentName, nextModel, poolSessionKey)
+	}
 	sess, err := pool.GetOrCreate(openCtx, openInput)
+	var ctxSeqOverride *int
+	if err != nil {
+		if openInput.AgentSessionID != "" {
+			log.Printf("[session/model] resume.error session=%s agent=%s model=%q pool_session=%s agent_session_id=%s err=%v fallback=open_new_runtime_session", current.Key, agentName, nextModel, poolSessionKey, openInput.AgentSessionID, err)
+			openInput.AgentSessionID = ""
+			openInput.AgentCtxSeq = 0
+			sess, err = pool.GetOrCreate(openCtx, openInput)
+			if err == nil {
+				zero := 0
+				ctxSeqOverride = &zero
+			}
+		}
+	}
 	if err != nil {
 		if prober := s.Registry.GetProber(); prober != nil {
 			prober.ReportRuntimeFailure(agentName, err)
 		}
 		log.Printf("[session/model] open.error session=%s agent=%s model=%q pool_session=%s err=%v", current.Key, agentName, nextModel, poolSessionKey, err)
-		return nil, err
+		return nil, nil, err
+	}
+	if ctxSeqOverride == nil && binding != nil && openInput.AgentSessionID != "" {
+		last := binding.AgentCtxSeq
+		ctxSeqOverride = &last
 	}
 	log.Printf("[session/model] open.done session=%s agent=%s model=%q pool_session=%s", current.Key, agentName, nextModel, poolSessionKey)
-	return sess, nil
+	return sess, ctxSeqOverride, nil
+}
+
+func resolveRuntimeModel(current *session.Session, requested string) string {
+	if model := strings.TrimSpace(requested); model != "" {
+		return model
+	}
+	if model := resolveSessionExchangeModel(current); model != "" {
+		return model
+	}
+	if current == nil {
+		return ""
+	}
+	return strings.TrimSpace(current.Model)
+}
+
+func resolveSessionExchangeModel(current *session.Session) string {
+	if current == nil || len(current.Exchanges) == 0 {
+		return ""
+	}
+	for i := len(current.Exchanges) - 1; i >= 0; i-- {
+		model := strings.TrimSpace(current.Exchanges[i].Model)
+		if model != "" {
+			return model
+		}
+	}
+	return ""
 }
 
 func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
@@ -799,7 +882,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	}
 	root := manager.Root()
 	rootAbs, _ := root.RootDir()
-	sess, err := s.ensureAgentSession(turnCtx, agentPool, current, in.Agent, in.Model, rootAbs)
+	sess, agentCtxSeq, err := s.ensureAgentSession(turnCtx, agentPool, manager, current, in.Agent, in.Model, rootAbs)
 	if err != nil {
 		return err
 	}
@@ -811,6 +894,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		Agent:         in.Agent,
 		Message:       in.Content,
 		ClientContext: in.ClientCtx,
+		AgentCtxSeq:   agentCtxSeq,
 		IsInitial:     isInitial,
 	})
 	var responseText string

@@ -35,11 +35,13 @@ type Session interface {
 }
 
 type OpenSessionInput struct {
-	SessionKey string
-	AgentName  string
-	Model      string
-	Probe      bool
-	RootPath   string
+	SessionKey     string
+	AgentName      string
+	Model          string
+	Probe          bool
+	RootPath       string
+	AgentSessionID string
+	AgentCtxSeq    int
 }
 
 type ExternalSessionSummary struct {

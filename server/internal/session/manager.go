@@ -360,6 +360,14 @@ func (m *Manager) GetAgentBinding(_ context.Context, sessionKey, agent string) (
 	return &binding, nil
 }
 
+func (m *Manager) FindAgentBinding(ctx context.Context, sessionKey, agent string) (*AgentBinding, error) {
+	binding, err := m.GetAgentBinding(ctx, sessionKey, agent)
+	if errors.Is(err, errSessionNotFound) {
+		return nil, nil
+	}
+	return binding, err
+}
+
 func (m *Manager) HasAgentBinding(_ context.Context, agent, agentSessionID string) (bool, error) {
 	if strings.TrimSpace(agent) == "" {
 		return false, errors.New("agent required")

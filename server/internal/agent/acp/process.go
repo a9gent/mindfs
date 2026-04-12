@@ -437,6 +437,62 @@ func (p *Process) NewSession(ctx context.Context, sessionKey, cwd string) error 
 	return nil
 }
 
+func (p *Process) ResumeSession(ctx context.Context, sessionKey, sessionID, cwd string) error {
+	p.mu.Lock()
+	if _, ok := p.sessions[sessionKey]; ok {
+		p.mu.Unlock()
+		return nil
+	}
+	p.mu.Unlock()
+
+	resp, err := p.conn.UnstableResumeSession(ctx, acp.UnstableResumeSessionRequest{
+		Cwd:        cwd,
+		McpServers: []acp.McpServer{},
+		SessionId:  acp.SessionId(strings.TrimSpace(sessionID)),
+	})
+	if err != nil {
+		return err
+	}
+	if raw, err := json.Marshal(resp); err == nil {
+		log.Printf("[agent/acp] resume_session.resp.raw agent=%s session_key=%s session_id=%s resp=%s", p.agentLabel(), sessionKey, sessionID, string(raw))
+	}
+	sess := &sessionState{
+		ID: acp.SessionId(strings.TrimSpace(sessionID)),
+	}
+	if resp.Models != nil {
+		modelState := &acp.SessionModelState{
+			CurrentModelId: acp.ModelId(resp.Models.CurrentModelId),
+			AvailableModels: func() []acp.ModelInfo {
+				if len(resp.Models.AvailableModels) == 0 {
+					return nil
+				}
+				items := make([]acp.ModelInfo, 0, len(resp.Models.AvailableModels))
+				for _, model := range resp.Models.AvailableModels {
+					items = append(items, acp.ModelInfo{
+						ModelId:     acp.ModelId(model.ModelId),
+						Name:        model.Name,
+						Description: model.Description,
+					})
+				}
+				return items
+			}(),
+		}
+		sess.models = modelState
+	}
+	p.mu.Lock()
+	if _, ok := p.sessions[sessionKey]; ok {
+		p.mu.Unlock()
+		return nil
+	}
+	if sess.models != nil {
+		p.models = sess.models
+	}
+	p.sessions[sessionKey] = sess
+	p.sessionsByID[string(sess.ID)] = sess
+	p.mu.Unlock()
+	return nil
+}
+
 // SetOnUpdate registers a callback for a specific session.
 func (p *Process) SetOnUpdate(sessionKey string, onUpdate func(SessionUpdate)) {
 	sess := p.getSessionByKey(sessionKey)

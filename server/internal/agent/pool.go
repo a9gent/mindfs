@@ -108,37 +108,40 @@ func (p *Pool) openSession(ctx context.Context, protocol Protocol, def Definitio
 	switch protocol {
 	case ProtocolClaudeSDK:
 		return p.claude.OpenSession(ctx, claude.OpenOptions{
-			AgentName:  in.AgentName,
-			SessionKey: in.SessionKey,
-			Model:      in.Model,
-			RootPath:   in.RootPath,
-			Command:    def.Command,
-			Args:       append([]string{}, def.Args...),
-			Env:        cloneEnv(def.Env),
+			AgentName:       in.AgentName,
+			SessionKey:      in.SessionKey,
+			Model:           in.Model,
+			RootPath:        in.RootPath,
+			Command:         def.Command,
+			Args:            append([]string{}, def.Args...),
+			Env:             cloneEnv(def.Env),
+			ResumeSessionID: in.AgentSessionID,
 		})
 	case ProtocolCodexSDK:
 		return p.codex.OpenSession(ctx, codex.OpenOptions{
-			AgentName:  in.AgentName,
-			SessionKey: in.SessionKey,
-			Model:      in.Model,
-			Probe:      in.Probe,
-			RootPath:   in.RootPath,
-			Command:    def.Command,
-			Args:       append([]string{}, def.Args...),
-			Env:        cloneEnv(def.Env),
+			AgentName:       in.AgentName,
+			SessionKey:      in.SessionKey,
+			Model:           in.Model,
+			Probe:           in.Probe,
+			RootPath:        in.RootPath,
+			Command:         def.Command,
+			Args:            append([]string{}, def.Args...),
+			Env:             cloneEnv(def.Env),
+			ResumeSessionID: in.AgentSessionID,
 		})
 	case ProtocolACP:
 		fallthrough
 	default:
 		return p.acp.OpenSession(ctx, acp.OpenOptions{
-			AgentName:  in.AgentName,
-			SessionKey: in.SessionKey,
-			Model:      in.Model,
-			RootPath:   in.RootPath,
-			Command:    def.Command,
-			Args:       def.BuildArgs(in.RootPath),
-			Env:        cloneEnv(def.Env),
-			Cwd:        def.ResolveCwd(in.RootPath),
+			AgentName:       in.AgentName,
+			SessionKey:      in.SessionKey,
+			Model:           in.Model,
+			RootPath:        in.RootPath,
+			Command:         def.Command,
+			Args:            def.BuildArgs(in.RootPath),
+			Env:             cloneEnv(def.Env),
+			Cwd:             def.ResolveCwd(in.RootPath),
+			ResumeSessionID: in.AgentSessionID,
 		})
 	}
 }
