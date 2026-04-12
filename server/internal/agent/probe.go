@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -237,12 +236,11 @@ func probeConfiguredAgentWithPool(ctx context.Context, name string, def Definiti
 func probeInstalledAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, status Status, phase probePhase) Status {
 	status.Installed = true
 
-	tmpRoot, err := os.MkdirTemp("", "mindfs-agent-probe-*")
+	tmpRoot, err := EnsureStableWorkDir("agent-probe", name)
 	if err != nil {
 		status.ProbeError = err.Error()
 		return status
 	}
-	defer os.RemoveAll(tmpRoot)
 
 	pool, ownsPool := resolveProbePool(def, pool)
 	if ownsPool {

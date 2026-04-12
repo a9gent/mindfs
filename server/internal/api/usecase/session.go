@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -340,11 +339,10 @@ func sessionNameRunner(ctx context.Context, pool *agent.Pool, rootAbs string, in
 		return "", nil
 	}
 
-	tmpRoot, err := os.MkdirTemp("", "mindfs-agent-name-*")
+	tmpRoot, err := agent.EnsureStableWorkDir("title-rename", agentName)
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(tmpRoot)
 
 	sessionKey := agentPoolSessionKey("name-"+in.SessionKey, agentName)
 	sess, err := pool.GetOrCreate(ctx, agenttypes.OpenSessionInput{
