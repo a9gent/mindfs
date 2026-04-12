@@ -453,9 +453,6 @@ func (p *Process) ResumeSession(ctx context.Context, sessionKey, sessionID, cwd 
 	if err != nil {
 		return err
 	}
-	if raw, err := json.Marshal(resp); err == nil {
-		log.Printf("[agent/acp] resume_session.resp.raw agent=%s session_key=%s session_id=%s resp=%s", p.agentLabel(), sessionKey, sessionID, string(raw))
-	}
 	sess := &sessionState{
 		ID: acp.SessionId(strings.TrimSpace(sessionID)),
 	}

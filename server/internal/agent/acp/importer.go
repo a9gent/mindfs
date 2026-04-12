@@ -3,7 +3,6 @@ package acp
 import (
 	"context"
 	"errors"
-	"log"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -85,7 +84,6 @@ func (i *Importer) ListExternalSessions(ctx context.Context, in agenttypes.ListE
 			if item.Title != nil {
 				firstUserText = strings.TrimSpace(*item.Title)
 			}
-			log.Printf("[agent/acp] external_session.preview agent=%s session_id=%s preview=%q", i.agentName, string(item.SessionId), firstUserText)
 			items = append(items, agenttypes.ExternalSessionSummary{
 				Agent:          i.agentName,
 				AgentSessionID: string(item.SessionId),
@@ -193,17 +191,9 @@ func (c *importCollector) handle(update SessionUpdate) {
 	defer c.mu.Unlock()
 	switch {
 	case update.Raw.UserMessageChunk != nil && update.Raw.UserMessageChunk.Content.Text != nil:
-		log.Printf("[agent/acp] import.user_chunk text=%q", update.Raw.UserMessageChunk.Content.Text.Text)
 		c.append("user", update.Raw.UserMessageChunk.Content.Text.Text)
 	case update.Raw.AgentMessageChunk != nil && update.Raw.AgentMessageChunk.Content.Text != nil:
-		log.Printf("[agent/acp] import.agent_chunk text=%q", update.Raw.AgentMessageChunk.Content.Text.Text)
 		c.append("agent", update.Raw.AgentMessageChunk.Content.Text.Text)
-	case update.Raw.UserMessageChunk != nil:
-		log.Printf("[agent/acp] import.user_chunk non_text")
-	case update.Raw.AgentMessageChunk != nil:
-		log.Printf("[agent/acp] import.agent_chunk non_text")
-	default:
-		log.Printf("[agent/acp] import.update other=%+v", update.Raw)
 	}
 }
 
