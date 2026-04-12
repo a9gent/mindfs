@@ -279,6 +279,33 @@ func (m *Manager) AddRelatedFile(_ context.Context, key string, file RelatedFile
 	return nil
 }
 
+func (m *Manager) RemoveRelatedFile(_ context.Context, key, path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return errors.New("file path required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, err := m.getSessionUnsafe(key, 0)
+	if err != nil {
+		return err
+	}
+	next := make([]RelatedFile, 0, len(session.RelatedFiles))
+	removed := false
+	for _, item := range session.RelatedFiles {
+		if strings.TrimSpace(item.Path) == path {
+			removed = true
+			continue
+		}
+		next = append(next, item)
+	}
+	if !removed {
+		return nil
+	}
+	session.RelatedFiles = next
+	return m.upsertSessionMetaUnsafe(session)
+}
+
 func (m *Manager) RecordOutputFile(ctx context.Context, key, path string) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("file path required")

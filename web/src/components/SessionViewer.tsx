@@ -28,6 +28,7 @@ type SessionViewerProps = {
   interactionMode?: "main" | "drawer";
   gitFileStatsByPath?: Record<string, { status: string; additions: number; deletions: number }>;
   onFileClick?: (path: string) => void;
+  onRemoveRelatedFile?: (path: string) => void;
 };
 
 type UploadAttachment = {
@@ -119,7 +120,7 @@ function timelineItemSpacing(previous: TimelineItem | null, current: TimelineIte
   return "16px";
 }
 
-function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main", gitFileStatsByPath = {}, onFileClick }: SessionViewerProps) {
+function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main", gitFileStatsByPath = {}, onFileClick, onRemoveRelatedFile }: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -364,6 +365,27 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
                           <span style={{ color: "#b91c1c", fontVariantNumeric: "tabular-nums" }}>-{gitFileStatsByPath[file.path].deletions}</span>
                         </div>
                       ) : null}
+                      <button
+                        type="button"
+                        aria-label={`移除关联文件 ${file.name}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onRemoveRelatedFile?.(file.path);
+                        }}
+                        style={{
+                          border: "none",
+                          background: "transparent",
+                          color: "#dc2626",
+                          cursor: "pointer",
+                          fontSize: "14px",
+                          lineHeight: 1,
+                          padding: "2px 4px",
+                          borderRadius: "4px",
+                          flexShrink: 0,
+                        }}
+                      >
+                        x
+                      </button>
                     </div>
                   ))}
                 </div>

@@ -112,6 +112,23 @@ func (s *Service) GetSessionRelatedFiles(ctx context.Context, in GetSessionRelat
 	return append([]session.RelatedFile(nil), current.RelatedFiles...), nil
 }
 
+type RemoveSessionRelatedFileInput struct {
+	RootID string
+	Key    string
+	Path   string
+}
+
+func (s *Service) RemoveSessionRelatedFile(ctx context.Context, in RemoveSessionRelatedFileInput) error {
+	if err := s.ensureRegistry(); err != nil {
+		return err
+	}
+	manager, err := s.Registry.GetSessionManager(in.RootID)
+	if err != nil {
+		return err
+	}
+	return manager.RemoveRelatedFile(ctx, in.Key, in.Path)
+}
+
 type CloseSessionInput struct {
 	RootID string
 	Key    string

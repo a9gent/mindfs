@@ -545,6 +545,30 @@ class SessionService {
     }
   }
 
+  async removeSessionRelatedFile(
+    rootId: string,
+    sessionKey: string,
+    path: string,
+  ): Promise<boolean> {
+    try {
+      const params = new URLSearchParams({ root: rootId, path });
+      const res = await fetch(
+        appURL(
+          `/api/sessions/${encodeURIComponent(sessionKey)}/related-files`,
+          params,
+        ),
+        { method: "DELETE" },
+      );
+      if (!res.ok) {
+        throw new Error("Failed to remove session related file");
+      }
+      return true;
+    } catch (err) {
+      console.error("[Session] Failed to remove session related file:", err);
+      return false;
+    }
+  }
+
   async deleteSession(rootId: string, sessionKey: string): Promise<boolean> {
     try {
       const params = new URLSearchParams({ root: rootId });

@@ -66,6 +66,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/sessions/import", h.handleExternalSessionImport)
 	r.Get("/api/sessions/{key}", h.handleSessionGet)
 	r.Get("/api/sessions/{key}/related-files", h.handleSessionRelatedFilesGet)
+	r.Delete("/api/sessions/{key}/related-files", h.handleSessionRelatedFilesDelete)
 	r.Delete("/api/sessions/{key}", h.handleSessionDelete)
 	r.Get("/api/dirs", h.handleDirs)
 	r.Post("/api/dirs", h.handleAddDir)
@@ -277,6 +278,39 @@ func (h *HTTPHandler) handleSessionRelatedFilesGet(w http.ResponseWriter, r *htt
 		return
 	}
 	respondJSON(w, http.StatusOK, out)
+}
+
+func (h *HTTPHandler) handleSessionRelatedFilesDelete(w http.ResponseWriter, r *http.Request) {
+	rootID := r.URL.Query().Get("root")
+	key := chi.URLParam(r, "key")
+	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	if strings.TrimSpace(key) == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("session key required"))
+		return
+	}
+	if path == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("path required"))
+		return
+	}
+	uc := h.service()
+	if err := uc.RemoveSessionRelatedFile(r.Context(), usecase.RemoveSessionRelatedFileInput{
+		RootID: rootID,
+		Key:    key,
+		Path:   path,
+	}); err != nil {
+		respondError(w, http.StatusNotFound, err)
+		return
+	}
+	if h.AppContext != nil {
+		h.AppContext.GetSessionStreamHub().BroadcastAll(WSResponse{
+			Type: "session.related_files.updated",
+			Payload: map[string]any{
+				"root_id":     rootID,
+				"session_key": key,
+			},
+		})
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *HTTPHandler) handleSessionDelete(w http.ResponseWriter, r *http.Request) {

@@ -4161,6 +4161,31 @@ export function App() {
     [actionHandlers, gitStatus, openGitDiff],
   );
 
+  const handleRemoveSessionRelatedFile = useCallback(
+    async (
+      rootID: string | null | undefined,
+      sessionKey: string | undefined,
+      path: string,
+    ) => {
+      const resolvedRoot = rootID || currentRootIdRef.current;
+      const resolvedKey = sessionKey || "";
+      if (!resolvedRoot || !resolvedKey || !path) return;
+      const removed = await sessionService.removeSessionRelatedFile(
+        resolvedRoot,
+        resolvedKey,
+        path,
+      );
+      if (!removed) return;
+      const relatedFiles = await sessionService.getSessionRelatedFiles(
+        resolvedRoot,
+        resolvedKey,
+      );
+      await setCachedSessionRelatedFiles(resolvedRoot, resolvedKey, relatedFiles);
+      updateSessionRelatedFilesForKey(resolvedRoot, resolvedKey, relatedFiles);
+    },
+    [updateSessionRelatedFilesForKey],
+  );
+
   const currentFileScrollKey = buildFileScrollKey(
     file?.root || currentRootId,
     file?.path,
@@ -4176,6 +4201,13 @@ export function App() {
       }
       gitFileStatsByPath={gitFileStatsByPath}
       onFileClick={handleSelectedSessionFileClick}
+      onRemoveRelatedFile={(path) =>
+        void handleRemoveSessionRelatedFile(
+          selectedSession?.root_id || currentRootId,
+          selectedSessionSnapshot?.key || selectedSessionSnapshot?.session_key,
+          path,
+        )
+      }
     />
   );
 
@@ -4936,6 +4968,13 @@ export function App() {
                 interactionMode="drawer"
                 gitFileStatsByPath={gitFileStatsByPath}
                 onFileClick={handleDrawerSessionFileClick}
+                onRemoveRelatedFile={(path) =>
+                  void handleRemoveSessionRelatedFile(
+                    currentRootId,
+                    drawerSessionSnapshot?.key || drawerSessionSnapshot?.session_key,
+                    path,
+                  )
+                }
               />
             ) : (
               <div style={{ padding: "40px", textAlign: "center" }}>
