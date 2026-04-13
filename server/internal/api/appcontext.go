@@ -10,6 +10,7 @@ import (
 	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/api/usecase"
 	"mindfs/server/internal/fs"
+	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/relay"
 	"mindfs/server/internal/session"
 	"mindfs/server/internal/update"
@@ -28,6 +29,7 @@ type AppContext struct {
 	Relay     *relay.Manager
 	RelayTips *relay.TipsService
 	Update    *update.Service
+	GitHub    *githubimport.Service
 
 	mu                       sync.RWMutex
 	roots                    map[string]*RootContext // root id -> root context
@@ -198,6 +200,10 @@ func (s *AppContext) GetRelayTipsService() *relay.TipsService {
 
 func (s *AppContext) GetUpdateService() *update.Service {
 	return s.Update
+}
+
+func (s *AppContext) GetGitHubImportService() *githubimport.Service {
+	return s.GitHub
 }
 
 func (s *AppContext) UpsertRoot(path string) (fs.RootInfo, error) {

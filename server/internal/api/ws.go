@@ -13,6 +13,7 @@ import (
 	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/api/usecase"
 	"mindfs/server/internal/fs"
+	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/session"
 	"mindfs/server/internal/update"
 
@@ -33,6 +34,7 @@ type WSHandler struct {
 	relatedFileOnce sync.Once
 	proberOnce      sync.Once
 	updateOnce      sync.Once
+	githubOnce      sync.Once
 	requestMu       sync.Mutex
 	requests        map[string]time.Time
 }
@@ -65,6 +67,11 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.AppContext.GetUpdateService().AddListener(h.broadcastAppUpdate)
 		}
 	})
+	h.githubOnce.Do(func() {
+		if h.AppContext != nil && h.AppContext.GetGitHubImportService() != nil {
+			h.AppContext.GetGitHubImportService().AddListener(h.broadcastGitHubImport)
+		}
+	})
 	clientID := strings.TrimSpace(r.URL.Query().Get("client_id"))
 	if clientID == "" {
 		http.Error(w, "client_id required", http.StatusBadRequest)
@@ -78,6 +85,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.AppContext != nil {
 		h.AppContext.GetSessionStreamHub().RegisterClient(clientID, conn)
 		h.pushInitialAppUpdate(clientID)
+		h.pushInitialGitHubImports(clientID)
 	}
 	defer func() {
 		if h.AppContext != nil {
@@ -240,6 +248,26 @@ func (h *WSHandler) pushInitialAppUpdate(clientID string) {
 		Type:    "app.update",
 		Payload: map[string]any{"state": h.AppContext.GetUpdateService().GetStatus()},
 	})
+}
+
+func (h *WSHandler) broadcastGitHubImport(status githubimport.Status) {
+	resp := WSResponse{
+		Type:    "github.import",
+		Payload: map[string]any{"status": status},
+	}
+	h.broadcastWS(resp)
+}
+
+func (h *WSHandler) pushInitialGitHubImports(clientID string) {
+	if h.AppContext == nil || h.AppContext.GetGitHubImportService() == nil {
+		return
+	}
+	for _, status := range h.AppContext.GetGitHubImportService().ActiveStatuses() {
+		h.AppContext.GetSessionStreamHub().SendToClient(clientID, WSResponse{
+			Type:    "github.import",
+			Payload: map[string]any{"status": status},
+		})
+	}
 }
 
 func (h *WSHandler) handleWSRequest(ctx context.Context, conn *websocket.Conn, clientID string, req WSRequest) {

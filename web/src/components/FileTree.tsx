@@ -49,9 +49,11 @@ type FileTreeProps = {
   creatingRootName?: string | null;
   creatingRootBusy?: boolean;
   onCreateRootStart?: () => void;
+  onOpenProjectAdd?: () => void;
   onCreateRootNameChange?: (name: string) => void;
   onCreateRootSubmit?: () => void;
   onCreateRootCancel?: () => void;
+  projectAddOverlay?: React.ReactNode;
   relayActionLabel?: string | null;
   relayActionDisabled?: boolean;
   relayActionHelp?: string | null;
@@ -136,9 +138,11 @@ export function FileTree({
   creatingRootName = null,
   creatingRootBusy = false,
   onCreateRootStart,
+  onOpenProjectAdd,
   onCreateRootNameChange,
   onCreateRootSubmit,
   onCreateRootCancel,
+  projectAddOverlay,
   relayActionLabel = null,
   relayActionDisabled = false,
   relayActionHelp = null,
@@ -609,7 +613,7 @@ export function FileTree({
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <div style={{ height: "36px", padding: "0 3px 0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center", boxSizing: "border-box", flexShrink: 0, gap: 12 }}>
+      <div style={{ position: "relative", height: "36px", padding: "0 3px 0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center", boxSizing: "border-box", flexShrink: 0, gap: 12, overflow: "visible" }}>
         <h3 style={{ margin: 0, fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", letterSpacing: "0.5px", textTransform: "uppercase" }}>Project</h3>
         <div ref={menuRef} style={{ position: "relative" }}>
           <button
@@ -651,11 +655,14 @@ export function FileTree({
                 zIndex: 20,
               }}
             >
-                <div style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)" }}>全局排序</div>
                 <button
                   type="button"
                   onClick={() => {
-                    onCreateRootStart?.();
+                    if (onOpenProjectAdd) {
+                      onOpenProjectAdd();
+                    } else {
+                      onCreateRootStart?.();
+                    }
                     setIsMenuOpen(false);
                   }}
                   style={{
@@ -677,9 +684,10 @@ export function FileTree({
                     <path d="M12 5v14" />
                     <path d="M5 12h14" />
                   </svg>
-                  <span>新建项目</span>
+                  <span>添加项目</span>
                 </button>
                 <div style={{ height: "1px", background: "var(--border-color)", margin: "6px 4px" }} />
+                <div style={{ padding: "4px 8px", fontSize: "11px", color: "var(--text-secondary)" }}>全局排序</div>
                 {DIRECTORY_SORT_OPTIONS.map((option) => {
                 const active = option.value === sortMode;
                 return (
@@ -732,6 +740,18 @@ export function FileTree({
                 <span>显示隐藏文件</span>
                 <span style={{ fontSize: "11px", opacity: showHiddenFiles ? 1 : 0 }}>✓</span>
               </button>
+            </div>
+          ) : null}
+          {projectAddOverlay ? (
+            <div
+              style={{
+                position: "absolute",
+                top: "calc(100% + 6px)",
+                right: 0,
+                zIndex: 30,
+              }}
+            >
+              {projectAddOverlay}
             </div>
           ) : null}
         </div>

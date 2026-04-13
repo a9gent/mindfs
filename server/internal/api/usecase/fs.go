@@ -510,6 +510,19 @@ func createManagedDir(registry Registry, name string) (string, error) {
 	if trimmed == "" {
 		return "", errors.New("path required")
 	}
+	if filepath.IsAbs(trimmed) {
+		abs := filepath.Clean(trimmed)
+		for _, existing := range registry.ListRoots() {
+			existingPath := filepath.Clean(existing.RootPath)
+			if existingPath == abs {
+				return "", errors.New("root already exists")
+			}
+		}
+		if err := os.MkdirAll(abs, 0o755); err != nil {
+			return "", err
+		}
+		return abs, nil
+	}
 	if trimmed == "." || trimmed == ".." {
 		return "", errors.New("invalid root name")
 	}

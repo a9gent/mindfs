@@ -59,6 +59,12 @@ import { ExternalSessionList } from "./components/ExternalSessionList";
 import { AgentIcon } from "./components/AgentIcon";
 import { ActionBar } from "./components/ActionBar";
 import { BottomSheet } from "./components/BottomSheet";
+import {
+  type GitHubImportState,
+  type LocalDirBrowserState,
+  ProjectAddPopover,
+  type ProjectAddMode,
+} from "./components/ProjectAddPopover";
 import { fetchAgents, type AgentStatus } from "./services/agents";
 
 // 类型定义
@@ -136,6 +142,18 @@ type ManagedRootPayload = {
   root_path?: string;
   size?: number;
   mtime?: string;
+};
+type LocalDirItemPayload = {
+  name?: string;
+  path?: string;
+  is_dir?: boolean;
+  is_added_root?: boolean;
+  root_id?: string;
+};
+type LocalDirsPayload = {
+  path?: string;
+  parent?: string;
+  items?: LocalDirItemPayload[];
 };
 type RelayStatusPayload = {
   relay_bound?: boolean;
@@ -700,6 +718,7 @@ export function App() {
     useState("");
   const [importMenuOpen, setImportMenuOpen] = useState(false);
   const importMenuRef = useRef<HTMLDivElement | null>(null);
+  const projectAddPopoverRef = useRef<HTMLDivElement | null>(null);
   const [availableAgents, setAvailableAgents] = useState<AgentStatus[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionItem | null>(
     null,
@@ -725,7 +744,31 @@ export function App() {
   const managedRootByIdRef = useRef<Record<string, ManagedRootPayload>>({});
   const [rootEntries, setRootEntries] = useState<FileEntry[]>([]);
   const [creatingRootName, setCreatingRootName] = useState<string | null>(null);
+  const [creatingRootParentPath, setCreatingRootParentPath] = useState<string | null>(null);
   const [creatingRootBusy, setCreatingRootBusy] = useState(false);
+  const [projectAddMode, setProjectAddMode] = useState<ProjectAddMode | null>(
+    null,
+  );
+  const [localDirState, setLocalDirState] = useState<LocalDirBrowserState>({
+    path: "",
+    parent: "",
+    items: [],
+    loading: false,
+    selectedPath: "",
+    adding: false,
+    error: "",
+  });
+  const [githubImportState, setGitHubImportState] = useState<GitHubImportState>({
+    url: "",
+    parentPath: "",
+    taskId: "",
+    status: "",
+    message: "",
+    running: false,
+    submitting: false,
+    done: false,
+    error: "",
+  });
   const [relayStatus, setRelayStatus] = useState<RelayStatusPayload | null>(
     null,
   );
@@ -937,6 +980,18 @@ export function App() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [importMenuOpen]);
+  useEffect(() => {
+    if (!projectAddMode) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!projectAddPopoverRef.current?.contains(event.target as Node)) {
+        setProjectAddMode(null);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [projectAddMode]);
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -2738,7 +2793,7 @@ export function App() {
     }
   }, []);
 
-  const handleCreateRootStart = useCallback(() => {
+  const handleCreateRootStart = useCallback((parentPath?: string | null) => {
     if (creatingRootBusy) {
       return;
     }
@@ -2749,20 +2804,151 @@ export function App() {
       nextName = `new-root-${suffix}`;
       suffix += 1;
     }
+    setCreatingRootParentPath(
+      parentPath && String(parentPath).trim() ? String(parentPath).trim() : null,
+    );
     setCreatingRootName(nextName);
   }, [creatingRootBusy]);
+
+  const handleOpenProjectAdd = useCallback(() => {
+    if (creatingRootBusy) {
+      return;
+    }
+    setProjectAddMode("mode");
+  }, [creatingRootBusy]);
+
+  const inferParentPath = useCallback((absolutePath: string): string => {
+    const trimmed = absolutePath.trim().replace(/[\\/]+$/, "");
+    const parts = trimmed.split(/[\\/]/).filter(Boolean);
+    if (parts.length <= 1) {
+      return "";
+    }
+    if (/^[A-Za-z]:/.test(trimmed)) {
+      const drive = parts[0];
+      const rest = parts.slice(1, -1);
+      return rest.length > 0 ? `${drive}\\${rest.join("\\")}` : `${drive}\\`;
+    }
+    if (trimmed.startsWith("/")) {
+      return `/${parts.slice(0, -1).join("/")}`;
+    }
+    return parts.slice(0, -1).join("/");
+  }, []);
+
+  const loadLocalDirs = useCallback(async (path: string) => {
+    const trimmed = String(path || "").trim();
+    if (!trimmed) {
+      setLocalDirState((prev) => ({
+        ...prev,
+        loading: false,
+        error: "目录路径为空",
+      }));
+      return;
+    }
+    setLocalDirState((prev) => ({
+      ...prev,
+      loading: true,
+      error: "",
+      path: trimmed,
+      selectedPath: "",
+    }));
+    try {
+      const response = await fetch(
+        appURL("/api/local_dirs", new URLSearchParams({ path: trimmed })),
+      );
+      const payload = (await response.json().catch(() => ({}))) as LocalDirsPayload;
+      if (!response.ok) {
+        throw new Error(String((payload as any)?.message || (payload as any)?.error || "加载目录失败"));
+      }
+      setLocalDirState({
+        path: String(payload.path || trimmed),
+        parent: String(payload.parent || ""),
+        items: Array.isArray(payload.items)
+          ? payload.items.map((item) => ({
+              name: String(item.name || ""),
+              path: String(item.path || ""),
+              is_dir: item.is_dir !== false,
+              is_added_root: item.is_added_root === true,
+              root_id: String(item.root_id || ""),
+            }))
+          : [],
+        loading: false,
+        selectedPath: "",
+        adding: false,
+        error: "",
+      });
+    } catch (error) {
+      setLocalDirState((prev) => ({
+        ...prev,
+        loading: false,
+        error: error instanceof Error ? error.message : "加载目录失败",
+      }));
+    }
+  }, []);
+
+  const openDirectoryPicker = useCallback((nextMode: ProjectAddMode) => {
+    const rootID = currentRootIdRef.current;
+    const rootPath = rootID
+      ? String(managedRootByIdRef.current[rootID]?.root_path || "")
+      : "";
+    const initialPath = rootPath ? inferParentPath(rootPath) : "";
+    setProjectAddMode(nextMode);
+    if (!initialPath || initialPath === ".") {
+      setLocalDirState((prev) => ({
+        ...prev,
+        path: rootPath,
+        parent: "",
+        items: [],
+        loading: false,
+        selectedPath: "",
+        adding: false,
+        error: "当前项目缺少可浏览的父目录",
+      }));
+      return;
+    }
+    void loadLocalDirs(initialPath);
+  }, [inferParentPath, loadLocalDirs]);
+
+  const handleOpenLocalProjectAdd = useCallback(() => {
+    void openDirectoryPicker("local");
+  }, [openDirectoryPicker]);
+
+  const handleOpenBlankProjectLocation = useCallback(() => {
+    void openDirectoryPicker("blank_location");
+  }, [openDirectoryPicker]);
+
+  const handleOpenGitHubProjectAdd = useCallback(() => {
+    void openDirectoryPicker("github_location");
+    setGitHubImportState((prev) => ({
+      ...prev,
+      parentPath: "",
+      taskId: "",
+      status: "",
+      message: "",
+      running: false,
+      submitting: false,
+      done: false,
+      error: "",
+    }));
+  }, [openDirectoryPicker]);
+
+  const handleSelectBlankProject = useCallback(() => {
+    setProjectAddMode(null);
+    handleCreateRootStart();
+  }, [handleCreateRootStart]);
 
   const handleCreateRootCancel = useCallback(() => {
     if (creatingRootBusy) {
       return;
     }
     setCreatingRootName(null);
+    setCreatingRootParentPath(null);
   }, [creatingRootBusy]);
 
   const handleCreateRootSubmit = useCallback(async () => {
     const name = String(creatingRootName || "").trim();
     if (!name) {
       setCreatingRootName(null);
+      setCreatingRootParentPath(null);
       return;
     }
     if (creatingRootBusy) {
@@ -2770,10 +2956,14 @@ export function App() {
     }
     setCreatingRootBusy(true);
     try {
+      const targetPath =
+        creatingRootParentPath && creatingRootParentPath.trim()
+          ? `${creatingRootParentPath.replace(/[\\/]+$/, "")}/${name}`
+          : name;
       const response = await fetch(appPath("/api/dirs"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: name, create: true }),
+        body: JSON.stringify({ path: targetPath, create: true }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -2783,6 +2973,7 @@ export function App() {
       }
       const created = payload as ManagedRootPayload;
       setCreatingRootName(null);
+      setCreatingRootParentPath(null);
       await refreshManagedRoots();
       if (created?.id) {
         await actionHandlersRef.current.open_dir({
@@ -2799,7 +2990,181 @@ export function App() {
     } finally {
       setCreatingRootBusy(false);
     }
-  }, [creatingRootBusy, creatingRootName, refreshManagedRoots]);
+  }, [creatingRootBusy, creatingRootName, creatingRootParentPath, refreshManagedRoots]);
+
+  const handleLocalDirSelect = useCallback((path: string) => {
+    setLocalDirState((prev) => {
+      const target = prev.items.find((item) => item.path === path);
+      if (!target) {
+        return prev;
+      }
+      if (projectAddMode === "local" && target.is_added_root) {
+        return prev;
+      }
+      return { ...prev, selectedPath: path };
+    });
+  }, [projectAddMode]);
+
+  const handleLocalDirAdd = useCallback(async () => {
+    const path = String(localDirState.selectedPath || "").trim();
+    if (localDirState.adding) {
+      return;
+    }
+    if (projectAddMode === "blank_location") {
+      setProjectAddMode(null);
+      handleCreateRootStart(localDirState.path);
+      return;
+    }
+    if (projectAddMode === "github_location") {
+      setProjectAddMode("github");
+      setGitHubImportState((prev) => ({
+        ...prev,
+        parentPath: localDirState.path,
+        taskId: "",
+        status: "",
+        message: "",
+        running: false,
+        submitting: false,
+        done: false,
+        error: "",
+      }));
+      return;
+    }
+    if (!path) {
+      return;
+    }
+    setLocalDirState((prev) => ({ ...prev, adding: true, error: "" }));
+    try {
+      const response = await fetch(appPath("/api/dirs"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path, create: false }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          String(payload?.message || payload?.error || "添加目录失败"),
+        );
+      }
+      setLocalDirState((prev) => ({
+        ...prev,
+        adding: false,
+        selectedPath: "",
+      }));
+      setProjectAddMode(null);
+      await refreshManagedRoots();
+      const created = payload as ManagedRootPayload;
+      if (created?.id) {
+        await actionHandlersRef.current.open_dir({
+          path: created.id,
+          root: created.id,
+          isRoot: true,
+        });
+      }
+      void loadLocalDirs(localDirState.path);
+    } catch (error) {
+      setLocalDirState((prev) => ({
+        ...prev,
+        adding: false,
+        error: error instanceof Error ? error.message : "添加目录失败",
+      }));
+    }
+  }, [handleCreateRootStart, loadLocalDirs, localDirState.adding, localDirState.path, localDirState.selectedPath, projectAddMode, refreshManagedRoots]);
+
+  const handleGitHubImportStart = useCallback(async () => {
+    const url = String(githubImportState.url || "").trim();
+    const parentPath = String(githubImportState.parentPath || "").trim();
+    if (
+      !url ||
+      !parentPath ||
+      githubImportState.running ||
+      githubImportState.submitting
+    ) {
+      return;
+    }
+    setGitHubImportState((prev) => ({
+      ...prev,
+      submitting: true,
+      done: false,
+      error: "",
+      taskId: "",
+      status: "",
+      message: "",
+    }));
+    try {
+      const response = await fetch(appPath("/api/imports/github"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, parent_path: parentPath }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          String(payload?.message || payload?.error || "GitHub 导入失败"),
+        );
+      }
+      setGitHubImportState((prev) => ({
+        ...prev,
+        taskId: String(payload?.task_id || ""),
+        status: "pending",
+        message: "克隆中",
+        submitting: false,
+        running: true,
+        done: false,
+        error: "",
+      }));
+    } catch (error) {
+      setGitHubImportState((prev) => ({
+        ...prev,
+        submitting: false,
+        running: false,
+        done: false,
+        error: error instanceof Error ? error.message : "GitHub 导入失败",
+      }));
+    }
+  }, [githubImportState.parentPath, githubImportState.running, githubImportState.submitting, githubImportState.url]);
+
+  const projectAddOverlay = projectAddMode ? (
+    <div ref={projectAddPopoverRef}>
+      <ProjectAddPopover
+        mode={projectAddMode}
+        onSelectMode={() => setProjectAddMode("mode")}
+        onSelectLocal={handleOpenLocalProjectAdd}
+        onSelectBlankLocation={handleOpenBlankProjectLocation}
+        onSelectGitHubLocation={handleOpenGitHubProjectAdd}
+        onSelectGitHub={handleOpenGitHubProjectAdd}
+        onSelectBlank={handleSelectBlankProject}
+        localState={localDirState}
+        onLocalNavigate={(path) => {
+          void loadLocalDirs(path);
+        }}
+        onLocalSelect={handleLocalDirSelect}
+        onLocalAdd={() => {
+          void handleLocalDirAdd();
+        }}
+        localActionLabel={
+          projectAddMode === "local" ? "添加" : "放置于此目录"
+        }
+        localDisabledAddedRoot={projectAddMode === "local"}
+        localBrowseOnly={
+          projectAddMode === "blank_location" ||
+          projectAddMode === "github_location"
+        }
+        githubState={githubImportState}
+        onGitHubUrlChange={(value) =>
+          setGitHubImportState((prev) => ({
+            ...prev,
+            url: value,
+            error: "",
+            done: false,
+          }))
+        }
+        onGitHubImport={() => {
+          void handleGitHubImportStart();
+        }}
+      />
+    </div>
+  ) : null;
 
   const handleRemoveCurrentRoot = useCallback(async () => {
     const rootID = currentRootIdRef.current;
@@ -3798,6 +4163,44 @@ export function App() {
         case "app.update":
           setUpdateState(normalizeUpdateState(payload?.state as UpdateState));
           break;
+        case "github.import": {
+          const status = (payload?.status || {}) as any;
+          const taskID = typeof status?.task_id === "string" ? status.task_id : "";
+          if (!taskID) {
+            break;
+          }
+          setGitHubImportState((prev) => {
+            if (prev.taskId && prev.taskId !== taskID) {
+              return prev;
+            }
+            const nextStatus = String(status?.status || "");
+            const done = nextStatus === "done";
+            const failed = nextStatus === "failed";
+            return {
+              ...prev,
+              taskId: taskID,
+              status: nextStatus,
+              message: String(status?.message || ""),
+              running: !done && !failed,
+              submitting: false,
+              done,
+              error: failed ? String(status?.message || "GitHub 导入失败") : "",
+            };
+          });
+          if (String(status?.status || "") === "done") {
+            setProjectAddMode(null);
+            void refreshManagedRoots();
+            const rootID = typeof status?.root_id === "string" ? status.root_id : "";
+            if (rootID) {
+              void actionHandlersRef.current.open_dir({
+                path: rootID,
+                root: rootID,
+                isRoot: true,
+              });
+            }
+          }
+          break;
+        }
       }
     });
     void loadSessions(currentRootId, { replace: true });
@@ -3817,6 +4220,7 @@ export function App() {
     setSelectedPendingByKey,
     setBoundSessionForRoot,
     setDrawerSessionForRoot,
+    refreshManagedRoots,
     refreshTreeDir,
     refreshCurrentFileContent,
     refreshGitStatus,
@@ -4799,12 +5203,14 @@ export function App() {
             rootId={currentRootId}
             creatingRootName={creatingRootName}
             creatingRootBusy={creatingRootBusy}
+            onOpenProjectAdd={handleOpenProjectAdd}
             onCreateRootStart={handleCreateRootStart}
             onCreateRootNameChange={setCreatingRootName}
             onCreateRootSubmit={() => {
               void handleCreateRootSubmit();
             }}
             onCreateRootCancel={handleCreateRootCancel}
+            projectAddOverlay={projectAddOverlay}
             onSelectFile={(e, r) => {
               actionHandlers.open({ path: e.path, root: r });
               if (isMobile) setIsLeftOpen(false);

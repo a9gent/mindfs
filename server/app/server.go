@@ -10,6 +10,7 @@ import (
 	"mindfs/server/internal/agent"
 	"mindfs/server/internal/api"
 	"mindfs/server/internal/fs"
+	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/relay"
 	"mindfs/server/internal/update"
 )
@@ -43,7 +44,7 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	agentProber := agent.NewProber(&agentConfig, agentPool, 5*time.Minute)
 	agentProber.Start(ctx)
 	executable, _ := os.Executable()
-	updateSvc := update.NewService("a9gent/mindfs", opts.Version, executable, opts.Args, time.Hour)
+	updateSvc := update.NewService("a9gent/mindfs", opts.Version, executable, opts.Args, 10*time.Minute)
 	updateSvc.Start(ctx)
 
 	services := &api.AppContext{
@@ -52,6 +53,11 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 		Prober: agentProber,
 		Update: updateSvc,
 	}
+	githubImportSvc, err := githubimport.NewService(services)
+	if err != nil {
+		return err
+	}
+	services.GitHub = githubImportSvc
 	httpHandler := &api.HTTPHandler{
 		AppContext: services,
 		StaticDir:  resolveStaticDir(),

@@ -16,6 +16,7 @@ import (
 	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/api/usecase"
 	"mindfs/server/internal/fs"
+	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/session"
 
 	"github.com/go-chi/chi/v5"
@@ -71,10 +72,12 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/dirs", h.handleDirs)
 	r.Post("/api/dirs", h.handleAddDir)
 	r.Delete("/api/dirs", h.handleRemoveDir)
+	r.Get("/api/local_dirs", h.handleLocalDirs)
 	r.Get("/api/relay/status", h.handleRelayStatus)
 	r.Get("/api/relay/tips", h.handleRelayTips)
 	r.Get("/api/app/update", h.handleAppUpdateGet)
 	r.Post("/api/app/update", h.handleAppUpdatePost)
+	r.Post("/api/imports/github", h.handleGitHubImportStart)
 
 	// Agent status API
 	r.Get("/api/agents", h.handleAgentsList)
@@ -418,6 +421,53 @@ func (h *HTTPHandler) handleAppUpdatePost(w http.ResponseWriter, r *http.Request
 		return
 	}
 	respondJSON(w, http.StatusOK, h.AppContext.GetUpdateService().GetStatus())
+}
+
+func (h *HTTPHandler) handleLocalDirs(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	if path == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("path required"))
+		return
+	}
+	out, err := h.service().ListLocalDirs(r.Context(), usecase.ListLocalDirsInput{
+		Path: path,
+	})
+	if err != nil {
+		status := http.StatusBadRequest
+		if os.IsNotExist(err) {
+			status = http.StatusNotFound
+		}
+		respondError(w, status, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, out)
+}
+
+func (h *HTTPHandler) handleGitHubImportStart(w http.ResponseWriter, r *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetGitHubImportService() == nil {
+		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("github import service not configured"))
+		return
+	}
+	var req struct {
+		URL        string `json:"url"`
+		ParentPath string `json:"parent_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json body"))
+		return
+	}
+	status, err := h.AppContext.GetGitHubImportService().Start(r.Context(), githubimport.StartInput{
+		URL:        req.URL,
+		ParentPath: req.ParentPath,
+	})
+	if err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest(err.Error()))
+		return
+	}
+	respondJSON(w, http.StatusAccepted, map[string]any{
+		"task_id": status.TaskID,
+		"status":  "accepted",
+	})
 }
 
 func (h *HTTPHandler) handleFrontend(w http.ResponseWriter, r *http.Request) {
