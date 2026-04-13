@@ -160,15 +160,29 @@ export function FileTree({
   const [deferredInstallPrompt, setDeferredInstallPrompt] = React.useState<BeforeInstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = React.useState(false);
   const [isInstallCapable, setIsInstallCapable] = React.useState(false);
-  const [relayTip, setRelayTip] = React.useState<RelayTip | null>(null);
-  const [dismissedRelayTipId, setDismissedRelayTipId] = React.useState<string | null>(() => {
+  const [relayTips, setRelayTips] = React.useState<RelayTip[]>([]);
+  const [activeRelayTipIndex, setActiveRelayTipIndex] = React.useState(0);
+  const [dismissedRelayTipIds, setDismissedRelayTipIds] = React.useState<string[]>(() => {
     if (typeof window === "undefined") {
-      return null;
+      return [];
     }
     try {
-      return window.localStorage.getItem(RELAYER_AD_DISMISS_STORAGE_KEY);
+      const raw = window.localStorage.getItem(RELAYER_AD_DISMISS_STORAGE_KEY);
+      if (!raw) {
+        return [];
+      }
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+      }
+      return typeof parsed === "string" && parsed.trim().length > 0 ? [parsed] : [];
     } catch {
-      return null;
+      try {
+        const legacy = window.localStorage.getItem(RELAYER_AD_DISMISS_STORAGE_KEY);
+        return legacy && legacy.trim().length > 0 ? [legacy] : [];
+      } catch {
+        return [];
+      }
     }
   });
   const menuRef = React.useRef<HTMLDivElement | null>(null);
@@ -329,7 +343,15 @@ export function FileTree({
 
   const shouldShowInstallButton = !isKnownInstalled && !(isAndroidChrome && !deferredInstallPrompt);
   const shouldShowInstallHelp = (!!installHelp) && (isKnownInstalled || isIOS || isMacSafari || isDesktopChromium || deferredInstallPrompt !== null || (isAndroidChrome && !deferredInstallPrompt));
-  const shouldShowRelayTip = Boolean(relayTip?.id && relayTip?.title && dismissedRelayTipId !== relayTip.id);
+  const visibleRelayTips = React.useMemo(
+    () => relayTips.filter((tip) => tip.id && tip.title && !dismissedRelayTipIds.includes(tip.id)),
+    [dismissedRelayTipIds, relayTips],
+  );
+  const relayTip = visibleRelayTips.length > 0
+    ? visibleRelayTips[((activeRelayTipIndex % visibleRelayTips.length) + visibleRelayTips.length) % visibleRelayTips.length]
+    : null;
+  const shouldShowRelayTip = Boolean(relayTip);
+  const shouldShowNextRelayTip = visibleRelayTips.length > 1;
   const hasFooterContent =
     !!updateActionLabel ||
     !!updateActionHelp ||
@@ -343,15 +365,26 @@ export function FileTree({
     if (!relayTip?.id) {
       return;
     }
-    setDismissedRelayTipId(relayTip.id);
-    if (typeof window === "undefined") {
-      return;
-    }
-    try {
-      window.localStorage.setItem(RELAYER_AD_DISMISS_STORAGE_KEY, relayTip.id);
-    } catch {
-    }
-  }, [relayTip]);
+    setDismissedRelayTipIds((current) => {
+      if (current.includes(relayTip.id)) {
+        return current;
+      }
+      const next = [...current, relayTip.id];
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(RELAYER_AD_DISMISS_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+        }
+      }
+      return next;
+    });
+    setActiveRelayTipIndex((current) => {
+      if (visibleRelayTips.length <= 1) {
+        return 0;
+      }
+      return current % (visibleRelayTips.length - 1);
+    });
+  }, [relayTip, visibleRelayTips.length]);
 
   const openRelayTip = React.useCallback(() => {
     if (typeof window === "undefined" || !relayTip?.href) {
@@ -425,13 +458,18 @@ export function FileTree({
         if (!response.ok) {
           throw new Error(`tips request failed: ${response.status}`);
         }
-        const payload = (await response.json()) as RelayTip | null;
+        const payload = (await response.json()) as RelayTip | RelayTip[] | null;
         if (!cancelled) {
-          setRelayTip(payload && payload.id && payload.title ? payload : null);
+          const nextTips = Array.isArray(payload)
+            ? payload.filter((tip): tip is RelayTip => Boolean(tip?.id && tip?.title))
+            : payload && payload.id && payload.title
+              ? [payload]
+              : [];
+          setRelayTips(nextTips);
         }
       } catch {
         if (!cancelled) {
-          setRelayTip(null);
+          setRelayTips([]);
         }
       }
     };
@@ -478,6 +516,21 @@ export function FileTree({
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [isMenuOpen]);
+
+  React.useEffect(() => {
+    if (visibleRelayTips.length === 0) {
+      setActiveRelayTipIndex(0);
+      return;
+    }
+    setActiveRelayTipIndex((current) => current % visibleRelayTips.length);
+  }, [visibleRelayTips.length]);
+
+  const showNextRelayTip = React.useCallback(() => {
+    if (visibleRelayTips.length <= 1) {
+      return;
+    }
+    setActiveRelayTipIndex((current) => (current + 1) % visibleRelayTips.length);
+  }, [visibleRelayTips.length]);
 
   const childKeyFor = (entry: FileEntry, entryRoot: string) => {
     if (entry.is_root) return `${entry.path}:.`;
@@ -902,28 +955,28 @@ export function FileTree({
             }}
           >
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "10px" }}>
-              <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: "4px", flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-                  {relayTip.badge ? (
-                    <span
-                      style={{
-                        padding: "2px 6px",
-                        borderRadius: "999px",
-                        background: "rgba(37, 99, 235, 0.1)",
-                        color: "var(--accent-color)",
-                        fontSize: "10px",
-                        fontWeight: 700,
-                        lineHeight: 1.4,
-                      }}
-                    >
-                      {relayTip.badge}
-                    </span>
-                  ) : null}
-                  {relayTip.eyebrow ? (
-                    <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-secondary)", lineHeight: 1.4 }}>
-                      {relayTip.eyebrow}
-                    </span>
-                  ) : null}
+              <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: "4px", flex: 1, paddingRight: relayTip.dismissible !== false ? "14px" : 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", minWidth: 0, flex: 1 }}>
+                    {relayTip.badge ? (
+                      <span
+                        style={{
+                          padding: "2px 6px",
+                          borderRadius: "999px",
+                          background: "rgba(37, 99, 235, 0.1)",
+                          color: "var(--accent-color)",
+                          fontSize: "10px",
+                          fontWeight: 700,
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        {relayTip.badge}
+                      </span>
+                    ) : null}
+                    {relayTip.eyebrow ? (
+                      <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                        {relayTip.eyebrow}
+                      </span>
+                    ) : null}
                 </div>
                 <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-primary)", lineHeight: 1.35 }}>
                   {relayTip.title}
@@ -940,6 +993,9 @@ export function FileTree({
                   aria-label="关闭广告"
                   onClick={dismissRelayTip}
                   style={{
+                    position: "absolute",
+                    top: "6px",
+                    right: "6px",
                     border: "none",
                     background: "transparent",
                     color: "var(--text-secondary)",
@@ -958,33 +1014,63 @@ export function FileTree({
                 </button>
               ) : null}
             </div>
-            {relayTip.href && relayTip.cta_label ? (
-              <button
-                type="button"
-                onClick={openRelayTip}
-                style={{
-                  alignSelf: "flex-start",
-                  border: "none",
-                  background: "transparent",
-                  color: "var(--accent-color)",
-                  borderRadius: "6px",
-                  padding: "0",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "4px",
-                  cursor: "pointer",
-                  fontSize: "11px",
-                  fontWeight: 600,
-                  lineHeight: 1,
-                }}
-              >
-                <span>{relayTip.cta_label}</span>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M5 12h14" />
-                  <path d="m13 5 7 7-7 7" />
-                </svg>
-              </button>
+            {(relayTip.href && relayTip.cta_label) || shouldShowNextRelayTip ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+                <div>
+                  {relayTip.href && relayTip.cta_label ? (
+                    <button
+                      type="button"
+                      onClick={openRelayTip}
+                      style={{
+                        alignSelf: "flex-start",
+                        border: "none",
+                        background: "transparent",
+                        color: "var(--accent-color)",
+                        borderRadius: "6px",
+                        padding: "0",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "4px",
+                        cursor: "pointer",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        lineHeight: 1,
+                      }}
+                    >
+                      <span>{relayTip.cta_label}</span>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M5 12h14" />
+                        <path d="m13 5 7 7-7 7" />
+                      </svg>
+                    </button>
+                  ) : null}
+                </div>
+                {shouldShowNextRelayTip ? (
+                  <button
+                    type="button"
+                    aria-label="下一个提示"
+                    onClick={showNextRelayTip}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      color: "var(--accent-color)",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "4px",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                      padding: 0,
+                    }}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M5 12h14" />
+                      <path d="m13 5 7 7-7 7" />
+                    </svg>
+                  </button>
+                ) : null}
+              </div>
             ) : null}
           </div>
         ) : null}

@@ -31,7 +31,7 @@ type TipsService struct {
 	client  *http.Client
 
 	mu       sync.RWMutex
-	current  *Tip
+	current  []Tip
 	lastErr  string
 	lastSync time.Time
 }
@@ -66,21 +66,22 @@ func (s *TipsService) loop(ctx context.Context) {
 	}
 }
 
-func (s *TipsService) Get() *Tip {
+func (s *TipsService) Get() []Tip {
 	if s == nil {
 		return nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.current == nil {
+	if len(s.current) == 0 {
 		return nil
 	}
-	tip := *s.current
-	return &tip
+	tips := make([]Tip, len(s.current))
+	copy(tips, s.current)
+	return tips
 }
 
 func (s *TipsService) refresh(ctx context.Context) {
-	tip, err := s.fetch(ctx)
+	tips, err := s.fetch(ctx)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -90,10 +91,10 @@ func (s *TipsService) refresh(ctx context.Context) {
 		return
 	}
 	s.lastErr = ""
-	s.current = tip
+	s.current = tips
 }
 
-func (s *TipsService) fetch(ctx context.Context) (*Tip, error) {
+func (s *TipsService) fetch(ctx context.Context) ([]Tip, error) {
 	if s == nil || s.manager == nil {
 		return nil, nil
 	}
@@ -126,14 +127,38 @@ func (s *TipsService) fetch(ctx context.Context) (*Tip, error) {
 		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return nil, fmt.Errorf("relay tips failed: %s %s", resp.Status, strings.TrimSpace(string(payload)))
 	}
-	var tip Tip
-	if err := json.NewDecoder(resp.Body).Decode(&tip); err != nil {
+	var payload json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(tip.ID) == "" || strings.TrimSpace(tip.Title) == "" {
+
+	var tips []Tip
+	if len(payload) == 0 || string(payload) == "null" {
 		return nil, nil
 	}
-	return &tip, nil
+	if payload[0] == '[' {
+		if err := json.Unmarshal(payload, &tips); err != nil {
+			return nil, err
+		}
+	} else {
+		var tip Tip
+		if err := json.Unmarshal(payload, &tip); err != nil {
+			return nil, err
+		}
+		tips = []Tip{tip}
+	}
+
+	filtered := make([]Tip, 0, len(tips))
+	for _, tip := range tips {
+		if strings.TrimSpace(tip.ID) == "" || strings.TrimSpace(tip.Title) == "" {
+			continue
+		}
+		filtered = append(filtered, tip)
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+	return filtered, nil
 }
 
 func buildTipsURL(baseURL, nodeID string) (string, error) {
