@@ -70,6 +70,20 @@ func InspectStatus(ctx context.Context, rootPath string) (StatusResult, error) {
 	}, nil
 }
 
+func HasRepo(ctx context.Context, rootPath string) (bool, error) {
+	_, err := loadRepoContext(ctx, rootPath)
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return false, err
+		}
+		if isNotRepoError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 func ReadDiff(ctx context.Context, rootPath, relPath string) (DiffResult, error) {
 	repo, err := loadRepoContext(ctx, rootPath)
 	if err != nil {

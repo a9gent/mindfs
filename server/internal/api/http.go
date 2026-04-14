@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -16,6 +17,7 @@ import (
 	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/api/usecase"
 	"mindfs/server/internal/fs"
+	"mindfs/server/internal/gitview"
 	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/session"
 
@@ -874,6 +876,9 @@ func managedDirResponse(dir fs.RootInfo) map[string]any {
 	if info, err := dir.StatRoot(); err == nil {
 		resp["size"] = info.Size()
 		resp["mtime"] = info.ModTime().UTC().Format(time.RFC3339Nano)
+	}
+	if ok, err := gitview.HasRepo(context.Background(), dir.RootPath); err == nil {
+		resp["is_git_repo"] = ok
 	}
 	return resp
 }

@@ -140,6 +140,7 @@ type ManagedRootPayload = {
   id: string;
   display_name?: string;
   root_path?: string;
+  is_git_repo?: boolean;
   size?: number;
   mtime?: string;
 };
@@ -1642,6 +1643,16 @@ export function App() {
     if (!rootID) {
       setGitStatus(null);
       return null;
+    }
+    if (managedRootByIdRef.current[rootID]?.is_git_repo !== true) {
+      const fallback = {
+        available: false,
+        dirty_count: 0,
+        items: [],
+      } as GitStatusPayload;
+      setGitStatus(fallback);
+      setGitStatusLoading(false);
+      return fallback;
     }
     setGitStatusLoading(true);
     try {
@@ -4633,8 +4644,10 @@ export function App() {
 
   let workspaceView: React.ReactNode;
   const showGitStatusPanel = !gitDiff && !file && !!currentRootId;
+  const gitStatusAvailable = filteredGitStatus?.available === true;
   const shouldRenderGitPanel =
     showGitStatusPanel &&
+    gitStatusAvailable &&
     (gitStatusLoading || (filteredGitStatus?.items.length || 0) > 0);
   if (gitDiff) {
     workspaceView = (
