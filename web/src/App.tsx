@@ -566,17 +566,33 @@ function parseFileLocation(path: string): {
 } {
   const raw = String(path || "");
   const [base, fragment = ""] = raw.split("#", 2);
-  if (!fragment) {
+  if (fragment) {
+    const match = /^L(\d+)(?:C(\d+))?$/i.exec(fragment.trim());
+    if (match) {
+      const targetLine = Number.parseInt(match[1], 10);
+      const targetColumn = match[2] ? Number.parseInt(match[2], 10) : undefined;
+      return {
+        path: base,
+        targetLine:
+          Number.isFinite(targetLine) && targetLine > 0 ? targetLine : undefined,
+        targetColumn:
+          targetColumn && Number.isFinite(targetColumn) && targetColumn > 0
+            ? targetColumn
+            : undefined,
+      };
+    }
+  }
+
+  const colonMatch = /^(.*):(\d+)(?::(\d+))?$/.exec(base.trim());
+  if (!colonMatch) {
     return { path: base };
   }
-  const match = /^L(\d+)(?:C(\d+))?$/i.exec(fragment.trim());
-  if (!match) {
-    return { path: base };
-  }
-  const targetLine = Number.parseInt(match[1], 10);
-  const targetColumn = match[2] ? Number.parseInt(match[2], 10) : undefined;
+  const targetLine = Number.parseInt(colonMatch[2], 10);
+  const targetColumn = colonMatch[3]
+    ? Number.parseInt(colonMatch[3], 10)
+    : undefined;
   return {
-    path: base,
+    path: colonMatch[1],
     targetLine:
       Number.isFinite(targetLine) && targetLine > 0 ? targetLine : undefined,
     targetColumn:

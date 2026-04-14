@@ -193,10 +193,10 @@ function resolveMarkdownHref(currentPath: string, href: string): string {
     return decodeURIComponent(trimmed.slice("file://".length));
   }
   if (trimmed.startsWith("/")) {
-    return trimmed.replace(/^\/+/, "");
+    return decodeURIComponent(trimmed);
   }
   const baseDir = currentPath ? dirnamePosix(currentPath) : ".";
-  return normalizePosixPath(`${baseDir}/${trimmed}`);
+  return decodeURIComponent(normalizePosixPath(`${baseDir}/${trimmed}`));
 }
 
 function isExternalHref(href: string): boolean {
