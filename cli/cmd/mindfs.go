@@ -27,6 +27,8 @@ import (
 
 var version = "dev"
 
+var errBrowserUnavailable = errors.New("browser auto-open unavailable")
+
 const (
 	daemonEnvKey          = "MINDFS_DAEMON"
 	internalRestartEnvKey = "MINDFS_INTERNAL_RESTART"
@@ -131,7 +133,7 @@ func main() {
 		}
 		fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
 		if err := openTarget(*addr, rootInfo.ID); err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
+			reportOpenTargetError(os.Stderr, err)
 		}
 		return
 	}
@@ -153,7 +155,7 @@ func main() {
 		fmt.Fprintln(os.Stdout, "mindfs service started")
 		fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
 		if err := openTarget(*addr, rootInfo.ID); err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
+			reportOpenTargetError(os.Stderr, err)
 		}
 		fmt.Fprintf(os.Stdout, "logs: %s\n", logPath)
 		return
@@ -190,7 +192,7 @@ func main() {
 
 	if !internalRestart && (*foreground || !daemonMode) {
 		if err := openTarget(*addr, rootInfo.ID); err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
+			reportOpenTargetError(os.Stderr, err)
 		}
 	}
 
@@ -559,6 +561,17 @@ func openTarget(addr string, rootID string) error {
 	return openBrowser(target)
 }
 
+func reportOpenTargetError(w io.Writer, err error) {
+	if err == nil || w == nil {
+		return
+	}
+	if errors.Is(err, errBrowserUnavailable) {
+		fmt.Fprintln(w, err.Error())
+		return
+	}
+	fmt.Fprintln(w, err.Error())
+}
+
 func localOpenURL(addr string, rootID string) string {
 	base := addrToURL(addr, "")
 	u, err := url.Parse(base)
@@ -576,6 +589,9 @@ func localOpenURL(addr string, rootID string) string {
 func openBrowser(target string) error {
 	if strings.TrimSpace(target) == "" {
 		return nil
+	}
+	if runtime.GOOS == "linux" && strings.TrimSpace(os.Getenv("DISPLAY")) == "" && strings.TrimSpace(os.Getenv("WAYLAND_DISPLAY")) == "" {
+		return fmt.Errorf("%w; open this URL manually: %s", errBrowserUnavailable, target)
 	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
