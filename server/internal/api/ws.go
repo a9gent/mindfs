@@ -329,6 +329,7 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 			return
 		}
 		key = created.Key
+		h.broadcastSessionMetaUpdated(rootID, created)
 		go func(rootID, sessionKey, agentName, firstMessage string) {
 			updated, err := uc.SuggestSessionName(context.Background(), usecase.SuggestSessionNameInput{
 				RootID:       rootID,

@@ -3751,6 +3751,7 @@ export function App() {
           afterTime: options?.afterTime,
         })) as SessionItem[];
         if (cancelled) return;
+        if (currentRootIdRef.current !== rootID) return;
         setHasMoreSessions(next.length >= 50);
         if (options?.replace || (!options?.beforeTime && !options?.afterTime)) {
           setSessions(next);
