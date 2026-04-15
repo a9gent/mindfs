@@ -47,7 +47,7 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 
 ### Access Modes
 
-- **Local mode**: Accessible in the browser on the local network immediately after startup — no account or configuration needed.
+- **Local mode**: Accessible in the browser on the local machine immediately after startup — no account or configuration needed.
 - **Relay remote mode**: Access your local instance from anywhere on the public internet without opening firewall ports, via an encrypted tunnel through [a9gent.com](https://a9gent.com). Click the bind button in the local UI to activate.
 - **Private channel**: Use a private network (e.g. Tailscale) and access directly via `ip:port`.
 
@@ -138,7 +138,7 @@ MindFS automatically detects the availability of installed agents. This usually 
 mindfs [flags] [root]
 
 Flags:
-  -addr string   Listen address (default ":7331")
+  -addr string   Listen address (default "127.0.0.1:7331")
   -no-relayer    Disable relay integration
   -remove        Unregister a managed directory from a running server
 ```

@@ -14,7 +14,7 @@ import (
 var version = "dev"
 
 func main() {
-	addr := flag.String("addr", ":7331", "listen address")
+	addr := flag.String("addr", "127.0.0.1:7331", "listen address")
 	noRelayer := flag.Bool("no-relayer", false, "disable relay integration")
 	flag.Parse()
 

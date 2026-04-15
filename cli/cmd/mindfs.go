@@ -53,7 +53,7 @@ func main() {
 		fmt.Fprintf(out, "  mindfs -remove /path/to/project\n")
 	}
 
-	addr := flag.String("addr", ":7331", "listen address")
+	addr := flag.String("addr", "127.0.0.1:7331", "listen address")
 	noRelayer := flag.Bool("no-relayer", false, "disable relay integration")
 	foreground := flag.Bool("foreground", false, "run in the foreground instead of as a background service")
 	stop := flag.Bool("stop", false, "stop the background mindfs service")
