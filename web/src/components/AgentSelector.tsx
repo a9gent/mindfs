@@ -5,9 +5,11 @@ import type { AgentStatus } from "../services/agents";
 type AgentSelectorProps = {
   agent: string;
   model?: string;
+  mode?: string;
   effort?: string;
   agents: AgentStatus[];
   onAgentChange: (agent: string, model?: string) => void;
+  onModeChange?: (mode?: string) => void;
   onEffortChange?: (effort?: string) => void;
   compact?: boolean;
   warnUnavailable?: boolean;
@@ -88,9 +90,11 @@ function parseAgentErrorDetails(error?: string): string[] {
 export function AgentSelector({
   agent,
   model = "",
+  mode = "",
   effort = "",
   agents,
   onAgentChange,
+  onModeChange,
   onEffortChange,
   compact = false,
   warnUnavailable = false,
@@ -99,6 +103,7 @@ export function AgentSelector({
   const [submenuAgent, setSubmenuAgent] = useState<string | null>(null);
   const [errorAgent, setErrorAgent] = useState<string | null>(null);
   const [modelSectionExpanded, setModelSectionExpanded] = useState(true);
+  const [modeSectionExpanded, setModeSectionExpanded] = useState(false);
   const [effortSectionExpanded, setEffortSectionExpanded] = useState(false);
   const [menuBodyHeight, setMenuBodyHeight] = useState<number | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -129,6 +134,15 @@ export function AgentSelector({
     () => submenuAgentStatus?.efforts ?? [],
     [submenuAgentStatus]
   );
+  const submenuModes = useMemo(
+    () => submenuAgentStatus?.modes ?? [],
+    [submenuAgentStatus]
+  );
+  const displayedMode = useMemo(() => {
+    if (!submenuAgentStatus) return "";
+    const fallbackMode = submenuAgentStatus.current_mode_id || "";
+    return submenuAgentStatus.name === agent ? mode || fallbackMode : fallbackMode;
+  }, [submenuAgentStatus, agent, mode]);
   const submenuIsCodex = submenuAgentStatus?.name === "codex";
   const submenuSupportsEffort = useMemo(
     () => submenuEfforts.length > 0 && !!submenuSelectedModel?.supportEffort,
@@ -152,6 +166,7 @@ export function AgentSelector({
         setSubmenuAgent(null);
         setErrorAgent(null);
         setModelSectionExpanded(true);
+        setModeSectionExpanded(false);
         setEffortSectionExpanded(false);
         setMenuBodyHeight(null);
       }
@@ -185,6 +200,7 @@ export function AgentSelector({
       setSubmenuAgent(null);
       setErrorAgent(null);
       setModelSectionExpanded(true);
+      setModeSectionExpanded(false);
       setEffortSectionExpanded(false);
     },
     [onAgentChange]
@@ -202,11 +218,12 @@ export function AgentSelector({
 
   const handleSubmenuToggle = useCallback(
     (entry: AgentStatus) => {
-      if (!entry.available || (entry.models?.length ?? 0) === 0) {
+      if (!entry.available || ((entry.models?.length ?? 0) === 0 && (entry.modes?.length ?? 0) === 0)) {
         return;
       }
       setErrorAgent(null);
       setModelSectionExpanded(true);
+      setModeSectionExpanded(false);
       setEffortSectionExpanded(false);
       const node = agentColumnRef.current;
       if (node) {
@@ -229,10 +246,25 @@ export function AgentSelector({
       setSubmenuAgent(null);
       setErrorAgent(null);
       setModelSectionExpanded(true);
+      setModeSectionExpanded(false);
       setEffortSectionExpanded(false);
       setMenuBodyHeight(null);
     },
     [onEffortChange]
+  );
+
+  const handleModeSelect = useCallback(
+    (nextMode: string) => {
+      onModeChange?.(nextMode);
+      setIsOpen(false);
+      setSubmenuAgent(null);
+      setErrorAgent(null);
+      setModelSectionExpanded(true);
+      setModeSectionExpanded(false);
+      setEffortSectionExpanded(false);
+      setMenuBodyHeight(null);
+    },
+    [onModeChange]
   );
 
   return (
@@ -246,6 +278,7 @@ export function AgentSelector({
               setSubmenuAgent(null);
               setErrorAgent(null);
               setModelSectionExpanded(true);
+              setModeSectionExpanded(false);
               setEffortSectionExpanded(false);
               setMenuBodyHeight(null);
             }
@@ -343,7 +376,7 @@ export function AgentSelector({
               Agent
             </div>
             {agents.map((a) => {
-              const hasModels = (a.models?.length ?? 0) > 0;
+              const hasModels = (a.models?.length ?? 0) > 0 || (a.modes?.length ?? 0) > 0;
               const hasError = !a.available && !!a.error;
               const isSelected = a.name === agent;
               const isExpanded = submenuAgent === a.name;
@@ -410,6 +443,7 @@ export function AgentSelector({
                             event.stopPropagation();
                             setSubmenuAgent(null);
                             setModelSectionExpanded(true);
+                            setModeSectionExpanded(false);
                             setEffortSectionExpanded(false);
                             setErrorAgent((prev) => (prev === a.name ? null : a.name));
                           }}
@@ -589,13 +623,51 @@ export function AgentSelector({
                     })}
                   </>
                 ) : null}
+                {submenuModes.length > 0 ? (
+                  <>
+                    <SectionHeader
+                      title="模式"
+                      expanded={modeSectionExpanded}
+                      onToggle={() => setModeSectionExpanded((prev) => !prev)}
+                      topBorder={modelSectionExpanded || submenuModels.length > 0 || !!submenuSelectedModel?.id}
+                      value={displayedMode || undefined}
+                    />
+                    {modeSectionExpanded ? (
+                      <>
+                        {submenuModes.map((item, index) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => handleModeSelect(item.id)}
+                            style={sectionItemStyle(item.id === displayedMode, index > 0)}
+                            title={item.description || item.id}
+                          >
+                            <span style={{ fontSize: "13px", fontWeight: 500 }}>
+                              {item.name || item.id}
+                            </span>
+                            {item.description ? (
+                              <span style={{ fontSize: "11px", color: "var(--text-secondary)", whiteSpace: "normal", overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                                {item.description}
+                              </span>
+                            ) : null}
+                          </button>
+                        ))}
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
                 {submenuSupportsEffort ? (
                   <>
                     <SectionHeader
                       title="思考等级"
                       expanded={effortSectionExpanded}
                       onToggle={() => setEffortSectionExpanded((prev) => !prev)}
-                      topBorder={modelSectionExpanded || submenuModels.length > 0 || !!submenuAgentStatus.current_model_id}
+                      topBorder={
+                        modelSectionExpanded ||
+                        submenuModels.length > 0 ||
+                        !!submenuSelectedModel?.id ||
+                        submenuModes.length > 0
+                      }
                       value={displayedEffort}
                     />
                     {effortSectionExpanded ? (
@@ -659,24 +731,37 @@ function SectionHeader({
     >
       <span
         style={{
+          flex: "0 0 auto",
           fontSize: "11px",
           fontWeight: 700,
           letterSpacing: "0.08em",
           textTransform: "uppercase",
           color: expanded ? "#3b82f6" : "var(--text-secondary)",
+          whiteSpace: "nowrap",
         }}
       >
         {title}
       </span>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "flex-end",
+          gap: "8px",
+          flex: "1 1 auto",
+          minWidth: 0,
+          marginLeft: "8px",
+        }}
+      >
         {value ? (
           <span
             title={value}
             style={{
+              minWidth: 0,
               fontSize: "11px",
               color: "var(--text-secondary)",
               whiteSpace: "nowrap",
-              maxWidth: "96px",
+              maxWidth: "92px",
               overflow: "hidden",
               textOverflow: "ellipsis",
               direction: "rtl",
@@ -693,6 +778,7 @@ function SectionHeader({
           fill="none"
           aria-hidden="true"
           style={{
+            flexShrink: 0,
             color: expanded ? "#3b82f6" : "var(--text-secondary)",
             transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
             transition: "transform 0.16s ease",

@@ -36,6 +36,7 @@ type Process struct {
 	sessionsByID map[string]*sessionState // ACP session id -> state
 	capability   CapabilitySnapshot
 	models       *acp.SessionModelState
+	modes        *acp.SessionModeState
 	commands     []acp.AvailableCommand
 	stderrHint   stderrHintState
 	activePrompt activePromptState
@@ -65,6 +66,7 @@ var stderrMessagePattern = regexp.MustCompile(`"message"\s*:\s*"([^"]+)"`)
 type sessionState struct {
 	ID       acp.SessionId
 	models   *acp.SessionModelState
+	modes    *acp.SessionModeState
 	commands []acp.AvailableCommand
 	onUpdate func(SessionUpdate)
 	mu       sync.RWMutex
@@ -101,6 +103,18 @@ func (s *sessionState) getModels() *acp.SessionModelState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.models
+}
+
+func (s *sessionState) setModes(modes *acp.SessionModeState) {
+	s.mu.Lock()
+	s.modes = modes
+	s.mu.Unlock()
+}
+
+func (s *sessionState) getModes() *acp.SessionModeState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.modes
 }
 
 func (s *sessionState) setCommands(commands []acp.AvailableCommand) {
@@ -177,6 +191,16 @@ func (c *mindfsClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 		c.proc.mu.Lock()
 		c.proc.commands = append([]acp.AvailableCommand(nil), params.Update.AvailableCommandsUpdate.AvailableCommands...)
 		c.proc.mu.Unlock()
+	}
+	if params.Update.CurrentModeUpdate != nil {
+		current := params.Update.CurrentModeUpdate.CurrentModeId
+		if state := session.getModes(); state != nil {
+			state.CurrentModeId = current
+			session.setModes(state)
+			c.proc.mu.Lock()
+			c.proc.modes = state
+			c.proc.mu.Unlock()
+		}
 	}
 
 	if internalUpdate.Type != "" {
@@ -422,6 +446,7 @@ func (p *Process) NewSession(ctx context.Context, sessionKey, cwd string) error 
 	sess := &sessionState{
 		ID:     resp.SessionId,
 		models: resp.Models,
+		modes:  resp.Modes,
 	}
 	p.mu.Lock()
 	if _, ok := p.sessions[sessionKey]; ok {
@@ -430,6 +455,9 @@ func (p *Process) NewSession(ctx context.Context, sessionKey, cwd string) error 
 	}
 	if resp.Models != nil {
 		p.models = resp.Models
+	}
+	if resp.Modes != nil {
+		p.modes = resp.Modes
 	}
 	p.sessions[sessionKey] = sess
 	p.sessionsByID[string(resp.SessionId)] = sess
@@ -476,6 +504,9 @@ func (p *Process) ResumeSession(ctx context.Context, sessionKey, sessionID, cwd 
 		}
 		sess.models = modelState
 	}
+	if resp.Modes != nil {
+		sess.modes = resp.Modes
+	}
 	p.mu.Lock()
 	if _, ok := p.sessions[sessionKey]; ok {
 		p.mu.Unlock()
@@ -483,6 +514,9 @@ func (p *Process) ResumeSession(ctx context.Context, sessionKey, sessionID, cwd 
 	}
 	if sess.models != nil {
 		p.models = sess.models
+	}
+	if sess.modes != nil {
+		p.modes = sess.modes
 	}
 	p.sessions[sessionKey] = sess
 	p.sessionsByID[string(sess.ID)] = sess
@@ -618,6 +652,12 @@ func (p *Process) ModelState() *acp.SessionModelState {
 	return p.models
 }
 
+func (p *Process) ModeState() *acp.SessionModeState {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.modes
+}
+
 func (p *Process) SetModel(ctx context.Context, sessionKey, model string) error {
 	sess := p.getSessionByKey(sessionKey)
 	if sess == nil || strings.TrimSpace(model) == "" {
@@ -639,12 +679,41 @@ func (p *Process) SetModel(ctx context.Context, sessionKey, model string) error 
 	return err
 }
 
+func (p *Process) SetMode(ctx context.Context, sessionKey, mode string) error {
+	sess := p.getSessionByKey(sessionKey)
+	if sess == nil || strings.TrimSpace(mode) == "" {
+		return nil
+	}
+	_, err := p.conn.SetSessionMode(ctx, acp.SetSessionModeRequest{
+		SessionId: sess.ID,
+		ModeId:    acp.SessionModeId(strings.TrimSpace(mode)),
+	})
+	if err == nil {
+		if state := sess.getModes(); state != nil {
+			state.CurrentModeId = acp.SessionModeId(strings.TrimSpace(mode))
+			sess.setModes(state)
+			p.mu.Lock()
+			p.modes = state
+			p.mu.Unlock()
+		}
+	}
+	return err
+}
+
 func (p *Process) SessionModelState(sessionKey string) *acp.SessionModelState {
 	sess := p.getSessionByKey(sessionKey)
 	if sess == nil {
 		return nil
 	}
 	return sess.getModels()
+}
+
+func (p *Process) SessionModeState(sessionKey string) *acp.SessionModeState {
+	sess := p.getSessionByKey(sessionKey)
+	if sess == nil {
+		return nil
+	}
+	return sess.getModes()
 }
 
 func (p *Process) SessionCommands(sessionKey string) []acp.AvailableCommand {

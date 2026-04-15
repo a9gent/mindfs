@@ -19,6 +19,7 @@ type OpenOptions struct {
 	AgentName       string
 	SessionKey      string
 	Model           string
+	Mode            string
 	RootPath        string
 	Command         string
 	Args            []string
@@ -63,6 +64,12 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 	}
 	if strings.TrimSpace(opts.Model) != "" {
 		if err := proc.SetModel(ctx, opts.SessionKey, opts.Model); err != nil {
+			proc.CloseSession(opts.SessionKey)
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(opts.Mode) != "" {
+		if err := proc.SetMode(ctx, opts.SessionKey, opts.Mode); err != nil {
 			proc.CloseSession(opts.SessionKey)
 			return nil, err
 		}
@@ -113,6 +120,28 @@ func mapCommandState(commands []acpsdk.AvailableCommand) types.CommandList {
 		})
 	}
 	return types.CommandList{Commands: items}
+}
+
+func mapModeState(state *acpsdk.SessionModeState) types.ModeList {
+	if state == nil {
+		return types.ModeList{}
+	}
+	modes := make([]types.ModeInfo, 0, len(state.AvailableModes))
+	for _, mode := range state.AvailableModes {
+		description := ""
+		if mode.Description != nil {
+			description = *mode.Description
+		}
+		modes = append(modes, types.ModeInfo{
+			ID:          string(mode.Id),
+			Name:        mode.Name,
+			Description: description,
+		})
+	}
+	return types.ModeList{
+		CurrentModeID: string(state.CurrentModeId),
+		Modes:         modes,
+	}
 }
 
 func (r *Runtime) CloseSession(sessionKey string) {
@@ -259,6 +288,20 @@ func (s *session) ListModels(_ context.Context) (types.ModelList, error) {
 		return types.ModelList{}, errors.New("acp session not initialized")
 	}
 	return mapModelState(s.proc.SessionModelState(s.sessionKey)), nil
+}
+
+func (s *session) SetMode(ctx context.Context, mode string) error {
+	if s == nil || s.proc == nil {
+		return errors.New("acp session not initialized")
+	}
+	return s.proc.SetMode(ctx, s.sessionKey, mode)
+}
+
+func (s *session) ListModes(_ context.Context) (types.ModeList, error) {
+	if s == nil || s.proc == nil {
+		return types.ModeList{}, errors.New("acp session not initialized")
+	}
+	return mapModeState(s.proc.SessionModeState(s.sessionKey)), nil
 }
 
 func (s *session) ListCommands(_ context.Context) (types.CommandList, error) {

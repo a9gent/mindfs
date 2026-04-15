@@ -28,6 +28,7 @@ type Exchange struct {
 	Role      string    `json:"role"`
 	Agent     string    `json:"agent,omitempty"`
 	Model     string    `json:"model,omitempty"`
+	Mode      string    `json:"mode,omitempty"`
 	Effort    string    `json:"effort,omitempty"`
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
@@ -63,4 +64,12 @@ func InferEffortFromSession(s *Session) string {
 		return ""
 	}
 	return strings.TrimSpace(s.Exchanges[len(s.Exchanges)-1].Effort)
+}
+
+// InferModeFromSession derives the latest non-empty mode from session data.
+func InferModeFromSession(s *Session) string {
+	if s == nil || len(s.Exchanges) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(s.Exchanges[len(s.Exchanges)-1].Mode)
 }

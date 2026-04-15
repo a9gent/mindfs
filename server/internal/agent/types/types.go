@@ -18,6 +18,12 @@ type Session interface {
 	// ListModels returns the models visible to the current session/runtime.
 	ListModels(ctx context.Context) (ModelList, error)
 
+	// SetMode updates the mode used by the current session.
+	SetMode(ctx context.Context, mode string) error
+
+	// ListModes returns the modes visible to the current session/runtime.
+	ListModes(ctx context.Context) (ModeList, error)
+
 	// ListCommands returns the commands visible to the current session/runtime.
 	ListCommands(ctx context.Context) (CommandList, error)
 
@@ -38,6 +44,7 @@ type OpenSessionInput struct {
 	SessionKey     string
 	AgentName      string
 	Model          string
+	Mode           string
 	Effort         string
 	Probe          bool
 	RootPath       string
@@ -102,6 +109,17 @@ type ModelInfo struct {
 type ModelList struct {
 	CurrentModelID string      `json:"current_model_id,omitempty"`
 	Models         []ModelInfo `json:"models,omitempty"`
+}
+
+type ModeInfo struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type ModeList struct {
+	CurrentModeID string     `json:"current_mode_id,omitempty"`
+	Modes         []ModeInfo `json:"modes,omitempty"`
 }
 
 type CommandInfo struct {

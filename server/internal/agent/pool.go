@@ -138,6 +138,7 @@ func (p *Pool) openSession(ctx context.Context, protocol Protocol, def Definitio
 			AgentName:       in.AgentName,
 			SessionKey:      in.SessionKey,
 			Model:           in.Model,
+			Mode:            in.Mode,
 			RootPath:        in.RootPath,
 			Command:         def.Command,
 			Args:            def.BuildArgs(in.RootPath),

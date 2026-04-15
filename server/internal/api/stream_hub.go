@@ -22,6 +22,8 @@ type StreamHub struct {
 type PendingUserMessage struct {
 	Agent     string    `json:"agent,omitempty"`
 	Model     string    `json:"model,omitempty"`
+	Mode      string    `json:"mode,omitempty"`
+	Effort    string    `json:"effort,omitempty"`
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -78,6 +80,8 @@ func cloneUserExchange(msg *PendingUserMessage) *session.Exchange {
 		Role:      "user",
 		Agent:     msg.Agent,
 		Model:     msg.Model,
+		Mode:      msg.Mode,
+		Effort:    msg.Effort,
 		Content:   msg.Content,
 		Timestamp: msg.Timestamp,
 	}
@@ -105,12 +109,13 @@ func buildSessionDoneResponse(rootID, sessionKey, requestID string) WSResponse {
 	}
 }
 
-func buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, model, effort, content string, timestamp time.Time) WSResponse {
+func buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, content string, timestamp time.Time) WSResponse {
 	sessionPayload := map[string]any{
 		"key":        sessionKey,
 		"type":       sessionType,
 		"agent":      agentName,
 		"model":      model,
+		"mode":       mode,
 		"effort":     effort,
 		"created_at": timestamp,
 		"updated_at": timestamp,
@@ -128,6 +133,7 @@ func buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionNam
 				"role":      "user",
 				"agent":     agentName,
 				"model":     model,
+				"mode":      mode,
 				"effort":    effort,
 				"content":   content,
 				"timestamp": timestamp,
@@ -241,13 +247,15 @@ func (h *StreamHub) getAllClientIDs() []string {
 	return clientIDs
 }
 
-func (h *StreamHub) SetPendingUser(sessionKey, agent, model, content string) *PendingUserMessage {
+func (h *StreamHub) SetPendingUser(sessionKey, agent, model, mode, effort, content string) *PendingUserMessage {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	state := h.ensurePendingSessionLocked(sessionKey)
 	state.User = &PendingUserMessage{
 		Agent:     agent,
 		Model:     model,
+		Mode:      mode,
+		Effort:    effort,
 		Content:   content,
 		Timestamp: time.Now().UTC(),
 	}
@@ -256,6 +264,8 @@ func (h *StreamHub) SetPendingUser(sessionKey, agent, model, content string) *Pe
 	return &PendingUserMessage{
 		Agent:     state.User.Agent,
 		Model:     state.User.Model,
+		Mode:      state.User.Mode,
+		Effort:    state.User.Effort,
 		Content:   state.User.Content,
 		Timestamp: state.User.Timestamp,
 	}
@@ -364,12 +374,13 @@ func (h *StreamHub) BroadcastSessionUserMessage(
 	sessionName string,
 	agentName string,
 	model string,
+	mode string,
 	effort string,
 	content string,
 	excludeClientID string,
 ) {
-	pendingUser := h.SetPendingUser(sessionKey, agentName, model, content)
-	resp := buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, model, effort, content, pendingUser.Timestamp)
+	pendingUser := h.SetPendingUser(sessionKey, agentName, model, mode, effort, content)
+	resp := buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, content, pendingUser.Timestamp)
 	for _, clientID := range h.GetSessionClientIDs(sessionKey, false) {
 		if clientID == excludeClientID {
 			continue

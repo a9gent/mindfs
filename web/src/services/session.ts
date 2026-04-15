@@ -15,6 +15,7 @@ export type Session = {
   type: SessionType;
   agent?: string;
   model?: string;
+  mode?: string;
   effort?: string;
   name: string;
   created_at: string;
@@ -26,6 +27,7 @@ export type Session = {
     role?: string;
     agent?: string;
     model?: string;
+    mode?: string;
     effort?: string;
     content?: string;
     timestamp?: string;
@@ -393,6 +395,7 @@ class SessionService {
     type: SessionType,
     agent: string,
     model?: string,
+    agentMode?: string,
     effort?: string,
     context?: Record<string, unknown>,
     requestId = this.createRequestId("msg"),
@@ -412,6 +415,7 @@ class SessionService {
         type,
         agent,
         model,
+        agent_mode: agentMode,
         effort,
         context: this.compactContext(sessionKey, context),
       },
@@ -770,6 +774,7 @@ function withSessionMeta(
     ...incoming,
     agent: preferIncomingText(incoming.agent, base.agent),
     model: preferIncomingText((incoming as any).model, (base as any).model),
+    mode: preferIncomingText((incoming as any).mode, (base as any).mode),
     name: preferIncomingText(incoming.name, base.name) || "",
     exchanges: Array.isArray(incoming.exchanges) ? [...incoming.exchanges] : [],
   };

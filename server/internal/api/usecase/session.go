@@ -230,6 +230,7 @@ type SendMessageInput struct {
 	Key       string
 	Agent     string
 	Model     string
+	Mode      string
 	Effort    string
 	Content   string
 	ClientCtx ClientContext
@@ -738,19 +739,23 @@ func (s *Service) ensureAgentSession(
 	current *session.Session,
 	agentName string,
 	model string,
+	mode string,
 	effort string,
 	rootAbs string,
 ) (agenttypes.Session, *int, error) {
 	poolSessionKey := agentPoolSessionKey(current.Key, agentName)
 	nextModel := resolveRuntimeModel(current, model)
+	nextMode := resolveRuntimeMode(current, mode)
 	nextEffort := resolveRuntimeEffort(agentName, current, effort)
 	currentModel := ""
+	currentMode := ""
 	currentEffort := ""
 	if current != nil {
 		currentModel = resolveSessionExchangeModel(current)
 		if currentModel == "" {
 			currentModel = strings.TrimSpace(current.Model)
 		}
+		currentMode = resolveSessionExchangeMode(current)
 		currentEffort = session.InferEffortFromSession(current)
 	}
 	if existing, ok := pool.Get(poolSessionKey); ok {
@@ -765,6 +770,17 @@ func (s *Service) ensureAgentSession(
 					return nil, nil, err
 				}
 				log.Printf("[session/model] switch.done session=%s agent=%s model=%q pool_session=%s", current.Key, agentName, nextModel, poolSessionKey)
+			}
+			if current != nil && currentMode != nextMode {
+				log.Printf("[session/mode] switch.detected session=%s agent=%s from=%q to=%q action=set_runtime_mode", current.Key, agentName, currentMode, nextMode)
+				if err := existing.SetMode(ctx, nextMode); err != nil {
+					if prober := s.Registry.GetProber(); prober != nil {
+						prober.ReportRuntimeFailure(agentName, err)
+					}
+					log.Printf("[session/mode] switch.error session=%s agent=%s mode=%q pool_session=%s err=%v", current.Key, agentName, nextMode, poolSessionKey, err)
+					return nil, nil, err
+				}
+				log.Printf("[session/mode] switch.done session=%s agent=%s mode=%q pool_session=%s", current.Key, agentName, nextMode, poolSessionKey)
 			}
 			var currentSeq *int
 			if current != nil {
@@ -795,6 +811,7 @@ func (s *Service) ensureAgentSession(
 		SessionKey: poolSessionKey,
 		AgentName:  agentName,
 		Model:      nextModel,
+		Mode:       nextMode,
 		Effort:     nextEffort,
 		RootPath:   rootAbs,
 		AgentSessionID: strings.TrimSpace(func() string {
@@ -811,15 +828,15 @@ func (s *Service) ensureAgentSession(
 		}(),
 	}
 	if openInput.AgentSessionID != "" {
-		log.Printf("[session/model] open session=%s agent=%s model=%q effort=%q pool_session=%s action=resume_runtime_session agent_session_id=%s agent_ctx_seq=%d", current.Key, agentName, nextModel, nextEffort, poolSessionKey, openInput.AgentSessionID, openInput.AgentCtxSeq)
+		log.Printf("[session/model] open session=%s agent=%s model=%q mode=%q effort=%q pool_session=%s action=resume_runtime_session agent_session_id=%s agent_ctx_seq=%d", current.Key, agentName, nextModel, nextMode, nextEffort, poolSessionKey, openInput.AgentSessionID, openInput.AgentCtxSeq)
 	} else {
-		log.Printf("[session/model] open session=%s agent=%s model=%q effort=%q pool_session=%s action=open_new_runtime_session", current.Key, agentName, nextModel, nextEffort, poolSessionKey)
+		log.Printf("[session/model] open session=%s agent=%s model=%q mode=%q effort=%q pool_session=%s action=open_new_runtime_session", current.Key, agentName, nextModel, nextMode, nextEffort, poolSessionKey)
 	}
 	sess, err := pool.GetOrCreate(openCtx, openInput)
 	var ctxSeqOverride *int
 	if err != nil {
 		if openInput.AgentSessionID != "" {
-			log.Printf("[session/model] resume.error session=%s agent=%s model=%q effort=%q pool_session=%s agent_session_id=%s err=%v fallback=open_new_runtime_session", current.Key, agentName, nextModel, nextEffort, poolSessionKey, openInput.AgentSessionID, err)
+			log.Printf("[session/model] resume.error session=%s agent=%s model=%q mode=%q effort=%q pool_session=%s agent_session_id=%s err=%v fallback=open_new_runtime_session", current.Key, agentName, nextModel, nextMode, nextEffort, poolSessionKey, openInput.AgentSessionID, err)
 			openInput.AgentSessionID = ""
 			openInput.AgentCtxSeq = 0
 			sess, err = pool.GetOrCreate(openCtx, openInput)
@@ -833,14 +850,14 @@ func (s *Service) ensureAgentSession(
 		if prober := s.Registry.GetProber(); prober != nil {
 			prober.ReportRuntimeFailure(agentName, err)
 		}
-		log.Printf("[session/model] open.error session=%s agent=%s model=%q effort=%q pool_session=%s err=%v", current.Key, agentName, nextModel, nextEffort, poolSessionKey, err)
+		log.Printf("[session/model] open.error session=%s agent=%s model=%q mode=%q effort=%q pool_session=%s err=%v", current.Key, agentName, nextModel, nextMode, nextEffort, poolSessionKey, err)
 		return nil, nil, err
 	}
 	if ctxSeqOverride == nil && binding != nil && openInput.AgentSessionID != "" {
 		last := binding.AgentCtxSeq
 		ctxSeqOverride = &last
 	}
-	log.Printf("[session/model] open.done session=%s agent=%s model=%q effort=%q pool_session=%s", current.Key, agentName, nextModel, nextEffort, poolSessionKey)
+	log.Printf("[session/model] open.done session=%s agent=%s model=%q mode=%q effort=%q pool_session=%s", current.Key, agentName, nextModel, nextMode, nextEffort, poolSessionKey)
 	return sess, ctxSeqOverride, nil
 }
 
@@ -887,6 +904,16 @@ func resolveRuntimeEffort(_ string, current *session.Session, requested string) 
 	return ""
 }
 
+func resolveRuntimeMode(current *session.Session, requested string) string {
+	if mode := strings.TrimSpace(requested); mode != "" {
+		return mode
+	}
+	if mode := resolveSessionExchangeMode(current); mode != "" {
+		return mode
+	}
+	return ""
+}
+
 func resolveSessionExchangeModel(current *session.Session) string {
 	if current == nil || len(current.Exchanges) == 0 {
 		return ""
@@ -895,6 +922,19 @@ func resolveSessionExchangeModel(current *session.Session) string {
 		model := strings.TrimSpace(current.Exchanges[i].Model)
 		if model != "" {
 			return model
+		}
+	}
+	return ""
+}
+
+func resolveSessionExchangeMode(current *session.Session) string {
+	if current == nil || len(current.Exchanges) == 0 {
+		return ""
+	}
+	for i := len(current.Exchanges) - 1; i >= 0; i-- {
+		mode := strings.TrimSpace(current.Exchanges[i].Mode)
+		if mode != "" {
+			return mode
 		}
 	}
 	return ""
@@ -937,7 +977,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	}
 	root := manager.Root()
 	rootAbs, _ := root.RootDir()
-	sess, agentCtxSeq, err := s.ensureAgentSession(turnCtx, agentPool, manager, current, in.Agent, in.Model, in.Effort, rootAbs)
+	sess, agentCtxSeq, err := s.ensureAgentSession(turnCtx, agentPool, manager, current, in.Agent, in.Model, in.Mode, in.Effort, rootAbs)
 	if err != nil {
 		return err
 	}
@@ -992,11 +1032,12 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	if err := manager.UpdateModel(ctx, current, in.Model); err != nil {
 		return err
 	}
+	resolvedMode := resolveRuntimeMode(current, in.Mode)
 	resolvedEffort := resolveRuntimeEffort(in.Agent, current, in.Effort)
-	if err := manager.AddExchangeForAgent(ctx, current, "user", in.Content, in.Agent, resolvedEffort); err != nil {
+	if err := manager.AddExchangeForAgent(ctx, current, "user", in.Content, in.Agent, resolvedMode, resolvedEffort); err != nil {
 		return err
 	}
-	if err := manager.AddExchangeForAgent(ctx, current, "agent", responseText, in.Agent, resolvedEffort); err != nil {
+	if err := manager.AddExchangeForAgent(ctx, current, "agent", responseText, in.Agent, resolvedMode, resolvedEffort); err != nil {
 		return err
 	}
 	if err := manager.UpdateAgentState(ctx, current, in.Agent, contextLineCount(current.Exchanges), sess.SessionID()); err != nil {

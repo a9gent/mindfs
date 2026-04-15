@@ -197,9 +197,10 @@ func (h *WSHandler) broadcastSessionMetaUpdated(rootID string, sess *session.Ses
 			"session": map[string]any{
 				"key":        sess.Key,
 				"name":       sess.Name,
-				"model":      sess.Model,
-				"effort":     session.InferEffortFromSession(sess),
-				"updated_at": sess.UpdatedAt,
+			"model":      sess.Model,
+			"mode":       session.InferModeFromSession(sess),
+			"effort":     session.InferEffortFromSession(sess),
+			"updated_at": sess.UpdatedAt,
 			},
 		},
 	}
@@ -217,9 +218,12 @@ func (h *WSHandler) broadcastAgentStatusChange(status agent.Status) {
 			"error":            status.Error,
 			"last_probe":       status.LastProbe,
 			"current_model_id": status.CurrentModelID,
+			"current_mode_id":  status.CurrentModeID,
 			"efforts":          status.Efforts,
 			"models":           status.Models,
+			"modes":            status.Modes,
 			"models_error":     status.ModelsError,
+			"modes_error":      status.ModesError,
 			"commands":         status.Commands,
 			"commands_error":   status.CommandsError,
 		},
@@ -292,6 +296,7 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 	sessionType := getString(req.Payload, "type")
 	agentName := getString(req.Payload, "agent")
 	model := getString(req.Payload, "model")
+	agentMode := getString(req.Payload, "agent_mode")
 	effort := getString(req.Payload, "effort")
 	requestID := strings.TrimSpace(req.ID)
 	if content == "" || sessionType == "" || agentName == "" {
@@ -357,11 +362,12 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 		Key:       key,
 		Agent:     agentName,
 		Model:     model,
+		Mode:      agentMode,
 		Effort:    effort,
 		Content:   content,
 		ClientCtx: clientCtx,
 		OnStart: func() {
-			streamHub.BroadcastSessionUserMessage(rootID, key, sessionType, sessionName, agentName, model, effort, content, clientID)
+			streamHub.BroadcastSessionUserMessage(rootID, key, sessionType, sessionName, agentName, model, agentMode, effort, content, clientID)
 		},
 		OnUpdate: func(update agenttypes.Event) {
 			event := updateToEvent(update)

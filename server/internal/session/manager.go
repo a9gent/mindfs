@@ -211,7 +211,7 @@ func (m *Manager) List(_ context.Context, opts ListOptions) ([]*Session, error) 
 	return m.listSessionsUnsafe(opts)
 }
 
-func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role, content, agent, effort string) error {
+func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role, content, agent, mode, effort string) error {
 	if session == nil || strings.TrimSpace(session.Key) == "" {
 		return errors.New("session required")
 	}
@@ -235,6 +235,7 @@ func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role,
 		Role:      role,
 		Agent:     resolvedAgent,
 		Model:     session.Model,
+		Mode:      strings.TrimSpace(mode),
 		Effort:    strings.TrimSpace(effort),
 		Content:   content,
 		Timestamp: m.now().UTC(),

@@ -225,6 +225,14 @@ func claudeModelSupportsEffort(id, name string) bool {
 	return strings.Contains(joined, "sonnet") || strings.Contains(joined, "opus")
 }
 
+func (s *session) SetMode(_ context.Context, _ string) error {
+	return nil
+}
+
+func (s *session) ListModes(_ context.Context) (types.ModeList, error) {
+	return types.ModeList{}, nil
+}
+
 func (s *session) ListCommands(ctx context.Context) (types.CommandList, error) {
 	_ = ctx
 	if s.client == nil {

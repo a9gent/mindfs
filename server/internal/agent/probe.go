@@ -24,9 +24,12 @@ type Status struct {
 	ProbeError     string                   `json:"-"`
 	LastProbe      time.Time                `json:"last_probe"`
 	CurrentModelID string                   `json:"current_model_id,omitempty"`
+	CurrentModeID  string                   `json:"current_mode_id,omitempty"`
 	Efforts        []string                 `json:"efforts,omitempty"`
 	Models         []agenttypes.ModelInfo   `json:"models,omitempty"`
+	Modes          []agenttypes.ModeInfo    `json:"modes"`
 	ModelsError    string                   `json:"models_error,omitempty"`
+	ModesError     string                   `json:"modes_error,omitempty"`
 	Commands       []agenttypes.CommandInfo `json:"commands,omitempty"`
 	CommandsError  string                   `json:"commands_error,omitempty"`
 }
@@ -351,6 +354,9 @@ func statusChanged(prev Status, next Status) bool {
 	if prev.CurrentModelID != next.CurrentModelID {
 		return true
 	}
+	if prev.CurrentModeID != next.CurrentModeID {
+		return true
+	}
 	if len(prev.Efforts) != len(next.Efforts) {
 		return true
 	}
@@ -360,6 +366,9 @@ func statusChanged(prev Status, next Status) bool {
 		}
 	}
 	if prev.ModelsError != next.ModelsError {
+		return true
+	}
+	if prev.ModesError != next.ModesError {
 		return true
 	}
 	if prev.CommandsError != next.CommandsError {
@@ -374,6 +383,14 @@ func statusChanged(prev Status, next Status) bool {
 			prev.Models[i].Description != next.Models[i].Description ||
 			prev.Models[i].Hidden != next.Models[i].Hidden ||
 			prev.Models[i].SupportEffort != next.Models[i].SupportEffort {
+			return true
+		}
+	}
+	if len(prev.Modes) != len(next.Modes) {
+		return true
+	}
+	for i := range prev.Modes {
+		if prev.Modes[i] != next.Modes[i] {
 			return true
 		}
 	}
@@ -449,6 +466,14 @@ func populateProbeModels(ctx context.Context, sess agenttypes.Session, status *S
 	status.CurrentModelID = models.CurrentModelID
 	status.Models = models.Models
 	status.Efforts = inferAgentEfforts(models.Models)
+
+	modes, err := sess.ListModes(modelsCtx)
+	if err != nil {
+		status.ModesError = err.Error()
+		return
+	}
+	status.CurrentModeID = modes.CurrentModeID
+	status.Modes = modes.Modes
 }
 
 func populateProbeCommands(ctx context.Context, sess agenttypes.Session, status *Status) {
@@ -478,9 +503,12 @@ func normalizeStatus(status Status) Status {
 		return status
 	}
 	status.CurrentModelID = ""
+	status.CurrentModeID = ""
 	status.Efforts = nil
 	status.Models = nil
+	status.Modes = nil
 	status.ModelsError = ""
+	status.ModesError = ""
 	status.Commands = nil
 	status.CommandsError = ""
 	return status

@@ -10,9 +10,12 @@ export type AgentStatus = {
   error?: string;
   last_probe?: string;
   current_model_id?: string;
+  current_mode_id?: string;
   efforts?: string[];
   models?: AgentModelInfo[];
+  modes?: AgentModeInfo[];
   models_error?: string;
+  modes_error?: string;
   commands?: AgentCommandInfo[];
   commands_error?: string;
 };
@@ -23,6 +26,12 @@ export type AgentModelInfo = {
   description?: string;
   hidden?: boolean;
   supportEffort?: boolean;
+};
+
+export type AgentModeInfo = {
+  id: string;
+  name: string;
+  description?: string;
 };
 
 export type AgentCommandInfo = {

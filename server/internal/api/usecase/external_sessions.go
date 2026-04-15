@@ -154,7 +154,7 @@ func (s *Service) ImportExternalSession(ctx context.Context, in ImportExternalSe
 		if role != "user" && role != "agent" {
 			continue
 		}
-		if err := manager.AddExchangeForAgent(ctx, created, role, exchange.Content, in.Agent, ""); err != nil {
+		if err := manager.AddExchangeForAgent(ctx, created, role, exchange.Content, in.Agent, "", ""); err != nil {
 			return ImportExternalSessionOutput{}, err
 		}
 	}
