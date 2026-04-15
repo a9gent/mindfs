@@ -1394,6 +1394,159 @@ export function App() {
     [rootSessionKey, setDrawerSessionForRoot, bumpCacheVersion],
   );
 
+  const syncSessionHeaderFromListItem = useCallback(
+    (rootID: string, item: SessionItem | null | undefined) => {
+      const sessionKey = item?.key || item?.session_key || "";
+      const sessionName = typeof item?.name === "string" ? item.name : "";
+      if (!rootID || !sessionKey || !sessionName) return;
+
+      const cacheKey = rootSessionKey(rootID, sessionKey);
+      const cached = sessionCacheRef.current[cacheKey];
+      let changed = false;
+      if (cached && cached.name !== sessionName) {
+        sessionCacheRef.current[cacheKey] = {
+          ...(cached as any),
+          name: sessionName,
+          updated_at: item?.updated_at || cached.updated_at,
+        } as Session;
+        changed = true;
+      }
+
+      setSelectedSession((prev) => {
+        const prevKey = prev?.key || prev?.session_key;
+        const prevRoot =
+          (prev?.root_id as string | undefined) || currentRootIdRef.current;
+        if (!prev || prevKey !== sessionKey || prevRoot !== rootID) return prev;
+        if (prev.name === sessionName) return prev;
+        return {
+          ...(prev as any),
+          name: sessionName,
+          updated_at: item?.updated_at || prev.updated_at,
+        } as SessionItem;
+      });
+
+      const drawer = drawerSessionByRootRef.current[rootID];
+      if (drawer?.key === sessionKey && drawer.name !== sessionName) {
+        setDrawerSessionForRoot(rootID, {
+          ...(drawer as any),
+          name: sessionName,
+          updated_at: item?.updated_at || drawer.updated_at,
+        } as Session);
+        changed = true;
+      }
+
+      if (changed) {
+        bumpCacheVersion();
+      }
+    },
+    [rootSessionKey, setDrawerSessionForRoot, bumpCacheVersion],
+  );
+  useEffect(() => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID || sessions.length === 0) return;
+    for (const item of sessions) {
+      syncSessionHeaderFromListItem(rootID, item);
+    }
+  }, [sessions, syncSessionHeaderFromListItem]);
+
+  const promotePendingSessionForRoot = useCallback(
+    (
+      rootID: string,
+      tempKey: string | undefined,
+      sessionKey: string,
+      fallback?: Session | null,
+    ) => {
+      const pendingKey = (tempKey || "").trim();
+      if (!rootID || !pendingKey || !sessionKey || pendingKey === sessionKey) {
+        return;
+      }
+
+      const pendingCacheKey = rootSessionKey(rootID, pendingKey);
+      const realCacheKey = rootSessionKey(rootID, sessionKey);
+      const pendingCached = sessionCacheRef.current[pendingCacheKey];
+      const realCached = sessionCacheRef.current[realCacheKey];
+      const drawer = drawerSessionByRootRef.current[rootID];
+      const selected = selectedSessionRef.current;
+      const selectedKey = selected?.key || selected?.session_key;
+      const selectedRoot =
+        (selected?.root_id as string | undefined) || currentRootIdRef.current;
+      const pendingName =
+        (typeof (pendingCached as any)?.name === "string" &&
+        (pendingCached as any).name
+          ? (pendingCached as any).name
+          : "") ||
+        (drawer?.key === pendingKey && typeof (drawer as any)?.name === "string"
+          ? ((drawer as any).name as string)
+          : "") ||
+        (selectedKey === pendingKey &&
+        selectedRoot === rootID &&
+        typeof selected?.name === "string"
+          ? selected.name
+          : "") ||
+        "新会话";
+      const latestReal =
+        realCached || pendingCached || fallback || drawer;
+      let cacheChanged = false;
+
+      if (pendingCached) {
+        sessionCacheRef.current[realCacheKey] = {
+          ...(pendingCached as any),
+          ...(realCached as any),
+          key: sessionKey,
+          name:
+            (typeof (realCached as any)?.name === "string" &&
+            (realCached as any).name
+              ? (realCached as any).name
+              : "") || pendingName,
+        } as Session;
+        delete sessionCacheRef.current[pendingCacheKey];
+        delete loadedSessionRef.current[pendingCacheKey];
+        delete loadingSessionRef.current[pendingCacheKey];
+        cacheChanged = true;
+      }
+
+      if (boundSessionByRootRef.current[rootID] === pendingKey) {
+        setBoundSessionForRoot(rootID, sessionKey);
+      }
+      if (drawer?.key === pendingKey) {
+        setDrawerSessionForRoot(rootID, {
+          ...(drawer as any),
+          ...(latestReal as any),
+          key: sessionKey,
+          name:
+            (typeof (latestReal as any)?.name === "string" &&
+            (latestReal as any).name
+              ? (latestReal as any).name
+              : "") || pendingName,
+        } as Session);
+      }
+
+      setSelectedSession((prev) => {
+        const prevKey = prev?.key || prev?.session_key;
+        const prevRoot =
+          (prev?.root_id as string | undefined) || currentRootIdRef.current;
+        if (!prev || prevKey !== pendingKey || prevRoot !== rootID) return prev;
+        return {
+          ...(prev as any),
+          ...(latestReal as any),
+          key: sessionKey,
+          session_key: sessionKey,
+          root_id: rootID,
+          name:
+            (typeof (latestReal as any)?.name === "string" &&
+            (latestReal as any).name
+              ? (latestReal as any).name
+              : "") || pendingName,
+        } as SessionItem;
+      });
+
+      if (cacheChanged) {
+        bumpCacheVersion();
+      }
+    },
+    [rootSessionKey, setBoundSessionForRoot, setDrawerSessionForRoot, bumpCacheVersion],
+  );
+
   const resolveAgentForSession = useCallback(
     (rootID: string, sessionKey: string, fallbackAgent?: string): string => {
       if (fallbackAgent) return fallbackAgent;
@@ -3707,6 +3860,21 @@ export function App() {
       ) {
         setBoundSessionForRoot(activeRoot, streamKey);
         if (pending) {
+          const pendingName =
+            (drawerSessionByRootRef.current[activeRoot]?.key ===
+            pending.tempKey &&
+            typeof (drawerSessionByRootRef.current[activeRoot] as any)?.name ===
+              "string"
+              ? ((drawerSessionByRootRef.current[activeRoot] as any).name as string)
+              : "") ||
+            ((selectedSessionRef.current?.key ||
+              selectedSessionRef.current?.session_key) === pending.tempKey &&
+            (((selectedSessionRef.current?.root_id as string | undefined) ||
+              currentRootIdRef.current) === activeRoot) &&
+            typeof selectedSessionRef.current?.name === "string"
+              ? selectedSessionRef.current.name
+              : "") ||
+            "新会话";
           const userEx = {
             role: "user",
             content: pending.message,
@@ -3724,7 +3892,7 @@ export function App() {
               model: pending.model,
               mode: pending.agentMode,
               effort: pending.effort,
-              name: "",
+              name: pendingName,
               created_at: pending.timestamp,
               updated_at: pending.timestamp,
               exchanges: [],
@@ -3746,6 +3914,14 @@ export function App() {
             pending: true,
           } as Session);
         }
+      }
+      if (pending?.tempKey) {
+        promotePendingSessionForRoot(
+          activeRoot,
+          pending.tempKey,
+          streamKey,
+          sessionCacheRef.current[ck] || null,
+        );
       }
       const event = payload.event;
       if (!event?.type) return;
@@ -4331,6 +4507,7 @@ export function App() {
     mergeSessionItems,
     rootSessionKey,
     resolveRootForSessionKey,
+    promotePendingSessionForRoot,
     appendAgentChunkForSession,
     appendThoughtChunkForSession,
     appendToolCallForSession,

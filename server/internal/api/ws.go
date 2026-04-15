@@ -197,10 +197,10 @@ func (h *WSHandler) broadcastSessionMetaUpdated(rootID string, sess *session.Ses
 			"session": map[string]any{
 				"key":        sess.Key,
 				"name":       sess.Name,
-			"model":      sess.Model,
-			"mode":       session.InferModeFromSession(sess),
-			"effort":     session.InferEffortFromSession(sess),
-			"updated_at": sess.UpdatedAt,
+				"model":      sess.Model,
+				"mode":       session.InferModeFromSession(sess),
+				"effort":     session.InferEffortFromSession(sess),
+				"updated_at": sess.UpdatedAt,
 			},
 		},
 	}
@@ -307,8 +307,8 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 	uc := &usecase.Service{Registry: h.AppContext}
 	streamHub := h.AppContext.GetSessionStreamHub()
 	if requestID != "" {
-		h.sendWSAccepted(conn, requestID, rootID, key)
 		if !h.reserveClientRequest(requestID) {
+			h.sendWSAccepted(conn, requestID, rootID, key)
 			return
 		}
 	}
@@ -349,6 +349,9 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 			log.Printf("[session-name] async.broadcast root=%s session=%s name=%q", rootID, sessionKey, updated.Name)
 			h.broadcastSessionMetaUpdated(rootID, updated)
 		}(rootID, key, agentName, content)
+	}
+	if requestID != "" {
+		h.sendWSAccepted(conn, requestID, rootID, key)
 	}
 	if h.AppContext != nil {
 		streamHub.BindSessionClient(key, clientID)
