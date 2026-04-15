@@ -18,6 +18,7 @@ type OpenOptions struct {
 	AgentName       string
 	SessionKey      string
 	Model           string
+	Effort          string
 	Probe           bool
 	RootPath        string
 	Command         string
@@ -41,10 +42,11 @@ func (r *Runtime) OpenSession(_ context.Context, opts OpenOptions) (types.Sessio
 	}
 	client := r.getOrCreateClient(opts)
 	threadOptions := codexsdk.ThreadOptions{
-		Model:            strings.TrimSpace(opts.Model),
-		SandboxMode:      codexsdk.SandboxModeFullAccess,
-		WorkingDirectory: opts.RootPath,
-		ApprovalPolicy:   codexsdk.ApprovalModeNever,
+		Model:                strings.TrimSpace(opts.Model),
+		ModelReasoningEffort: codexsdk.ModelReasoningEffort(strings.TrimSpace(opts.Effort)),
+		SandboxMode:          codexsdk.SandboxModeFullAccess,
+		WorkingDirectory:     opts.RootPath,
+		ApprovalPolicy:       codexsdk.ApprovalModeNever,
 		ApprovalHandler: func(_ codexsdk.ApprovalRequest) (codexsdk.ApprovalDecision, error) {
 			return codexsdk.ApprovalDecisionApproved, nil
 		},
@@ -253,10 +255,11 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 			name = strings.TrimSpace(model.Model)
 		}
 		models = append(models, types.ModelInfo{
-			ID:          model.Model,
-			Name:        name,
-			Description: model.Description,
-			Hidden:      model.Hidden,
+			ID:            model.Model,
+			Name:          name,
+			Description:   model.Description,
+			Hidden:        model.Hidden,
+			SupportEffort: true,
 		})
 		if model.IsDefault && currentModelID == "" {
 			currentModelID = model.Model

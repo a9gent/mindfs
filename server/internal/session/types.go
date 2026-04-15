@@ -28,6 +28,7 @@ type Exchange struct {
 	Role      string    `json:"role"`
 	Agent     string    `json:"agent,omitempty"`
 	Model     string    `json:"model,omitempty"`
+	Effort    string    `json:"effort,omitempty"`
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -54,4 +55,12 @@ func InferAgentFromSession(s *Session) string {
 		}
 	}
 	return ""
+}
+
+// InferEffortFromSession derives the latest non-empty effort from session data.
+func InferEffortFromSession(s *Session) string {
+	if s == nil || len(s.Exchanges) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(s.Exchanges[len(s.Exchanges)-1].Effort)
 }

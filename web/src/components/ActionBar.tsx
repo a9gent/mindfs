@@ -16,6 +16,7 @@ type SessionInfo = {
   type: "chat" | "plugin";
   agent: string;
   model?: string;
+  effort?: string;
   pending?: boolean;
 };
 
@@ -50,7 +51,13 @@ type ActionBarProps = {
   attachedFileContext?: AttachedFileContext | null;
   canOpenSessionDrawer?: boolean;
   detachedBoundSession?: boolean;
-  onSendMessage?: (message: string, mode: SessionMode, agent: string, model?: string) => void | Promise<void>;
+  onSendMessage?: (
+    message: string,
+    mode: SessionMode,
+    agent: string,
+    model?: string,
+    effort?: string,
+  ) => void | Promise<void>;
   onCancelCurrentTurn?: (sessionKey: string) => void;
   onNewSession?: () => void;
   onRequestFileContext?: () => void;
@@ -112,6 +119,7 @@ export function ActionBar({
   const [mode, setMode] = useState<SessionMode>("chat");
   const [agent, setAgent] = useState("");
   const [model, setModel] = useState("");
+  const [effort, setEffort] = useState("");
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [serializedInput, setSerializedInput] = useState("");
   const [activeToken, setActiveToken] = useState<{ type: "file" | "slash"; query: string } | null>(null);
@@ -158,7 +166,8 @@ export function ActionBar({
     const nextMode = currentSession.type === "plugin" ? "plugin" : "chat";
     const nextAgent = currentSession.agent || "";
     const nextModel = currentSession.model || "";
-    const signature = `${sessionKey || ""}::${nextMode}::${nextAgent}::${nextModel}`;
+    const nextEffort = currentSession.effort || "";
+    const signature = `${sessionKey || ""}::${nextMode}::${nextAgent}::${nextModel}::${nextEffort}`;
     if (syncedSessionSignatureRef.current === signature) {
       return;
     }
@@ -166,6 +175,7 @@ export function ActionBar({
     setMode(nextMode);
     setAgent(nextAgent);
     setModel(nextModel);
+    setEffort(nextEffort);
   }, [currentSession]);
 
   useEffect(() => {
@@ -189,6 +199,7 @@ export function ActionBar({
     }
     setAgent(preferred.name);
     setModel("");
+    setEffort("");
   }, [agent, agents, currentSession]);
 
   useEffect(() => {
@@ -204,6 +215,35 @@ export function ActionBar({
       setModel("");
     }
   }, [agent, model, agents]);
+
+  const selectedAgent = agents.find((item) => item.name === agent);
+  const selectedModelInfo =
+    (selectedAgent?.models ?? []).find((item) => item.id === model)
+    || (selectedAgent?.models ?? []).find(
+      (item) => item.id === selectedAgent?.current_model_id,
+    );
+  const availableEfforts = selectedAgent?.efforts ?? [];
+  const isCodexEffortAgent = selectedAgent?.name === "codex";
+  const supportsEffort =
+    availableEfforts.length > 0 && !!selectedModelInfo?.supportEffort;
+
+  useEffect(() => {
+    if (!supportsEffort) {
+      if (effort) {
+        setEffort("");
+      }
+      return;
+    }
+    if (isCodexEffortAgent) {
+      if (!effort || !availableEfforts.includes(effort)) {
+        setEffort("medium");
+      }
+      return;
+    }
+    if (effort && !availableEfforts.includes(effort)) {
+      setEffort("");
+    }
+  }, [supportsEffort, effort, availableEfforts, isCodexEffortAgent]);
 
   useEffect(() => () => candidateAbortRef.current?.abort(), []);
 
@@ -309,7 +349,13 @@ export function ActionBar({
       if (!payload) {
         return;
       }
-      await onSendMessage?.(payload, mode, agent, model || undefined);
+      await onSendMessage?.(
+        payload,
+        mode,
+        agent,
+        model || undefined,
+        supportsEffort ? effort || undefined : undefined,
+      );
       editorRef.current?.clear();
       setSerializedInput("");
       setActiveToken(null);
@@ -330,7 +376,7 @@ export function ActionBar({
       setSending(false);
       requestAnimationFrame(() => editorRef.current?.focus());
     }
-  }, [serializedInput, pendingAttachments, isConnected, sending, agent, model, onSendMessage, mode, currentRootId]);
+  }, [serializedInput, pendingAttachments, isConnected, sending, agent, model, onSendMessage, mode, currentRootId, supportsEffort, effort]);
 
   const handleCancel = useCallback(async () => {
     const sessionKey = currentSession?.key;
@@ -648,11 +694,14 @@ export function ActionBar({
               <AgentSelector
                 agent={agent}
                 model={model}
+                effort={effort}
                 agents={agents}
                 onAgentChange={(nextAgent, nextModel) => {
                   setAgent(nextAgent);
                   setModel(nextModel || "");
+                  setEffort("");
                 }}
+                onEffortChange={(nextEffort) => setEffort(nextEffort || "")}
                 compact={true}
                 warnUnavailable={isSelectedAgentUnavailable}
               />

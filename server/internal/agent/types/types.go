@@ -38,6 +38,7 @@ type OpenSessionInput struct {
 	SessionKey     string
 	AgentName      string
 	Model          string
+	Effort         string
 	Probe          bool
 	RootPath       string
 	AgentSessionID string
@@ -91,10 +92,11 @@ type ExternalSessionImporter interface {
 }
 
 type ModelInfo struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Hidden      bool   `json:"hidden,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Description   string `json:"description,omitempty"`
+	Hidden        bool   `json:"hidden,omitempty"`
+	SupportEffort bool   `json:"supportEffort,omitempty"`
 }
 
 type ModelList struct {

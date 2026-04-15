@@ -10,6 +10,7 @@ export type AgentStatus = {
   error?: string;
   last_probe?: string;
   current_model_id?: string;
+  efforts?: string[];
   models?: AgentModelInfo[];
   models_error?: string;
   commands?: AgentCommandInfo[];
@@ -21,6 +22,7 @@ export type AgentModelInfo = {
   name: string;
   description?: string;
   hidden?: boolean;
+  supportEffort?: boolean;
 };
 
 export type AgentCommandInfo = {
@@ -28,6 +30,39 @@ export type AgentCommandInfo = {
   description?: string;
   argument_hint?: string;
 };
+
+const VALID_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+
+function normalizeEfforts(input: unknown): string[] | undefined {
+  if (!Array.isArray(input)) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  const efforts: string[] = [];
+  for (const item of input) {
+    const value = String(item || "").trim().toLowerCase();
+    if (!VALID_EFFORTS.includes(value as (typeof VALID_EFFORTS)[number])) {
+      continue;
+    }
+    if (seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    efforts.push(value);
+  }
+  return efforts;
+}
+
+function normalizeAgentStatus(input: unknown): AgentStatus | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+  const agent = input as AgentStatus;
+  return {
+    ...agent,
+    efforts: normalizeEfforts(agent.efforts),
+  };
+}
 
 let cachedAgents: AgentStatus[] = [];
 let lastFetch = 0;
@@ -45,7 +80,9 @@ export async function fetchAgents(force = false): Promise<AgentStatus[]> {
       throw new Error("Failed to fetch agents");
     }
     const data = await res.json();
-    cachedAgents = Array.isArray(data) ? data : [];
+    cachedAgents = Array.isArray(data)
+      ? data.map(normalizeAgentStatus).filter((item): item is AgentStatus => item !== null)
+      : [];
     lastFetch = now;
     return cachedAgents;
   } catch (err) {

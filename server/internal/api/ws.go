@@ -198,6 +198,7 @@ func (h *WSHandler) broadcastSessionMetaUpdated(rootID string, sess *session.Ses
 				"key":        sess.Key,
 				"name":       sess.Name,
 				"model":      sess.Model,
+				"effort":     session.InferEffortFromSession(sess),
 				"updated_at": sess.UpdatedAt,
 			},
 		},
@@ -216,6 +217,7 @@ func (h *WSHandler) broadcastAgentStatusChange(status agent.Status) {
 			"error":            status.Error,
 			"last_probe":       status.LastProbe,
 			"current_model_id": status.CurrentModelID,
+			"efforts":          status.Efforts,
 			"models":           status.Models,
 			"models_error":     status.ModelsError,
 			"commands":         status.Commands,
@@ -290,6 +292,7 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 	sessionType := getString(req.Payload, "type")
 	agentName := getString(req.Payload, "agent")
 	model := getString(req.Payload, "model")
+	effort := getString(req.Payload, "effort")
 	requestID := strings.TrimSpace(req.ID)
 	if content == "" || sessionType == "" || agentName == "" {
 		h.sendWSError(conn, req.ID, "invalid_request", "content, type and agent required")
@@ -354,10 +357,11 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 		Key:       key,
 		Agent:     agentName,
 		Model:     model,
+		Effort:    effort,
 		Content:   content,
 		ClientCtx: clientCtx,
 		OnStart: func() {
-			streamHub.BroadcastSessionUserMessage(rootID, key, sessionType, sessionName, agentName, model, content, clientID)
+			streamHub.BroadcastSessionUserMessage(rootID, key, sessionType, sessionName, agentName, model, effort, content, clientID)
 		},
 		OnUpdate: func(update agenttypes.Event) {
 			event := updateToEvent(update)

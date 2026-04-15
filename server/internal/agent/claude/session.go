@@ -28,6 +28,7 @@ type OpenOptions struct {
 	AgentName       string
 	SessionKey      string
 	Model           string
+	Effort          string
 	RootPath        string
 	Command         string
 	Args            []string
@@ -63,6 +64,9 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 	}
 	if strings.TrimSpace(opts.Model) != "" {
 		optionList = append(optionList, claudeagent.WithModel(strings.TrimSpace(opts.Model)))
+	}
+	if strings.TrimSpace(opts.Effort) != "" {
+		optionList = append(optionList, claudeagent.WithEffort(claudeagent.Effort(strings.TrimSpace(opts.Effort))))
 	}
 
 	client, err := claudeagent.NewClient(optionList...)
@@ -194,9 +198,10 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 			name = strings.TrimSpace(model.Value)
 		}
 		models = append(models, types.ModelInfo{
-			ID:          model.Value,
-			Name:        name,
-			Description: model.Description,
+			ID:            model.Value,
+			Name:          name,
+			Description:   model.Description,
+			SupportEffort: claudeModelSupportsEffort(model.Value, name),
 		})
 	}
 	log.Printf("[agent/claude] models.cached session=%s count=%d", s.sessionKey, len(models))
@@ -213,6 +218,11 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 		CurrentModelID: currentModelID,
 		Models:         models,
 	}, nil
+}
+
+func claudeModelSupportsEffort(id, name string) bool {
+	joined := strings.ToLower(strings.TrimSpace(id) + " " + strings.TrimSpace(name))
+	return strings.Contains(joined, "sonnet") || strings.Contains(joined, "opus")
 }
 
 func (s *session) ListCommands(ctx context.Context) (types.CommandList, error) {

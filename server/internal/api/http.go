@@ -17,8 +17,8 @@ import (
 	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/api/usecase"
 	"mindfs/server/internal/fs"
-	"mindfs/server/internal/gitview"
 	"mindfs/server/internal/githubimport"
+	"mindfs/server/internal/gitview"
 	"mindfs/server/internal/session"
 
 	"github.com/go-chi/chi/v5"
@@ -350,6 +350,7 @@ func sessionResponse(s *session.Session, pendingUser *session.Exchange) map[stri
 		"type":          s.Type,
 		"agent":         session.InferAgentFromSession(s),
 		"model":         s.Model,
+		"effort":        session.InferEffortFromSession(s),
 		"name":          s.Name,
 		"exchanges":     exchanges,
 		"related_files": s.RelatedFiles,
@@ -368,6 +369,7 @@ func sessionListResponse(s *session.Session) map[string]any {
 		"type":       s.Type,
 		"agent":      session.InferAgentFromSession(s),
 		"model":      s.Model,
+		"effort":     session.InferEffortFromSession(s),
 		"name":       s.Name,
 		"created_at": s.CreatedAt,
 		"updated_at": s.UpdatedAt,

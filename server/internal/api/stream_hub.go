@@ -105,12 +105,13 @@ func buildSessionDoneResponse(rootID, sessionKey, requestID string) WSResponse {
 	}
 }
 
-func buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, model, content string, timestamp time.Time) WSResponse {
+func buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, model, effort, content string, timestamp time.Time) WSResponse {
 	sessionPayload := map[string]any{
 		"key":        sessionKey,
 		"type":       sessionType,
 		"agent":      agentName,
 		"model":      model,
+		"effort":     effort,
 		"created_at": timestamp,
 		"updated_at": timestamp,
 	}
@@ -127,6 +128,7 @@ func buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionNam
 				"role":      "user",
 				"agent":     agentName,
 				"model":     model,
+				"effort":    effort,
 				"content":   content,
 				"timestamp": timestamp,
 			},
@@ -362,11 +364,12 @@ func (h *StreamHub) BroadcastSessionUserMessage(
 	sessionName string,
 	agentName string,
 	model string,
+	effort string,
 	content string,
 	excludeClientID string,
 ) {
 	pendingUser := h.SetPendingUser(sessionKey, agentName, model, content)
-	resp := buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, model, content, pendingUser.Timestamp)
+	resp := buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, model, effort, content, pendingUser.Timestamp)
 	for _, clientID := range h.GetSessionClientIDs(sessionKey, false) {
 		if clientID == excludeClientID {
 			continue

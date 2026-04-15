@@ -77,6 +77,7 @@ export type SessionItem = {
   type?: SessionMode;
   agent?: string;
   model?: string;
+  effort?: string;
   scope?: string;
   purpose?: string;
   created_at?: string;
@@ -88,6 +89,7 @@ export type SessionItem = {
     content?: string;
     timestamp?: string;
     model?: string;
+    effort?: string;
   }>;
   pending?: boolean;
 };
@@ -95,6 +97,7 @@ type Exchange = {
   role: string;
   agent?: string;
   model?: string;
+  effort?: string;
   content?: string;
   timestamp?: string;
   toolCall?: any;
@@ -105,6 +108,7 @@ type PendingSend = {
   mode: SessionMode;
   agent: string;
   model?: string;
+  effort?: string;
   message: string;
   timestamp: string;
   requestId?: string;
@@ -1330,7 +1334,13 @@ export function App() {
   );
 
   const updateSessionAgentForKey = useCallback(
-    (rootID: string, sessionKey: string, agent: string, model?: string) => {
+    (
+      rootID: string,
+      sessionKey: string,
+      agent: string,
+      model?: string,
+      effort?: string,
+    ) => {
       if (!rootID || !sessionKey || !agent) return;
       const cacheKey = rootSessionKey(rootID, sessionKey);
       const cached = sessionCacheRef.current[cacheKey];
@@ -1339,6 +1349,7 @@ export function App() {
           ...(cached as any),
           agent,
           model: model || "",
+          effort: effort || "",
           updated_at: new Date().toISOString(),
         } as Session;
       }
@@ -1347,18 +1358,26 @@ export function App() {
         const prevRoot =
           (prev?.root_id as string | undefined) || currentRootIdRef.current;
         if (!prev || prevKey !== sessionKey || prevRoot !== rootID) return prev;
-        return { ...(prev as any), agent, model: model || "" } as SessionItem;
+        return {
+          ...(prev as any),
+          agent,
+          model: model || "",
+          effort: effort || "",
+        } as SessionItem;
       });
       const current = drawerSessionByRootRef.current[rootID];
       if (
         current &&
         current.key === sessionKey &&
-        (current.agent !== agent || (current as any).model !== (model || ""))
+        (current.agent !== agent ||
+          (current as any).model !== (model || "") ||
+          (current as any).effort !== (effort || ""))
       ) {
         setDrawerSessionForRoot(rootID, {
           ...(current as any),
           agent,
           model: model || "",
+          effort: effort || "",
         } as Session);
       }
       bumpCacheVersion();
@@ -2069,6 +2088,7 @@ export function App() {
       mode: SessionMode,
       agent: string,
       model?: string,
+      effort?: string,
     ) => {
       const activeRoot = currentRootIdRef.current;
       if (!activeRoot) return;
@@ -2114,7 +2134,8 @@ export function App() {
       }
       let effectiveMode = mode,
         effectiveAgent = agent,
-        effectiveModel = model || "";
+        effectiveModel = model || "",
+        effectiveEffort = effort || "";
       if (sendSessionKey && session) {
         const previousAgent = session.agent || "";
         effectiveMode = normalizeMode(session.type as any);
@@ -2122,16 +2143,21 @@ export function App() {
         effectiveModel =
           model ||
           (effectiveAgent === previousAgent ? session.model || "" : "");
+        effectiveEffort =
+          effort ||
+          (effectiveAgent === previousAgent ? (session as any).effort || "" : "");
         updateSessionAgentForKey(
           activeRoot,
           sendSessionKey,
           effectiveAgent,
           effectiveModel,
+          effectiveEffort,
         );
         session = {
           ...(session as any),
           agent: effectiveAgent,
           model: effectiveModel,
+          effort: effectiveEffort,
         } as Session;
         setBoundSessionForRoot(activeRoot, sendSessionKey);
         setSelectedPendingByKey(sendSessionKey, true);
@@ -2147,6 +2173,7 @@ export function App() {
           type: mode,
           agent,
           model: effectiveModel,
+          effort: effectiveEffort,
           name: "新会话",
           pending: true,
         } as any;
@@ -2156,6 +2183,9 @@ export function App() {
       const tempKey = sendSessionKey ? "" : session?.key || "";
       const userEx: Exchange = {
         role: "user",
+        agent: effectiveAgent,
+        model: effectiveModel,
+        effort: effectiveEffort,
         content: message,
         timestamp: now,
         pending_ack: true,
@@ -2165,6 +2195,7 @@ export function App() {
         mode: effectiveMode,
         agent: effectiveAgent,
         model: effectiveModel,
+        effort: effectiveEffort,
         message,
         timestamp: now,
         requestId,
@@ -2178,11 +2209,12 @@ export function App() {
         const prevExchanges = Array.isArray((cached as any).exchanges)
           ? ((cached as any).exchanges as Exchange[])
           : [];
-        sessionCacheRef.current[ck] = {
-          ...(cached as any),
-          exchanges: [...prevExchanges, userEx],
-          updated_at: now,
-        } as Session;
+          sessionCacheRef.current[ck] = {
+            ...(cached as any),
+            exchanges: [...prevExchanges, userEx],
+            effort: effectiveEffort,
+            updated_at: now,
+          } as Session;
         session = sessionCacheRef.current[ck];
         bumpCacheVersion();
       } else {
@@ -2191,6 +2223,7 @@ export function App() {
           mode: effectiveMode,
           agent: effectiveAgent,
           model: effectiveModel,
+          effort: effectiveEffort,
           message,
           timestamp: now,
           requestId,
@@ -2237,6 +2270,7 @@ export function App() {
         effectiveMode,
         effectiveAgent,
         effectiveModel || undefined,
+        effectiveEffort || undefined,
         context,
         requestId,
       );
@@ -3656,6 +3690,7 @@ export function App() {
             content: pending.message,
             timestamp: pending.timestamp,
             model: pending.model,
+            effort: pending.effort,
           };
           const cached =
             sessionCacheRef.current[ck] ||
@@ -3664,6 +3699,7 @@ export function App() {
               type: pending.mode,
               agent: pending.agent,
               model: pending.model,
+              effort: pending.effort,
               name: "",
               created_at: pending.timestamp,
               updated_at: pending.timestamp,
@@ -4049,6 +4085,7 @@ export function App() {
                 type: sessionMeta?.type || "chat",
                 agent: sessionMeta?.agent || exchange?.agent || "",
                 model: sessionMeta?.model || exchange?.model || "",
+                effort: sessionMeta?.effort || exchange?.effort || "",
                 name: sessionMeta?.name || "新会话",
                 created_at:
                   sessionMeta?.created_at ||
@@ -4083,6 +4120,11 @@ export function App() {
                 exchange?.model ||
                 (cached as any).model ||
                 "",
+              effort:
+                sessionMeta?.effort ||
+                exchange?.effort ||
+                (cached as any).effort ||
+                "",
               exchanges: duplicate
                 ? prevExchanges
                 : [
@@ -4091,6 +4133,7 @@ export function App() {
                       role: "user",
                       agent: exchange?.agent || "",
                       model: exchange?.model || "",
+                      effort: exchange?.effort || "",
                       content: exchange?.content || "",
                       timestamp:
                         exchange?.timestamp || new Date().toISOString(),
@@ -4130,6 +4173,10 @@ export function App() {
                   typeof payload.session.model === "string"
                     ? payload.session.model
                     : (cached as any).model,
+                effort:
+                  typeof payload.session.effort === "string"
+                    ? payload.session.effort
+                    : (cached as any).effort,
                 updated_at: payload.session.updated_at || cached.updated_at,
               } as Session;
               bumpCacheVersion();
@@ -4150,6 +4197,10 @@ export function App() {
                         typeof payload.session.model === "string"
                           ? payload.session.model
                           : (prev as any).model,
+                      effort:
+                        typeof payload.session.effort === "string"
+                          ? payload.session.effort
+                          : (prev as any).effort,
                       updated_at: payload.session.updated_at || prev.updated_at,
                     } as SessionItem)
                   : prev,

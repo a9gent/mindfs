@@ -5,8 +5,10 @@ import type { AgentStatus } from "../services/agents";
 type AgentSelectorProps = {
   agent: string;
   model?: string;
+  effort?: string;
   agents: AgentStatus[];
   onAgentChange: (agent: string, model?: string) => void;
+  onEffortChange?: (effort?: string) => void;
   compact?: boolean;
   warnUnavailable?: boolean;
 };
@@ -86,21 +88,21 @@ function parseAgentErrorDetails(error?: string): string[] {
 export function AgentSelector({
   agent,
   model = "",
+  effort = "",
   agents,
   onAgentChange,
+  onEffortChange,
   compact = false,
   warnUnavailable = false,
 }: AgentSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [submenuAgent, setSubmenuAgent] = useState<string | null>(null);
   const [errorAgent, setErrorAgent] = useState<string | null>(null);
+  const [modelSectionExpanded, setModelSectionExpanded] = useState(true);
+  const [effortSectionExpanded, setEffortSectionExpanded] = useState(false);
   const [menuBodyHeight, setMenuBodyHeight] = useState<number | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const agentColumnRef = useRef<HTMLDivElement>(null);
-  const selectedAgent = useMemo(
-    () => agents.find((item) => item.name === agent),
-    [agents, agent]
-  );
   const submenuAgentStatus = useMemo(
     () => agents.find((item) => item.name === submenuAgent) ?? null,
     [agents, submenuAgent]
@@ -113,6 +115,26 @@ export function AgentSelector({
     () => submenuAgentStatus?.models ?? [],
     [submenuAgentStatus]
   );
+  const submenuSelectedModel = useMemo(() => {
+    if (!submenuAgentStatus) return null;
+    const fallbackModel = submenuAgentStatus.current_model_id || "";
+    const targetModel =
+      submenuAgentStatus.name === agent ? model || fallbackModel : fallbackModel;
+    return (
+      (submenuAgentStatus.models ?? []).find((item) => item.id === targetModel) ??
+      null
+    );
+  }, [submenuAgentStatus, agent, model]);
+  const submenuEfforts = useMemo(
+    () => submenuAgentStatus?.efforts ?? [],
+    [submenuAgentStatus]
+  );
+  const submenuIsCodex = submenuAgentStatus?.name === "codex";
+  const submenuSupportsEffort = useMemo(
+    () => submenuEfforts.length > 0 && !!submenuSelectedModel?.supportEffort,
+    [submenuEfforts, submenuSelectedModel]
+  );
+  const displayedEffort = submenuIsCodex ? effort || "medium" : effort || "Auto";
   const buttonTitle = useMemo(() => {
     if (warnUnavailable) {
       return `当前会话的 Agent（${agent}）不可用`;
@@ -129,6 +151,8 @@ export function AgentSelector({
         setIsOpen(false);
         setSubmenuAgent(null);
         setErrorAgent(null);
+        setModelSectionExpanded(true);
+        setEffortSectionExpanded(false);
         setMenuBodyHeight(null);
       }
     };
@@ -160,6 +184,8 @@ export function AgentSelector({
       setIsOpen(false);
       setSubmenuAgent(null);
       setErrorAgent(null);
+      setModelSectionExpanded(true);
+      setEffortSectionExpanded(false);
     },
     [onAgentChange]
   );
@@ -180,6 +206,8 @@ export function AgentSelector({
         return;
       }
       setErrorAgent(null);
+      setModelSectionExpanded(true);
+      setEffortSectionExpanded(false);
       const node = agentColumnRef.current;
       if (node) {
         setMenuBodyHeight(
@@ -194,11 +222,17 @@ export function AgentSelector({
     []
   );
 
-  const handleDefaultModelSelect = useCallback(
-    (entry: AgentStatus) => {
-      handleAgentSelect(entry.name, "");
+  const handleEffortSelect = useCallback(
+    (nextEffort: string) => {
+      onEffortChange?.(nextEffort);
+      setIsOpen(false);
+      setSubmenuAgent(null);
+      setErrorAgent(null);
+      setModelSectionExpanded(true);
+      setEffortSectionExpanded(false);
+      setMenuBodyHeight(null);
     },
-    [handleAgentSelect]
+    [onEffortChange]
   );
 
   return (
@@ -211,6 +245,8 @@ export function AgentSelector({
             if (!next) {
               setSubmenuAgent(null);
               setErrorAgent(null);
+              setModelSectionExpanded(true);
+              setEffortSectionExpanded(false);
               setMenuBodyHeight(null);
             }
             return next;
@@ -309,7 +345,6 @@ export function AgentSelector({
             {agents.map((a) => {
               const hasModels = (a.models?.length ?? 0) > 0;
               const hasError = !a.available && !!a.error;
-              const errorMessage = parseAgentErrorMessage(a.error);
               const isSelected = a.name === agent;
               const isExpanded = submenuAgent === a.name;
               const isShowingError = errorAgent === a.name;
@@ -374,6 +409,8 @@ export function AgentSelector({
                             event.preventDefault();
                             event.stopPropagation();
                             setSubmenuAgent(null);
+                            setModelSectionExpanded(true);
+                            setEffortSectionExpanded(false);
                             setErrorAgent((prev) => (prev === a.name ? null : a.name));
                           }}
                           style={{
@@ -515,72 +552,70 @@ export function AgentSelector({
               </div>
             ) : submenuAgentStatus ? (
               <>
-              {submenuAgentStatus.current_model_id ? (
-                <button
-                  type="button"
-                  onClick={() => handleDefaultModelSelect(submenuAgentStatus)}
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "flex-start",
-                    gap: "2px",
-                    width: "100%",
-                    minWidth: 0,
-                    padding: "10px 12px",
-                    border: "none",
-                    background: submenuAgentStatus.name === agent && !model ? "rgba(59, 130, 246, 0.08)" : "transparent",
-                    color: submenuAgentStatus.name === agent && !model ? "#3b82f6" : "var(--text-primary)",
-                    textAlign: "left",
-                    cursor: "pointer",
-                  }}
-                >
-                  <span style={{ fontSize: "13px", fontWeight: 500 }}>默认模型</span>
-                  <span style={{ fontSize: "11px", color: "var(--text-secondary)", whiteSpace: "normal", overflowWrap: "anywhere", wordBreak: "break-word" }}>
-                    当前默认: {submenuAgentStatus.current_model_id}
-                  </span>
-                </button>
-              ) : null}
-              {submenuModels.map((item) => {
-                const isSelected = submenuAgentStatus.name === agent && item.id === model;
-                const showTopBorder = !!submenuAgentStatus.current_model_id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => handleAgentSelect(submenuAgentStatus.name, item.id)}
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "flex-start",
-                      gap: "2px",
-                      width: "100%",
-                      minWidth: 0,
-                      padding: "10px 12px",
-                      border: "none",
-                      borderTop: showTopBorder ? "1px solid var(--menu-divider)" : "none",
-                      background: isSelected ? "rgba(59, 130, 246, 0.08)" : "transparent",
-                      color: isSelected ? "#3b82f6" : "var(--text-primary)",
-                      textAlign: "left",
-                      cursor: "pointer",
-                      opacity: item.hidden ? 0.66 : 1,
-                    }}
-                    title={item.description || item.id}
-                  >
-                    <span style={{ fontSize: "13px", fontWeight: 500 }}>
-                      {item.name || item.id}
-                    </span>
-                    {item.description ? (
-                      <span style={{ fontSize: "11px", color: "var(--text-secondary)", whiteSpace: "normal", overflowWrap: "anywhere", wordBreak: "break-word" }}>
-                        {item.description}
-                      </span>
-                    ) : item.hidden ? (
-                      <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
-                        hidden
-                      </span>
+                <SectionHeader
+                  title="模型"
+                  expanded={modelSectionExpanded}
+                  onToggle={() => setModelSectionExpanded((prev) => !prev)}
+                  value={submenuSelectedModel?.id || undefined}
+                />
+                {modelSectionExpanded ? (
+                  <>
+                    {submenuModels.map((item, index) => {
+                      const isSelected =
+                        submenuAgentStatus.name === agent &&
+                        item.id === (submenuSelectedModel?.id || "");
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => handleAgentSelect(submenuAgentStatus.name, item.id)}
+                          style={sectionItemStyle(isSelected, index > 0, item.hidden ? 0.66 : 1)}
+                          title={item.description || item.id}
+                        >
+                          <span style={{ fontSize: "13px", fontWeight: 500 }}>
+                            {item.name || item.id}
+                          </span>
+                          {item.description ? (
+                            <span style={{ fontSize: "11px", color: "var(--text-secondary)", whiteSpace: "normal", overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                              {item.description}
+                            </span>
+                          ) : item.hidden ? (
+                            <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                              hidden
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </>
+                ) : null}
+                {submenuSupportsEffort ? (
+                  <>
+                    <SectionHeader
+                      title="思考等级"
+                      expanded={effortSectionExpanded}
+                      onToggle={() => setEffortSectionExpanded((prev) => !prev)}
+                      topBorder={modelSectionExpanded || submenuModels.length > 0 || !!submenuAgentStatus.current_model_id}
+                      value={displayedEffort}
+                    />
+                    {effortSectionExpanded ? (
+                      <>
+                        {submenuEfforts.map((item, index) => (
+                          <button
+                            key={item}
+                            type="button"
+                            onClick={() => handleEffortSelect(item)}
+                            style={sectionItemStyle(item === displayedEffort.toLowerCase(), index > 0)}
+                          >
+                            <span style={{ fontSize: "13px", fontWeight: 500, textTransform: "capitalize" }}>
+                              {item}
+                            </span>
+                          </button>
+                        ))}
+                      </>
                     ) : null}
-                  </button>
-                );
-              })}
+                  </>
+                ) : null}
               </>
             ) : null}
           </div>
@@ -588,4 +623,113 @@ export function AgentSelector({
       )}
     </div>
   );
+}
+
+function SectionHeader({
+  title,
+  expanded,
+  onToggle,
+  topBorder = false,
+  value,
+}: {
+  title: string;
+  expanded: boolean;
+  onToggle: () => void;
+  topBorder?: boolean;
+  value?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        width: "100%",
+        minWidth: 0,
+        padding: "10px 12px",
+        border: "none",
+        borderTop: topBorder ? "1px solid var(--menu-divider)" : "none",
+        background: expanded ? "rgba(59, 130, 246, 0.05)" : "transparent",
+        color: "var(--text-primary)",
+        textAlign: "left",
+        cursor: "pointer",
+      }}
+    >
+      <span
+        style={{
+          fontSize: "11px",
+          fontWeight: 700,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          color: expanded ? "#3b82f6" : "var(--text-secondary)",
+        }}
+      >
+        {title}
+      </span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+        {value ? (
+          <span
+            title={value}
+            style={{
+              fontSize: "11px",
+              color: "var(--text-secondary)",
+              whiteSpace: "nowrap",
+              maxWidth: "96px",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              direction: "rtl",
+              textAlign: "left",
+            }}
+          >
+            {value}
+          </span>
+        ) : null}
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+          aria-hidden="true"
+          style={{
+            color: expanded ? "#3b82f6" : "var(--text-secondary)",
+            transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
+            transition: "transform 0.16s ease",
+          }}
+        >
+          <path
+            d="M4 2.5 8 6 4 9.5"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </span>
+    </button>
+  );
+}
+
+function sectionItemStyle(
+  selected: boolean,
+  topBorder = false,
+  opacity = 1,
+): React.CSSProperties {
+  return {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: "2px",
+    width: "100%",
+    minWidth: 0,
+    padding: "10px 12px",
+    border: "none",
+    borderTop: topBorder ? "1px solid var(--menu-divider)" : "none",
+    background: selected ? "rgba(59, 130, 246, 0.08)" : "transparent",
+    color: selected ? "#3b82f6" : "var(--text-primary)",
+    textAlign: "left",
+    cursor: "pointer",
+    opacity,
+  };
 }

@@ -15,6 +15,7 @@ export type Session = {
   type: SessionType;
   agent?: string;
   model?: string;
+  effort?: string;
   name: string;
   created_at: string;
   updated_at: string;
@@ -25,6 +26,7 @@ export type Session = {
     role?: string;
     agent?: string;
     model?: string;
+    effort?: string;
     content?: string;
     timestamp?: string;
     toolCall?: ToolCall;
@@ -391,6 +393,7 @@ class SessionService {
     type: SessionType,
     agent: string,
     model?: string,
+    effort?: string,
     context?: Record<string, unknown>,
     requestId = this.createRequestId("msg"),
   ): Promise<boolean> {
@@ -409,6 +412,7 @@ class SessionService {
         type,
         agent,
         model,
+        effort,
         context: this.compactContext(sessionKey, context),
       },
     };

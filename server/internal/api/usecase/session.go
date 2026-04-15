@@ -230,6 +230,7 @@ type SendMessageInput struct {
 	Key       string
 	Agent     string
 	Model     string
+	Effort    string
 	Content   string
 	ClientCtx ClientContext
 	OnStart   func()
@@ -737,35 +738,43 @@ func (s *Service) ensureAgentSession(
 	current *session.Session,
 	agentName string,
 	model string,
+	effort string,
 	rootAbs string,
 ) (agenttypes.Session, *int, error) {
 	poolSessionKey := agentPoolSessionKey(current.Key, agentName)
 	nextModel := resolveRuntimeModel(current, model)
+	nextEffort := resolveRuntimeEffort(agentName, current, effort)
 	currentModel := ""
+	currentEffort := ""
 	if current != nil {
 		currentModel = resolveSessionExchangeModel(current)
 		if currentModel == "" {
 			currentModel = strings.TrimSpace(current.Model)
 		}
+		currentEffort = session.InferEffortFromSession(current)
 	}
 	if existing, ok := pool.Get(poolSessionKey); ok {
-		if current != nil && currentModel != nextModel {
-			log.Printf("[session/model] switch.detected session=%s agent=%s from=%q to=%q action=set_runtime_model", current.Key, agentName, currentModel, nextModel)
-			if err := existing.SetModel(ctx, nextModel); err != nil {
-				if prober := s.Registry.GetProber(); prober != nil {
-					prober.ReportRuntimeFailure(agentName, err)
+		if !shouldReopenSessionForEffort(pool, agentName, currentEffort, nextEffort) {
+			if current != nil && currentModel != nextModel {
+				log.Printf("[session/model] switch.detected session=%s agent=%s from=%q to=%q action=set_runtime_model", current.Key, agentName, currentModel, nextModel)
+				if err := existing.SetModel(ctx, nextModel); err != nil {
+					if prober := s.Registry.GetProber(); prober != nil {
+						prober.ReportRuntimeFailure(agentName, err)
+					}
+					log.Printf("[session/model] switch.error session=%s agent=%s model=%q pool_session=%s err=%v", current.Key, agentName, nextModel, poolSessionKey, err)
+					return nil, nil, err
 				}
-				log.Printf("[session/model] switch.error session=%s agent=%s model=%q pool_session=%s err=%v", current.Key, agentName, nextModel, poolSessionKey, err)
-				return nil, nil, err
+				log.Printf("[session/model] switch.done session=%s agent=%s model=%q pool_session=%s", current.Key, agentName, nextModel, poolSessionKey)
 			}
-			log.Printf("[session/model] switch.done session=%s agent=%s model=%q pool_session=%s", current.Key, agentName, nextModel, poolSessionKey)
+			var currentSeq *int
+			if current != nil {
+				last := current.AgentCtxSeq[agentName]
+				currentSeq = &last
+			}
+			return existing, currentSeq, nil
 		}
-		var currentSeq *int
-		if current != nil {
-			last := current.AgentCtxSeq[agentName]
-			currentSeq = &last
-		}
-		return existing, currentSeq, nil
+		log.Printf("[session/effort] reopen.detected session=%s agent=%s from=%q to=%q action=resume_runtime_session", current.Key, agentName, currentEffort, nextEffort)
+		pool.Close(poolSessionKey)
 	}
 
 	openCtx := pool.Context()
@@ -786,6 +795,7 @@ func (s *Service) ensureAgentSession(
 		SessionKey: poolSessionKey,
 		AgentName:  agentName,
 		Model:      nextModel,
+		Effort:     nextEffort,
 		RootPath:   rootAbs,
 		AgentSessionID: strings.TrimSpace(func() string {
 			if binding == nil {
@@ -801,15 +811,15 @@ func (s *Service) ensureAgentSession(
 		}(),
 	}
 	if openInput.AgentSessionID != "" {
-		log.Printf("[session/model] open session=%s agent=%s model=%q pool_session=%s action=resume_runtime_session agent_session_id=%s agent_ctx_seq=%d", current.Key, agentName, nextModel, poolSessionKey, openInput.AgentSessionID, openInput.AgentCtxSeq)
+		log.Printf("[session/model] open session=%s agent=%s model=%q effort=%q pool_session=%s action=resume_runtime_session agent_session_id=%s agent_ctx_seq=%d", current.Key, agentName, nextModel, nextEffort, poolSessionKey, openInput.AgentSessionID, openInput.AgentCtxSeq)
 	} else {
-		log.Printf("[session/model] open session=%s agent=%s model=%q pool_session=%s action=open_new_runtime_session", current.Key, agentName, nextModel, poolSessionKey)
+		log.Printf("[session/model] open session=%s agent=%s model=%q effort=%q pool_session=%s action=open_new_runtime_session", current.Key, agentName, nextModel, nextEffort, poolSessionKey)
 	}
 	sess, err := pool.GetOrCreate(openCtx, openInput)
 	var ctxSeqOverride *int
 	if err != nil {
 		if openInput.AgentSessionID != "" {
-			log.Printf("[session/model] resume.error session=%s agent=%s model=%q pool_session=%s agent_session_id=%s err=%v fallback=open_new_runtime_session", current.Key, agentName, nextModel, poolSessionKey, openInput.AgentSessionID, err)
+			log.Printf("[session/model] resume.error session=%s agent=%s model=%q effort=%q pool_session=%s agent_session_id=%s err=%v fallback=open_new_runtime_session", current.Key, agentName, nextModel, nextEffort, poolSessionKey, openInput.AgentSessionID, err)
 			openInput.AgentSessionID = ""
 			openInput.AgentCtxSeq = 0
 			sess, err = pool.GetOrCreate(openCtx, openInput)
@@ -823,15 +833,35 @@ func (s *Service) ensureAgentSession(
 		if prober := s.Registry.GetProber(); prober != nil {
 			prober.ReportRuntimeFailure(agentName, err)
 		}
-		log.Printf("[session/model] open.error session=%s agent=%s model=%q pool_session=%s err=%v", current.Key, agentName, nextModel, poolSessionKey, err)
+		log.Printf("[session/model] open.error session=%s agent=%s model=%q effort=%q pool_session=%s err=%v", current.Key, agentName, nextModel, nextEffort, poolSessionKey, err)
 		return nil, nil, err
 	}
 	if ctxSeqOverride == nil && binding != nil && openInput.AgentSessionID != "" {
 		last := binding.AgentCtxSeq
 		ctxSeqOverride = &last
 	}
-	log.Printf("[session/model] open.done session=%s agent=%s model=%q pool_session=%s", current.Key, agentName, nextModel, poolSessionKey)
+	log.Printf("[session/model] open.done session=%s agent=%s model=%q effort=%q pool_session=%s", current.Key, agentName, nextModel, nextEffort, poolSessionKey)
 	return sess, ctxSeqOverride, nil
+}
+
+func shouldReopenSessionForEffort(pool *agent.Pool, agentName, currentEffort, nextEffort string) bool {
+	currentEffort = strings.TrimSpace(currentEffort)
+	nextEffort = strings.TrimSpace(nextEffort)
+	if currentEffort == nextEffort {
+		return false
+	}
+	if pool == nil {
+		return false
+	}
+	def, ok := pool.Config().GetAgent(agentName)
+	if !ok {
+		return false
+	}
+	protocol := def.Protocol
+	if protocol == "" {
+		protocol = agent.DefaultProtocol(agentName)
+	}
+	return protocol == agent.ProtocolCodexSDK || protocol == agent.ProtocolClaudeSDK
 }
 
 func resolveRuntimeModel(current *session.Session, requested string) string {
@@ -845,6 +875,16 @@ func resolveRuntimeModel(current *session.Session, requested string) string {
 		return ""
 	}
 	return strings.TrimSpace(current.Model)
+}
+
+func resolveRuntimeEffort(_ string, current *session.Session, requested string) string {
+	if effort := strings.TrimSpace(requested); effort != "" {
+		return effort
+	}
+	if effort := session.InferEffortFromSession(current); effort != "" {
+		return effort
+	}
+	return ""
 }
 
 func resolveSessionExchangeModel(current *session.Session) string {
@@ -897,7 +937,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	}
 	root := manager.Root()
 	rootAbs, _ := root.RootDir()
-	sess, agentCtxSeq, err := s.ensureAgentSession(turnCtx, agentPool, manager, current, in.Agent, in.Model, rootAbs)
+	sess, agentCtxSeq, err := s.ensureAgentSession(turnCtx, agentPool, manager, current, in.Agent, in.Model, in.Effort, rootAbs)
 	if err != nil {
 		return err
 	}
@@ -952,10 +992,11 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	if err := manager.UpdateModel(ctx, current, in.Model); err != nil {
 		return err
 	}
-	if err := manager.AddExchangeForAgent(ctx, current, "user", in.Content, in.Agent); err != nil {
+	resolvedEffort := resolveRuntimeEffort(in.Agent, current, in.Effort)
+	if err := manager.AddExchangeForAgent(ctx, current, "user", in.Content, in.Agent, resolvedEffort); err != nil {
 		return err
 	}
-	if err := manager.AddExchangeForAgent(ctx, current, "agent", responseText, in.Agent); err != nil {
+	if err := manager.AddExchangeForAgent(ctx, current, "agent", responseText, in.Agent, resolvedEffort); err != nil {
 		return err
 	}
 	if err := manager.UpdateAgentState(ctx, current, in.Agent, contextLineCount(current.Exchanges), sess.SessionID()); err != nil {
