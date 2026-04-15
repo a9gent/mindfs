@@ -24,8 +24,8 @@ import {
 } from "lexical";
 
 type TokenType = "file" | "skill";
-type CandidateType = TokenType | "slash_command";
-type ActiveTokenType = "file" | "slash";
+type CandidateType = TokenType | "slash_command" | "prompt";
+type ActiveTokenType = "file" | "slash" | "prompt";
 
 type ActiveToken = {
   type: ActiveTokenType;
@@ -230,7 +230,7 @@ function parseActiveToken(displayText: string, cursorPos: number): ActiveToken |
   let start = cursor - 1;
   while (start >= 0) {
     const ch = displayText[start];
-    if (ch === "@" || ch === "/") {
+    if (ch === "@" || ch === "/" || ch === "#") {
       const prev = start > 0 ? displayText[start - 1] : "";
       const isBoundary =
         prev === "" ||
@@ -251,7 +251,7 @@ function parseActiveToken(displayText: string, cursorPos: number): ActiveToken |
         }
       }
       return {
-        type: ch === "@" ? "file" : "slash",
+        type: ch === "@" ? "file" : ch === "/" ? "slash" : "prompt",
         query: displayText.slice(start + 1, end),
       };
     }
@@ -267,12 +267,18 @@ function expectedActiveTokenType(candidateType: CandidateType): ActiveTokenType 
   if (candidateType === "file") {
     return "file";
   }
+  if (candidateType === "prompt") {
+    return "prompt";
+  }
   return "slash";
 }
 
-function triggerChar(tokenType: ActiveTokenType): "@" | "/" {
+function triggerChar(tokenType: ActiveTokenType): "@" | "/" | "#" {
   if (tokenType === "file") {
     return "@";
+  }
+  if (tokenType === "prompt") {
+    return "#";
   }
   return "/";
 }
@@ -424,6 +430,8 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
         if (prefix) replacementNodes.push($createTextNode(prefix));
         if (type === "slash_command") {
           replacementNodes.push($createTextNode(`/${value}`));
+        } else if (type === "prompt") {
+          replacementNodes.push($createTextNode(value));
         } else {
           replacementNodes.push($createTokenNode(type, value, createLabel(type, value)));
         }

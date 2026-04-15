@@ -307,6 +307,9 @@ func (s *AppContext) GetCandidateRegistry() *usecase.CandidateRegistry {
 	if s.candidateRegistry == nil {
 		registry := usecase.NewCandidateRegistry()
 		registry.Register(usecase.NewFileCandidateProvider())
+		if store, err := usecase.NewPromptStore(); err == nil {
+			registry.Register(usecase.NewPromptCandidateProvider(store))
+		}
 		registry.Register(usecase.NewSkillCandidateProvider())
 		registry.Register(usecase.NewSlashCommandCandidateProvider(func(agentName string) (agent.Status, bool) {
 			if s.Prober == nil {

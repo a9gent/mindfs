@@ -7,6 +7,8 @@ import { InlineTokenText } from "./InlineTokenText";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { appURL } from "../services/base";
 import type { RelatedFile, ToolCall } from "../services/session";
+import { savePrompt } from "../services/prompts";
+import { reportError } from "../services/error";
 
 type SessionItem = {
   key?: string;
@@ -80,6 +82,16 @@ function stripImageAttachmentTokens(content: string): string {
     .replace(/^[\n\s]+|[\n\s]+$/g, "");
 }
 
+function stripUploadAttachmentTokens(content: string): string {
+  if (!content) {
+    return "";
+  }
+  return content
+    .replace(uploadTokenPattern, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^[\n\s]+|[\n\s]+$/g, "");
+}
+
 const formatTime = (isoString?: string) => {
   if (!isoString) return "";
   try {
@@ -122,9 +134,12 @@ function timelineItemSpacing(previous: TimelineItem | null, current: TimelineIte
 
 function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main", gitFileStatsByPath = {}, onFileClick, onRemoveRelatedFile }: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
+  const [savedPromptKeys, setSavedPromptKeys] = useState<Record<string, true>>({});
+  const [copiedMessageKeys, setCopiedMessageKeys] = useState<Record<string, true>>({});
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const onFileClickRef = useRef(onFileClick);
+  const copyResetTimersRef = useRef<Record<string, number>>({});
   const sessionKey = session?.key || session?.session_key || null;
   const exchanges = Array.isArray(session?.exchanges) ? session.exchanges : [];
   const { timeline, isStreaming } = useSessionStream(sessionKey, exchanges);
@@ -135,6 +150,20 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
   useEffect(() => {
     onFileClickRef.current = onFileClick;
   }, [onFileClick]);
+
+  useEffect(() => {
+    setSavedPromptKeys({});
+    setCopiedMessageKeys({});
+    Object.values(copyResetTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+    copyResetTimersRef.current = {};
+  }, [sessionKey]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(copyResetTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+      copyResetTimersRef.current = {};
+    };
+  }, []);
 
   useEffect(() => {
     const container = scrollRef.current;
@@ -187,6 +216,27 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
   const displayFiles = showAllFiles ? relatedFiles : relatedFiles.slice(0, 10);
   const hasMoreFiles = relatedFiles.length > 10;
   const displayName = session.name || session.purpose || session.key || session.session_key || "Session";
+  const userMetaButtonStyle: React.CSSProperties = {
+    width: "18px",
+    height: "18px",
+    border: "none",
+    background: "transparent",
+    padding: 0,
+    margin: 0,
+    color: "#2563eb",
+    cursor: "pointer",
+    fontSize: "14px",
+    fontWeight: 800,
+    lineHeight: 1,
+    opacity: 1,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: "6px",
+    flexShrink: 0,
+  };
+
+  const makePromptKey = (item: TimelineItem): string => `${item.timestamp || ""}\n${item.content || ""}`;
 
   const renderTimelineItem = (item: TimelineItem, idx: number, spacing: string = "0") => {
     if (item.type === "thought") {
@@ -223,6 +273,10 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
     const uploadAttachments = isUser ? extractUploadAttachments(item.content || "") : [];
     const imageAttachments = uploadAttachments.filter((attachment) => attachment.isImage);
     const displayContent = isUser ? stripImageAttachmentTokens(item.content || "") : (item.content || "");
+    const promptSaveContent = isUser ? stripUploadAttachmentTokens(item.content || "") : "";
+    const promptKey = makePromptKey(item);
+    const promptSaved = !!savedPromptKeys[promptKey];
+    const copySucceeded = !!copiedMessageKeys[promptKey];
     const userMessageWidth = imageAttachments.length > 0 ? "min(320px, 100%)" : "auto";
     const hasRichUserAttachments = imageAttachments.length > 0;
     return (
@@ -282,7 +336,7 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
                 <InlineTokenText content={displayContent} isDark={false} variant="inverse" />
               </div>
             ) : null}
-            <span style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, alignSelf: 'flex-end', display: "inline-flex", alignItems: "center", gap: "5px" }}>
+            <span style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, alignSelf: 'flex-end', display: "inline-flex", alignItems: "center", gap: "4px" }}>
               {item.pendingAck ? (
                 <span
                   aria-label="发送中"
@@ -298,6 +352,80 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
                 />
               ) : null}
               <span>{time}</span>
+              {promptSaved ? (
+                <span
+                  aria-label="已添加提示词"
+                  title="已添加提示词"
+                  style={{ ...userMetaButtonStyle, color: "#2563eb", fontSize: "13px" }}
+                >
+                  ✓
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!promptSaveContent) {
+                      reportError("file.write_failed", "消息内容为空，无法加入常用提示词");
+                      return;
+                    }
+                    void savePrompt(promptSaveContent)
+                      .then(() => {
+                        setSavedPromptKeys((prev) => ({ ...prev, [promptKey]: true }));
+                      })
+                      .catch((err) => {
+                        reportError("file.write_failed", String((err as Error)?.message || "保存提示词失败"));
+                      });
+                  }}
+                  style={userMetaButtonStyle}
+                  aria-label="加入常用提示词"
+                  title="加入常用提示词"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+                    <path fill="currentColor" stroke="currentColor" strokeWidth="0.45" strokeLinejoin="round" d="M1.086 5.183A2.5 2.5 0 0 1 2.854 2.12l3.863-1.035A2.5 2.5 0 0 1 9.78 2.854L10.354 5H9.32l-.506-1.888a1.5 1.5 0 0 0-1.837-1.06L3.112 3.087a1.5 1.5 0 0 0-1.06 1.837l1.035 3.864a1.5 1.5 0 0 0 1.837 1.06L5 9.828v1.028a2.5 2.5 0 0 1-2.879-1.81zM8 6a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zM7 8a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1zm4 .5a.5.5 0 0 0-1 0V10H8.5a.5.5 0 0 0 0 1H10v1.5a.5.5 0 0 0 1 0V11h1.5a.5.5 0 0 0 0-1H11z"/>
+                  </svg>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!promptSaveContent) {
+                    reportError("file.write_failed", "消息内容为空，无法复制");
+                    return;
+                  }
+                  void navigator.clipboard.writeText(promptSaveContent)
+                    .then(() => {
+                      setCopiedMessageKeys((prev) => ({ ...prev, [promptKey]: true }));
+                      if (copyResetTimersRef.current[promptKey]) {
+                        window.clearTimeout(copyResetTimersRef.current[promptKey]);
+                      }
+                      copyResetTimersRef.current[promptKey] = window.setTimeout(() => {
+                        setCopiedMessageKeys((prev) => {
+                          const next = { ...prev };
+                          delete next[promptKey];
+                          return next;
+                        });
+                        delete copyResetTimersRef.current[promptKey];
+                      }, 1000);
+                    })
+                    .catch((err) => {
+                      reportError("file.write_failed", String((err as Error)?.message || "复制失败"));
+                    });
+                }}
+                style={userMetaButtonStyle}
+                aria-label="复制消息"
+                title="复制消息"
+              >
+                {copySucceeded ? (
+                  <span aria-hidden="true" style={{ fontSize: "13px", fontWeight: 800, lineHeight: 1 }}>
+                    ✓
+                  </span>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="currentColor" d="M20 2H10c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2m0 12H10V4h10z"/>
+                    <path fill="currentColor" d="M14 20H4V10h2V8H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2v-2h-2z"/>
+                  </svg>
+                )}
+              </button>
             </span>
           </div>
         ) : (

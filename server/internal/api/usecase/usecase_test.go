@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -196,6 +197,63 @@ func TestMergeCandidateItemsPreferSlash(t *testing.T) {
 	}
 	if items[1].Name != "refactor" {
 		t.Fatalf("expected refactor to remain, got %#v", items[1])
+	}
+}
+
+func TestPromptStoreAppendMovesExistingToLatestAndLimits(t *testing.T) {
+	store := &PromptStore{filePath: filepath.Join(t.TempDir(), "prompts.json")}
+	for i := 0; i < maxPromptItems; i++ {
+		if _, err := store.Append("prompt-" + strconv.Itoa(i)); err != nil {
+			t.Fatalf("Append(%d) returned error: %v", i, err)
+		}
+	}
+	items, err := store.Append("prompt-10")
+	if err != nil {
+		t.Fatalf("Append(existing) returned error: %v", err)
+	}
+	if len(items) != maxPromptItems {
+		t.Fatalf("expected %d prompts after move, got %d", maxPromptItems, len(items))
+	}
+	if items[len(items)-1] != "prompt-10" {
+		t.Fatalf("expected moved prompt at end, got %q", items[len(items)-1])
+	}
+	items, err = store.Append("prompt-new")
+	if err != nil {
+		t.Fatalf("Append(new) returned error: %v", err)
+	}
+	if len(items) != maxPromptItems {
+		t.Fatalf("expected %d prompts after limit, got %d", maxPromptItems, len(items))
+	}
+	for _, item := range items {
+		if item == "prompt-0" {
+			t.Fatalf("expected oldest prompt to be trimmed, got %#v", items)
+		}
+	}
+	if items[len(items)-1] != "prompt-new" {
+		t.Fatalf("expected newest prompt at end, got %q", items[len(items)-1])
+	}
+}
+
+func TestPromptCandidateProviderSearchReturnsNewestFirst(t *testing.T) {
+	store := &PromptStore{filePath: filepath.Join(t.TempDir(), "prompts.json")}
+	for _, item := range []string{"first prompt", "second prompt", "another"} {
+		if _, err := store.Append(item); err != nil {
+			t.Fatalf("Append(%q) returned error: %v", item, err)
+		}
+	}
+	provider := NewPromptCandidateProvider(store)
+	items, err := provider.Search(context.Background(), rootfs.RootInfo{}, "", "prompt")
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 prompt matches, got %d: %#v", len(items), items)
+	}
+	if items[0].Type != CandidateTypePrompt || items[0].Name != "second prompt" {
+		t.Fatalf("expected newest prompt first, got %#v", items[0])
+	}
+	if items[1].Name != "first prompt" {
+		t.Fatalf("expected older prompt second, got %#v", items[1])
 	}
 }
 

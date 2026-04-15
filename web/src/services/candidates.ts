@@ -1,6 +1,6 @@
 import { appURL } from "./base";
 
-export type CandidateType = "file" | "skill";
+export type CandidateType = "file" | "skill" | "prompt";
 export type CandidateItemType = CandidateType | "slash_command";
 
 export type CandidateItem = {

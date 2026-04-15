@@ -64,6 +64,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/git/diff", h.handleGitDiff)
 	r.Post("/api/upload", h.handleUpload)
 	r.Get("/api/candidates", h.handleCandidates)
+	r.Post("/api/prompts", h.handlePromptSave)
 	r.Get("/api/sessions", h.handleSessions)
 	r.Get("/api/sessions/external", h.handleExternalSessionsList)
 	r.Post("/api/sessions/import", h.handleExternalSessionImport)
@@ -142,6 +143,24 @@ func (h *HTTPHandler) handleCandidates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, out.Items)
+}
+
+func (h *HTTPHandler) handlePromptSave(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid prompt payload"))
+		return
+	}
+	out, err := h.service().SavePrompt(r.Context(), usecase.SavePromptInput{
+		Text: input.Text,
+	})
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, out)
 }
 
 func (h *HTTPHandler) handleExternalSessionsList(w http.ResponseWriter, r *http.Request) {

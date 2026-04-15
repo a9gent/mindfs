@@ -19,6 +19,7 @@ type CandidateType string
 
 const (
 	CandidateTypeFile         CandidateType = "file"
+	CandidateTypePrompt       CandidateType = "prompt"
 	CandidateTypeSkill        CandidateType = "skill"
 	CandidateTypeSlashCommand CandidateType = "slash_command"
 )
@@ -80,9 +81,13 @@ func (s *Service) SearchCandidates(ctx context.Context, in SearchCandidatesInput
 	if err := validateSearchCandidatesInput(in); err != nil {
 		return SearchCandidatesOutput{}, err
 	}
-	root, err := s.Registry.GetRoot(in.RootID)
-	if err != nil {
-		return SearchCandidatesOutput{}, err
+	var root rootfs.RootInfo
+	if in.Type != CandidateTypePrompt {
+		var err error
+		root, err = s.Registry.GetRoot(in.RootID)
+		if err != nil {
+			return SearchCandidatesOutput{}, err
+		}
 	}
 	registry := s.Registry.GetCandidateRegistry()
 	if in.Type == CandidateTypeSkill {
@@ -284,9 +289,41 @@ func (p *SlashCommandCandidateProvider) Search(ctx context.Context, _ rootfs.Roo
 	return limitCandidateItems(items), nil
 }
 
+type PromptCandidateProvider struct {
+	store *PromptStore
+}
+
+func NewPromptCandidateProvider(store *PromptStore) *PromptCandidateProvider {
+	return &PromptCandidateProvider{store: store}
+}
+
+func (p *PromptCandidateProvider) Type() CandidateType {
+	return CandidateTypePrompt
+}
+
+func (p *PromptCandidateProvider) Search(ctx context.Context, _ rootfs.RootInfo, _ string, query string) ([]CandidateItem, error) {
+	if p == nil || p.store == nil {
+		return nil, nil
+	}
+	prompts, err := p.store.Search(ctx, query, maxCandidateItems)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]CandidateItem, 0, len(prompts))
+	for _, prompt := range prompts {
+		items = append(items, CandidateItem{
+			Type: CandidateTypePrompt,
+			Name: prompt,
+		})
+	}
+	return items, nil
+}
+
 func validateSearchCandidatesInput(in SearchCandidatesInput) error {
 	switch in.Type {
 	case CandidateTypeFile:
+		return nil
+	case CandidateTypePrompt:
 		return nil
 	case CandidateTypeSkill, CandidateTypeSlashCommand:
 		if strings.TrimSpace(in.Agent) == "" {

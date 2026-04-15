@@ -74,6 +74,11 @@ const modePlaceholders: Record<SessionMode, string> = {
   plugin: "描述要生成的视图插件...",
 };
 
+const chatBlurPlaceholders = [
+  "给 agent 发消息...",
+  "试试输入/ @ #，更快捷",
+];
+
 const MOBILE_BREAKPOINT = 768;
 const IME_ENTER_GUARD_MS = 120;
 
@@ -94,6 +99,8 @@ function candidateNameColor(candidateType: CandidateItem["type"], isDark: boolea
   switch (candidateType) {
     case "slash_command":
       return isDark ? "#93c5fd" : "#1d4ed8";
+    case "prompt":
+      return isDark ? "#fcd34d" : "#b45309";
     case "skill":
       return isDark ? "#c4b5fd" : "#7c3aed";
     default:
@@ -125,7 +132,7 @@ export function ActionBar({
   const [effort, setEffort] = useState("");
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [serializedInput, setSerializedInput] = useState("");
-  const [activeToken, setActiveToken] = useState<{ type: "file" | "slash"; query: string } | null>(null);
+  const [activeToken, setActiveToken] = useState<{ type: "file" | "slash" | "prompt"; query: string } | null>(null);
   const [dragX, setDragX] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [sending, setSending] = useState(false);
@@ -133,6 +140,9 @@ export function ActionBar({
   const [isMultiLine, setIsMultiLine] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [isDark, setIsDark] = useState(window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const [blurPlaceholder, setBlurPlaceholder] = useState(
+    () => chatBlurPlaceholders[Math.floor(Math.random() * chatBlurPlaceholders.length)] || modePlaceholders.chat,
+  );
   const [candidates, setCandidates] = useState<CandidateItem[]>([]);
   const [activeCandidateIndex, setActiveCandidateIndex] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
@@ -275,7 +285,7 @@ export function ActionBar({
     candidateAbortRef.current = controller;
     fetchCandidates({
       rootId: currentRootId,
-      type: activeToken.type === "file" ? "file" : "skill",
+      type: activeToken.type === "file" ? "file" : activeToken.type === "prompt" ? "prompt" : "skill",
       query: activeToken.query,
       agent: activeToken.type === "slash" ? agent : undefined,
       signal: controller.signal,
@@ -312,7 +322,7 @@ export function ActionBar({
 
   const handleEditorChange = useCallback((payload: {
     serializedText: string;
-    activeToken: { type: "file" | "slash"; query: string } | null;
+    activeToken: { type: "file" | "slash" | "prompt"; query: string } | null;
   }) => {
     setSerializedInput(payload.serializedText);
     setActiveToken(payload.activeToken);
@@ -493,7 +503,9 @@ export function ActionBar({
   const isModeLocked = !!currentSession;
   const inputPlaceholder = currentSession && !currentSession.pending
     ? "左滑蓝环开始新会话..."
-    : modePlaceholders[mode];
+    : mode === "chat" && !isFocused
+      ? blurPlaceholder
+      : modePlaceholders[mode];
   const editorRightInset = isMultiLine ? 14 : isMobile ? 124 : 148;
   const editorBottomInset = isMultiLine ? 44 : 12;
   const editorMinHeight = 44;
@@ -545,6 +557,11 @@ export function ActionBar({
               onChange={handleEditorChange}
               onFocusChange={(focused) => {
                 setIsFocused(focused);
+                if (!focused && mode === "chat") {
+                  setBlurPlaceholder(
+                    chatBlurPlaceholders[Math.floor(Math.random() * chatBlurPlaceholders.length)] || modePlaceholders.chat,
+                  );
+                }
                 if (focused) {
                   onRequestFileContext?.();
                 }
@@ -562,7 +579,7 @@ export function ActionBar({
               }}
             />
 
-            {activeToken && candidates.length > 0 ? (
+            {activeToken && (candidates.length > 0 || activeToken.type === "prompt") ? (
               <div
                 style={{
                   position: "absolute",
@@ -581,41 +598,54 @@ export function ActionBar({
                   zIndex: 20,
                 }}
               >
-                {candidates.map((candidate, index) => (
+                {candidates.length === 0 ? (
                   <div
-                    key={`${candidate.type}:${candidate.name}`}
-                    ref={(element) => {
-                      candidateItemRefs.current[index] = element;
-                    }}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      applyCandidate(candidate);
-                    }}
-                    role="option"
-                    aria-selected={index === activeCandidateIndex}
                     style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "flex-start",
-                      gap: "2px",
-                      width: "100%",
-                      padding: "10px 12px",
-                      border: "none",
-                      borderTop: index === 0 ? "none" : "1px solid var(--menu-divider)",
-                      background: index === activeCandidateIndex ? "var(--menu-active-bg)" : "transparent",
-                      color: "var(--text-primary)",
-                      cursor: "pointer",
-                      textAlign: "left",
+                      padding: "11px 12px",
+                      fontSize: "12px",
+                      color: "var(--text-secondary)",
+                      lineHeight: 1.5,
                     }}
                   >
-                    <span style={{ fontSize: "13px", fontWeight: 500, color: candidateNameColor(candidate.type, isDark) }}>
-                      {candidate.type === "file" ? `@${candidate.name}` : `/${candidate.name}`}
-                    </span>
-                    {candidate.description ? (
-                      <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{candidate.description}</span>
-                    ) : null}
+                    收藏用户消息后，可快速插入提示词
                   </div>
-                ))}
+                ) : (
+                  candidates.map((candidate, index) => (
+                    <div
+                      key={`${candidate.type}:${candidate.name}`}
+                      ref={(element) => {
+                        candidateItemRefs.current[index] = element;
+                      }}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        applyCandidate(candidate);
+                      }}
+                      role="option"
+                      aria-selected={index === activeCandidateIndex}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "flex-start",
+                        gap: "2px",
+                        width: "100%",
+                        padding: "10px 12px",
+                        border: "none",
+                        borderTop: index === 0 ? "none" : "1px solid var(--menu-divider)",
+                        background: index === activeCandidateIndex ? "var(--menu-active-bg)" : "transparent",
+                        color: "var(--text-primary)",
+                        cursor: "pointer",
+                        textAlign: "left",
+                      }}
+                    >
+                      <span style={{ fontSize: "13px", fontWeight: 500, color: candidateNameColor(candidate.type, isDark) }}>
+                        {candidate.type === "file" ? `@${candidate.name}` : candidate.type === "prompt" ? `#${candidate.name}` : `/${candidate.name}`}
+                      </span>
+                      {candidate.description ? (
+                        <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{candidate.description}</span>
+                      ) : null}
+                    </div>
+                  ))
+                )}
               </div>
             ) : null}
 
