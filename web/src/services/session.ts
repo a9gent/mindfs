@@ -116,6 +116,8 @@ class SessionService {
   private pendingMessages = new Map<string, PendingMessage>();
   private listeners = new Set<(event: SessionServiceEvent) => void>();
   private reconnectTimer: number | null = null;
+  private probeTimeoutTimer: number | null = null;
+  private activeProbeId: string | null = null;
   private reconnectDelayMs = 1000;
   private fastReconnectUntil = 0;
   private rootId: string | null = null;
@@ -124,17 +126,19 @@ class SessionService {
   private readonly maxReconnectDelayMs = 30000;
   private readonly fastReconnectDelayMs = 1000;
   private readonly fastReconnectWindowMs = 10000;
+  private readonly probeTimeoutMs = 2000;
   private contextCache = new Map<string, { selectionKey: string }>();
 
   constructor() {
     if (typeof window !== "undefined") {
-      window.addEventListener("online", () => this.reconnectNow());
-      window.addEventListener("pageshow", () => this.reconnectNow());
+      window.addEventListener("online", () => this.ensureConnection());
+      window.addEventListener("pageshow", () => this.ensureConnection());
+      window.addEventListener("focus", () => this.ensureConnection());
     }
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") {
-          this.reconnectNow();
+          this.ensureConnection();
         }
       });
     }
@@ -172,6 +176,7 @@ class SessionService {
 
     ws.onopen = () => {
       if (this.ws !== ws) return;
+      this.clearProbe();
       this.reconnectDelayMs = 1000;
       if (this.hasConnected) {
         this.emit({ type: "ws.reconnected" });
@@ -184,6 +189,7 @@ class SessionService {
 
     ws.onmessage = (event) => {
       if (this.ws !== ws) return;
+      this.clearProbe();
       try {
         const msg = JSON.parse(event.data);
         this.handleMessage(msg);
@@ -207,6 +213,7 @@ class SessionService {
 
   disconnect() {
     this.clearReconnectTimer();
+    this.clearProbe();
     this.closeSocket();
     this.contextCache.clear();
   }
@@ -218,7 +225,16 @@ class SessionService {
     }
   }
 
+  private clearProbe() {
+    if (this.probeTimeoutTimer) {
+      clearTimeout(this.probeTimeoutTimer);
+      this.probeTimeoutTimer = null;
+    }
+    this.activeProbeId = null;
+  }
+
   private closeSocket() {
+    this.clearProbe();
     if (this.ws) {
       const ws = this.ws;
       this.ws = null;
@@ -230,17 +246,46 @@ class SessionService {
     }
   }
 
+  private ensureConnection() {
+    if (!this.rootId) return;
+    if (!this.ws || this.ws.readyState >= WebSocket.CLOSING) {
+      this.reconnectNow();
+      return;
+    }
+    if (this.ws.readyState === WebSocket.CONNECTING) return;
+    this.probeConnection();
+  }
+
   private reconnectNow() {
     if (!this.rootId) return;
-    if (
-      this.ws?.readyState === WebSocket.OPEN ||
-      this.ws?.readyState === WebSocket.CONNECTING
-    )
-      return;
     this.clearReconnectTimer();
+    this.clearProbe();
     this.reconnectDelayMs = 1000;
     this.fastReconnectUntil = Date.now() + this.fastReconnectWindowMs;
     this.connect(this.rootId);
+  }
+
+  private probeConnection() {
+    if (!this.rootId || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.reconnectNow();
+      return;
+    }
+    if (this.activeProbeId) return;
+    const probeId = this.createRequestId("ping");
+    this.activeProbeId = probeId;
+    this.ws.send(
+      JSON.stringify({
+        id: probeId,
+        type: "ping",
+        payload: {},
+      }),
+    );
+    this.probeTimeoutTimer = window.setTimeout(() => {
+      if (this.activeProbeId !== probeId) return;
+      console.warn("[Session] WebSocket probe timed out, reconnecting");
+      this.clearProbe();
+      this.reconnectNow();
+    }, this.probeTimeoutMs);
   }
 
   private buildSelectionKey(selection: unknown): string {
@@ -299,6 +344,9 @@ class SessionService {
   private handleMessage(msg: any) {
     const type = msg.type as string;
     const payload = msg.payload || {};
+    if (type === "pong") {
+      return;
+    }
     const sessionKey = payload.session_key as string;
     if (type === "session.accepted") {
       const requestId =

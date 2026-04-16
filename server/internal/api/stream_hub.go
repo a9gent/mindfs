@@ -17,6 +17,7 @@ type StreamHub struct {
 	sessionClients  map[string]map[string]struct{}
 	pendingSessions map[string]*SessionPendingState
 	replayStates    map[string]*ClientReplayState
+	completed       map[string]*CompletedSessionState
 }
 
 type PendingUserMessage struct {
@@ -45,6 +46,11 @@ type ClientReplayState struct {
 	ReplayIndex int
 }
 
+type CompletedSessionState struct {
+	RequestID string
+	Completed time.Time
+}
+
 type replayStep struct {
 	events []StreamEvent
 	live   bool
@@ -61,6 +67,7 @@ func NewStreamHub() *StreamHub {
 		sessionClients:  make(map[string]map[string]struct{}),
 		pendingSessions: make(map[string]*SessionPendingState),
 		replayStates:    make(map[string]*ClientReplayState),
+		completed:       make(map[string]*CompletedSessionState),
 	}
 }
 
@@ -251,6 +258,7 @@ func (h *StreamHub) SetPendingUser(sessionKey, agent, model, mode, effort, conte
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	state := h.ensurePendingSessionLocked(sessionKey)
+	delete(h.completed, sessionKey)
 	state.User = &PendingUserMessage{
 		Agent:     agent,
 		Model:     model,
@@ -300,6 +308,7 @@ func (h *StreamHub) ReplayPending(rootID, clientID, sessionKey string) {
 		step := h.collectReplayStep(clientID, sessionKey)
 		h.replayStepToClient(rootID, clientID, sessionKey, step.events)
 		if step.live {
+			h.replayCompletionToClient(rootID, clientID, sessionKey)
 			return
 		}
 	}
@@ -361,6 +370,12 @@ func (h *StreamHub) BroadcastSessionStream(rootID, sessionKey string, event *Str
 }
 
 func (h *StreamHub) BroadcastSessionDone(rootID, sessionKey, requestID string) {
+	h.mu.Lock()
+	h.completed[sessionKey] = &CompletedSessionState{
+		RequestID: requestID,
+		Completed: time.Now().UTC(),
+	}
+	h.mu.Unlock()
 	resp := buildSessionDoneResponse(rootID, sessionKey, requestID)
 	for _, clientID := range h.GetSessionClientIDs(sessionKey, false) {
 		h.SendToClient(clientID, resp)
@@ -448,6 +463,26 @@ func (h *StreamHub) replayStepToClient(rootID, clientID, sessionKey string, even
 	for i := range events {
 		h.SendToClient(clientID, buildSessionStreamResponse(rootID, sessionKey, &events[i]))
 	}
+}
+
+func (h *StreamHub) replayCompletionToClient(rootID, clientID, sessionKey string) {
+	if blank(rootID) || blank(clientID) || blank(sessionKey) {
+		return
+	}
+	h.mu.Lock()
+	completed := h.completed[sessionKey]
+	if completed == nil {
+		h.mu.Unlock()
+		return
+	}
+	if time.Since(completed.Completed) > 2*time.Minute {
+		delete(h.completed, sessionKey)
+		h.mu.Unlock()
+		return
+	}
+	requestID := completed.RequestID
+	h.mu.Unlock()
+	h.SendToClient(clientID, buildSessionDoneResponse(rootID, sessionKey, requestID))
 }
 
 func (h *StreamHub) isReplayClientLocked(clientID, sessionKey string) bool {

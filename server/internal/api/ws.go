@@ -278,6 +278,8 @@ func (h *WSHandler) pushInitialGitHubImports(clientID string) {
 
 func (h *WSHandler) handleWSRequest(ctx context.Context, conn *websocket.Conn, clientID string, req WSRequest) {
 	switch req.Type {
+	case "ping":
+		h.handleWSPing(conn, req)
 	case "session.message":
 		go h.handleSessionMessage(ctx, conn, clientID, req)
 	case "session.ready":
@@ -287,6 +289,15 @@ func (h *WSHandler) handleWSRequest(ctx context.Context, conn *websocket.Conn, c
 	default:
 		h.sendWSError(conn, req.ID, "method_not_found", "method not found")
 	}
+}
+
+func (h *WSHandler) handleWSPing(conn *websocket.Conn, req WSRequest) {
+	resp := WSResponse{
+		ID:      req.ID,
+		Type:    "pong",
+		Payload: map[string]any{"ts": time.Now().UTC().Format(time.RFC3339Nano)},
+	}
+	_ = h.writeWSJSON(conn, resp)
 }
 
 func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Conn, clientID string, req WSRequest) {

@@ -3804,6 +3804,30 @@ export function App() {
       }
       await sessionService.markSessionReady(rootID, sessionKey);
     };
+    const getReplayTargetsForRoot = (rootID: string): string[] => {
+      if (!rootID) return [];
+      const keys = new Set<string>();
+      const boundKey = boundSessionByRootRef.current[rootID] || "";
+      if (boundKey && !boundKey.startsWith("pending-")) {
+        keys.add(boundKey);
+      }
+      const drawerKey = drawerSessionByRootRef.current[rootID]?.key || "";
+      if (drawerKey && !drawerKey.startsWith("pending-")) {
+        keys.add(drawerKey);
+      }
+      const selected = selectedSessionRef.current;
+      const selectedKey = selected?.key || selected?.session_key || "";
+      const selectedRoot =
+        (selected?.root_id as string | undefined) || currentRootIdRef.current;
+      if (
+        selectedRoot === rootID &&
+        selectedKey &&
+        !selectedKey.startsWith("pending-")
+      ) {
+        keys.add(selectedKey);
+      }
+      return Array.from(keys);
+    };
     const refreshSessionRelatedFiles = async (
       rootID: string,
       sessionKey: string,
@@ -4144,10 +4168,11 @@ export function App() {
               currentRootIdRef.current,
               newest ? { afterTime: newest } : { replace: true },
             );
-            const boundKey =
-              boundSessionByRootRef.current[currentRootIdRef.current] || "";
-            if (boundKey) {
-              void reloadSessionForReplay(currentRootIdRef.current, boundKey);
+            const replayTargets = getReplayTargetsForRoot(
+              currentRootIdRef.current,
+            );
+            for (const sessionKey of replayTargets) {
+              void reloadSessionForReplay(currentRootIdRef.current, sessionKey);
             }
           }
           break;
