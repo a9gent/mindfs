@@ -944,8 +944,12 @@ export function FileTree({
           <div
             style={{
               position: "relative",
-              border: "1px solid rgba(37, 99, 235, 0.16)",
-              background: "linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(37, 99, 235, 0.04))",
+              border:
+                "1px solid color-mix(in srgb, var(--accent-color) 18%, var(--border-color))",
+              background:
+                "linear-gradient(180deg, color-mix(in srgb, var(--sidebar-bg) 94%, var(--accent-color) 6%), color-mix(in srgb, var(--sidebar-bg) 88%, var(--accent-color) 12%))",
+              boxShadow:
+                "0 8px 24px color-mix(in srgb, var(--accent-color) 10%, transparent)",
               borderRadius: "8px",
               padding: "10px",
               display: "flex",
@@ -962,7 +966,8 @@ export function FileTree({
                         style={{
                           padding: "2px 6px",
                           borderRadius: "999px",
-                          background: "rgba(37, 99, 235, 0.1)",
+                          background:
+                            "color-mix(in srgb, var(--accent-color) 14%, transparent)",
                           color: "var(--accent-color)",
                           fontSize: "10px",
                           fontWeight: 700,
