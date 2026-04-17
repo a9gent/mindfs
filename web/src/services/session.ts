@@ -642,6 +642,34 @@ class SessionService {
     }
   }
 
+  async renameSession(
+    rootId: string,
+    sessionKey: string,
+    name: string,
+  ): Promise<Session | null> {
+    try {
+      const params = new URLSearchParams({ root: rootId });
+      const res = await fetch(
+        appURL(`/api/sessions/${encodeURIComponent(sessionKey)}/rename`, params),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ name }),
+        },
+      );
+      if (!res.ok) {
+        throw new Error("Failed to rename session");
+      }
+      const data = await res.json();
+      return data as Session;
+    } catch (err) {
+      console.error("[Session] Failed to rename session:", err);
+      return null;
+    }
+  }
+
   async fetchExternalSessions(
     rootId: string,
     agent: string,

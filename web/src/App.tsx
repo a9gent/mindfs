@@ -2103,6 +2103,78 @@ export function App() {
     ],
   );
 
+  const handleRenameSession = useCallback(
+    async (session: SessionItem, nextName: string) => {
+      const sessionKey = session?.key || session?.session_key;
+      const rootID =
+        (session?.root_id as string | undefined) || currentRootIdRef.current;
+      if (!rootID || !sessionKey) return false;
+
+      const trimmedName = nextName.trim();
+      if (!trimmedName || trimmedName === String(session?.name || "").trim()) {
+        return true;
+      }
+
+      const renamed = await sessionService.renameSession(
+        rootID,
+        sessionKey,
+        trimmedName,
+      );
+      if (!renamed) {
+        reportError("session.rename_failed", "重命名会话失败");
+        return false;
+      }
+
+      setSessions((prev) =>
+        prev.map((item) =>
+          (item.key || item.session_key) === sessionKey
+            ? ({
+                ...item,
+                name: renamed.name,
+                updated_at: renamed.updated_at,
+              } as SessionItem)
+            : item,
+        ),
+      );
+
+      const cacheKey = rootSessionKey(rootID, sessionKey);
+      const cached = sessionCacheRef.current[cacheKey];
+      if (cached) {
+        sessionCacheRef.current[cacheKey] = {
+          ...cached,
+          name: renamed.name,
+          updated_at: renamed.updated_at,
+        } as Session;
+      }
+
+      if (
+        (selectedSessionRef.current?.key ||
+          selectedSessionRef.current?.session_key) === sessionKey
+      ) {
+        setSelectedSession((prev) =>
+          prev
+            ? ({
+                ...prev,
+                name: renamed.name,
+                updated_at: renamed.updated_at,
+              } as SessionItem)
+            : prev,
+        );
+      }
+
+      if (boundSessionByRootRef.current[rootID] === sessionKey) {
+        const latest = sessionCacheRef.current[cacheKey];
+        if (latest) {
+          setDrawerSessionForRoot(rootID, latest);
+        }
+      }
+
+      bumpCacheVersion();
+      return true;
+    },
+    [bumpCacheVersion, rootSessionKey, setDrawerSessionForRoot],
+  );
+
   useEffect(() => {
     handleSelectSessionRef.current = handleSelectSession;
   }, [handleSelectSession]);
@@ -5497,6 +5569,7 @@ export function App() {
           handleSelectSession(s);
           if (isMobile) setIsRightOpen(false);
         }}
+        onRename={handleRenameSession}
         onDelete={handleDeleteSession}
         onLoadOlder={handleLoadOlderSessions}
         loadingOlder={loadingOlderSessions}

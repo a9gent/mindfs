@@ -70,6 +70,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/sessions/import", h.handleExternalSessionImport)
 	r.Get("/api/sessions/{key}", h.handleSessionGet)
 	r.Get("/api/sessions/{key}/related-files", h.handleSessionRelatedFilesGet)
+	r.Post("/api/sessions/{key}/rename", h.handleSessionRename)
 	r.Delete("/api/sessions/{key}/related-files", h.handleSessionRelatedFilesDelete)
 	r.Delete("/api/sessions/{key}", h.handleSessionDelete)
 	r.Get("/api/dirs", h.handleDirs)
@@ -335,6 +336,49 @@ func (h *HTTPHandler) handleSessionRelatedFilesDelete(w http.ResponseWriter, r *
 		})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *HTTPHandler) handleSessionRename(w http.ResponseWriter, r *http.Request) {
+	rootID := r.URL.Query().Get("root")
+	key := chi.URLParam(r, "key")
+	if strings.TrimSpace(key) == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("session key required"))
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json body"))
+		return
+	}
+	uc := h.service()
+	renamed, err := uc.RenameSession(r.Context(), usecase.RenameSessionInput{
+		RootID: rootID,
+		Key:    key,
+		Name:   req.Name,
+	})
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	if h.AppContext != nil {
+		h.AppContext.GetSessionStreamHub().BroadcastAll(WSResponse{
+			Type: "session.meta.updated",
+			Payload: map[string]any{
+				"root_id": rootID,
+				"session": map[string]any{
+					"key":        renamed.Key,
+					"name":       renamed.Name,
+					"model":      renamed.Model,
+					"mode":       session.InferModeFromSession(renamed),
+					"effort":     session.InferEffortFromSession(renamed),
+					"updated_at": renamed.UpdatedAt,
+				},
+			},
+		})
+	}
+	respondJSON(w, http.StatusOK, sessionListResponse(renamed))
 }
 
 func (h *HTTPHandler) handleSessionDelete(w http.ResponseWriter, r *http.Request) {

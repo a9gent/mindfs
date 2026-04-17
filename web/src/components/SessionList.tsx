@@ -20,6 +20,7 @@ type SessionListProps = {
   headerAction?: React.ReactNode;
   onSelect?: (session: SessionItem) => void;
   onRestore?: (session: SessionItem) => void;
+  onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onDelete?: (session: SessionItem) => void;
   onLoadOlder?: () => void;
   loadingOlder?: boolean;
@@ -36,6 +37,7 @@ export function SessionList({
   selectedKey = "",
   headerAction,
   onSelect,
+  onRename,
   onDelete,
   onLoadOlder,
   loadingOlder = false,
@@ -102,6 +104,7 @@ export function SessionList({
                 session={session}
                 selected={session.key === selectedKey}
                 onSelect={onSelect}
+                onRename={onRename}
                 onDelete={onDelete}
               />
             ))}
@@ -135,17 +138,31 @@ function SessionCard({
   session,
   selected,
   onSelect,
+  onRename,
   onDelete,
 }: {
   session: SessionItem;
   selected: boolean;
   onSelect?: (session: SessionItem) => void;
+  onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onDelete?: (session: SessionItem) => void;
 }) {
   const isClosed = !!session.closed_at;
   const displayName = session.name || `Session ${session.key.slice(0, 8)}`;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draftName, setDraftName] = useState(displayName);
+  const [saving, setSaving] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const composingRef = useRef(false);
+  const submittingRef = useRef(false);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraftName(displayName);
+    }
+  }, [displayName, editing]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -157,6 +174,59 @@ function SessionCard({
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (!editing) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [editing]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const input = inputRef.current;
+    if (!input) return;
+    const atEnd = input.selectionStart === input.value.length;
+    if (atEnd) {
+      input.scrollLeft = input.scrollWidth;
+    }
+  }, [draftName, editing]);
+
+  const cancelEditing = () => {
+    setEditing(false);
+    setSaving(false);
+    setDraftName(displayName);
+  };
+
+  const submitRename = async () => {
+    if (submittingRef.current) return;
+    const trimmed = draftName.trim();
+    if (!trimmed) {
+      cancelEditing();
+      return;
+    }
+    if (trimmed === displayName.trim()) {
+      cancelEditing();
+      return;
+    }
+    if (!onRename) {
+      cancelEditing();
+      return;
+    }
+    submittingRef.current = true;
+    setSaving(true);
+    try {
+      const ok = await onRename(session, trimmed);
+      if (ok === false) {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+        return;
+      }
+      setEditing(false);
+    } finally {
+      submittingRef.current = false;
+      setSaving(false);
+    }
+  };
 
   return (
     <div
@@ -170,28 +240,19 @@ function SessionCard({
         position: "relative",
       }}
     >
-      <button
-        type="button"
-        onClick={() => onSelect?.(session)}
+      <div
         style={{
-          textAlign: "left",
+          textAlign: "left" as const,
           padding: "7px 10px 7px 6px",
           borderRadius: "8px",
           border: "1px solid transparent",
           background: selected ? "rgba(59, 130, 246, 0.1)" : "transparent",
-          cursor: "pointer",
           flex: 1,
           minWidth: 0,
           display: "flex",
           alignItems: "center",
           gap: "8px",
           transition: "all 0.15s ease",
-        }}
-        onMouseEnter={(e) => {
-          if (!selected) e.currentTarget.style.background = "rgba(0,0,0,0.03)";
-        }}
-        onMouseLeave={(e) => {
-          if (!selected) e.currentTarget.style.background = "transparent";
         }}
       >
         <span
@@ -231,36 +292,153 @@ function SessionCard({
           </span>
         </span>
 
-        <div
-          style={{
-            minWidth: 0,
-            flex: 1,
-            fontSize: "13px",
-            fontWeight: selected ? 600 : 500,
-            color: selected ? "var(--accent-color)" : "var(--text-primary)",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
-          {displayName}
-        </div>
+        {editing ? (
+          <input
+            ref={inputRef}
+            value={draftName}
+            disabled={saving}
+            onChange={(e) => {
+              setDraftName(e.target.value);
+              e.currentTarget.scrollLeft = e.currentTarget.scrollWidth;
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Escape") {
+                e.preventDefault();
+                cancelEditing();
+                return;
+              }
+              if (e.key !== "Enter") {
+                return;
+              }
+              const nativeEvent = e.nativeEvent as KeyboardEvent;
+              const isComposing =
+                composingRef.current ||
+                nativeEvent.isComposing ||
+                nativeEvent.keyCode === 229;
+              if (isComposing) {
+                return;
+              }
+              e.preventDefault();
+              void submitRename();
+            }}
+            style={{
+              minWidth: 0,
+              flex: 1,
+              height: "28px",
+              borderRadius: "6px",
+              border: "1px solid var(--accent-color)",
+              background: "var(--content-bg, #fff)",
+              color: "var(--text-primary)",
+              fontSize: "13px",
+              fontWeight: 600,
+              padding: "0 10px 0 8px",
+              outline: "none",
+              boxSizing: "border-box",
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => onSelect?.(session)}
+            style={{
+              minWidth: 0,
+              flex: 1,
+              border: "none",
+              background: "transparent",
+              padding: 0,
+              cursor: "pointer",
+              textAlign: "left",
+              fontSize: "13px",
+              fontWeight: selected ? 600 : 500,
+              color: selected ? "var(--accent-color)" : "var(--text-primary)",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+            onMouseEnter={(e) => {
+              const container = e.currentTarget.parentElement;
+              if (container && !selected) {
+                container.style.background = "rgba(0,0,0,0.03)";
+              }
+            }}
+            onMouseLeave={(e) => {
+              const container = e.currentTarget.parentElement;
+              if (container && !selected) {
+                container.style.background = "transparent";
+              }
+            }}
+          >
+            {displayName}
+          </button>
+        )}
 
-        <span
-          style={{
-            flexShrink: 0,
-            fontSize: "10px",
-            color: "var(--text-secondary)",
-            opacity: 0.8,
-          }}
-        >
-          {formatTime(
-            isClosed && session.closed_at
-              ? session.closed_at
-              : session.updated_at,
-          )}
-        </span>
-      </button>
+        {editing ? (
+          <div
+            style={{
+              flexShrink: 0,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "4px",
+            }}
+          >
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => {
+                e.stopPropagation();
+                cancelEditing();
+              }}
+              disabled={saving}
+              aria-label="取消重命名"
+              style={{
+                ...inlineActionStyle,
+                opacity: saving ? 0.6 : 1,
+                cursor: saving ? "default" : "pointer",
+              }}
+            >
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+        ) : null}
+
+        {!editing ? (
+          <span
+            style={{
+              flexShrink: 0,
+              fontSize: "10px",
+              color: "var(--text-secondary)",
+              opacity: 0.8,
+            }}
+          >
+            {formatTime(
+              isClosed && session.closed_at
+                ? session.closed_at
+                : session.updated_at,
+            )}
+          </span>
+        ) : null}
+      </div>
 
       <div ref={menuRef} style={{ position: "relative", flexShrink: 0 }}>
         <button
@@ -316,22 +494,40 @@ function SessionCard({
               onClick={(e) => {
                 e.stopPropagation();
                 setMenuOpen(false);
+                setDraftName(displayName);
+                setEditing(true);
+              }}
+              style={{
+                ...menuItemStyle,
+                color: "var(--text-primary)",
+              }}
+            >
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+              </svg>
+              重命名
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen(false);
                 onDelete?.(session);
               }}
               style={{
-                width: "100%",
-                border: "none",
-                background: "transparent",
+                ...menuItemStyle,
                 color: "#dc2626",
-                borderRadius: "8px",
-                padding: "8px 10px",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                textAlign: "left",
-                cursor: "pointer",
-                fontSize: "12px",
-                fontWeight: 500,
               }}
             >
               <svg
@@ -372,3 +568,31 @@ function formatTime(isoString: string): string {
   }
   return `${date.getFullYear() % 100}/${date.getMonth() + 1}`;
 }
+
+const menuItemStyle: React.CSSProperties = {
+  width: "100%",
+  border: "none",
+  background: "transparent",
+  borderRadius: "8px",
+  padding: "8px 10px",
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  textAlign: "left",
+  cursor: "pointer",
+  fontSize: "12px",
+  fontWeight: 500,
+};
+
+const inlineActionStyle: React.CSSProperties = {
+  width: "24px",
+  height: "24px",
+  border: "none",
+  borderRadius: "6px",
+  background: "transparent",
+  color: "var(--text-secondary)",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 0,
+};

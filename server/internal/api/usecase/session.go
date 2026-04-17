@@ -182,6 +182,23 @@ func (s *Service) DeleteSession(ctx context.Context, in DeleteSessionInput) erro
 	return nil
 }
 
+type RenameSessionInput struct {
+	RootID string
+	Key    string
+	Name   string
+}
+
+func (s *Service) RenameSession(ctx context.Context, in RenameSessionInput) (*session.Session, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return nil, err
+	}
+	manager, err := s.Registry.GetSessionManager(in.RootID)
+	if err != nil {
+		return nil, err
+	}
+	return manager.Rename(ctx, in.Key, in.Name)
+}
+
 type BuildPromptInput struct {
 	Session       *session.Session
 	Manager       *session.Manager
