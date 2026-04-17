@@ -2040,6 +2040,49 @@ export function App() {
     ],
   );
 
+  const tryShowBoundSessionForRoot = useCallback(
+    async (
+      rootID: string | null | undefined,
+      options?: {
+        pluginQuery?: Record<string, string>;
+        closeLeftSidebar?: boolean;
+      },
+    ): Promise<boolean> => {
+      const resolvedRoot = String(rootID || "");
+      if (!resolvedRoot) {
+        return false;
+      }
+      const boundKey = String(
+        boundSessionByRootRef.current[resolvedRoot] || "",
+      ).trim();
+      if (!boundKey || boundKey.startsWith("pending-")) {
+        return false;
+      }
+      if (currentRootIdRef.current !== resolvedRoot) {
+        setCurrentRootId(resolvedRoot);
+      }
+      setGitDiff(null);
+      setFile(null);
+      setMainEntries([]);
+      setPluginQuery(options?.pluginQuery || {});
+      setSelectedDir(resolvedRoot);
+      setSelectedDirKey(
+        buildDirectorySelectionKey(resolvedRoot, resolvedRoot, true),
+      );
+      fileCursorRef.current = 0;
+      await handleSelectSession({
+        key: boundKey,
+        session_key: boundKey,
+        root_id: resolvedRoot,
+      });
+      if (options?.closeLeftSidebar && isMobile) {
+        setIsLeftOpen(false);
+      }
+      return true;
+    },
+    [handleSelectSession, isMobile],
+  );
+
   const handleDeleteSession = useCallback(
     async (session: SessionItem) => {
       const sessionKey = session?.key || session?.session_key;
@@ -3000,6 +3043,13 @@ export function App() {
         if (isActuallyRoot) {
           setCurrentRootId(path);
           setExpanded((prev) => Array.from(new Set([...prev, path])));
+          const restored = await tryShowBoundSessionForRoot(path, {
+            pluginQuery: nextPluginQuery,
+            closeLeftSidebar: true,
+          });
+          if (restored) {
+            return;
+          }
         } else {
           setExpanded((prev) => Array.from(new Set([...prev, expandedKey])));
         }
@@ -3014,6 +3064,7 @@ export function App() {
       replaceURLState,
       rememberCurrentFileScroll,
       treeCacheKey,
+      tryShowBoundSessionForRoot,
     ],
   );
   const actionHandlersRef = useRef(actionHandlers);
@@ -4718,18 +4769,28 @@ export function App() {
             preservePluginQuery: true,
           });
         } else {
-          actionHandlersRef.current.open_dir({
-            path: preferredRoot,
-            root: preferredRoot,
-            preservePluginQuery: true,
-            isRoot: true,
+          const restored = await tryShowBoundSessionForRoot(preferredRoot, {
+            pluginQuery: urlState.pluginQuery,
           });
+          if (!restored) {
+            actionHandlersRef.current.open_dir({
+              path: preferredRoot,
+              root: preferredRoot,
+              preservePluginQuery: true,
+              isRoot: true,
+            });
+          }
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [ensurePluginsLoaded, handleRelayNavigationFailure, refreshRelayStatus]);
+  }, [
+    ensurePluginsLoaded,
+    handleRelayNavigationFailure,
+    refreshRelayStatus,
+    tryShowBoundSessionForRoot,
+  ]);
 
   useEffect(() => {
     if (!isRelayPWAContext()) {
@@ -4791,19 +4852,25 @@ export function App() {
         }
         return;
       }
-      if (fileRef.current) {
+      void (async () => {
+        const restored = await tryShowBoundSessionForRoot(state.root, {
+          pluginQuery: state.pluginQuery,
+        });
+        if (restored) {
+          return;
+        }
         actionHandlers.open_dir({
           path: state.root,
           root: state.root,
           preservePluginQuery: true,
           isRoot: true,
         });
-      }
+      })();
     }
 
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [actionHandlers]);
+  }, [actionHandlers, tryShowBoundSessionForRoot]);
 
   const selectedRoot =
     (selectedSession?.root_id as string | undefined) || currentRootId || "";
