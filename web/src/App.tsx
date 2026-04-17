@@ -1193,12 +1193,18 @@ export function App() {
   }, []);
 
   const handleRelayNavigationFailure = useCallback(
-    (status: number, errorCode?: string | null) => {
+    async (status: number, errorCode?: string | null) => {
       if (!isRelayPWAContext()) {
         return false;
       }
       const code = String(errorCode || "").trim();
       if (status === 401 || code === "unauthorized") {
+        try {
+          const response = await fetch("/api/auth/me");
+          if (response.ok) {
+            return false;
+          }
+        } catch {}
         redirectToRelayLogin();
         return true;
       }
@@ -3055,7 +3061,7 @@ export function App() {
           const status = extractHTTPStatusFromErrorMessage(
             (err as Error)?.message || "",
           );
-          if (status && handleRelayNavigationFailure(status, "")) {
+          if (status && (await handleRelayNavigationFailure(status, ""))) {
             return;
           }
           console.error("[file.open] failed", { root, path, cursor, err });
@@ -3127,7 +3133,7 @@ export function App() {
             if (!res.ok) {
               const payload = await res.json().catch(() => ({}));
               if (
-                handleRelayNavigationFailure(
+                await handleRelayNavigationFailure(
                   res.status,
                   typeof payload?.error === "string" ? payload.error : "",
                 )
@@ -3230,7 +3236,7 @@ export function App() {
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       if (
-        handleRelayNavigationFailure(
+        await handleRelayNavigationFailure(
           response.status,
           typeof payload?.error === "string" ? payload.error : "",
         )
@@ -4911,7 +4917,7 @@ export function App() {
         if (!r.ok) {
           const payload = await r.json().catch(() => ({}));
           if (
-            handleRelayNavigationFailure(
+            await handleRelayNavigationFailure(
               r.status,
               typeof payload?.error === "string" ? payload.error : "",
             )
