@@ -268,14 +268,18 @@ func (s *session) SessionID() string {
 }
 
 func (s *session) CancelCurrentTurn() error {
+	log.Printf("[agent/claude] cancel.begin session=%s", s.sessionKey)
 	if s.stream == nil {
 		s.turn.Cancel()
+		log.Printf("[agent/claude] cancel.done session=%s mode=turn_only", s.sessionKey)
 		return nil
 	}
 	if err := s.stream.Interrupt(context.Background()); err == nil {
+		log.Printf("[agent/claude] cancel.done session=%s mode=interrupt", s.sessionKey)
 		return nil
 	}
 	s.turn.Cancel()
+	log.Printf("[agent/claude] cancel.done session=%s mode=fallback_turn_only", s.sessionKey)
 	return nil
 }
 

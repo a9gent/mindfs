@@ -948,6 +948,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		log.Printf("[session/model] validate.error root=%s session=%s agent=%s model=%q err=%v", in.RootID, in.Key, strings.TrimSpace(in.Agent), strings.TrimSpace(in.Model), err)
 		return err
 	}
+	log.Printf("[session] turn.begin root=%s session=%s agent=%s model=%q", in.RootID, in.Key, strings.TrimSpace(in.Agent), strings.TrimSpace(in.Model))
 	turnCtx, turnCancel := context.WithCancel(ctx)
 	registerActiveTurn(in.RootID, in.Key, turnCancel)
 	defer unregisterActiveTurn(in.RootID, in.Key)
@@ -1029,6 +1030,11 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		}
 	})
 	sendErr := sess.SendMessage(turnCtx, prompt)
+	if sendErr != nil {
+		log.Printf("[session] turn.send.error root=%s session=%s agent=%s err=%v", in.RootID, current.Key, in.Agent, sendErr)
+	} else {
+		log.Printf("[session] turn.send.done root=%s session=%s agent=%s", in.RootID, current.Key, in.Agent)
+	}
 	if err := manager.UpdateModel(ctx, current, in.Model); err != nil {
 		return err
 	}
@@ -1052,6 +1058,11 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		return sendErr
 	} else if prober != nil {
 		prober.ReportSuccess(in.Agent)
+	}
+	if isCanceledTurnError(sendErr) {
+		log.Printf("[session] turn.canceled root=%s session=%s agent=%s", in.RootID, current.Key, in.Agent)
+	} else {
+		log.Printf("[session] turn.complete root=%s session=%s agent=%s", in.RootID, current.Key, in.Agent)
 	}
 
 	return nil
@@ -1223,11 +1234,17 @@ func (s *Service) CancelSessionTurn(ctx context.Context, in CancelSessionTurnInp
 	}
 	active := getActiveTurn(in.RootID, current.Key)
 	if active == nil {
+		log.Printf("[session] turn.cancel.skip root=%s session=%s reason=no_active_turn", in.RootID, current.Key)
 		return nil
 	}
+	log.Printf("[session] turn.cancel.begin root=%s session=%s", in.RootID, current.Key)
 	active.cancel()
 	if active.session != nil {
-		return active.session.CancelCurrentTurn()
+		if err := active.session.CancelCurrentTurn(); err != nil {
+			log.Printf("[session] turn.cancel.error root=%s session=%s err=%v", in.RootID, current.Key, err)
+			return err
+		}
 	}
+	log.Printf("[session] turn.cancel.done root=%s session=%s", in.RootID, current.Key)
 	return nil
 }
