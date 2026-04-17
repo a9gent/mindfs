@@ -704,6 +704,10 @@ export function App() {
   const invalidTreeCacheKeysRef = useRef<Set<string>>(new Set());
   const boundSessionByRootRef = useRef<Record<string, string | null>>({});
   const drawerSessionByRootRef = useRef<Record<string, Session | null>>({});
+  const selectedSessionByRootRef = useRef<Record<string, string | null>>({});
+  const mainViewPreferenceByRootRef = useRef<
+    Record<string, "session" | "file" | "directory" | "git-diff">
+  >({});
   const drawerOpenByRootRef = useRef<Record<string, boolean>>({});
   const fileCursorRef = useRef<number>(0);
   const fileScrollPositionsRef = useRef<Record<string, number>>(
@@ -1126,6 +1130,17 @@ export function App() {
     [],
   );
 
+  const setMainViewPreferenceForRoot = useCallback(
+    (
+      rootID: string | null | undefined,
+      preference: "session" | "file" | "directory" | "git-diff",
+    ) => {
+      if (!rootID) return;
+      mainViewPreferenceByRootRef.current[rootID] = preference;
+    },
+    [],
+  );
+
   const getDirectorySortKey = useCallback(
     (rootID: string | null | undefined, dirPath: string | null | undefined) => {
       if (!rootID) {
@@ -1508,6 +1523,9 @@ export function App() {
       if (boundSessionByRootRef.current[rootID] === pendingKey) {
         setBoundSessionForRoot(rootID, sessionKey);
       }
+      if (selectedSessionByRootRef.current[rootID] === pendingKey) {
+        selectedSessionByRootRef.current[rootID] = sessionKey;
+      }
       if (drawer?.key === pendingKey) {
         setDrawerSessionForRoot(rootID, {
           ...(drawer as any),
@@ -1860,6 +1878,7 @@ export function App() {
         return;
       }
       fileOpenRequestRef.current += 1;
+      setMainViewPreferenceForRoot(rootID, "git-diff");
       setSelectedSession(null);
       setFile(null);
       setGitDiff(null);
@@ -1885,7 +1904,7 @@ export function App() {
         console.error("[git.diff] failed", { rootID, path: item.path, err });
       }
     },
-    [isMobile, replaceURLState],
+    [isMobile, replaceURLState, setMainViewPreferenceForRoot],
   );
 
   const handleTreeUpload = useCallback(
@@ -1940,6 +1959,7 @@ export function App() {
       const targetRoot =
         (session?.root_id as string | undefined) || currentRootIdRef.current;
       if (!targetRoot || !key) return;
+      setMainViewPreferenceForRoot(targetRoot, "session");
       const currentDrawer = drawerSessionByRootRef.current[targetRoot];
       const preservePending =
         currentDrawer?.key === key
@@ -1952,6 +1972,7 @@ export function App() {
         cursor: 0,
         pluginQuery: {},
       });
+      selectedSessionByRootRef.current[targetRoot] = key;
       setSelectedSession({
         ...(session as any),
         pending: preservePending,
@@ -1998,8 +2019,10 @@ export function App() {
       if (cached) {
         applySession(cached);
         if (hasSessionExchanges(cached)) {
-          loadedSessionRef.current[cacheKey] = true;
-          return;
+          if (loadedSessionRef.current[cacheKey]) {
+            void sessionService.markSessionReady(targetRoot, key);
+            return;
+          }
         }
       } else {
         const persisted = await getCachedSession(targetRoot, key);
@@ -2008,6 +2031,7 @@ export function App() {
         }
       }
       if (loadedSessionRef.current[cacheKey]) {
+        void sessionService.markSessionReady(targetRoot, key);
         return;
       }
       try {
@@ -2036,6 +2060,7 @@ export function App() {
       bumpCacheVersion,
       setDrawerOpenForRoot,
       setDrawerSessionForRoot,
+      setMainViewPreferenceForRoot,
       replaceURLState,
     ],
   );
@@ -2052,10 +2077,23 @@ export function App() {
       if (!resolvedRoot) {
         return false;
       }
+      if (mainViewPreferenceByRootRef.current[resolvedRoot] !== "session") {
+        return false;
+      }
+      const selectedKey = String(
+        selectedSessionByRootRef.current[resolvedRoot] || "",
+      ).trim();
       const boundKey = String(
         boundSessionByRootRef.current[resolvedRoot] || "",
       ).trim();
-      if (!boundKey || boundKey.startsWith("pending-")) {
+      const drawerKey = String(
+        drawerSessionByRootRef.current[resolvedRoot]?.key || "",
+      ).trim();
+      const preferredKey =
+        (selectedKey && !selectedKey.startsWith("pending-") ? selectedKey : "") ||
+        (boundKey && !boundKey.startsWith("pending-") ? boundKey : "") ||
+        (drawerKey && !drawerKey.startsWith("pending-") ? drawerKey : "");
+      if (!preferredKey) {
         return false;
       }
       if (currentRootIdRef.current !== resolvedRoot) {
@@ -2070,17 +2108,47 @@ export function App() {
         buildDirectorySelectionKey(resolvedRoot, resolvedRoot, true),
       );
       fileCursorRef.current = 0;
-      await handleSelectSession({
-        key: boundKey,
-        session_key: boundKey,
-        root_id: resolvedRoot,
-      });
+      const cacheKey = rootSessionKey(resolvedRoot, preferredKey);
+      let initialSession =
+        sessionCacheRef.current[cacheKey] ||
+        (await getCachedSession(resolvedRoot, preferredKey));
+      if (initialSession) {
+        sessionCacheRef.current[cacheKey] = {
+          ...(initialSession as any),
+          key: preferredKey,
+        } as Session;
+      } else {
+        const syncResult = await syncSession(resolvedRoot, preferredKey);
+        if (syncResult.session) {
+          initialSession = {
+            ...(syncResult.session as any),
+            key: preferredKey,
+          } as Session;
+          sessionCacheRef.current[cacheKey] = initialSession as Session;
+          loadedSessionRef.current[cacheKey] = true;
+          bumpCacheVersion();
+        }
+      }
+      await handleSelectSession(
+        initialSession
+          ? ({
+              ...(initialSession as any),
+              key: preferredKey,
+              session_key: preferredKey,
+              root_id: resolvedRoot,
+            } as SessionItem)
+          : {
+              key: preferredKey,
+              session_key: preferredKey,
+              root_id: resolvedRoot,
+            },
+      );
       if (options?.closeLeftSidebar && isMobile) {
         setIsLeftOpen(false);
       }
       return true;
     },
-    [handleSelectSession, isMobile],
+    [handleSelectSession, isMobile, rootSessionKey, bumpCacheVersion],
   );
 
   const handleDeleteSession = useCallback(
@@ -2110,6 +2178,9 @@ export function App() {
 
       if (boundSessionByRootRef.current[rootID] === sessionKey) {
         setBoundSessionForRoot(rootID, null);
+      }
+      if (selectedSessionByRootRef.current[rootID] === sessionKey) {
+        selectedSessionByRootRef.current[rootID] = null;
       }
       if (drawerSessionByRootRef.current[rootID]?.key === sessionKey) {
         setDrawerSessionForRoot(rootID, null);
@@ -2607,12 +2678,21 @@ export function App() {
 
   const handleNewSession = useCallback(() => {
     const rootID = currentRootIdRef.current;
+    setMainViewPreferenceForRoot(rootID, "session");
     setSelectedSession(null);
+    if (rootID) {
+      selectedSessionByRootRef.current[rootID] = null;
+    }
     setBoundSessionForRoot(rootID, null);
     setDrawerSessionForRoot(rootID, null);
     setInteractionMode("main");
     setDrawerOpenForRoot(rootID, false);
-  }, [setBoundSessionForRoot, setDrawerOpenForRoot, setDrawerSessionForRoot]);
+  }, [
+    setBoundSessionForRoot,
+    setDrawerOpenForRoot,
+    setDrawerSessionForRoot,
+    setMainViewPreferenceForRoot,
+  ]);
 
   const currentSelectionSource = useMemo(() => {
     if (file?.path) {
@@ -2760,6 +2840,7 @@ export function App() {
           rootInfo?.root_path,
         );
         if (!path || !root) return;
+        setMainViewPreferenceForRoot(String(root), "file");
         rememberCurrentFileScroll();
         setGitDiff(null);
         const currentFilePath = fileRef.current?.path || "";
@@ -2959,6 +3040,7 @@ export function App() {
           if (currentRootIdRef.current !== root) {
             setCurrentRootId(root);
           }
+          setMainViewPreferenceForRoot(root, "directory");
           setFile(null);
           setSelectedSession(null);
           setMainEntries([]);
@@ -3048,6 +3130,7 @@ export function App() {
             closeLeftSidebar: true,
           });
           if (restored) {
+            await refreshTreeDir(path, ".", false);
             return;
           }
         } else {
@@ -3060,6 +3143,7 @@ export function App() {
       handleRelayNavigationFailure,
       isMobile,
       normalizeTreeResponse,
+      setMainViewPreferenceForRoot,
       setDrawerOpenForRoot,
       replaceURLState,
       rememberCurrentFileScroll,
@@ -3096,6 +3180,11 @@ export function App() {
     managedRootIdsRef.current = new Set(nextRootIds);
     setManagedRootIds(nextRootIds);
     setRootEntries(mapManagedRootsToEntries(nextDirs));
+    Object.keys(selectedSessionByRootRef.current).forEach((rootID) => {
+      if (!nextRootIds.includes(rootID)) {
+        delete selectedSessionByRootRef.current[rootID];
+      }
+    });
 
     if (nextRootIds.length === 0) {
       setCurrentRootId(null);
@@ -3107,6 +3196,7 @@ export function App() {
       setSessions([]);
       setCurrentSession(null);
       setActiveBoundSessionKey(null);
+      selectedSessionByRootRef.current = {};
       setInteractionMode("main");
       setIsDrawerOpen(false);
       replaceURLState({
@@ -3889,7 +3979,6 @@ export function App() {
     ) => {
       if (!rootID || !sessionKey) return;
       const cacheKey = rootSessionKey(rootID, sessionKey);
-      const currentInMemory = sessionCacheRef.current[cacheKey];
       const inflight = loadingSessionRef.current[cacheKey];
       const request =
         inflight ||
@@ -3901,9 +3990,7 @@ export function App() {
       }
       const syncResult = await request;
       if (cancelled) return;
-      const shouldApply =
-        !!syncResult.session && (syncResult.hasDelta || !currentInMemory);
-      if (shouldApply && syncResult.session) {
+      if (syncResult.session) {
         const normalized = {
           ...(syncResult.session as any),
           key: sessionKey,
@@ -3930,6 +4017,14 @@ export function App() {
     const getReplayTargetsForRoot = (rootID: string): string[] => {
       if (!rootID) return [];
       const keys = new Set<string>();
+      const rememberedSelectedKey =
+        selectedSessionByRootRef.current[rootID] || "";
+      if (
+        rememberedSelectedKey &&
+        !rememberedSelectedKey.startsWith("pending-")
+      ) {
+        keys.add(rememberedSelectedKey);
+      }
       const boundKey = boundSessionByRootRef.current[rootID] || "";
       if (boundKey && !boundKey.startsWith("pending-")) {
         keys.add(boundKey);
@@ -3951,6 +4046,15 @@ export function App() {
       }
       return Array.from(keys);
     };
+    const replayTargetsForAllRoots = () => {
+      for (const rootID of managedRootIdsRef.current) {
+        if (!rootID) continue;
+        const replayTargets = getReplayTargetsForRoot(rootID);
+        for (const sessionKey of replayTargets) {
+          void reloadSessionForReplay(rootID, sessionKey);
+        }
+      }
+    };
     const refreshSessionRelatedFiles = async (
       rootID: string,
       sessionKey: string,
@@ -3971,7 +4075,25 @@ export function App() {
         delete cancelRequestedBySessionRef.current[cacheKey];
       }
       delete pendingBySessionRef.current[cacheKey];
+      const cached = sessionCacheRef.current[cacheKey];
+      if (cached && cached.key === sessionKey) {
+        sessionCacheRef.current[cacheKey] = {
+          ...(cached as any),
+          pending: false,
+        } as Session;
+      }
       setSelectedPendingByKey(sessionKey, false);
+      setSelectedSession((prev) => {
+        const prevRoot =
+          (prev?.root_id as string | undefined) || currentRootIdRef.current;
+        if (!prev || prevRoot !== rootID || !(prev as any).pending) {
+          return prev;
+        }
+        return {
+          ...(prev as any),
+          pending: false,
+        } as SessionItem;
+      });
       const latest = wasCanceled
         ? sessionCacheRef.current[cacheKey]
         : drawerSessionByRootRef.current[rootID];
@@ -3980,7 +4102,13 @@ export function App() {
           ...(latest as any),
           pending: false,
         } as Session);
+      } else if (drawerSessionByRootRef.current[rootID] && (drawerSessionByRootRef.current[rootID] as any)?.pending) {
+        setDrawerSessionForRoot(rootID, {
+          ...(drawerSessionByRootRef.current[rootID] as any),
+          pending: false,
+        } as Session);
       }
+      bumpCacheVersion();
     };
 
     const handleSessionStream = (payload: any) => {
@@ -4282,6 +4410,7 @@ export function App() {
               newest ? { afterTime: newest } : { replace: true },
             );
           }
+          replayTargetsForAllRoots();
           break;
         case "ws.reconnected":
           void refreshManagedRoots();
@@ -4291,13 +4420,8 @@ export function App() {
               currentRootIdRef.current,
               newest ? { afterTime: newest } : { replace: true },
             );
-            const replayTargets = getReplayTargetsForRoot(
-              currentRootIdRef.current,
-            );
-            for (const sessionKey of replayTargets) {
-              void reloadSessionForReplay(currentRootIdRef.current, sessionKey);
-            }
           }
+          replayTargetsForAllRoots();
           break;
         case "root.changed":
           void refreshManagedRoots();
@@ -4984,6 +5108,67 @@ export function App() {
     [selectedSession, currentRootId, getSessionSnapshot],
   );
 
+  useEffect(() => {
+    const sessionKey =
+      selectedSession?.key || selectedSession?.session_key || "";
+    const rootID =
+      (selectedSession?.root_id as string | undefined) || currentRootId || "";
+    if (!rootID || !sessionKey || sessionKey.startsWith("pending-")) {
+      return;
+    }
+    if (hasSessionExchanges(selectedSessionSnapshot as Session | null)) {
+      return;
+    }
+    const cacheKey = rootSessionKey(rootID, sessionKey);
+    if (loadingSessionRef.current[cacheKey]) {
+      return;
+    }
+    const request = syncSession(rootID, sessionKey)
+      .then((syncResult) => {
+        const fullSession = syncResult.session;
+        if (!fullSession) {
+          return;
+        }
+        const normalized = {
+          ...(fullSession as any),
+          key: sessionKey,
+        } as Session;
+        sessionCacheRef.current[cacheKey] = normalized;
+        loadedSessionRef.current[cacheKey] = true;
+        setSelectedSession((prev) => {
+          const prevKey = prev?.key || prev?.session_key;
+          const prevRoot =
+            (prev?.root_id as string | undefined) || currentRootIdRef.current;
+          if (!prev || prevKey !== sessionKey || prevRoot !== rootID) {
+            return prev;
+          }
+          return {
+            ...(prev as any),
+            ...(normalized as any),
+            key: sessionKey,
+            session_key: sessionKey,
+            root_id: rootID,
+          } as SessionItem;
+        });
+        if (boundSessionByRootRef.current[rootID] === sessionKey) {
+          setDrawerSessionForRoot(rootID, normalized);
+        }
+        bumpCacheVersion();
+        void sessionService.markSessionReady(rootID, sessionKey);
+      })
+      .finally(() => {
+        delete loadingSessionRef.current[cacheKey];
+      });
+    loadingSessionRef.current[cacheKey] = request;
+  }, [
+    selectedSession,
+    selectedSessionSnapshot,
+    currentRootId,
+    rootSessionKey,
+    bumpCacheVersion,
+    setDrawerSessionForRoot,
+  ]);
+
   const handleSelectedSessionFileClick = useCallback(
     (path: string) => {
       const root =
@@ -5007,6 +5192,32 @@ export function App() {
       currentSession ? getSessionSnapshot(currentRootId, currentSession) : null,
     [currentSession, currentRootId, getSessionSnapshot],
   );
+
+  const rootSessionIndicators = useMemo(() => {
+    const next: Record<string, { bound?: boolean; pending?: boolean }> = {};
+    for (const root of managedRootIds) {
+      const boundKey = String(boundSessionByRootRef.current[root] || "").trim();
+      const hasBound = !!boundKey && !boundKey.startsWith("pending-");
+      if (!hasBound) {
+        continue;
+      }
+      const drawer = drawerSessionByRootRef.current[root] as
+        | (Session & { pending?: boolean })
+        | null
+        | undefined;
+      const selected =
+        ((selectedSession?.root_id as string | undefined) || currentRootId) ===
+          root &&
+        (selectedSession?.key || selectedSession?.session_key) === boundKey
+          ? ((selectedSession as any) as { pending?: boolean })
+          : null;
+      const pending =
+        (drawer?.key === boundKey && !!drawer?.pending) ||
+        !!selected?.pending;
+      next[root] = { bound: true, pending };
+    }
+    return next;
+  }, [managedRootIds, selectedSession, currentRootId, cacheVersion, rootSessionKey]);
 
   const handleDrawerSessionFileClick = useCallback(
     (path: string) => {
@@ -5663,6 +5874,7 @@ export function App() {
             selectedDirKey={selectedDirKey}
             selectedPath={file?.path}
             rootId={currentRootId}
+            rootSessionIndicators={rootSessionIndicators}
             creatingRootName={creatingRootName}
             creatingRootBusy={creatingRootBusy}
             onOpenProjectAdd={handleOpenProjectAdd}

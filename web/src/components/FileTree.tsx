@@ -31,6 +31,11 @@ type FileMeta = {
   session_name?: string;
 };
 
+type RootSessionIndicator = {
+  bound?: boolean;
+  pending?: boolean;
+};
+
 type FileTreeProps = {
   entries: FileEntry[];
   childrenByPath: Record<string, FileEntry[]>;
@@ -40,6 +45,7 @@ type FileTreeProps = {
   selectedDirKey?: string | null;
   selectedPath?: string | null;
   rootId?: string | null;
+  rootSessionIndicators?: Record<string, RootSessionIndicator>;
   fileMetas?: Record<string, FileMeta>;
   activeSessionKey?: string | null;
   onSortModeChange?: (mode: DirectorySortMode) => void;
@@ -129,6 +135,7 @@ export function FileTree({
   selectedDirKey,
   selectedPath,
   rootId,
+  rootSessionIndicators = {},
   fileMetas = {},
   activeSessionKey,
   onSortModeChange,
@@ -618,6 +625,11 @@ export function FileTree({
         const meta = fileMetas[entry.path];
         const hasSessionLink = !entry.is_dir && meta?.source_session;
         const isFromActiveSession = hasSessionLink && meta.source_session === activeSessionKey;
+        const rootIndicator = isManagedRootNode
+          ? rootSessionIndicators[entry.path] || {}
+          : null;
+        const showRootIndicator = !!rootIndicator?.bound;
+        const isRootPending = !!rootIndicator?.pending;
 
         return (
           <li key={expandedKey}>
@@ -651,6 +663,25 @@ export function FileTree({
               <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1, marginLeft: "4px" }}>
                 {entry.name}
               </span>
+              {showRootIndicator ? (
+                <span
+                  aria-label={isRootPending ? "已绑定会话，正在回复" : "已绑定会话"}
+                  title={isRootPending ? "已绑定会话，正在回复" : "已绑定会话"}
+                  style={{
+                    width: "8px",
+                    height: "8px",
+                    borderRadius: "999px",
+                    flexShrink: 0,
+                    boxSizing: "border-box",
+                    border: "1.5px solid #2563eb",
+                    background: isRootPending ? "#2563eb" : "transparent",
+                    animation: isRootPending ? "mindfs-bound-pulse 2.2s ease-in-out infinite" : "none",
+                    boxShadow: isRootPending
+                      ? "0 0 0 1.5px rgba(37,99,235,0.14)"
+                      : "0 0 0 1px rgba(37,99,235,0.10)",
+                  }}
+                />
+              ) : null}
               {hasSessionLink && (
                 <span style={{ fontSize: "10px", color: isFromActiveSession ? "#3b82f6" : "#9ca3af" }}>
                   {isFromActiveSession ? "◆" : "◇"}
@@ -1168,7 +1199,13 @@ export function FileTree({
           </div>
         ) : null}
       </div>
-      <style>{`@keyframes mindfs-update-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      <style>{`
+        @keyframes mindfs-update-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes mindfs-bound-pulse {
+          0%, 100% { opacity: 1; box-shadow: 0 0 0 1.5px rgba(37,99,235,0.14); }
+          50% { opacity: 0.18; box-shadow: 0 0 0 4px rgba(37,99,235,0.08); }
+        }
+      `}</style>
     </div>
   );
 }
