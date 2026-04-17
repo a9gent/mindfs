@@ -134,6 +134,7 @@ function timelineItemSpacing(previous: TimelineItem | null, current: TimelineIte
 
 function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main", gitFileStatsByPath = {}, onFileClick, onRemoveRelatedFile }: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
+  const [relatedFilesCollapsed, setRelatedFilesCollapsed] = useState(false);
   const [savedPromptKeys, setSavedPromptKeys] = useState<Record<string, true>>({});
   const [copiedMessageKeys, setCopiedMessageKeys] = useState<Record<string, true>>({});
   const scrollEndRef = useRef<HTMLDivElement>(null);
@@ -154,6 +155,7 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
   useEffect(() => {
     setSavedPromptKeys({});
     setCopiedMessageKeys({});
+    setRelatedFilesCollapsed(false);
     Object.values(copyResetTimersRef.current).forEach((timer) => window.clearTimeout(timer));
     copyResetTimersRef.current = {};
   }, [sessionKey]);
@@ -480,43 +482,93 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
               <div style={{ marginTop: "18px", paddingTop: "14px", borderTop: "1px solid var(--border-color)", width: "100%", boxSizing: "border-box" }}>
                 <div style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", marginBottom: "6px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                   <span>关联文件 {relatedFiles.length}</span>
-                  {hasMoreFiles && <button type="button" onClick={() => setShowAllFiles(!showAllFiles)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--text-secondary)", fontSize: "11px" }}>{showAllFiles ? "收起" : "更多"}</button>}
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                  {displayFiles.map((file, i) => (
-                    <div key={i} onClick={() => onFileClickRef.current?.(file.path)} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "3px 6px", borderRadius: "6px", cursor: "pointer", transition: "background 0.15s" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.04)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
-                      <img src={`https://api.iconify.design/lucide:file-text.svg?color=%2394a3b8`} alt="file" style={{ width: 13, height: 13, flexShrink: 0 }} />
-                      <div style={{ flex: 1, minWidth: 0, fontSize: "12px", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</div>
-                      {gitFileStatsByPath[file.path] ? (
-                        <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>
-                          <span style={{ color: "#15803d", fontVariantNumeric: "tabular-nums" }}>+{gitFileStatsByPath[file.path].additions}</span>
-                          <span style={{ color: "#b91c1c", fontVariantNumeric: "tabular-nums" }}>-{gitFileStatsByPath[file.path].deletions}</span>
-                        </div>
-                      ) : null}
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: "10px" }}>
+                    {hasMoreFiles ? (
                       <button
                         type="button"
-                        aria-label={`移除关联文件 ${file.name}`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onRemoveRelatedFile?.(file.path);
-                        }}
+                        onClick={() => setShowAllFiles(!showAllFiles)}
+                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--text-secondary)", fontSize: "11px" }}
+                      >
+                        {showAllFiles ? "收起" : "更多"}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => setRelatedFilesCollapsed((value) => !value)}
+                      aria-label={relatedFilesCollapsed ? "展开关联文件" : "折叠关联文件"}
+                      title={relatedFilesCollapsed ? "展开关联文件" : "折叠关联文件"}
+                      style={{
+                        border: "none",
+                        background: "transparent",
+                        padding: 0,
+                        margin: 0,
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        width: "16px",
+                        height: "16px",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <span
+                        aria-hidden="true"
                         style={{
-                          border: "none",
-                          background: "transparent",
-                          color: "#dc2626",
-                          cursor: "pointer",
-                          fontSize: "14px",
-                          lineHeight: 1,
-                          padding: "2px 4px",
-                          borderRadius: "4px",
                           flexShrink: 0,
+                          transform: relatedFilesCollapsed ? "rotate(0deg)" : "rotate(90deg)",
+                          transition: "transform 0.2s",
+                          color: "var(--text-secondary)",
+                          display: "inline-flex",
+                          alignItems: "center",
                         }}
                       >
-                        x
-                      </button>
-                    </div>
-                  ))}
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="9 18 15 12 9 6" />
+                        </svg>
+                      </span>
+                    </button>
+                  </div>
                 </div>
+                {!relatedFilesCollapsed ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    {displayFiles.map((file, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <div onClick={() => onFileClickRef.current?.(file.path)} style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1, minWidth: 0, padding: "3px 6px", borderRadius: "6px", cursor: "pointer", transition: "background 0.15s" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.04)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                          <img src={`https://api.iconify.design/lucide:file-text.svg?color=%2394a3b8`} alt="file" style={{ width: 13, height: 13, flexShrink: 0 }} />
+                          <div style={{ flex: 1, minWidth: 0, fontSize: "12px", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</div>
+                          {gitFileStatsByPath[file.path] ? (
+                            <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>
+                              <span style={{ color: "#15803d", fontVariantNumeric: "tabular-nums" }}>+{gitFileStatsByPath[file.path].additions}</span>
+                              <span style={{ color: "#b91c1c", fontVariantNumeric: "tabular-nums" }}>-{gitFileStatsByPath[file.path].deletions}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                        <button
+                          type="button"
+                          aria-label={`移除关联文件 ${file.name}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onRemoveRelatedFile?.(file.path);
+                          }}
+                          style={{
+                            border: "none",
+                            background: "transparent",
+                            color: "#dc2626",
+                            cursor: "pointer",
+                            fontSize: "14px",
+                            lineHeight: 1,
+                            padding: "2px 4px",
+                            borderRadius: "4px",
+                            flexShrink: 0,
+                          }}
+                        >
+                          x
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             )}
             <div ref={scrollEndRef} style={{ height: "1px" }} />
