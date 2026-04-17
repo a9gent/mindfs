@@ -809,6 +809,7 @@ export function App() {
   const [selectedDir, setSelectedDir] = useState<string | null>(null);
   const [selectedDirKey, setSelectedDirKey] = useState<string | null>(null);
   const [mainEntries, setMainEntries] = useState<FileEntry[]>([]);
+  const [mainDirectoryError, setMainDirectoryError] = useState("");
   const [gitStatus, setGitStatus] = useState<GitStatusPayload | null>(null);
   const [gitStatusLoading, setGitStatusLoading] = useState(false);
   const [gitDiff, setGitDiff] = useState<GitDiffPayload | null>(null);
@@ -1755,6 +1756,24 @@ export function App() {
     return { entries: [] };
   }, []);
 
+  const formatDirectoryLoadError = useCallback((message?: string | null) => {
+    const text = String(message || "").trim();
+    if (!text) {
+      return "无法读取这个目录。";
+    }
+    const lower = text.toLowerCase();
+    if (
+      lower.includes("access is denied") ||
+      lower.includes("permission denied") ||
+      lower.includes("operation not permitted") ||
+      lower.includes("拒绝访问") ||
+      lower.includes("权限")
+    ) {
+      return "当前进程没有权限读取这个目录或其中的部分系统项。";
+    }
+    return text;
+  }, []);
+
   const treeCacheKey = useCallback(
     (rootID: string, dirPath: string) => `${rootID}:${dirPath || "."}`,
     [],
@@ -1773,6 +1792,7 @@ export function App() {
         const payload = await res.json();
         const parsed = normalizeTreeResponse(payload);
         invalidTreeCacheKeysRef.current.delete(treeCacheKey(rootID, dirPath));
+        setMainDirectoryError("");
         setEntriesByPath((prev) => ({
           ...prev,
           [treeCacheKey(rootID, dirPath)]: parsed.entries,
@@ -3044,6 +3064,7 @@ export function App() {
           setFile(null);
           setSelectedSession(null);
           setMainEntries([]);
+          setMainDirectoryError("");
           setPluginQuery(nextPluginQuery);
           replaceURLState({
             root,
@@ -3061,6 +3082,7 @@ export function App() {
             !invalidTreeCacheKeysRef.current.has(cacheKey)
           ) {
             setMainEntries(cachedEntries || []);
+            setMainDirectoryError("");
             setSelectedDir(targetPath);
             setSelectedDirKey(
               buildDirectorySelectionKey(root, targetPath, targetIsRoot),
@@ -3086,11 +3108,22 @@ export function App() {
               ) {
                 return;
               }
+              const message = formatDirectoryLoadError(
+                typeof payload?.error === "string" ? payload.error : "",
+              );
+              setSelectedDir(targetPath);
+              setSelectedDirKey(
+                buildDirectorySelectionKey(root, targetPath, targetIsRoot),
+              );
+              setMainEntries([]);
+              setMainDirectoryError(message);
+              reportError("file.read_failed", message);
               return;
             }
             const payload = await res.json();
             const parsed = normalizeTreeResponse(payload);
             invalidTreeCacheKeysRef.current.delete(cacheKey);
+            setMainDirectoryError("");
             setEntriesByPath((prev) => ({
               ...prev,
               [cacheKey]: parsed.entries,
@@ -3105,7 +3138,16 @@ export function App() {
             fileCursorRef.current = 0;
             setDrawerOpenForRoot(root, false);
             if (isMobile) setIsLeftOpen(false);
-          } catch {}
+          } catch {
+            const message = "目录加载失败，请稍后重试。";
+            setSelectedDir(targetPath);
+            setSelectedDirKey(
+              buildDirectorySelectionKey(root, targetPath, targetIsRoot),
+            );
+            setMainEntries([]);
+            setMainDirectoryError(message);
+            reportError("file.read_failed", message);
+          }
         };
         const isExpanded = expandedRef.current.includes(expandedKey);
         const isCurrentExpandedRoot =
@@ -5477,6 +5519,7 @@ export function App() {
         root={currentRootId || undefined}
         path={selectedDir || ""}
         entries={visibleMainEntries}
+        errorMessage={mainDirectoryError}
         topContent={
           shouldRenderGitPanel ? (
             <GitStatusPanel

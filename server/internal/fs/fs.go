@@ -282,7 +282,9 @@ func (r RootInfo) ListEntries(dirRelPath string) ([]Entry, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return nil, err
+			// Some system directories contain permission-gated or special entries.
+			// Skip those children so one unreadable item doesn't blank the whole view.
+			continue
 		}
 		result = append(result, Entry{
 			Name:  name,

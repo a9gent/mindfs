@@ -12,6 +12,7 @@ type DefaultListViewProps = {
   root?: string;
   path?: string;
   entries: FileEntry[];
+  errorMessage?: string;
   topContent?: React.ReactNode;
   showHiddenFiles?: boolean;
   sortMode: DirectorySortMode;
@@ -117,6 +118,7 @@ export function DefaultListView({
   root,
   path = "",
   entries,
+  errorMessage,
   topContent,
   showHiddenFiles = false,
   sortMode,
@@ -355,6 +357,24 @@ export function DefaultListView({
           </div>
         ) : null}
         <div style={{ padding: topContent ? "4px 16px 24px" : "24px 16px" }}>
+        {errorMessage ? (
+          <div
+            style={{
+              padding: "18px 16px",
+              borderRadius: "12px",
+              border: "1px solid rgba(245, 158, 11, 0.28)",
+              background: "rgba(245, 158, 11, 0.08)",
+              color: "var(--text-primary)",
+            }}
+          >
+            <div style={{ fontSize: "14px", fontWeight: 600, marginBottom: "6px" }}>
+              当前目录无法访问
+            </div>
+            <div style={{ fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+              {errorMessage}
+            </div>
+          </div>
+        ) : null}
         <div style={{ display: "flex", flexDirection: "column", gap: "4px", width: "100%" }}>
           {sortedEntries.map((entry) => (
             <div
