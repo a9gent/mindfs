@@ -5,7 +5,10 @@ package acp
 import (
 	"os"
 	"os/exec"
+	"syscall"
 )
+
+const createNoWindow = 0x08000000
 
 func killProcessTree(proc *os.Process) error {
 	if proc == nil {
@@ -15,5 +18,11 @@ func killProcessTree(proc *os.Process) error {
 }
 
 func configurePlatformProcessCommand(cmd *exec.Cmd) {
-	_ = cmd
+	if cmd == nil {
+		return
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: createNoWindow,
+	}
 }

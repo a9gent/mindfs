@@ -13,6 +13,8 @@ import (
 	"syscall"
 )
 
+const detachedProcess = 0x00000008
+
 func platformStateDir() (string, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
@@ -27,7 +29,7 @@ func configureBackgroundCommand(cmd *exec.Cmd) {
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
-		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | detachedProcess,
 	}
 }
 
