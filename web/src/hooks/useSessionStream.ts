@@ -20,8 +20,23 @@ type UseSessionStreamResult = {
   isStreaming: boolean;
 };
 
-function nowID(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function hashText(input: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function stableTimelineID(
+  prefix: string,
+  index: number,
+  content: string,
+  timestamp?: string,
+  agent?: string,
+): string {
+  return `${prefix}:${index}:${timestamp || ""}:${agent || ""}:${hashText(content)}`;
 }
 
 function normalizeRole(role?: string): string {
@@ -67,30 +82,57 @@ function settleRunningTools(items: TimelineItem[]): TimelineItem[] {
 
 function buildBaseTimeline(exchanges: ExchangeLike[]): TimelineItem[] {
   const out: TimelineItem[] = [];
-  for (const ex of exchanges) {
+  for (let index = 0; index < exchanges.length; index += 1) {
+    const ex = exchanges[index];
     const role = normalizeRole(ex.role);
     const content = ex.content || "";
     if (role === "user") {
       if (!content) continue;
-      out.push({ id: nowID("user"), type: "user_text", content, timestamp: ex.timestamp, agent: ex.agent, pendingAck: ex.pending_ack === true });
+      out.push({
+        id: stableTimelineID("user", index, content, ex.timestamp, ex.agent),
+        type: "user_text",
+        content,
+        timestamp: ex.timestamp,
+        agent: ex.agent,
+        pendingAck: ex.pending_ack === true,
+      });
       continue;
     }
     if (role === "agent" || role === "assistant") {
       if (!content) continue;
-      out.push({ id: nowID("assistant"), type: "assistant_text", content, timestamp: ex.timestamp, agent: ex.agent });
+      out.push({
+        id: stableTimelineID("assistant", index, content, ex.timestamp, ex.agent),
+        type: "assistant_text",
+        content,
+        timestamp: ex.timestamp,
+        agent: ex.agent,
+      });
       continue;
     }
     if (role === "thought") {
       if (!content) continue;
-      out.push({ id: nowID("thought"), type: "thought", content });
+      out.push({
+        id: stableTimelineID("thought", index, content, ex.timestamp, ex.agent),
+        type: "thought",
+        content,
+      });
       continue;
     }
     if (role === "tool") {
       if (!ex.toolCall) continue;
+      const normalizedTool = normalizeToolCall(ex.toolCall);
       out.push({
-        id: ex.toolCall.callId || nowID("tool"),
+        id:
+          normalizedTool.callId ||
+          stableTimelineID(
+            "tool",
+            index,
+            JSON.stringify(normalizedTool),
+            ex.timestamp,
+            ex.agent,
+          ),
         type: "tool",
-        toolCall: normalizeToolCall(ex.toolCall),
+        toolCall: normalizedTool,
       });
     }
   }

@@ -1,4 +1,4 @@
-import React, { memo, useState, useEffect, useRef } from "react";
+import React, { memo, useEffect, useRef, useState } from "react";
 import { useSessionStream, type TimelineItem } from "../hooks/useSessionStream";
 import { ThinkingBlock } from "./stream/ThinkingBlock";
 import { ToolCallCard } from "./stream/ToolCallCard";
@@ -25,6 +25,7 @@ type SessionItem = {
 
 type SessionViewerProps = {
   session: SessionItem | null;
+  loading?: boolean;
   rootId?: string | null;
   rootPath?: string | null;
   interactionMode?: "main" | "drawer";
@@ -132,7 +133,7 @@ function timelineItemSpacing(previous: TimelineItem | null, current: TimelineIte
   return "16px";
 }
 
-function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main", gitFileStatsByPath = {}, onFileClick, onRemoveRelatedFile }: SessionViewerProps) {
+function SessionViewerInner({ session, loading = false, rootId, rootPath, interactionMode = "main", gitFileStatsByPath = {}, onFileClick, onRemoveRelatedFile }: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
   const [relatedFilesCollapsed, setRelatedFilesCollapsed] = useState(false);
   const [savedPromptKeys, setSavedPromptKeys] = useState<Record<string, true>>({});
@@ -169,7 +170,7 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
 
   useEffect(() => {
     const container = scrollRef.current;
-    if (!container || !scrollEndRef.current) {
+    if (!container) {
       return;
     }
     const nextKey = sessionKey;
@@ -218,6 +219,7 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
   const displayFiles = showAllFiles ? relatedFiles : relatedFiles.slice(0, 10);
   const hasMoreFiles = relatedFiles.length > 10;
   const displayName = session.name || session.purpose || session.key || session.session_key || "Session";
+  const hasVisibleTimeline = timeline.length > 0;
   const userMetaButtonStyle: React.CSSProperties = {
     width: "18px",
     height: "18px",
@@ -238,13 +240,13 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
     flexShrink: 0,
   };
 
-  const makePromptKey = (item: TimelineItem): string => `${item.timestamp || ""}\n${item.content || ""}`;
+  const makePromptKey = (item: TimelineItem): string => `${item.id}\n${item.timestamp || ""}\n${item.content || ""}`;
 
   const renderTimelineItem = (item: TimelineItem, idx: number, spacing: string = "0") => {
     if (item.type === "thought") {
       return (
         <div style={{ marginTop: spacing }}>
-          <ThinkingBlock key={item.id || `thought-${idx}`} content={item.content || ""} defaultExpanded={false} />
+          <ThinkingBlock content={item.content || ""} defaultExpanded={false} />
         </div>
       );
     }
@@ -253,7 +255,6 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
       return (
         <div style={{ marginTop: spacing }}>
           <ToolCallCard
-            key={item.id || tc.callId || `tool-${idx}`}
             kind={tc.kind}
             title={(tc as any).title || (tc.meta && typeof tc.meta.title === "string" ? (tc.meta.title as string) : "")}
             callId={tc.callId || ""}
@@ -469,7 +470,42 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
           overflowX: "hidden",
         }}>
           <div style={{ width: "100%", minWidth: 0, margin: "0", display: "flex", flexDirection: "column" }}>
-            {timeline.map((item, idx) => renderTimelineItem(item, idx, timelineItemSpacing(idx > 0 ? timeline[idx - 1] : null, item)))}
+            {loading && !hasVisibleTimeline ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "14px",
+                  padding: "6px 0 8px",
+                }}
+              >
+                <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                  正在加载会话...
+                </div>
+                {[0, 1, 2].map((index) => (
+                  <div
+                    key={index}
+                    style={{
+                      width: index === 1 ? "78%" : index === 2 ? "64%" : "52%",
+                      height: index === 0 ? "18px" : "72px",
+                      alignSelf: index === 0 ? "flex-start" : index === 1 ? "flex-end" : "flex-start",
+                      borderRadius: index === 0 ? "8px" : "18px",
+                      background:
+                        "linear-gradient(90deg, rgba(148,163,184,0.12) 0%, rgba(148,163,184,0.24) 50%, rgba(148,163,184,0.12) 100%)",
+                      backgroundSize: "200% 100%",
+                      animation: "sessionLoadingPulse 1.1s ease-in-out infinite",
+                    }}
+                  />
+                ))}
+              </div>
+            ) : null}
+            {timeline.map((item, idx) =>
+              renderTimelineItem(
+                item,
+                idx,
+                timelineItemSpacing(idx > 0 ? timeline[idx - 1] : null, item),
+              ),
+            )}
             {(isAwaiting || isStreaming) && (
               <div style={{ marginTop: "16px", display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--text-secondary)" }}>
                 <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "var(--accent-color)", animation: "pulse 1s infinite" }} />
@@ -580,6 +616,11 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
           0%, 100% { opacity: 1; }
           50% { opacity: 0.5; }
         }
+        @keyframes sessionLoadingPulse {
+          0% { background-position: 100% 0; opacity: 0.7; }
+          50% { opacity: 1; }
+          100% { background-position: -100% 0; opacity: 0.7; }
+        }
         @keyframes spin {
           to { transform: rotate(360deg); }
         }
@@ -590,6 +631,7 @@ function SessionViewerInner({ session, rootId, rootPath, interactionMode = "main
 
 export const SessionViewer = memo(SessionViewerInner, (prev, next) => (
   prev.session === next.session &&
+  prev.loading === next.loading &&
   prev.rootId === next.rootId &&
   prev.rootPath === next.rootPath &&
   prev.interactionMode === next.interactionMode &&
