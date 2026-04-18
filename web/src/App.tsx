@@ -1950,6 +1950,33 @@ export function App() {
     }
   }, []);
 
+  const loadSessionsForRoot = useCallback(
+    async (
+      rootID: string,
+      options?: {
+        beforeTime?: string;
+        afterTime?: string;
+        replace?: boolean;
+        force?: boolean;
+      },
+    ) => {
+      try {
+        const next = (await sessionService.fetchSessions(rootID, {
+          beforeTime: options?.beforeTime,
+          afterTime: options?.afterTime,
+        })) as SessionItem[];
+        if (!options?.force && currentRootIdRef.current !== rootID) return;
+        setHasMoreSessions(next.length >= 50);
+        if (options?.replace || (!options?.beforeTime && !options?.afterTime)) {
+          setSessions(next);
+          return;
+        }
+        setSessions((prev) => mergeSessionItems(prev, next));
+      } catch {}
+    },
+    [mergeSessionItems],
+  );
+
   const openGitDiff = useCallback(
     async (rootID: string, item: GitStatusItem) => {
       if (!rootID || !item?.path) {
@@ -3246,6 +3273,7 @@ export function App() {
             closeLeftSidebar: true,
           });
           if (restored) {
+            void loadSessionsForRoot(path, { replace: true, force: true });
             await refreshTreeDir(path, ".", false);
             return;
           }
@@ -3265,6 +3293,7 @@ export function App() {
       rememberCurrentFileScroll,
       treeCacheKey,
       tryShowBoundSessionForRoot,
+      loadSessionsForRoot,
     ],
   );
   const actionHandlersRef = useRef(actionHandlers);
@@ -4071,25 +4100,6 @@ export function App() {
   useEffect(() => {
     if (!currentRootId) return;
     let cancelled = false;
-    const loadSessions = async (
-      rootID: string,
-      options?: { beforeTime?: string; afterTime?: string; replace?: boolean },
-    ) => {
-      try {
-        const next = (await sessionService.fetchSessions(rootID, {
-          beforeTime: options?.beforeTime,
-          afterTime: options?.afterTime,
-        })) as SessionItem[];
-        if (cancelled) return;
-        if (currentRootIdRef.current !== rootID) return;
-        setHasMoreSessions(next.length >= 50);
-        if (options?.replace || (!options?.beforeTime && !options?.afterTime)) {
-          setSessions(next);
-          return;
-        }
-        setSessions((prev) => mergeSessionItems(prev, next));
-      } catch {}
-    };
     const reloadSessionForReplay = async (
       rootID: string,
       sessionKey: string,
@@ -4525,7 +4535,7 @@ export function App() {
           void refreshManagedRoots();
           if (currentRootIdRef.current) {
             const newest = sessionsRef.current[0]?.updated_at || "";
-            void loadSessions(
+            void loadSessionsForRoot(
               currentRootIdRef.current,
               newest ? { afterTime: newest } : { replace: true },
             );
@@ -4536,7 +4546,7 @@ export function App() {
           void refreshManagedRoots();
           if (currentRootIdRef.current) {
             const newest = sessionsRef.current[0]?.updated_at || "";
-            void loadSessions(
+            void loadSessionsForRoot(
               currentRootIdRef.current,
               newest ? { afterTime: newest } : { replace: true },
             );
@@ -4553,7 +4563,7 @@ export function App() {
             break;
           }
           if (rootID === currentRootIdRef.current) {
-            void loadSessions(rootID, { replace: true });
+            void loadSessionsForRoot(rootID, { replace: true });
           }
           break;
         }
@@ -4648,13 +4658,13 @@ export function App() {
           if (rootID && sessionKey) {
             handleSessionStreamDone(rootID, sessionKey);
             const newest = sessionsRef.current[0]?.updated_at || "";
-            void loadSessions(
+            void loadSessionsForRoot(
               rootID,
               newest ? { afterTime: newest } : { replace: true },
             );
           } else if (currentRootIdRef.current) {
             const newest = sessionsRef.current[0]?.updated_at || "";
-            void loadSessions(
+            void loadSessionsForRoot(
               currentRootIdRef.current,
               newest ? { afterTime: newest } : { replace: true },
             );
@@ -4747,7 +4757,7 @@ export function App() {
             } as Session;
             bumpCacheVersion();
             const newest = sessionsRef.current[0]?.updated_at || "";
-            void loadSessions(
+            void loadSessionsForRoot(
               rootID,
               newest ? { afterTime: newest } : { replace: true },
             );
@@ -4821,7 +4831,7 @@ export function App() {
               }
             }
             const newest = sessionsRef.current[0]?.updated_at || "";
-            void loadSessions(
+            void loadSessionsForRoot(
               rootID,
               newest ? { afterTime: newest } : { replace: true },
             );
@@ -4889,7 +4899,7 @@ export function App() {
         }
       }
     });
-    void loadSessions(currentRootId, { replace: true });
+    void loadSessionsForRoot(currentRootId, { replace: true });
     return () => {
       cancelled = true;
       unsubscribeEvents();
@@ -4897,7 +4907,7 @@ export function App() {
   }, [
     currentRootId,
     gitDiff?.path,
-    mergeSessionItems,
+    loadSessionsForRoot,
     rootSessionKey,
     resolveRootForSessionKey,
     promotePendingSessionForRoot,
@@ -4947,6 +4957,7 @@ export function App() {
     }
     didInitRef.current = true;
     let cancelled = false;
+    let settled = false;
     if (isRelayPWAContext() && !isRelayNodePage()) {
       const lastNodeID = window.localStorage.getItem(
         RELAY_LAST_NODE_ID_STORAGE_KEY,
@@ -4977,7 +4988,9 @@ export function App() {
           return;
         }
         void refreshRelayStatus();
-        if (cancelled || !dirs.length) return;
+        if (cancelled || !dirs.length) {
+          return;
+        }
         const nextDirs = dirs as ManagedRootPayload[];
         const ids = nextDirs.map((d) => d.id);
         managedRootByIdRef.current = Object.fromEntries(
@@ -5023,16 +5036,40 @@ export function App() {
               preservePluginQuery: true,
               isRoot: true,
             });
+          } else {
+            void loadSessionsForRoot(preferredRoot, {
+              replace: true,
+              force: true,
+            });
+            await refreshTreeDir(preferredRoot, ".", false);
           }
         }
-      });
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        reportError(
+          "app.init_failed",
+          String((err as Error)?.message || err || "初始化失败"),
+        );
+      })
+      .finally(() => {
+        settled = true;
+      })
+    ;
     return () => {
       cancelled = true;
+      if (!settled) {
+        didInitRef.current = false;
+      }
     };
   }, [
     ensurePluginsLoaded,
     handleRelayNavigationFailure,
+    loadSessionsForRoot,
     refreshRelayStatus,
+    refreshTreeDir,
     tryShowBoundSessionForRoot,
   ]);
 
@@ -5101,6 +5138,8 @@ export function App() {
           pluginQuery: state.pluginQuery,
         });
         if (restored) {
+          void loadSessionsForRoot(state.root, { replace: true, force: true });
+          await refreshTreeDir(state.root, ".", false);
           return;
         }
         actionHandlers.open_dir({
@@ -5114,7 +5153,7 @@ export function App() {
 
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [actionHandlers, tryShowBoundSessionForRoot]);
+  }, [actionHandlers, loadSessionsForRoot, refreshTreeDir, tryShowBoundSessionForRoot]);
 
   const selectedRoot =
     (selectedSession?.root_id as string | undefined) || currentRootId || "";
