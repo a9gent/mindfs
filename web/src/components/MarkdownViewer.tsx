@@ -3,7 +3,6 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import Prism from "prismjs";
-import mermaid from "mermaid";
 import "prismjs/themes/prism.css";
 // Reuse the language imports from global Prism context (since they are imported in CodeViewer, they might be available if loaded, 
 // but strictly speaking we should import them here or centralize. For simplicity, we rely on the side-effects of CodeViewer imports 
@@ -30,8 +29,18 @@ const monoFontFamily = [
 
 let mermaidInitialized = false;
 let mermaidRenderId = 0;
+let mermaidModulePromise: Promise<typeof import("mermaid")> | null = null;
 
-function ensureMermaidInitialized() {
+async function getMermaid() {
+  if (!mermaidModulePromise) {
+    mermaidModulePromise = import("mermaid");
+  }
+  const mod = await mermaidModulePromise;
+  return mod.default;
+}
+
+async function ensureMermaidInitialized() {
+  const mermaid = await getMermaid();
   if (mermaidInitialized) return;
   mermaid.initialize({
     startOnLoad: false,
@@ -56,7 +65,7 @@ function MermaidBlock({ chart }: { chart: string }) {
         return;
       }
 
-      ensureMermaidInitialized();
+      const mermaid = await ensureMermaidInitialized();
       const renderId = `mindfs-mermaid-${mermaidRenderId += 1}`;
 
       try {

@@ -573,6 +573,7 @@ func (h *HTTPHandler) serveStaticAsset(w http.ResponseWriter, r *http.Request) b
 
 	assetPath := filepath.Join(staticDir, cleanPath)
 	if info, err := os.Stat(assetPath); err == nil && !info.IsDir() {
+		applyStaticCacheHeaders(w, cleanPath)
 		http.ServeFile(w, r, assetPath)
 		return true
 	}
@@ -584,11 +585,21 @@ func (h *HTTPHandler) serveStaticAsset(w http.ResponseWriter, r *http.Request) b
 
 	indexPath := filepath.Join(staticDir, "index.html")
 	if info, err := os.Stat(indexPath); err == nil && !info.IsDir() {
+		applyStaticCacheHeaders(w, "index.html")
 		http.ServeFile(w, r, indexPath)
 		return true
 	}
 
 	return false
+}
+
+func applyStaticCacheHeaders(w http.ResponseWriter, cleanPath string) {
+	switch cleanPath {
+	case "service-worker.js", "index.html":
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+	}
 }
 
 func pathForStaticAsset(requestPath string) string {

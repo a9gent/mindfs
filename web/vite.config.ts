@@ -32,6 +32,20 @@ function listPublicAssets(publicDir: string): string[] {
   return urls.sort();
 }
 
+type BundleItem = {
+  fileName: string;
+  type: string;
+};
+
+function listShellBundleAssets(bundle: Record<string, BundleItem>): string[] {
+  return Object.values(bundle)
+    .filter((item) => item.fileName !== "service-worker.js")
+    .filter((item) => !item.fileName.endsWith(".map"))
+    .filter((item) => item.fileName.startsWith("assets/index-"))
+    .map((item) => `./${item.fileName}`)
+    .sort();
+}
+
 function buildServiceWorker(precacheUrls: string[], version: string): string {
   return `const SHELL_CACHE = "mindfs-shell-${version}";
 const RUNTIME_CACHE = "mindfs-runtime-${version}";
@@ -112,14 +126,12 @@ async function handleStaticRequest(request) {
   const shellCache = await caches.open(SHELL_CACHE);
   const cachedShellResponse = await shellCache.match(request);
   if (cachedShellResponse) {
-    fetchAndStore(request, shellCache);
     return cachedShellResponse;
   }
 
   const runtimeCache = await caches.open(RUNTIME_CACHE);
   const cachedRuntimeResponse = await runtimeCache.match(request);
   if (cachedRuntimeResponse) {
-    fetchAndStore(request, runtimeCache);
     return cachedRuntimeResponse;
   }
 
@@ -142,16 +154,6 @@ async function handleStaticRequest(request) {
     });
   }
 }
-
-async function fetchAndStore(request, cache) {
-  try {
-    const response = await fetch(request);
-    if (response.ok) {
-      await cache.put(request, response.clone());
-    }
-  } catch {
-  }
-}
 `;
 }
 
@@ -159,16 +161,13 @@ function autoPrecachePlugin() {
   return {
     name: "mindfs-auto-precache",
     apply: "build" as const,
-    generateBundle(this: { emitFile: (file: { type: "asset"; fileName: string; source: string }) => void }, _options: unknown, bundle: Record<string, { fileName: string; type: string }>) {
+    generateBundle(this: { emitFile: (file: { type: "asset"; fileName: string; source: string }) => void }, _options: unknown, bundle: Record<string, BundleItem>) {
       const publicDir = path.resolve(__dirname, "public");
       const publicAssets = listPublicAssets(publicDir);
-      const bundleAssets = Object.values(bundle)
-        .map((item) => item.fileName)
-        .filter((fileName) => fileName !== "service-worker.js")
-        .filter((fileName) => !fileName.endsWith(".map"))
-        .map((fileName) => `./${fileName}`)
-        .sort();
-      const precacheUrls = Array.from(new Set(["./", "./index.html", ...publicAssets, ...bundleAssets]));
+      const shellBundleAssets = listShellBundleAssets(bundle);
+      const precacheUrls = Array.from(
+        new Set(["./", "./index.html", ...publicAssets, ...shellBundleAssets]),
+      );
       const version = crypto
         .createHash("sha256")
         .update(JSON.stringify(precacheUrls))
