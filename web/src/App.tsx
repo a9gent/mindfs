@@ -2654,6 +2654,7 @@ export function App() {
           name: "新会话",
           pending: true,
         } as any;
+        setBoundSessionForRoot(activeRoot, tempKey);
       }
       const now = new Date().toISOString();
       const requestId = sessionService.createRequestId("msg");
@@ -2698,6 +2699,7 @@ export function App() {
         session = sessionCacheRef.current[ck];
         bumpCacheVersion();
       } else {
+        const tempSessionKey = session?.key || "";
         pendingDraftRef.current = {
           rootId: activeRoot,
           mode: effectiveMode,
@@ -2710,11 +2712,17 @@ export function App() {
           requestId,
           tempKey,
         };
-        session = {
+        const draftSession = {
           ...(session as any),
           exchanges: [userEx],
           updated_at: now,
         } as Session;
+        if (tempSessionKey) {
+          sessionCacheRef.current[rootSessionKey(activeRoot, tempSessionKey)] =
+            draftSession;
+          bumpCacheVersion();
+        }
+        session = draftSession;
       }
       const isBoundInMain =
         !!selectedSessionRef.current &&
