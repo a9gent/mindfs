@@ -475,13 +475,10 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                 style={{
                   display: "flex",
                   flexDirection: "column",
-                  gap: "14px",
+                  gap: "10px",
                   padding: "6px 0 8px",
                 }}
               >
-                <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                  正在加载会话...
-                </div>
                 {[0, 1, 2].map((index) => (
                   <div
                     key={index}

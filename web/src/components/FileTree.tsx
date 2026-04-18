@@ -5,6 +5,7 @@ import {
   type FileEntry,
   sortDirectoryEntries,
 } from "../services/directorySort";
+import { appPath } from "../services/base";
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -461,7 +462,7 @@ export function FileTree({
 
     const loadRelayTip = async () => {
       try {
-        const response = await fetch("/api/relay/tips", { signal: controller.signal });
+        const response = await fetch(appPath("/api/relay/tips"), { signal: controller.signal });
         if (!response.ok) {
           throw new Error(`tips request failed: ${response.status}`);
         }
