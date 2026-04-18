@@ -2150,7 +2150,11 @@ export function App() {
         if (inflight) {
           const syncResult = await inflight;
           const fullSession = syncResult?.session;
-          if (fullSession) applySession(fullSession);
+          if (fullSession) {
+            applySession(fullSession);
+          } else {
+            setSelectedSessionLoading(false);
+          }
           return;
         }
         const request = syncSession(targetRoot, key).finally(() => {
@@ -5285,10 +5289,20 @@ export function App() {
     if (!rootID || !sessionKey || sessionKey.startsWith("pending-")) {
       return;
     }
-    if (hasSessionExchanges(selectedSessionSnapshot as Session | null)) {
+    if (selectedSessionLoading) {
       return;
     }
     const cacheKey = rootSessionKey(rootID, sessionKey);
+    const cached = sessionCacheRef.current[cacheKey];
+    if (loadedSessionRef.current[cacheKey]) {
+      return;
+    }
+    if (hasSessionExchanges(cached)) {
+      return;
+    }
+    if (hasSessionExchanges(selectedSessionSnapshot as Session | null)) {
+      return;
+    }
     if (loadingSessionRef.current[cacheKey]) {
       return;
     }
@@ -5331,6 +5345,7 @@ export function App() {
     loadingSessionRef.current[cacheKey] = request;
   }, [
     selectedSession,
+    selectedSessionLoading,
     selectedSessionSnapshot,
     currentRootId,
     rootSessionKey,
