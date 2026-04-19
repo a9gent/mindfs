@@ -135,6 +135,32 @@ function timelineItemSpacing(previous: TimelineItem | null, current: TimelineIte
   return "16px";
 }
 
+function collectAssistantFlowMarkdown(timeline: TimelineItem[], startIndex: number): string {
+  const segments: string[] = [];
+
+  for (let index = startIndex; index >= 0; index -= 1) {
+    const item = timeline[index];
+    if (item.type === "user_text") {
+      break;
+    }
+    if (item.type === "assistant_text" && item.content) {
+      segments.unshift(item.content);
+    }
+  }
+
+  for (let index = startIndex + 1; index < timeline.length; index += 1) {
+    const item = timeline[index];
+    if (item.type === "user_text") {
+      break;
+    }
+    if (item.type === "assistant_text" && item.content) {
+      segments.push(item.content);
+    }
+  }
+
+  return segments.join("\n\n").trim();
+}
+
 function shouldDefaultCollapseRelatedFiles(isMobile: boolean, relatedFileCount: number): boolean {
   if (isMobile) {
     return relatedFileCount > 0;
@@ -341,6 +367,7 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
     const copySucceeded = !!copiedMessageKeys[promptKey];
     const userMessageWidth = imageAttachments.length > 0 ? "min(320px, 100%)" : "auto";
     const hasRichUserAttachments = imageAttachments.length > 0;
+    const assistantMarkdownContent = !isUser ? collectAssistantFlowMarkdown(timeline, idx) : "";
     return (
       <div
         key={idx}
@@ -504,6 +531,47 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
             </div>
             {!hideAssistantMeta && (
               <span style={{ alignSelf: 'flex-start', display: "inline-flex", alignItems: "center", gap: "6px", fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, marginTop: '-10px', marginBottom: '4px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!assistantMarkdownContent) {
+                      reportError("file.write_failed", "消息内容为空，无法复制");
+                      return;
+                    }
+                    void navigator.clipboard.writeText(assistantMarkdownContent)
+                      .then(() => {
+                        setCopiedMessageKeys((prev) => ({ ...prev, [promptKey]: true }));
+                        if (copyResetTimersRef.current[promptKey]) {
+                          window.clearTimeout(copyResetTimersRef.current[promptKey]);
+                        }
+                        copyResetTimersRef.current[promptKey] = window.setTimeout(() => {
+                          setCopiedMessageKeys((prev) => {
+                            const next = { ...prev };
+                            delete next[promptKey];
+                            return next;
+                          });
+                          delete copyResetTimersRef.current[promptKey];
+                        }, 1000);
+                      })
+                      .catch((err) => {
+                        reportError("file.write_failed", String((err as Error)?.message || "复制失败"));
+                      });
+                  }}
+                  style={userMetaButtonStyle}
+                  aria-label="复制 Markdown"
+                  title="复制 Markdown"
+                >
+                  {copySucceeded ? (
+                    <span aria-hidden="true" style={{ fontSize: "13px", fontWeight: 800, lineHeight: 1 }}>
+                      ✓
+                    </span>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                      <path fill="currentColor" d="M20 2H10c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2m0 12H10V4h10z"/>
+                      <path fill="currentColor" d="M14 20H4V10h2V8H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2v-2h-2z"/>
+                    </svg>
+                  )}
+                </button>
                 <AgentIcon agentName={item.agent || ""} style={{ width: "12px", height: "12px" }} />
                 <span>{time}</span>
               </span>
