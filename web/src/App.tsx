@@ -2190,7 +2190,11 @@ export function App() {
       await waitForNextPaint();
       const cacheKey = rootSessionKey(targetRoot, key);
       const applySession = (fullSession: Session) => {
-        const normalized = { ...(fullSession as any), key } as Session;
+        const normalized = {
+          ...(fullSession as any),
+          key,
+          pending: false,
+        } as Session;
         sessionCacheRef.current[cacheKey] = normalized;
         setSelectedSession((prev) => {
           const prevKey = prev?.key || prev?.session_key;
@@ -2202,23 +2206,14 @@ export function App() {
           return toSessionItem(targetRoot, {
             ...(prev as any),
             ...(normalized as any),
-            pending:
-              typeof (prev as any)?.pending === "boolean"
-                ? !!(prev as any).pending
-                : preservePending,
             key,
             session_key: key,
             root_id: targetRoot,
           });
         });
         if ((boundSessionByRootRef.current[targetRoot] || null) === key) {
-          const activeDrawer = drawerSessionByRootRef.current[targetRoot];
           setDrawerSessionForRoot(targetRoot, {
             ...(normalized as any),
-            pending:
-              activeDrawer?.key === key
-                ? !!(activeDrawer as any)?.pending
-                : preservePending,
           } as Session);
         }
         setSelectedSessionLoading(false);
@@ -4231,6 +4226,7 @@ export function App() {
         const normalized = {
           ...(syncResult.session as any),
           key: sessionKey,
+          pending: false,
         } as Session;
         sessionCacheRef.current[cacheKey] = normalized;
         loadedSessionRef.current[cacheKey] = true;
@@ -4244,6 +4240,7 @@ export function App() {
               ? toSessionItem(rootID, {
                   ...(prev as any),
                   ...(normalized as any),
+                  pending: false,
                 })
               : prev,
           );

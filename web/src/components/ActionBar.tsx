@@ -497,7 +497,7 @@ export function ActionBar({
   }, [isDragging, handleDragEnd]);
 
   const isSelectedAgentUnavailable = agents.length > 0 ? agents.find((a) => a.name === agent)?.available === false : false;
-  const canSend = (!!serializedInput.trim() || pendingAttachments.length > 0) && isConnected && !sending && !!agent && !isSelectedAgentUnavailable;
+  const canSend = (!!serializedInput.trim() || pendingAttachments.length > 0) && isConnected && !sending && !!agent;
   const hasBoundSession = !!currentSession;
   const showCancel = !!currentSession?.pending && !!currentSession?.key;
   const isModeLocked = !!currentSession;
