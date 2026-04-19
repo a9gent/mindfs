@@ -135,15 +135,29 @@ function timelineItemSpacing(previous: TimelineItem | null, current: TimelineIte
   return "16px";
 }
 
+function shouldDefaultCollapseRelatedFiles(isMobile: boolean, relatedFileCount: number): boolean {
+  if (isMobile) {
+    return relatedFileCount > 0;
+  }
+  return relatedFileCount > 5;
+}
+
 function SessionViewerInner({ session, loading = false, rootId, rootPath, interactionMode = "main", targetSeq = 0, gitFileStatsByPath = {}, onFileClick, onRemoveRelatedFile }: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
   const [relatedFilesCollapsed, setRelatedFilesCollapsed] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.matchMedia("(max-width: 767px)").matches;
+  });
   const [savedPromptKeys, setSavedPromptKeys] = useState<Record<string, true>>({});
   const [copiedMessageKeys, setCopiedMessageKeys] = useState<Record<string, true>>({});
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const onFileClickRef = useRef(onFileClick);
   const copyResetTimersRef = useRef<Record<string, number>>({});
+  const relatedFilesDefaultStateRef = useRef<string>("");
   const sessionKey = session?.key || session?.session_key || null;
   const exchanges = Array.isArray(session?.exchanges) ? session.exchanges : [];
   const { timeline, isStreaming } = useSessionStream(sessionKey, exchanges);
@@ -156,9 +170,24 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
   }, [onFileClick]);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const media = window.matchMedia("(max-width: 767px)");
+    const handleChange = () => {
+      setIsMobile(media.matches);
+    };
+    handleChange();
+    media.addEventListener("change", handleChange);
+    return () => {
+      media.removeEventListener("change", handleChange);
+    };
+  }, []);
+
+  useEffect(() => {
     setSavedPromptKeys({});
     setCopiedMessageKeys({});
-    setRelatedFilesCollapsed(false);
+    relatedFilesDefaultStateRef.current = "";
     Object.values(copyResetTimersRef.current).forEach((timer) => window.clearTimeout(timer));
     copyResetTimersRef.current = {};
   }, [sessionKey]);
@@ -219,16 +248,7 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
     });
   }, [targetSeq, timeline]);
 
-  if (!session) {
-    return (
-      <div style={{ padding: "40px", textAlign: "center", color: "var(--text-secondary)" }}>
-        选择一个会话查看内容
-      </div>
-    );
-  }
-
-  // 解析关联文件
-  const rawRelated = session.related_files || (session as any).outputs || [];
+  const rawRelated = session?.related_files || (session as any)?.outputs || [];
   const relatedFiles = (Array.isArray(rawRelated) ? rawRelated : [])
     .map((f: any) => {
       const path = typeof f === "string" ? f : (typeof f?.path === "string" ? f.path : "");
@@ -236,6 +256,24 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
       return { path, name };
     })
     .filter(f => f.path);
+  const defaultRelatedFilesCollapsed = shouldDefaultCollapseRelatedFiles(isMobile, relatedFiles.length);
+  const relatedFilesDefaultStateKey = `${sessionKey || ""}:${isMobile ? "mobile" : "desktop"}:${defaultRelatedFilesCollapsed ? "collapsed" : "expanded"}`;
+
+  useEffect(() => {
+    if (relatedFilesDefaultStateRef.current === relatedFilesDefaultStateKey) {
+      return;
+    }
+    relatedFilesDefaultStateRef.current = relatedFilesDefaultStateKey;
+    setRelatedFilesCollapsed(defaultRelatedFilesCollapsed);
+  }, [defaultRelatedFilesCollapsed, relatedFilesDefaultStateKey]);
+
+  if (!session) {
+    return (
+      <div style={{ padding: "40px", textAlign: "center", color: "var(--text-secondary)" }}>
+        选择一个会话查看内容
+      </div>
+    );
+  }
 
   const displayFiles = showAllFiles ? relatedFiles : relatedFiles.slice(0, 10);
   const hasMoreFiles = relatedFiles.length > 10;
