@@ -161,6 +161,51 @@ function collectAssistantFlowMarkdown(timeline: TimelineItem[], startIndex: numb
   return segments.join("\n\n").trim();
 }
 
+async function copyText(text: string): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall back for browsers/webviews with restricted Clipboard API support.
+    }
+  }
+
+  if (typeof document === "undefined") {
+    throw new Error("当前环境不支持复制");
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "true");
+  textArea.setAttribute("aria-hidden", "true");
+  textArea.style.position = "fixed";
+  textArea.style.top = "0";
+  textArea.style.left = "0";
+  textArea.style.width = "1px";
+  textArea.style.height = "1px";
+  textArea.style.padding = "0";
+  textArea.style.border = "0";
+  textArea.style.outline = "0";
+  textArea.style.boxShadow = "none";
+  textArea.style.background = "transparent";
+  textArea.style.opacity = "0";
+
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+  textArea.setSelectionRange(0, text.length);
+
+  try {
+    const succeeded = document.execCommand("copy");
+    if (!succeeded) {
+      throw new Error("复制失败");
+    }
+  } finally {
+    document.body.removeChild(textArea);
+  }
+}
+
 function shouldDefaultCollapseRelatedFiles(isMobile: boolean, relatedFileCount: number): boolean {
   if (isMobile) {
     return relatedFileCount > 0;
@@ -485,7 +530,7 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                     reportError("file.write_failed", "消息内容为空，无法复制");
                     return;
                   }
-                  void navigator.clipboard.writeText(promptSaveContent)
+                  void copyText(promptSaveContent)
                     .then(() => {
                       setCopiedMessageKeys((prev) => ({ ...prev, [promptKey]: true }));
                       if (copyResetTimersRef.current[promptKey]) {
@@ -538,7 +583,7 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                       reportError("file.write_failed", "消息内容为空，无法复制");
                       return;
                     }
-                    void navigator.clipboard.writeText(assistantMarkdownContent)
+                    void copyText(assistantMarkdownContent)
                       .then(() => {
                         setCopiedMessageKeys((prev) => ({ ...prev, [promptKey]: true }));
                         if (copyResetTimersRef.current[promptKey]) {
