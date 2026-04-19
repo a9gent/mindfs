@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { sessionService, type ToolCall } from "../services/session";
 
 type ExchangeLike = {
+  seq?: number;
   role?: string;
   agent?: string;
   content?: string;
@@ -11,7 +12,7 @@ type ExchangeLike = {
 };
 
 export type TimelineItem =
-  | { id: string; type: "user_text" | "assistant_text"; content: string; timestamp?: string; agent?: string; pendingAck?: boolean }
+  | { id: string; type: "user_text" | "assistant_text"; content: string; timestamp?: string; agent?: string; pendingAck?: boolean; seq?: number }
   | { id: string; type: "thought"; content: string }
   | { id: string; type: "tool"; toolCall: ToolCall };
 
@@ -95,6 +96,7 @@ function buildBaseTimeline(exchanges: ExchangeLike[]): TimelineItem[] {
         timestamp: ex.timestamp,
         agent: ex.agent,
         pendingAck: ex.pending_ack === true,
+        seq: ex.seq,
       });
       continue;
     }
@@ -106,6 +108,7 @@ function buildBaseTimeline(exchanges: ExchangeLike[]): TimelineItem[] {
         content,
         timestamp: ex.timestamp,
         agent: ex.agent,
+        seq: ex.seq,
       });
       continue;
     }

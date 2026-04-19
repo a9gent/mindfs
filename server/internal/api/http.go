@@ -66,6 +66,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/candidates", h.handleCandidates)
 	r.Post("/api/prompts", h.handlePromptSave)
 	r.Get("/api/sessions", h.handleSessions)
+	r.Get("/api/sessions/search", h.handleSessionSearch)
 	r.Get("/api/sessions/external", h.handleExternalSessionsList)
 	r.Post("/api/sessions/import", h.handleExternalSessionImport)
 	r.Get("/api/sessions/{key}", h.handleSessionGet)
@@ -122,6 +123,28 @@ func (h *HTTPHandler) handleSessions(w http.ResponseWriter, r *http.Request) {
 		payload = append(payload, sessionListResponse(s))
 	}
 	respondJSON(w, http.StatusOK, payload)
+}
+
+func (h *HTTPHandler) handleSessionSearch(w http.ResponseWriter, r *http.Request) {
+	rootID := strings.TrimSpace(r.URL.Query().Get("root"))
+	query := r.URL.Query().Get("q")
+	limit, err := parsePositiveIntQuery(r, "limit")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("limit must be a positive integer"))
+		return
+	}
+	out, err := h.service().SearchSessions(r.Context(), usecase.SearchSessionsInput{
+		RootID: rootID,
+		Query:  query,
+		Limit:  limit,
+	})
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"items": out.Items,
+	})
 }
 
 func (h *HTTPHandler) handleCandidates(w http.ResponseWriter, r *http.Request) {

@@ -40,6 +40,26 @@ type RelatedFile struct {
 	CreatedBySession bool   `json:"created_by_session"`
 }
 
+type SearchOptions struct {
+	Query string
+	Limit int
+}
+
+type SearchHit struct {
+	Key        string     `json:"key"`
+	Type       string     `json:"type"`
+	Agent      string     `json:"agent,omitempty"`
+	Model      string     `json:"model,omitempty"`
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	ClosedAt   *time.Time `json:"closed_at,omitempty"`
+	MatchType  string     `json:"match_type"`
+	MatchScore int        `json:"match_score"`
+	Seq        int        `json:"seq"`
+	Snippet    string     `json:"snippet,omitempty"`
+}
+
 // InferAgentFromSession derives the display agent from session data.
 func InferAgentFromSession(s *Session) string {
 	if s == nil {

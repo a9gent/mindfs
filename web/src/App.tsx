@@ -85,6 +85,9 @@ export type SessionItem = {
   created_at?: string;
   updated_at?: string;
   closed_at?: string;
+  search_seq?: number;
+  search_snippet?: string;
+  search_match_type?: "name" | "user" | "reply";
   related_files?: RelatedFile[];
   exchanges?: Array<{
     role?: string;
@@ -131,6 +134,18 @@ function toSessionItem(
       typeof session?.updated_at === "string" ? session.updated_at : undefined,
     closed_at:
       typeof session?.closed_at === "string" ? session.closed_at : undefined,
+    search_seq:
+      typeof session?.search_seq === "number" ? session.search_seq : undefined,
+    search_snippet:
+      typeof session?.search_snippet === "string"
+        ? session.search_snippet
+        : undefined,
+    search_match_type:
+      session?.search_match_type === "name" ||
+      session?.search_match_type === "user" ||
+      session?.search_match_type === "reply"
+        ? session.search_match_type
+        : undefined,
     pending: typeof session?.pending === "boolean" ? session.pending : undefined,
   };
 }
@@ -779,6 +794,12 @@ export function App() {
 
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const sessionsRef = useRef<SessionItem[]>([]);
+  const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
+  const [sessionSearchResultsMode, setSessionSearchResultsMode] = useState(false);
+  const [sessionSearchQuery, setSessionSearchQuery] = useState("");
+  const [sessionSearchAppliedQuery, setSessionSearchAppliedQuery] = useState("");
+  const [sessionSearchResults, setSessionSearchResults] = useState<SessionItem[]>([]);
+  const [sessionSearchLoading, setSessionSearchLoading] = useState(false);
   const [hasMoreSessions, setHasMoreSessions] = useState(false);
   const [loadingOlderSessions, setLoadingOlderSessions] = useState(false);
   const [sessionListMode, setSessionListMode] = useState<"local" | "import">(
@@ -1117,6 +1138,23 @@ export function App() {
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+  useEffect(() => {
+    if (sessionListMode !== "local") {
+      setSessionSearchOpen(false);
+      setSessionSearchResultsMode(false);
+      setSessionSearchQuery("");
+      setSessionSearchAppliedQuery("");
+      setSessionSearchResults([]);
+      setSessionSearchLoading(false);
+    }
+  }, [sessionListMode]);
+  useEffect(() => {
+    setSessionSearchQuery("");
+    setSessionSearchResultsMode(false);
+    setSessionSearchAppliedQuery("");
+    setSessionSearchResults([]);
+    setSessionSearchLoading(false);
+  }, [currentRootId]);
   useEffect(() => {
     externalSessionsRef.current = externalSessions;
   }, [externalSessions]);
@@ -1976,6 +2014,66 @@ export function App() {
     },
     [mergeSessionItems],
   );
+
+  const executeSessionSearch = useCallback(() => {
+    const trimmed = sessionSearchQuery.trim();
+    if (trimmed.length < 2) {
+      return;
+    }
+    setSessionSearchResultsMode(true);
+    setSessionSearchAppliedQuery(trimmed);
+  }, [sessionSearchQuery]);
+
+  useEffect(() => {
+    if (
+      sessionListMode !== "local" ||
+      !sessionSearchOpen ||
+      !currentRootId ||
+      !sessionSearchAppliedQuery
+    ) {
+      setSessionSearchLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setSessionSearchLoading(true);
+    void sessionService
+      .searchSessions(currentRootId, sessionSearchAppliedQuery, 20)
+      .then((hits) => {
+        if (cancelled) return;
+        const mapped = hits
+          .map((hit) => {
+            const item = toSessionItem(currentRootId, {
+              ...hit,
+              root_id: currentRootId,
+              search_seq: hit.seq,
+              search_snippet: hit.snippet,
+              search_match_type: hit.match_type,
+            });
+            return item;
+          })
+          .filter((item): item is SessionItem => !!item);
+        setSessionSearchResults(mapped);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("[session.search] failed", {
+          rootId: currentRootId,
+          query: sessionSearchAppliedQuery,
+          err,
+        });
+        setSessionSearchResults([]);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSessionSearchLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentRootId, sessionListMode, sessionSearchAppliedQuery, sessionSearchOpen]);
 
   const openGitDiff = useCallback(
     async (rootID: string, item: GitStatusItem) => {
@@ -5467,6 +5565,7 @@ export function App() {
   const sessionView = (
     <SessionViewer
       session={selectedSessionSnapshot}
+      targetSeq={selectedSession?.search_seq}
       loading={selectedSessionLoading}
       rootId={selectedSession?.root_id || currentRootId}
       rootPath={
@@ -6042,18 +6141,83 @@ export function App() {
       />
     ) : (
       <SessionList
-        sessions={sessions}
+        sessions={
+          sessionSearchOpen && sessionSearchResultsMode
+            ? sessionSearchResults
+            : sessions
+        }
         selectedKey={selectedSession?.key}
         headerAction={sessionImportMenu}
+        searchOpen={sessionSearchOpen}
+        searchResultsMode={sessionSearchResultsMode}
+        searchQuery={sessionSearchQuery}
+        searchLoading={sessionSearchLoading}
+        emptyText={
+          sessionSearchResultsMode
+            ? "未找到匹配会话"
+            : sessionSearchOpen
+              ? ""
+            : "暂无会话记录"
+        }
+        onSearchToggle={() => {
+          setSessionSearchOpen((prev) => {
+            const next = !prev;
+            if (!next) {
+              setSessionSearchResultsMode(false);
+              setSessionSearchQuery("");
+              setSessionSearchAppliedQuery("");
+              setSessionSearchResults([]);
+              setSessionSearchLoading(false);
+            }
+            return next;
+          });
+        }}
+        onSearchQueryChange={(value) => {
+          setSessionSearchQuery(value);
+          if (!value.trim() && !sessionSearchResultsMode) {
+            setSessionSearchAppliedQuery("");
+            setSessionSearchResults([]);
+            setSessionSearchLoading(false);
+          }
+        }}
+        onSearchSubmit={executeSessionSearch}
+        onSearchBlur={() => {
+          setSessionSearchOpen(false);
+          setSessionSearchResultsMode(false);
+          setSessionSearchQuery("");
+          setSessionSearchAppliedQuery("");
+          setSessionSearchResults([]);
+          setSessionSearchLoading(false);
+        }}
+        onSearchBack={() => {
+          setSessionSearchResultsMode(false);
+          setSessionSearchQuery("");
+          setSessionSearchAppliedQuery("");
+          setSessionSearchResults([]);
+          setSessionSearchLoading(false);
+          setSessionSearchOpen(false);
+        }}
         onSelect={(s) => {
           handleSelectSession(s);
           if (isMobile) setIsRightOpen(false);
         }}
         onRename={handleRenameSession}
         onDelete={handleDeleteSession}
-        onLoadOlder={handleLoadOlderSessions}
-        loadingOlder={loadingOlderSessions}
-        hasMore={hasMoreSessions}
+        onLoadOlder={
+          sessionSearchOpen && sessionSearchResultsMode
+            ? undefined
+            : handleLoadOlderSessions
+        }
+        loadingOlder={
+          sessionSearchOpen && sessionSearchResultsMode
+            ? false
+            : loadingOlderSessions
+        }
+        hasMore={
+          sessionSearchOpen && sessionSearchResultsMode
+            ? false
+            : hasMoreSessions
+        }
       />
     );
 
@@ -6258,6 +6422,7 @@ export function App() {
             {drawerSessionSnapshot ? (
               <SessionViewer
                 session={drawerSessionSnapshot}
+                targetSeq={currentSession?.search_seq}
                 loading={false}
                 rootId={currentRootId}
                 rootPath={

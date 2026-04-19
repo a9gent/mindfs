@@ -36,6 +36,21 @@ export type Session = {
   }>;
 };
 
+export type SessionSearchHit = {
+  key: string;
+  type: SessionType;
+  agent?: string;
+  model?: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  closed_at?: string;
+  match_type: "name" | "user" | "reply";
+  match_score: number;
+  seq: number;
+  snippet?: string;
+};
+
 export type ToolCallLocation = {
   path: string;
   line?: number;
@@ -545,6 +560,32 @@ class SessionService {
       return Array.isArray(data) ? data : [];
     } catch (err) {
       console.error("[Session] Failed to fetch sessions:", err);
+      return [];
+    }
+  }
+
+  async searchSessions(
+    rootId: string,
+    query: string,
+    limit?: number,
+  ): Promise<SessionSearchHit[]> {
+    try {
+      const trimmed = query.trim();
+      if (!rootId || !trimmed) {
+        return [];
+      }
+      const params = new URLSearchParams({ root: rootId, q: trimmed });
+      if (typeof limit === "number" && limit > 0) {
+        params.set("limit", String(limit));
+      }
+      const res = await fetch(appURL("/api/sessions/search", params));
+      if (!res.ok) {
+        throw new Error("Failed to search sessions");
+      }
+      const data = await res.json();
+      return Array.isArray(data?.items) ? (data.items as SessionSearchHit[]) : [];
+    } catch (err) {
+      console.error("[Session] Failed to search sessions:", err);
       return [];
     }
   }

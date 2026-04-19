@@ -40,6 +40,16 @@ type ListSessionsOutput struct {
 	Sessions []*session.Session
 }
 
+type SearchSessionsInput struct {
+	RootID string
+	Query  string
+	Limit  int
+}
+
+type SearchSessionsOutput struct {
+	Items []session.SearchHit
+}
+
 func (s *Service) ListSessions(ctx context.Context, in ListSessionsInput) (ListSessionsOutput, error) {
 	if err := s.ensureRegistry(); err != nil {
 		return ListSessionsOutput{}, err
@@ -57,6 +67,24 @@ func (s *Service) ListSessions(ctx context.Context, in ListSessionsInput) (ListS
 		return ListSessionsOutput{}, err
 	}
 	return ListSessionsOutput{Sessions: items}, nil
+}
+
+func (s *Service) SearchSessions(ctx context.Context, in SearchSessionsInput) (SearchSessionsOutput, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return SearchSessionsOutput{}, err
+	}
+	manager, err := s.Registry.GetSessionManager(in.RootID)
+	if err != nil {
+		return SearchSessionsOutput{}, err
+	}
+	items, err := manager.Search(ctx, session.SearchOptions{
+		Query: in.Query,
+		Limit: in.Limit,
+	})
+	if err != nil {
+		return SearchSessionsOutput{}, err
+	}
+	return SearchSessionsOutput{Items: items}, nil
 }
 
 type CreateSessionInput struct {

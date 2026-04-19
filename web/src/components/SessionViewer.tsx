@@ -16,9 +16,10 @@ type SessionItem = {
   type?: string;
   name?: string;
   agent?: string;
+  search_seq?: number;
   scope?: string;
   purpose?: string;
-  exchanges?: Array<{ role?: string; agent?: string; content?: string; timestamp?: string }>;
+  exchanges?: Array<{ seq?: number; role?: string; agent?: string; content?: string; timestamp?: string }>;
   closed_at?: string;
   related_files?: RelatedFile[];
 };
@@ -29,6 +30,7 @@ type SessionViewerProps = {
   rootId?: string | null;
   rootPath?: string | null;
   interactionMode?: "main" | "drawer";
+  targetSeq?: number;
   gitFileStatsByPath?: Record<string, { status: string; additions: number; deletions: number }>;
   onFileClick?: (path: string) => void;
   onRemoveRelatedFile?: (path: string) => void;
@@ -133,7 +135,7 @@ function timelineItemSpacing(previous: TimelineItem | null, current: TimelineIte
   return "16px";
 }
 
-function SessionViewerInner({ session, loading = false, rootId, rootPath, interactionMode = "main", gitFileStatsByPath = {}, onFileClick, onRemoveRelatedFile }: SessionViewerProps) {
+function SessionViewerInner({ session, loading = false, rootId, rootPath, interactionMode = "main", targetSeq = 0, gitFileStatsByPath = {}, onFileClick, onRemoveRelatedFile }: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
   const [relatedFilesCollapsed, setRelatedFilesCollapsed] = useState(false);
   const [savedPromptKeys, setSavedPromptKeys] = useState<Record<string, true>>({});
@@ -197,6 +199,25 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
       el.removeEventListener("scroll", updateStickiness);
     };
   }, [sessionKey]);
+
+  useEffect(() => {
+    if (!targetSeq) {
+      return;
+    }
+    const container = scrollRef.current;
+    if (!container || !timeline.length) {
+      return;
+    }
+    const node = container.querySelector<HTMLElement>(
+      `[data-session-seq="${targetSeq}"]`,
+    );
+    if (!node) {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      node.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }, [targetSeq, timeline]);
 
   if (!session) {
     return (
@@ -283,7 +304,11 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
     const userMessageWidth = imageAttachments.length > 0 ? "min(320px, 100%)" : "auto";
     const hasRichUserAttachments = imageAttachments.length > 0;
     return (
-      <div key={idx} style={{ marginTop: spacing, alignSelf: isUser ? "flex-end" : "flex-start", width: isUser ? userMessageWidth : "100%", maxWidth: isUser ? "80%" : "100%", minWidth: 0, position: "relative", display: "flex", flexDirection: "column" }}>
+      <div
+        key={idx}
+        data-session-seq={item.seq || undefined}
+        style={{ marginTop: spacing, alignSelf: isUser ? "flex-end" : "flex-start", width: isUser ? userMessageWidth : "100%", maxWidth: isUser ? "80%" : "100%", minWidth: 0, position: "relative", display: "flex", flexDirection: "column" }}
+      >
         {isUser ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: "6px", width: userMessageWidth, maxWidth: "100%", minWidth: 0 }}>
             {hasRichUserAttachments ? (
