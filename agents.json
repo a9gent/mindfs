@@ -58,6 +58,15 @@
       "name": "qwen",
       "command": "qwen",
       "args": ["--acp"]
+    },
+    {
+      "name": "qoder",
+      "command": "qodercli",
+      "args": ["--acp"]
+    },
+    {
+      "name": "pi",
+      "command": "pi-acp"
     }
   ]
 }

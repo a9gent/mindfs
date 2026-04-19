@@ -18,6 +18,8 @@ const ICON_URLS: Record<string, { src: string; alt: string }> = {
   kimi: { src: appPath('/assets/agents/kimi.svg'), alt: 'Kimi' },
   openclaw: { src: appPath('/assets/agents/openclaw.svg'), alt: 'OpenClaw' },
   opencode: { src: appPath('/assets/agents/opencode.svg'), alt: 'OpenCode' },
+  pi: { src: appPath('/assets/agents/pi.svg'), alt: 'Pi' },
+  qoder: { src: appPath('/assets/agents/qoder.svg'), alt: 'Qoder' },
   qwen: { src: appPath('/assets/agents/qwen.svg'), alt: 'Qwen' },
 };
 
@@ -99,6 +101,10 @@ export function AgentIcon({ agentName, ...props }: AgentIconProps) {
     icon = ICON_URLS.openclaw;
   } else if (lowerAgentName.includes('opencode')) {
     icon = ICON_URLS.opencode;
+  } else if (lowerAgentName.includes('pi')) {
+    icon = ICON_URLS.pi;
+  } else if (lowerAgentName.includes('qoder')) {
+    icon = ICON_URLS.qoder;
   } else if (lowerAgentName.includes('qwen')) {
     icon = ICON_URLS.qwen;
   } else if (lowerAgentName.includes('kiro')) {

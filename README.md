@@ -23,7 +23,7 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 
 ### Agent Sessions
 
-- **Multi-Agent support**: Claude Code · OpenAI Codex · Gemini CLI · Cursor · GitHub Copilot · Cline · Augment · Kimi · Kiro · Qwen · OpenCode · OpenClaw — installed agents are detected automatically.
+- **Multi-Agent support**: Claude Code · OpenAI Codex · Gemini CLI · Cursor · GitHub Copilot · Cline · Augment · Kimi · Kiro · Qwen · Qoder · Pi · OpenCode · OpenClaw — installed agents are detected automatically.
 - **Real-time streaming**: Token-by-token output pushed to the browser; tool calls, thought traces, and permission prompts rendered as structured, collapsible cards.
 - **Flexible switching**: Switch agents or models mid-session; all agents share the same context — no need to re-explain the background.
 - **External session import**: Browse existing sessions from supported agent CLIs, import one into MindFS, and continue it as a native MindFS session.
@@ -85,6 +85,8 @@ MindFS does not include any AI model — you need at least one Agent CLI install
 | **OpenClaw** | https://docs.openclaw.ai/ |
 | **Kimi** | https://www.kimi.com/code/docs/kimi-cli/guides/getting-started.html |
 | **Qwen** | https://qwen.ai/qwencode |
+| **Qoder** | https://docs.qoder.com/cli/quick-start |
+| **Pi** | https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent, and acp adatper: https://github.com/svkozak/pi-acp |
 
 Once an agent is installed, start MindFS and interact with it through the browser.
 
