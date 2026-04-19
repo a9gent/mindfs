@@ -49,6 +49,7 @@ type TokenEditorProps = {
   onFocusChange?: (focused: boolean) => void;
   onPointerDown?: () => void;
   onKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
+  onPaste?: (event: React.ClipboardEvent<HTMLDivElement>) => void;
   onEnter?: (event: KeyboardEvent | null) => boolean;
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
@@ -354,6 +355,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
     onFocusChange,
     onPointerDown,
     onKeyDown,
+    onPaste,
     onEnter,
     onCompositionStart,
     onCompositionEnd,
@@ -549,6 +551,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
                 onFocusChange?.(false);
               }}
               onKeyDown={onKeyDown}
+              onPaste={onPaste}
               onCompositionStart={onCompositionStart}
               onCompositionEnd={onCompositionEnd}
               style={{

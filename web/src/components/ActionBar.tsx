@@ -82,6 +82,24 @@ const chatBlurPlaceholders = [
 const MOBILE_BREAKPOINT = 768;
 const IME_ENTER_GUARD_MS = 120;
 
+function buildPendingAttachment(file: File): PendingAttachment {
+  const isImage = file.type.startsWith("image/");
+  const fallbackExt = file.type.split("/")[1] || "png";
+  const fileName = file.name || `pasted-image-${Date.now()}.${fallbackExt}`;
+  const normalizedFile = file.name
+    ? file
+    : new File([file], fileName, {
+      type: file.type || "image/png",
+      lastModified: file.lastModified || Date.now(),
+    });
+  return {
+    id: `${normalizedFile.name}-${normalizedFile.size}-${normalizedFile.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
+    file: normalizedFile,
+    isImage,
+    previewUrl: isImage ? URL.createObjectURL(normalizedFile) : undefined,
+  };
+}
+
 function useResponsive() {
   const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
@@ -320,6 +338,13 @@ export function ActionBar({
     setIsMultiLine(height > 50);
   }, []);
 
+  const appendPendingAttachments = useCallback((files: File[]) => {
+    if (files.length === 0) {
+      return;
+    }
+    setPendingAttachments((prev) => [...prev, ...files.map(buildPendingAttachment)]);
+  }, []);
+
   const handleEditorChange = useCallback((payload: {
     serializedText: string;
     activeToken: { type: "file" | "slash" | "prompt"; query: string } | null;
@@ -465,6 +490,22 @@ export function ActionBar({
     return false;
   }, [candidates, activeCandidateIndex, applyCandidate, handleSend, isCompositionActive, isMobile]);
 
+  const handleEditorPaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+    if (sending || !currentRootId) {
+      return;
+    }
+    const clipboardItems = Array.from(event.clipboardData?.items || []);
+    const imageFiles = clipboardItems
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => !!file);
+    if (imageFiles.length === 0) {
+      return;
+    }
+    event.preventDefault();
+    appendPendingAttachments(imageFiles);
+  }, [appendPendingAttachments, currentRootId, sending]);
+
   const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
     const clientX = "touches" in e ? e.touches[0].clientX : e.clientX;
     dragStartRef.current = clientX;
@@ -568,6 +609,7 @@ export function ActionBar({
               }}
               onPointerDown={onRequestFileContext}
               onKeyDown={handleKeyDown}
+              onPaste={handleEditorPaste}
               onEnter={handleEditorEnter}
               onCompositionStart={() => {
                 isComposingRef.current = true;
@@ -797,18 +839,7 @@ export function ActionBar({
                 onChange={(event) => {
                   const selectedFiles = Array.from(event.target.files || []);
                   if (selectedFiles.length > 0) {
-                    setPendingAttachments((prev) => [
-                      ...prev,
-                      ...selectedFiles.map((file) => {
-                        const isImage = file.type.startsWith("image/");
-                        return {
-                          id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
-                          file,
-                          isImage,
-                          previewUrl: isImage ? URL.createObjectURL(file) : undefined,
-                        };
-                      }),
-                    ]);
+                    appendPendingAttachments(selectedFiles);
                   }
                   event.currentTarget.value = "";
                 }}
