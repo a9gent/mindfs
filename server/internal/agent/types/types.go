@@ -12,6 +12,9 @@ type Session interface {
 	// SendMessage sends a message to the current session.
 	SendMessage(ctx context.Context, content string) error
 
+	// CurrentModel returns the model currently used by the runtime session.
+	CurrentModel() string
+
 	// SetModel updates the model used by the current session.
 	SetModel(ctx context.Context, model string) error
 

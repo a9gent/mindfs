@@ -1032,18 +1032,22 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	sendErr := sess.SendMessage(turnCtx, prompt)
 	if sendErr != nil {
 		log.Printf("[session] turn.send.error root=%s session=%s agent=%s err=%v", in.RootID, current.Key, in.Agent, sendErr)
-	} else {
-		log.Printf("[session] turn.send.done root=%s session=%s agent=%s", in.RootID, current.Key, in.Agent)
 	}
-	if err := manager.UpdateModel(ctx, current, in.Model); err != nil {
+	persistedModel := strings.TrimSpace(in.Model)
+	if persistedModel == "" {
+		persistedModel = sess.CurrentModel()
+	}
+	if err := manager.UpdateModel(ctx, current, persistedModel); err != nil {
 		return err
 	}
 	resolvedMode := resolveRuntimeMode(current, in.Mode)
 	resolvedEffort := resolveRuntimeEffort(in.Agent, current, in.Effort)
 	if err := manager.AddExchangeForAgent(ctx, current, "user", in.Content, in.Agent, resolvedMode, resolvedEffort); err != nil {
+		log.Printf("[session] persist.user.error root=%s session=%s agent=%s err=%v", in.RootID, current.Key, in.Agent, err)
 		return err
 	}
 	if err := manager.AddExchangeForAgent(ctx, current, "agent", responseText, in.Agent, resolvedMode, resolvedEffort); err != nil {
+		log.Printf("[session] persist.agent.error root=%s session=%s agent=%s err=%v", in.RootID, current.Key, in.Agent, err)
 		return err
 	}
 	if err := manager.UpdateAgentState(ctx, current, in.Agent, contextLineCount(current.Exchanges), sess.SessionID()); err != nil {
