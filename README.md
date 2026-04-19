@@ -26,7 +26,8 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 - **Multi-Agent support**: Claude Code · OpenAI Codex · Gemini CLI · Cursor · GitHub Copilot · Cline · Augment · Kimi · Kiro · Qwen · Qoder · Pi · OpenCode · OpenClaw — installed agents are detected automatically.
 - **Real-time streaming**: Token-by-token output pushed to the browser; tool calls, thought traces, and permission prompts rendered as structured, collapsible cards.
 - **Flexible switching**: Switch agents or models mid-session; all agents share the same context — no need to re-explain the background.
-- **External session import**: Browse existing sessions from supported agent CLIs, import one into MindFS, and continue it as a native MindFS session.
+- **Session search**: Search by session title or conversation content, then jump straight to the matched session and snippet.
+- **External session both-way import**: Browse existing sessions from supported agent CLIs, import one into MindFS, and continue it as a native MindFS session. MindFS session can resumed in agent cli too.
 - **Binding persistence and recovery**: MindFS persists the mapping between its internal session and the underlying agent session, so the link can be restored after service restarts and follow-up messages continue on the same agent session when available.
 - **Rich media input**: Attach files and images directly in your messages.
 - **Multi-device sync**: Access the same instance from multiple devices simultaneously with live session sync.

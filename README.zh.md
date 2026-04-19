@@ -26,7 +26,8 @@
 - **多 Agent 支持**：Claude Code · OpenAI Codex · Gemini CLI · Cursor · GitHub Copilot · Cline · Augment · Kimi · Kiro · Qwen · Qoder · Pi · OpenCode · OpenClaw，自动探测已安装的 Agent。
 - **实时流式输出**：逐 token 推送，工具调用、思考过程、权限请求均以结构化卡片实时渲染。
 - **灵活切换**：会话中随时切换 Agent 或模型，多 Agent 共享同一上下文，无需重新描述背景。
-- **外部会话导入**：可浏览受支持 Agent CLI 的已有会话，选择后导入到 MindFS，并作为原生 MindFS 会话继续使用。
+- **会话搜索**：支持按会话标题或对话内容搜索，并可直接跳转到命中的会话和片段。
+- **外部会话双向导入**：可浏览受支持 Agent CLI 的已有会话，选择后导入到 MindFS，并作为原生 MindFS 会话继续使用，同时 MindFS 中的会话亦可在cli中恢复。
 - **绑定持久化与恢复**：MindFS 会持久化内部会话与底层 Agent 会话的绑定关系，服务重启后可恢复该关联；后续消息在条件允许时会继续落到同一个 Agent 会话上。
 - **富媒体输入**：支持在消息中直接附带文件和图片。
 - **多端同步**：同一实例可同时在多个设备上访问，会话状态实时同步。

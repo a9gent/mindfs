@@ -2223,10 +2223,9 @@ export function App() {
       if (cached) {
         applySession(cached);
         if (hasSessionExchanges(cached)) {
-          if (loadedSessionRef.current[cacheKey]) {
-            void sessionService.markSessionReady(targetRoot, key);
-            return;
-          }
+          loadedSessionRef.current[cacheKey] = true;
+          void sessionService.markSessionReady(targetRoot, key);
+          return;
         }
       } else {
         const persisted = await getCachedSession(targetRoot, key);
@@ -5367,14 +5366,6 @@ export function App() {
     () => {
       if (!selectedSession) {
         return null;
-      }
-      if (selectedSessionLoading) {
-        return {
-          ...(selectedSession as any),
-          exchanges: Array.isArray((selectedSession as any).exchanges)
-            ? ([...(selectedSession as any).exchanges] as any)
-            : [],
-        } as SessionItem;
       }
       return getSessionSnapshot(
         selectedSession.root_id || currentRootId,
