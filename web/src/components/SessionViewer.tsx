@@ -226,15 +226,17 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
   const [copiedMessageKeys, setCopiedMessageKeys] = useState<Record<string, true>>({});
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const useInnerScrollContainer = interactionMode !== "drawer";
   const onFileClickRef = useRef(onFileClick);
   const copyResetTimersRef = useRef<Record<string, number>>({});
   const relatedFilesDefaultStateRef = useRef<string>("");
   const sessionKey = session?.key || session?.session_key || null;
   const exchanges = Array.isArray(session?.exchanges) ? session.exchanges : [];
-  const { timeline, isStreaming } = useSessionStream(sessionKey, exchanges);
+  const { timeline, isStreaming, streamVersion } = useSessionStream(sessionKey, exchanges);
   const isAwaiting = !!(session as any)?.pending;
   const shouldStickToBottomRef = useRef(true);
   const lastSessionKeyRef = useRef<string | null>(null);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
   useEffect(() => {
     onFileClickRef.current = onFileClick;
@@ -261,7 +263,7 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
     relatedFilesDefaultStateRef.current = "";
     Object.values(copyResetTimersRef.current).forEach((timer) => window.clearTimeout(timer));
     copyResetTimersRef.current = {};
-  }, [sessionKey]);
+  }, [sessionKey, useInnerScrollContainer]);
 
   useEffect(() => {
     return () => {
@@ -272,7 +274,10 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
 
   useEffect(() => {
     const container = scrollRef.current;
-    if (!container) {
+if (useInnerScrollContainer && !container) {
+      return;
+    }
+    if (!scrollEndRef.current) {
       return;
     }
     const nextKey = sessionKey;
@@ -284,21 +289,41 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
     if (shouldStickToBottomRef.current) {
       scrollEndRef.current.scrollIntoView({ behavior: "auto", block: "end" });
     }
-  }, [sessionKey, timeline, isStreaming]);
+  }, [sessionKey, timeline, isStreaming, streamVersion, useInnerScrollContainer]);
 
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el) return;
+    if (!useInnerScrollContainer || !el) {
+      shouldStickToBottomRef.current = true;
+      setShowJumpToLatest(false);
+      return;
+    }
+    let lastScrollTop = el.scrollTop;
     const updateStickiness = () => {
-      const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop;
-      shouldStickToBottomRef.current = distanceFromBottom < 32;
+      const viewportGap = window.visualViewport
+        ? window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop
+        : 0;
+      const rawDistanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop;
+      const distanceFromBottom = Math.max(0, rawDistanceFromBottom - viewportGap);
+      const isNearBottom = distanceFromBottom < 40;
+      const movedUp = el.scrollTop < lastScrollTop;
+      const movedDown = el.scrollTop > lastScrollTop;
+      if (isNearBottom) {
+        shouldStickToBottomRef.current = true;
+      } else if (movedUp) {
+        shouldStickToBottomRef.current = false;
+      } else if (movedDown && distanceFromBottom < 200) {
+        shouldStickToBottomRef.current = true;
+      }
+      setShowJumpToLatest(!shouldStickToBottomRef.current);
+      lastScrollTop = el.scrollTop;
     };
     updateStickiness();
     el.addEventListener("scroll", updateStickiness, { passive: true });
     return () => {
       el.removeEventListener("scroll", updateStickiness);
     };
-  }, [sessionKey]);
+  }, [sessionKey, useInnerScrollContainer]);
 
   useEffect(() => {
     if (!targetSeq) {
@@ -370,8 +395,7 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
     flexShrink: 0,
   };
 
-  const makePromptKey = (item: TimelineItem): string => `${item.id}\n${item.timestamp || ""}\n${item.content || ""}`;
-
+const makePromptKey = (item: TimelineItem): string => `${item.id}\n${'timestamp' in item ? (item as any).timestamp : ""}\n${'content' in item ? (item as any).content : ""}`;
   const renderTimelineItem = (item: TimelineItem, idx: number, spacing: string = "0") => {
     if (item.type === "thought") {
       return (
@@ -636,15 +660,16 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
       )}
 
       {/* 滚动容器 */}
-      <div ref={scrollRef} style={{ flex: 1, minHeight: 0, minWidth: 0, overflowY: "auto", overflowX: "hidden", position: "relative", WebkitOverflowScrolling: "touch" }}>
-        <div style={{ 
-          width: "100%",
-          minWidth: 0,
-          display: "block", 
-          padding: "24px 16px", 
-          boxSizing: "border-box",
-          overflowX: "hidden",
-        }}>
+      <div style={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative" }}>
+        <div ref={scrollRef} style={{ flex: 1, minHeight: 0, minWidth: 0, height: "100%", overflowY: useInnerScrollContainer ? "auto" : "visible", overflowX: "hidden", position: "relative", WebkitOverflowScrolling: "touch" }}>
+          <div style={{ 
+            width: "100%",
+            minWidth: 0,
+            display: "block", 
+            padding: "24px 16px", 
+            boxSizing: "border-box",
+            overflowX: "hidden",
+          }}>
           <div style={{ width: "100%", minWidth: 0, margin: "0", display: "flex", flexDirection: "column" }}>
             {loading && !hasVisibleTimeline ? (
               <div
@@ -800,7 +825,40 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
             )}
             <div ref={scrollEndRef} style={{ height: "1px" }} />
           </div>
+          </div>
         </div>
+        {showJumpToLatest ? (
+          <button
+            type="button"
+            onClick={() => {
+              shouldStickToBottomRef.current = true;
+              setShowJumpToLatest(false);
+              scrollEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+            }}
+            aria-label="回到底部最新消息"
+            title="回到底部最新消息"
+            style={{
+              position: "absolute",
+              right: "16px",
+              bottom: "16px",
+              zIndex: 3,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              border: "1px solid rgba(37,99,235,0.35)",
+              background: "#2563eb",
+              color: "#ffffff",
+              borderRadius: "999px",
+              padding: "8px 12px",
+              boxShadow: "0 8px 24px rgba(15, 23, 42, 0.14)",
+              cursor: "pointer",
+              fontSize: "12px",
+            }}
+          >
+            <ChevronDownSmallIcon />
+            <span>回到底部</span>
+          </button>
+        ) : null}
       </div>
       <style>{`
         @keyframes pulse {
@@ -817,6 +875,24 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
         }
       `}</style>
     </div>
+  );
+}
+
+function ChevronDownSmallIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
   );
 }
 

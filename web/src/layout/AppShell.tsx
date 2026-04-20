@@ -112,6 +112,7 @@ export function AppShell({
   
   const sidebarWidth = isMobile ? "0px" : (isTablet ? "200px" : "260px");
   const rightWidth = isMobile ? "0px" : (rightSidebar ? (isTablet ? "240px" : "280px") : "0px");
+  const mobileHeight = viewportRect.visibleHeight > 0 ? `${viewportRect.visibleHeight}px` : "100%";
 
   const shellStyle: React.CSSProperties & {
     "--mindfs-actionbar-bottom-padding"?: string;
@@ -121,8 +122,8 @@ export function AppShell({
     gridTemplateColumns: isMobile ? undefined : `${leftOpen ? sidebarWidth : "0px"} 1fr ${rightOpen ? rightWidth : "0px"}`,
     gridTemplateRows: isMobile ? undefined : "1fr auto",
     gridTemplateAreas: isMobile ? undefined : `"sidebar main right" "sidebar footer right"`,
-    minHeight: isMobile ? "100%" : "100vh",
-    height: isMobile ? "100%" : "100dvh",
+    minHeight: isMobile ? mobileHeight : "100vh",
+    height: isMobile ? mobileHeight : "100dvh",
     background: "var(--bg-gradient-start, #f3f4f6)",
     color: "var(--text-primary)",
     position: isMobile ? "fixed" : "relative",
@@ -221,7 +222,7 @@ export function AppShell({
   );
 }
 
-function getVisibleViewportRect(): { keyboardOpen: boolean } {
+function getVisibleViewportRect(): { keyboardOpen: boolean; visibleHeight: number } {
   const visualViewport = window.visualViewport;
   if (visualViewport) {
     const rawInset = window.innerHeight - visualViewport.height - visualViewport.offsetTop;
@@ -232,7 +233,8 @@ function getVisibleViewportRect(): { keyboardOpen: boolean } {
       document.documentElement.clientHeight - visualViewport.height > 80;
     return {
       keyboardOpen,
+      visibleHeight: visualViewport.height,
     };
   }
-  return { keyboardOpen: false };
+  return { keyboardOpen: false, visibleHeight: window.innerHeight };
 }

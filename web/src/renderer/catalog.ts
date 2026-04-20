@@ -5,18 +5,18 @@ import { z } from "zod";
 
 export const ComponentSchema = z.object({
   type: z.string(),
-  props: z.record(z.any()).optional(),
+  props: z.record(z.string(), z.any()).optional(),
   children: z.array(z.string()).optional(),
 });
 
 export const UITreeSchema = z.object({
   root: z.string(),
-  elements: z.record(ComponentSchema),
-  state: z.record(z.any()).optional(),
+  elements: z.record(z.string(), ComponentSchema),
+  state: z.record(z.string(), z.any()).optional(),
 });
 
 // 定义可序列化的 Action 校验，替代 z.any() 函数
 export const ActionSchema = z.object({
   action: z.string(),
-  params: z.record(z.any()).optional(),
+  params: z.record(z.string(), z.any()).optional(),
 });

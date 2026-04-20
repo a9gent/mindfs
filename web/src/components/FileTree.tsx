@@ -1,4 +1,6 @@
 import React from "react";
+import { openExternalURL } from "../services/platformNavigation";
+import { shouldEnablePWAInstall } from "../services/runtime";
 import {
   DIRECTORY_SORT_OPTIONS,
   type DirectorySortMode,
@@ -270,7 +272,10 @@ export function FileTree({
   }, []);
 
   React.useEffect(() => {
-    if (typeof window === "undefined") {
+    if (typeof window === "undefined" || !shouldEnablePWAInstall()) {
+      setDeferredInstallPrompt(null);
+      setIsInstalled(false);
+      setIsInstallCapable(false);
       return;
     }
 
@@ -399,10 +404,10 @@ export function FileTree({
       return;
     }
     if (relayTip.target === "_self") {
-      window.location.href = relayTip.href;
+      window.location.assign(relayTip.href);
       return;
     }
-    window.open(relayTip.href, "_blank", "noopener,noreferrer");
+    openExternalURL(relayTip.href);
   }, [relayTip]);
 
   const handleInstall = React.useCallback(async () => {

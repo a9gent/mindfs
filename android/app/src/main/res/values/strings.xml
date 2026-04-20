@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MindFS</string>
+    <string name="title_activity_main">MindFS</string>
+    <string name="package_name">com.mindfs.app</string>
+    <string name="custom_url_scheme">com.mindfs.app</string>
+</resources>
