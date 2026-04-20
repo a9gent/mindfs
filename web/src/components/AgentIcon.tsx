@@ -89,6 +89,7 @@ function useCachedIcon(url?: string): string | undefined {
 
 export function AgentIcon({ agentName, ...props }: AgentIconProps) {
   const lowerAgentName = agentName.toLowerCase();
+  const agentTokens = lowerAgentName.split(/[^a-z0-9]+/).filter(Boolean);
   const style = props.style ?? {};
   const width = style.width ?? props.width ?? 16;
   const height = style.height ?? props.height ?? 16;
@@ -101,7 +102,9 @@ export function AgentIcon({ agentName, ...props }: AgentIconProps) {
     icon = ICON_URLS.openclaw;
   } else if (lowerAgentName.includes('opencode')) {
     icon = ICON_URLS.opencode;
-  } else if (lowerAgentName.includes('pi')) {
+  } else if (lowerAgentName.includes('copilot')) {
+    icon = ICON_URLS.copilot;
+  } else if (agentTokens.includes('pi') || lowerAgentName === 'pi') {
     icon = ICON_URLS.pi;
   } else if (lowerAgentName.includes('qoder')) {
     icon = ICON_URLS.qoder;
@@ -113,8 +116,6 @@ export function AgentIcon({ agentName, ...props }: AgentIconProps) {
     icon = ICON_URLS.kimi;
   } else if (lowerAgentName.includes('cline')) {
     icon = ICON_URLS.cline;
-  } else if (lowerAgentName.includes('copilot')) {
-    icon = ICON_URLS.copilot;
   } else if (lowerAgentName.includes('codex')) {
     icon = ICON_URLS.codex;
   } else if (lowerAgentName.includes('claude')) {

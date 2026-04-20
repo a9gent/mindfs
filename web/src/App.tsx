@@ -766,6 +766,7 @@ export function App() {
   const sessionCacheRef = useRef<Record<string, Session>>({});
   const loadedSessionRef = useRef<Record<string, boolean>>({});
   const loadingSessionRef = useRef<Record<string, Promise<SyncSessionResult>>>({});
+  const staleSessionKeysRef = useRef<Set<string>>(new Set());
   const invalidTreeCacheKeysRef = useRef<Set<string>>(new Set());
   const boundSessionByRootRef = useRef<Record<string, string | null>>({});
   const drawerSessionByRootRef = useRef<Record<string, SessionItem | null>>({});
@@ -1411,6 +1412,139 @@ export function App() {
       });
     },
     [],
+  );
+
+  const resolvePendingForSession = useCallback(
+    (
+      rootID: string | null | undefined,
+      sessionKey: string | null | undefined,
+      fallback?: boolean,
+    ): boolean => {
+      const resolvedRoot = String(rootID || "");
+      const resolvedKey = String(sessionKey || "");
+      if (!resolvedRoot || !resolvedKey) {
+        return !!fallback;
+      }
+      const cacheKey = rootSessionKey(resolvedRoot, resolvedKey);
+      if (pendingBySessionRef.current[cacheKey]) {
+        return true;
+      }
+      const drawer = drawerSessionByRootRef.current[resolvedRoot] as
+        | ({ pending?: boolean; key?: string; session_key?: string } & Record<string, unknown>)
+        | null
+        | undefined;
+      if (
+        drawer &&
+        (drawer.key || drawer.session_key) === resolvedKey &&
+        typeof drawer.pending === "boolean"
+      ) {
+        return drawer.pending;
+      }
+      const selected = selectedSessionRef.current as
+        | ({ pending?: boolean; key?: string; session_key?: string; root_id?: string } & Record<string, unknown>)
+        | null
+        | undefined;
+      if (
+        selected &&
+        ((selected.root_id as string | undefined) || currentRootIdRef.current) ===
+          resolvedRoot &&
+        (selected.key || selected.session_key) === resolvedKey &&
+        typeof selected.pending === "boolean"
+      ) {
+        return selected.pending;
+      }
+      const cached = sessionCacheRef.current[cacheKey] as
+        | ({ pending?: boolean } & Record<string, unknown>)
+        | null
+        | undefined;
+      if (cached && typeof cached.pending === "boolean") {
+        return cached.pending;
+      }
+      return !!fallback;
+    },
+    [rootSessionKey],
+  );
+
+  const markSessionStale = useCallback(
+    (rootID: string | null | undefined, sessionKey: string | null | undefined) => {
+      const resolvedRoot = String(rootID || "");
+      const resolvedKey = String(sessionKey || "");
+      if (!resolvedRoot || !resolvedKey || resolvedKey.startsWith("pending-")) {
+        return;
+      }
+      staleSessionKeysRef.current.add(rootSessionKey(resolvedRoot, resolvedKey));
+    },
+    [rootSessionKey],
+  );
+
+  const clearSessionStale = useCallback(
+    (rootID: string | null | undefined, sessionKey: string | null | undefined) => {
+      const resolvedRoot = String(rootID || "");
+      const resolvedKey = String(sessionKey || "");
+      if (!resolvedRoot || !resolvedKey) {
+        return;
+      }
+      staleSessionKeysRef.current.delete(rootSessionKey(resolvedRoot, resolvedKey));
+    },
+    [rootSessionKey],
+  );
+
+  const isSessionStale = useCallback(
+    (rootID: string | null | undefined, sessionKey: string | null | undefined): boolean => {
+      const resolvedRoot = String(rootID || "");
+      const resolvedKey = String(sessionKey || "");
+      if (!resolvedRoot || !resolvedKey) {
+        return false;
+      }
+      return staleSessionKeysRef.current.has(rootSessionKey(resolvedRoot, resolvedKey));
+    },
+    [rootSessionKey],
+  );
+
+  const restoreActiveSession = useCallback(
+    async (
+      rootID: string | null | undefined,
+      sessionKey: string | null | undefined,
+    ): Promise<Session | null> => {
+      const resolvedRoot = String(rootID || "");
+      const resolvedKey = String(sessionKey || "");
+      if (!resolvedRoot || !resolvedKey || resolvedKey.startsWith("pending-")) {
+        return null;
+      }
+      const cacheKey = rootSessionKey(resolvedRoot, resolvedKey);
+      const inflight = loadingSessionRef.current[cacheKey];
+      const request =
+        inflight ||
+        syncSession(resolvedRoot, resolvedKey).finally(() => {
+          delete loadingSessionRef.current[cacheKey];
+        });
+      if (!inflight) {
+        loadingSessionRef.current[cacheKey] = request;
+      }
+      const syncResult = await request;
+      const fullSession = syncResult?.session;
+      if (!fullSession) {
+        return null;
+      }
+      const pending = resolvePendingForSession(
+        resolvedRoot,
+        resolvedKey,
+        !!(fullSession as any)?.pending,
+      );
+      sessionCacheRef.current[cacheKey] = {
+        ...(fullSession as any),
+        key: resolvedKey,
+        pending,
+      } as Session;
+      bumpCacheVersion();
+      await sessionService.markSessionReady(resolvedRoot, resolvedKey);
+      return {
+        ...(fullSession as any),
+        key: resolvedKey,
+        pending,
+      } as Session;
+    },
+    [bumpCacheVersion, resolvePendingForSession, rootSessionKey],
   );
 
   const updateSessionRelatedFilesForKey = useCallback(
@@ -2177,6 +2311,12 @@ export function App() {
         pluginQuery: {},
       });
       selectedSessionByRootRef.current[targetRoot] = key;
+      const cacheKey = rootSessionKey(targetRoot, key);
+      const wasStale = isSessionStale(targetRoot, key);
+      const hadInMemoryState =
+        !!pendingBySessionRef.current[cacheKey] ||
+        hasSessionExchanges(sessionCacheRef.current[cacheKey]);
+      const shouldSyncHistory = wasStale || !hadInMemoryState;
       setSelectedSessionLoading(true);
       setSelectedSession(
         toSessionItem(targetRoot, {
@@ -2188,14 +2328,24 @@ export function App() {
       setDrawerOpenForRoot(targetRoot, false);
       if (isMobile) setIsRightOpen(false);
       await waitForNextPaint();
-      const cacheKey = rootSessionKey(targetRoot, key);
-      const applySession = (fullSession: Session) => {
+      const applySession = (
+        fullSession: Session,
+        options?: { writeCache?: boolean },
+      ) => {
+        const shouldWriteCache = options?.writeCache !== false;
+        const pending = resolvePendingForSession(
+          targetRoot,
+          key,
+          !!(fullSession as any)?.pending || preservePending,
+        );
         const normalized = {
           ...(fullSession as any),
           key,
-          pending: false,
+          pending,
         } as Session;
-        sessionCacheRef.current[cacheKey] = normalized;
+        if (shouldWriteCache) {
+          sessionCacheRef.current[cacheKey] = normalized;
+        }
         setSelectedSession((prev) => {
           const prevKey = prev?.key || prev?.session_key;
           const prevRoot =
@@ -2217,48 +2367,36 @@ export function App() {
           } as Session);
         }
         setSelectedSessionLoading(false);
-        bumpCacheVersion();
+        if (shouldWriteCache) {
+          bumpCacheVersion();
+        }
       };
       const cached = sessionCacheRef.current[cacheKey];
       if (cached) {
         applySession(cached);
-        if (hasSessionExchanges(cached)) {
+        if (!shouldSyncHistory && hasSessionExchanges(cached)) {
           loadedSessionRef.current[cacheKey] = true;
-          void sessionService.markSessionReady(targetRoot, key);
           return;
         }
       } else {
         const persisted = await getCachedSession(targetRoot, key);
         if (persisted) {
           applySession(persisted);
+          if (!shouldSyncHistory && hasSessionExchanges(persisted)) {
+            loadedSessionRef.current[cacheKey] = true;
+            return;
+          }
         }
       }
-      if (loadedSessionRef.current[cacheKey]) {
-        void sessionService.markSessionReady(targetRoot, key);
+      if (!shouldSyncHistory && loadedSessionRef.current[cacheKey]) {
         return;
       }
       try {
-        const inflight = loadingSessionRef.current[cacheKey];
-        if (inflight) {
-          const syncResult = await inflight;
-          const fullSession = syncResult?.session;
-          if (fullSession) {
-            applySession(fullSession);
-          } else {
-            setSelectedSessionLoading(false);
-          }
-          return;
-        }
-        const request = syncSession(targetRoot, key).finally(() => {
-          delete loadingSessionRef.current[cacheKey];
-        });
-        loadingSessionRef.current[cacheKey] = request;
-        const syncResult = await request;
-        const fullSession = syncResult.session;
-        if (fullSession) {
-          applySession(fullSession as Session);
+        const restored = await restoreActiveSession(targetRoot, key);
+        if (restored) {
+          applySession(restored, { writeCache: false });
           loadedSessionRef.current[cacheKey] = true;
-          void sessionService.markSessionReady(targetRoot, key);
+          clearSessionStale(targetRoot, key);
         } else {
           setSelectedSessionLoading(false);
         }
@@ -2270,6 +2408,10 @@ export function App() {
       isMobile,
       rootSessionKey,
       bumpCacheVersion,
+      clearSessionStale,
+      isSessionStale,
+      resolvePendingForSession,
+      restoreActiveSession,
       setDrawerOpenForRoot,
       setDrawerSessionForRoot,
       setMainViewPreferenceForRoot,
@@ -2329,17 +2471,6 @@ export function App() {
           ...(initialSession as any),
           key: preferredKey,
         } as Session;
-      } else {
-        const syncResult = await syncSession(resolvedRoot, preferredKey);
-        if (syncResult.session) {
-          initialSession = {
-            ...(syncResult.session as any),
-            key: preferredKey,
-          } as Session;
-          sessionCacheRef.current[cacheKey] = initialSession as Session;
-          loadedSessionRef.current[cacheKey] = true;
-          bumpCacheVersion();
-        }
       }
       await handleSelectSession(
         initialSession
@@ -2386,6 +2517,7 @@ export function App() {
       delete loadingSessionRef.current[cacheKey];
       delete pendingBySessionRef.current[cacheKey];
       delete cancelRequestedBySessionRef.current[cacheKey];
+      staleSessionKeysRef.current.delete(cacheKey);
       void deleteCachedSession(rootID, sessionKey);
 
       if (boundSessionByRootRef.current[rootID] === sessionKey) {
@@ -4209,46 +4341,28 @@ export function App() {
       sessionKey: string,
     ) => {
       if (!rootID || !sessionKey) return;
-      const cacheKey = rootSessionKey(rootID, sessionKey);
-      const inflight = loadingSessionRef.current[cacheKey];
-      const request =
-        inflight ||
-        syncSession(rootID, sessionKey).finally(() => {
-          delete loadingSessionRef.current[cacheKey];
-        });
-      if (!inflight) {
-        loadingSessionRef.current[cacheKey] = request;
-      }
-      const syncResult = await request;
+      const restored = await restoreActiveSession(rootID, sessionKey);
       if (cancelled) return;
-      if (syncResult?.session) {
-        const normalized = {
-          ...(syncResult.session as any),
-          key: sessionKey,
-          pending: false,
-        } as Session;
-        sessionCacheRef.current[cacheKey] = normalized;
-        loadedSessionRef.current[cacheKey] = true;
-        bumpCacheVersion();
-        if (
-          (selectedSessionRef.current?.key ||
-            selectedSessionRef.current?.session_key) === sessionKey
-        ) {
-          setSelectedSession((prev) =>
-            prev
-              ? toSessionItem(rootID, {
-                  ...(prev as any),
-                  ...(normalized as any),
-                  pending: false,
-                })
-              : prev,
-          );
-        }
-        if (boundSessionByRootRef.current[rootID] === sessionKey) {
-          setDrawerSessionForRoot(rootID, normalized);
-        }
+      if (!restored) return;
+      const cacheKey = rootSessionKey(rootID, sessionKey);
+      loadedSessionRef.current[cacheKey] = true;
+      clearSessionStale(rootID, sessionKey);
+      if (
+        (selectedSessionRef.current?.key ||
+          selectedSessionRef.current?.session_key) === sessionKey
+      ) {
+        setSelectedSession((prev) =>
+          prev
+            ? toSessionItem(rootID, {
+                ...(prev as any),
+                ...(restored as any),
+              })
+            : prev,
+        );
       }
-      await sessionService.markSessionReady(rootID, sessionKey);
+      if (boundSessionByRootRef.current[rootID] === sessionKey) {
+        setDrawerSessionForRoot(rootID, restored);
+      }
     };
     const getReplayTargetsForRoot = (rootID: string): string[] => {
       if (!rootID) return [];
@@ -4283,12 +4397,29 @@ export function App() {
       return Array.from(keys);
     };
     const replayTargetsForAllRoots = () => {
+      const replayCacheKeys = new Set<string>();
       for (const rootID of managedRootIdsRef.current) {
         if (!rootID) continue;
         const replayTargets = getReplayTargetsForRoot(rootID);
         for (const sessionKey of replayTargets) {
+          replayCacheKeys.add(rootSessionKey(rootID, sessionKey));
           void reloadSessionForReplay(rootID, sessionKey);
         }
+      }
+      for (const cacheKey of Object.keys(sessionCacheRef.current)) {
+        if (replayCacheKeys.has(cacheKey)) {
+          continue;
+        }
+        const separator = cacheKey.indexOf("::");
+        if (separator <= 0) {
+          continue;
+        }
+        const rootID = cacheKey.slice(0, separator);
+        const sessionKey = cacheKey.slice(separator + 2);
+        if (!rootID || !sessionKey || !hasSessionExchanges(sessionCacheRef.current[cacheKey])) {
+          continue;
+        }
+        markSessionStale(rootID, sessionKey);
       }
     };
     const refreshSessionRelatedFiles = async (
@@ -5020,6 +5151,9 @@ export function App() {
     appendAgentChunkForSession,
     appendThoughtChunkForSession,
     appendToolCallForSession,
+    clearSessionStale,
+    markSessionStale,
+    resolvePendingForSession,
     setSelectedPendingByKey,
     setBoundSessionForRoot,
     setDrawerSessionForRoot,
@@ -5387,56 +5521,45 @@ export function App() {
       return;
     }
     const cacheKey = rootSessionKey(rootID, sessionKey);
+    const isStale = isSessionStale(rootID, sessionKey);
     const cached = sessionCacheRef.current[cacheKey];
-    if (loadedSessionRef.current[cacheKey]) {
+    if (!isStale && loadedSessionRef.current[cacheKey]) {
       return;
     }
-    if (hasSessionExchanges(cached)) {
+    if (!isStale && hasSessionExchanges(cached)) {
       return;
     }
-    if (hasSessionExchanges(selectedSessionSnapshot as Session | null)) {
+    if (!isStale && hasSessionExchanges(selectedSessionSnapshot as Session | null)) {
       return;
     }
     if (loadingSessionRef.current[cacheKey]) {
       return;
     }
-    const request = syncSession(rootID, sessionKey)
-      .then((syncResult) => {
-        const fullSession = syncResult?.session;
-        if (!fullSession) {
-          return;
+    void restoreActiveSession(rootID, sessionKey).then((restored) => {
+      if (!restored) {
+        return;
+      }
+      loadedSessionRef.current[cacheKey] = true;
+      clearSessionStale(rootID, sessionKey);
+      setSelectedSession((prev) => {
+        const prevKey = prev?.key || prev?.session_key;
+        const prevRoot =
+          (prev?.root_id as string | undefined) || currentRootIdRef.current;
+        if (!prev || prevKey !== sessionKey || prevRoot !== rootID) {
+          return prev;
         }
-        const normalized = {
-          ...(fullSession as any),
+        return toSessionItem(rootID, {
+          ...(prev as any),
+          ...(restored as any),
           key: sessionKey,
-        } as Session;
-        sessionCacheRef.current[cacheKey] = normalized;
-        loadedSessionRef.current[cacheKey] = true;
-        setSelectedSession((prev) => {
-          const prevKey = prev?.key || prev?.session_key;
-          const prevRoot =
-            (prev?.root_id as string | undefined) || currentRootIdRef.current;
-          if (!prev || prevKey !== sessionKey || prevRoot !== rootID) {
-            return prev;
-          }
-          return toSessionItem(rootID, {
-            ...(prev as any),
-            ...(normalized as any),
-            key: sessionKey,
-            session_key: sessionKey,
-            root_id: rootID,
-          });
+          session_key: sessionKey,
+          root_id: rootID,
         });
-        if (boundSessionByRootRef.current[rootID] === sessionKey) {
-          setDrawerSessionForRoot(rootID, normalized);
-        }
-        bumpCacheVersion();
-        void sessionService.markSessionReady(rootID, sessionKey);
-      })
-      .finally(() => {
-        delete loadingSessionRef.current[cacheKey];
       });
-    loadingSessionRef.current[cacheKey] = request;
+      if (boundSessionByRootRef.current[rootID] === sessionKey) {
+        setDrawerSessionForRoot(rootID, restored);
+      }
+    });
   }, [
     selectedSession,
     selectedSessionLoading,
@@ -5444,6 +5567,10 @@ export function App() {
     currentRootId,
     rootSessionKey,
     bumpCacheVersion,
+    clearSessionStale,
+    isSessionStale,
+    resolvePendingForSession,
+    restoreActiveSession,
     setDrawerSessionForRoot,
   ]);
 
