@@ -1,3 +1,5 @@
+import { shouldRegisterServiceWorker } from "./services/runtime";
+
 export function registerServiceWorker(): void {
   if (typeof window === "undefined") {
     return;
@@ -5,7 +7,7 @@ export function registerServiceWorker(): void {
   if (!("serviceWorker" in navigator)) {
     return;
   }
-  if (import.meta.env.DEV) {
+  if (import.meta.env.DEV || !shouldRegisterServiceWorker()) {
     return;
   }
 

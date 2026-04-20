@@ -1,6 +1,16 @@
 import React from "react";
-import type { SessionInfo } from "./AgentFloatingPanel";
 import { InlineTokenText } from "./InlineTokenText";
+
+type SessionInfo = {
+  key: string;
+  name: string;
+  type: "chat" | "plugin";
+  agent: string;
+  model?: string;
+  mode?: string;
+  effort?: string;
+  pending?: boolean;
+};
 
 type Exchange = {
   role: "user" | "agent";

@@ -155,11 +155,71 @@ async function fetchAndStore(request, cache) {
 `;
 }
 
+function appShellHTMLPlugin() {
+  return {
+    name: "mindfs-app-shell-html",
+    transformIndexHtml(html: string) {
+      const pwaLinks = [
+        '    <link rel="manifest" href="/manifest.webmanifest" />',
+        '    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />',
+      ].join("\n");
+      const pwaMeta = [
+        '    <meta name="apple-mobile-web-app-capable" content="yes" />',
+        '    <meta name="apple-mobile-web-app-status-bar-style" content="default" />',
+        '    <meta name="apple-mobile-web-app-title" content="MindFS" />',
+        '    <meta name="mobile-web-app-capable" content="yes" />',
+      ].join("\n");
+      const appShell = process.env.VITE_APP_SHELL === "1";
+      return html
+        .replace("<!--APP_SHELL_PWA_LINKS-->", appShell ? "" : pwaLinks)
+        .replace("<!--APP_SHELL_PWA_META-->", appShell ? "" : pwaMeta);
+    },
+  };
+}
+
+const PWA_ONLY_ASSETS = new Set([
+  "manifest.webmanifest",
+  "apple-touch-icon.png",
+  "pwa-192.png",
+  "pwa-512.png",
+  "pwa-icon-maskable.svg",
+  "pwa-icon.svg",
+  "pwa-maskable-192.png",
+  "pwa-maskable-512.png",
+  "service-worker.js",
+]);
+
+function appShellExcludeAssetsPlugin() {
+  let resolvedOutDir = "";
+  return {
+    name: "mindfs-app-shell-exclude-assets",
+    apply: "build" as const,
+    configResolved(config: { build: { outDir: string } }) {
+      resolvedOutDir = config.build.outDir;
+    },
+    closeBundle() {
+      if (process.env.VITE_APP_SHELL !== "1" || !resolvedOutDir) {
+        return;
+      }
+      // public/ 目录文件由 Vite 直接复制，不经过 bundle，需在 closeBundle 里删除
+      for (const fileName of PWA_ONLY_ASSETS) {
+        const filePath = path.join(resolvedOutDir, fileName);
+        if (fs.existsSync(filePath)) {
+          fs.rmSync(filePath);
+        }
+      }
+    },
+  };
+}
+
 function autoPrecachePlugin() {
   return {
     name: "mindfs-auto-precache",
     apply: "build" as const,
     generateBundle(this: { emitFile: (file: { type: "asset"; fileName: string; source: string }) => void }, _options: unknown, bundle: Record<string, { fileName: string; type: string }>) {
+      if (process.env.VITE_APP_SHELL === "1") {
+        return;
+      }
       const publicDir = path.resolve(__dirname, "public");
       const publicAssets = listPublicAssets(publicDir);
       const bundleAssets = Object.values(bundle)
@@ -186,7 +246,7 @@ function autoPrecachePlugin() {
 
 export default defineConfig({
   base: "./",
-  plugins: [tailwindcss(), react(), autoPrecachePlugin()],
+  plugins: [tailwindcss(), react(), appShellHTMLPlugin(), appShellExcludeAssetsPlugin(), autoPrecachePlugin()],
   server: {
     host: "0.0.0.0",
     proxy: {

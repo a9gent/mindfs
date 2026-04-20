@@ -112,7 +112,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 }
 
 // Specialized error boundaries
-export function MainViewErrorBoundary({ children }: { children: ReactNode }): JSX.Element {
+export function MainViewErrorBoundary({ children }: { children: ReactNode }): React.ReactElement {
   return (
     <ErrorBoundary
       name="主视图"
@@ -126,7 +126,7 @@ export function MainViewErrorBoundary({ children }: { children: ReactNode }): JS
   );
 }
 
-export function DrawerPanelErrorBoundary({ children }: { children: ReactNode }): JSX.Element {
+export function DrawerPanelErrorBoundary({ children }: { children: ReactNode }): React.ReactElement {
   return (
     <ErrorBoundary
       name="抽屉"

@@ -1,4 +1,14 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, type ReactElement } from "react";
+import { appURL } from "../services/base";
+import {
+  clearStoredToken,
+  getStoredApiBaseURL,
+  getStoredToken,
+  getStoredWsBaseURL,
+  setStoredApiBaseURL,
+  setStoredToken,
+  setStoredWsBaseURL,
+} from "../services/storage";
 
 type LoginProps = {
   onLogin: (token: string) => void;
@@ -14,15 +24,21 @@ export function Login({
   isAuthenticated,
   connectionStatus,
   error,
-}: LoginProps): JSX.Element {
+}: LoginProps): ReactElement {
   const [token, setToken] = useState("");
+  const [apiBaseURL, setApiBaseURL] = useState(() => getStoredApiBaseURL() || "");
+  const [wsBaseURL, setWsBaseURL] = useState(() => getStoredWsBaseURL() || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCheckingEndpoint, setIsCheckingEndpoint] = useState(false);
+  const [endpointMessage, setEndpointMessage] = useState<string | null>(null);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
       if (!token.trim()) return;
 
+      setStoredApiBaseURL(apiBaseURL.trim());
+      setStoredWsBaseURL(wsBaseURL.trim());
       setIsSubmitting(true);
       try {
         onLogin(token.trim());
@@ -30,8 +46,27 @@ export function Login({
         setIsSubmitting(false);
       }
     },
-    [token, onLogin]
+    [apiBaseURL, onLogin, token, wsBaseURL]
   );
+
+  const handleCheckEndpoint = useCallback(async () => {
+    setStoredApiBaseURL(apiBaseURL.trim());
+    setStoredWsBaseURL(wsBaseURL.trim());
+    setIsCheckingEndpoint(true);
+    setEndpointMessage(null);
+    try {
+      const response = await fetch(appURL("/api/relay/status"));
+      if (!response.ok) {
+        setEndpointMessage(`Service check failed: ${response.status}`);
+        return;
+      }
+      setEndpointMessage("Service reachable");
+    } catch {
+      setEndpointMessage("Service unreachable");
+    } finally {
+      setIsCheckingEndpoint(false);
+    }
+  }, [apiBaseURL, wsBaseURL]);
 
   const statusColors: Record<string, string> = {
     connected: "#10b981",
@@ -148,6 +183,65 @@ export function Login({
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: "16px" }}>
             <label
+              htmlFor="apiBaseURL"
+              style={{
+                display: "block",
+                fontSize: "13px",
+                fontWeight: 500,
+                color: "var(--text-primary)",
+                marginBottom: "6px",
+              }}
+            >
+              API Base URL
+            </label>
+            <input
+              id="apiBaseURL"
+              type="url"
+              value={apiBaseURL}
+              onChange={(e) => setApiBaseURL(e.target.value)}
+              placeholder="http://host:port"
+              style={{
+                width: "100%",
+                padding: "12px 16px",
+                borderRadius: "8px",
+                border: "1px solid var(--border-color)",
+                fontSize: "14px",
+                outline: "none",
+                boxSizing: "border-box",
+                marginBottom: "12px",
+              }}
+              autoFocus
+            />
+            <label
+              htmlFor="wsBaseURL"
+              style={{
+                display: "block",
+                fontSize: "13px",
+                fontWeight: 500,
+                color: "var(--text-primary)",
+                marginBottom: "6px",
+              }}
+            >
+              WS Base URL
+            </label>
+            <input
+              id="wsBaseURL"
+              type="url"
+              value={wsBaseURL}
+              onChange={(e) => setWsBaseURL(e.target.value)}
+              placeholder="Optional, derive from API by default"
+              style={{
+                width: "100%",
+                padding: "12px 16px",
+                borderRadius: "8px",
+                border: "1px solid var(--border-color)",
+                fontSize: "14px",
+                outline: "none",
+                boxSizing: "border-box",
+                marginBottom: "12px",
+              }}
+            />
+            <label
               htmlFor="token"
               style={{
                 display: "block",
@@ -174,7 +268,6 @@ export function Login({
                 outline: "none",
                 boxSizing: "border-box",
               }}
-              autoFocus
             />
           </div>
 
@@ -200,24 +293,49 @@ export function Login({
             </div>
           )}
 
-          <button
-            type="submit"
-            disabled={isSubmitting || !token.trim()}
-            style={{
-              width: "100%",
-              padding: "12px 16px",
-              borderRadius: "8px",
-              border: "none",
-              background: isSubmitting || !token.trim() ? "#d1d5db" : "#3b82f6",
-              color: "#fff",
-              fontSize: "14px",
-              fontWeight: 500,
-              cursor: isSubmitting || !token.trim() ? "not-allowed" : "pointer",
-              transition: "background 0.15s",
-            }}
-          >
-            {isSubmitting ? "Connecting..." : "Connect"}
-          </button>
+          <div style={{ display: "flex", gap: "12px", marginBottom: "12px" }}>
+            <button
+              type="button"
+              onClick={() => { void handleCheckEndpoint(); }}
+              disabled={isCheckingEndpoint || !apiBaseURL.trim()}
+              style={{
+                flex: 1,
+                padding: "12px 16px",
+                borderRadius: "8px",
+                border: "1px solid var(--border-color)",
+                background: "#fff",
+                color: "var(--text-primary)",
+                fontSize: "14px",
+                fontWeight: 500,
+                cursor: isCheckingEndpoint || !apiBaseURL.trim() ? "not-allowed" : "pointer",
+              }}
+            >
+              {isCheckingEndpoint ? "Checking..." : "Check Service"}
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting || !token.trim() || !apiBaseURL.trim()}
+              style={{
+                flex: 1,
+                padding: "12px 16px",
+                borderRadius: "8px",
+                border: "none",
+                background: isSubmitting || !token.trim() || !apiBaseURL.trim() ? "#d1d5db" : "#3b82f6",
+                color: "#fff",
+                fontSize: "14px",
+                fontWeight: 500,
+                cursor: isSubmitting || !token.trim() || !apiBaseURL.trim() ? "not-allowed" : "pointer",
+                transition: "background 0.15s",
+              }}
+            >
+              {isSubmitting ? "Connecting..." : "Connect"}
+            </button>
+          </div>
+          {endpointMessage ? (
+            <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: "0 0 12px" }}>
+              {endpointMessage}
+            </p>
+          ) : null}
         </form>
 
         <div
@@ -252,21 +370,16 @@ export function useAuth(): {
   login: (token: string) => void;
   logout: () => void;
 } {
-  const [token, setToken] = useState<string | null>(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("mindfs_token");
-    }
-    return null;
-  });
+  const [token, setToken] = useState<string | null>(() => getStoredToken());
 
   const login = useCallback((newToken: string) => {
     setToken(newToken);
-    localStorage.setItem("mindfs_token", newToken);
+    setStoredToken(newToken);
   }, []);
 
   const logout = useCallback(() => {
     setToken(null);
-    localStorage.removeItem("mindfs_token");
+    clearStoredToken();
   }, []);
 
   return {
@@ -286,7 +399,7 @@ export function LoginStatus({
   isAuthenticated: boolean;
   connectionStatus: "connected" | "connecting" | "disconnected" | "error";
   onLogout: () => void;
-}): JSX.Element | null {
+}): ReactElement | null {
   if (!isAuthenticated) {
     return null;
   }

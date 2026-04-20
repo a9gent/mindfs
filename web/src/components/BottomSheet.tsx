@@ -21,9 +21,9 @@ export function BottomSheet({
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener('resize', handleResize);
+    window.addEventListener("resize", handleResize);
     if (isOpen) setIsAnimating(true);
-    return () => window.removeEventListener('resize', handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, [isOpen]);
 
   if (!isOpen && !isAnimating) return null;
@@ -81,16 +81,22 @@ export function BottomSheet({
           transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
           overflow: "hidden",
           border: "none",
-          ...(isMobile ? mobileStyles : pcStyles)
+          ...(isMobile ? mobileStyles : pcStyles),
         }}
         onTransitionEnd={() => {
           if (!isOpen) setIsAnimating(false);
         }}
       >
         {/* Handle Area (Compressed) */}
-        <div 
-          style={{ 
-            width: "100%", height: "8px", display: "flex", justifyContent: "center", alignItems: "center", cursor: "ns-resize", flexShrink: 0,
+        <div
+          style={{
+            width: "100%",
+            height: "8px",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            cursor: "ns-resize",
+            flexShrink: 0,
           }}
           onClick={onExpand}
         >
@@ -98,7 +104,7 @@ export function BottomSheet({
         </div>
 
         {/* Content */}
-        <div style={{ flex: 1, overflow: "auto" }}>
+        <div style={{ flex: 1, overflow: "auto", WebkitOverflowScrolling: "touch", minHeight: 0 }}>
           {children}
         </div>
 

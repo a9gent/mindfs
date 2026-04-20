@@ -113,7 +113,7 @@ class TokenNode extends TextNode {
   }
 
   updateDOM(prevNode: TokenNode, dom: HTMLElement, config: EditorConfig): boolean {
-    const updated = super.updateDOM(prevNode, dom, config);
+    const updated = super.updateDOM(prevNode as unknown as this, dom, config);
     if (prevNode.__tokenType !== this.__tokenType) {
       if (this.__tokenType === "file") {
         dom.style.background = "var(--token-file-bg)";
@@ -539,6 +539,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
             <ContentEditable
               className="token-editor-input"
               aria-placeholder={placeholder}
+              placeholder={<span></span>}
               spellCheck={false}
               onFocus={() => {
                 setIsFocused(true);
@@ -595,9 +596,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
               </div>
             ) : null
           }
-          ErrorBoundary={({ error }) => {
-            throw error;
-          }}
+          ErrorBoundary={({ children, onError: _onError }) => children}
         />
         <HistoryPlugin />
         <EditorBridge

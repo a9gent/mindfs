@@ -1,4 +1,7 @@
 import React from "react";
+import { appURL } from "../services/base";
+import { openExternalURL } from "../services/platformNavigation";
+import { shouldEnablePWAInstall } from "../services/runtime";
 import {
   DIRECTORY_SORT_OPTIONS,
   type DirectorySortMode,
@@ -262,7 +265,10 @@ export function FileTree({
   }, []);
 
   React.useEffect(() => {
-    if (typeof window === "undefined") {
+    if (typeof window === "undefined" || !shouldEnablePWAInstall()) {
+      setDeferredInstallPrompt(null);
+      setIsInstalled(false);
+      setIsInstallCapable(false);
       return;
     }
 
@@ -391,10 +397,10 @@ export function FileTree({
       return;
     }
     if (relayTip.target === "_self") {
-      window.location.href = relayTip.href;
+      window.location.assign(relayTip.href);
       return;
     }
-    window.open(relayTip.href, "_blank", "noopener,noreferrer");
+    openExternalURL(relayTip.href);
   }, [relayTip]);
 
   const handleInstall = React.useCallback(async () => {
@@ -454,7 +460,7 @@ export function FileTree({
 
     const loadRelayTip = async () => {
       try {
-        const response = await fetch("/api/relay/tips", { signal: controller.signal });
+        const response = await fetch(appURL("/api/relay/tips"), { signal: controller.signal });
         if (!response.ok) {
           throw new Error(`tips request failed: ${response.status}`);
         }
