@@ -66,7 +66,11 @@ func NewService(localAddr string) (*Service, error) {
 		localAddr: localAddr,
 		localURL:  addrToURL(localAddr, ""),
 		store:     store,
-		client:    &http.Client{Timeout: 15 * time.Second},
+		// Do not apply a whole-request timeout here. Relay traffic can include
+		// large static assets and streamed responses; http.Client.Timeout would
+		// abort the body read mid-transfer and surface as a 502 on the relayed
+		// path even when the local server is healthy.
+		client: &http.Client{},
 	}, nil
 }
 

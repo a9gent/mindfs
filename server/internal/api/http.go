@@ -567,6 +567,10 @@ func (h *HTTPHandler) handleFrontend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if isRelayedRequest(r) {
+		w.Write([]byte(rewriteRelayedFrontendContent(indexHTML)))
+		return
+	}
 	w.Write([]byte(indexHTML))
 }
 
@@ -597,6 +601,10 @@ func (h *HTTPHandler) serveStaticAsset(w http.ResponseWriter, r *http.Request) b
 	assetPath := filepath.Join(staticDir, cleanPath)
 	if info, err := os.Stat(assetPath); err == nil && !info.IsDir() {
 		applyStaticCacheHeaders(w, cleanPath)
+		if isRelayedRequest(r) && shouldRewriteRelayedStaticAsset(cleanPath) {
+			serveRewrittenStaticAsset(w, r, assetPath)
+			return true
+		}
 		http.ServeFile(w, r, assetPath)
 		return true
 	}
@@ -623,6 +631,38 @@ func applyStaticCacheHeaders(w http.ResponseWriter, cleanPath string) {
 		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("Expires", "0")
 	}
+}
+
+func isRelayedRequest(r *http.Request) bool {
+	return strings.TrimSpace(r.Header.Get("X-MindFS-Relayed")) == "1"
+}
+
+func shouldRewriteRelayedStaticAsset(cleanPath string) bool {
+	switch cleanPath {
+	case "index.html", "service-worker.js":
+		return true
+	default:
+		return false
+	}
+}
+
+func rewriteRelayedFrontendContent(content string) string {
+	return strings.ReplaceAll(content, "./assets/", "/mindfs-assets/")
+}
+
+func serveRewrittenStaticAsset(w http.ResponseWriter, r *http.Request, assetPath string) {
+	content, err := os.ReadFile(assetPath)
+	if err != nil {
+		http.ServeFile(w, r, assetPath)
+		return
+	}
+	switch filepath.Base(assetPath) {
+	case "index.html":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	case "service-worker.js":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	}
+	w.Write([]byte(rewriteRelayedFrontendContent(string(content))))
 }
 
 func pathForStaticAsset(requestPath string) string {
