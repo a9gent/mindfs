@@ -44,6 +44,7 @@ export type TimelineItem =
 type UseSessionStreamResult = {
   timeline: TimelineItem[];
   isStreaming: boolean;
+  streamVersion: number;
 };
 
 type ContextWindowLike = {
@@ -362,6 +363,7 @@ export function useSessionStream(
   sessionContextWindow?: ContextWindowLike,
 ): UseSessionStreamResult {
   const [isStreaming, setIsStreaming] = useState(false);
+  const [streamVersion, setStreamVersion] = useState(0);
 
   const baseTimeline = useMemo(
     () =>
@@ -374,10 +376,12 @@ export function useSessionStream(
 
   useEffect(() => {
     setIsStreaming(false);
+    setStreamVersion(0);
     if (!sessionKey) return;
 
     const unsubscribe = sessionService.subscribe(sessionKey, {
       onStream: (event) => {
+        setStreamVersion((value) => value + 1);
         if (event.type === "message_done" || event.type === "error") {
           setIsStreaming(false);
         } else {
@@ -396,5 +400,6 @@ export function useSessionStream(
   return {
     timeline: settleRunningTools(baseTimeline),
     isStreaming,
+    streamVersion,
   };
 }

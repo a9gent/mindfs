@@ -12,6 +12,7 @@ import TokenEditor, {
 
 type SessionInfo = {
   key: string;
+  session_key?: string;
   name: string;
   type: "chat" | "plugin";
   agent: string;

@@ -554,7 +554,12 @@ class SessionService {
     requestId = this.createRequestId("msg"),
   ): Promise<boolean> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.error("[Session] WebSocket not connected");
+      console.warn("[session/send] blocked", {
+        requestId,
+        rootId,
+        sessionKey: sessionKey || null,
+        readyState: this.ws?.readyState ?? null,
+      });
       return false;
     }
 

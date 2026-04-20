@@ -5,7 +5,8 @@ export type SessionType = "chat" | "plugin";
 
 export type SessionItem = {
   key: string;
-  type: SessionType;
+  session_key?: string;
+  type?: SessionType;
   agent?: string;
   name: string;
   created_at: string;
@@ -446,7 +447,7 @@ function SessionCard({
           transition: "all 0.15s ease",
         }}
       >
-        {!isSearchResult ? (
+{!isSearchResult ? (
           <span
             style={{
               position: "relative",
@@ -459,7 +460,7 @@ function SessionCard({
             }}
           >
             <span style={{ fontSize: "14px", lineHeight: 1 }}>
-              {typeIcons[session.type]}
+              {typeIcons[session.type || "chat"]}
             </span>
             <span
               style={{
