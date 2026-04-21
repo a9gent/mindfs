@@ -1,3 +1,4 @@
+import { registerPlugin } from "@capacitor/core";
 import { appURL } from "./base";
 import { isCapacitorRuntime } from "./runtime";
 
@@ -6,6 +7,16 @@ type DownloadFileParams = {
   path: string;
   name?: string;
 };
+
+type NativeDownloadPlugin = {
+  download: (opts: { url: string; filename: string }) => Promise<{
+    downloadId: number;
+    filename: string;
+    directory: string;
+  }>;
+};
+
+const NativeDownload = registerPlugin<NativeDownloadPlugin>("NativeDownload");
 
 function sanitizeDownloadName(path: string, name?: string): string {
   const candidate = String(name || path || "").trim();
@@ -46,22 +57,11 @@ function triggerBrowserDownload(url: string, filename: string): void {
  * - 无需存储权限（Android 10+）
  */
 async function downloadWithAndroidDownloadManager(url: string, filename: string): Promise<void> {
-  const win = window as Window & {
-    Capacitor?: {
-      Plugins?: {
-        NativeDownload?: {
-          download: (opts: { url: string; filename: string }) => Promise<{ downloadId: number; filename: string; directory: string }>;
-        };
-      };
-    };
-  };
-
-  const plugin = win.Capacitor?.Plugins?.NativeDownload;
-  if (!plugin) {
-    throw new Error("NativeDownload 插件未注册，请检查 MainActivity.java");
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error("下载地址不是完整的 http/https URL，请先配置移动端 API 地址");
   }
 
-  await plugin.download({ url, filename });
+  await NativeDownload.download({ url, filename });
   // DownloadManager 接管后台下载，通知栏会显示进度和完成提示
 }
 
