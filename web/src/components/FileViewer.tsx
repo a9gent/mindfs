@@ -327,7 +327,7 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onS
       // Android：DownloadManager 接管，通知栏会显示进度和完成，给个简单提示
       // 浏览器端：下载已触发
       const isAndroid = typeof window !== "undefined" && !!(window as Window & { Capacitor?: unknown }).Capacitor;
-      showToast(isAndroid ? "正在下载，完成后请查看通知栏" : "下载已开始，请查看浏览器下载栏", true);
+      showToast(isAndroid ? "已加入系统下载队列，请查看通知栏或下载目录" : "下载已开始，请查看浏览器下载栏", true);
     } catch (error) {
       const message = error instanceof Error ? error.message : "下载失败";
       showToast(message, false);

@@ -183,7 +183,11 @@ func (i *Importer) projectDir(rootPath string) string {
 	if rootPath == "" {
 		return ""
 	}
-	return filepath.Join(i.baseDir, strings.ReplaceAll(rootPath, string(os.PathSeparator), "-"))
+	replacer := strings.NewReplacer(
+		string(os.PathSeparator), "-",
+		".", "-",
+	)
+	return filepath.Join(i.baseDir, replacer.Replace(rootPath))
 }
 
 func (i *Importer) storeSessionFiles(items []claudeSessionFile) {
@@ -235,11 +239,14 @@ func inspectClaudeSessionFile(path string) (claudeSessionFile, bool, error) {
 			sessionID = strings.TrimSpace(asString(raw["sessionId"]))
 		}
 		if cwd == "" {
-			cwd = normalizeComparablePath(asString(raw["cwd"]))
+			candidate := normalizeComparablePath(asString(raw["cwd"]))
+			if candidate != "" {
+				cwd = candidate
+			}
 		}
 		if firstUserText == "" && strings.EqualFold(asString(raw["type"]), "user") {
 			if message, _ := raw["message"].(map[string]any); message != nil {
-				if text := strings.TrimSpace(extractClaudeMessageText(message["content"])); text != "" {
+				if text := strings.TrimSpace(extractClaudeMessageText(message["content"])); isMeaningfulClaudeUserText(text) {
 					firstUserText = text
 				}
 			}
@@ -295,21 +302,15 @@ func readClaudeImportedExchanges(path string) ([]agenttypes.ImportedExchange, er
 		}
 		ts := parseTimeRFC3339(asString(raw["timestamp"]))
 		if role == "user" {
-			items = append(items, agenttypes.ImportedExchange{
-				Role:      "user",
-				Content:   text,
-				Timestamp: ts,
-			})
-			return nil
+			if !isMeaningfulClaudeUserText(text) {
+				continue
+			}
+			items = appendMergedClaudeExchange(items, "user", text, ts)
+			continue
 		}
-		items = append(items, agenttypes.ImportedExchange{
-			Role:      "agent",
-			Content:   text,
-			Timestamp: ts,
-		})
-		return nil
-	})
-	if err != nil {
+		items = appendMergedClaudeExchange(items, "agent", text, ts)
+	}
+	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -355,6 +356,56 @@ func extractClaudeMessageText(raw any) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n\n"))
+}
+
+func isMeaningfulClaudeUserText(text string) bool {
+	text = strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	if strings.HasPrefix(lower, "<local-command-caveat>") ||
+		strings.HasPrefix(lower, "<command-name>") ||
+		strings.HasPrefix(lower, "<local-command-stdout>") ||
+		strings.HasPrefix(lower, "<local-command-stderr>") ||
+		strings.HasPrefix(lower, "this session was migrated from elsewhere.") ||
+		strings.HasPrefix(lower, "this session is being continued from a previous conversation") {
+		return false
+	}
+	if strings.Contains(lower, "<command-message>") || strings.Contains(lower, "<command-args>") {
+		return false
+	}
+	if strings.Contains(lower, "<local-command-stdout>") || strings.Contains(lower, "<local-command-stderr>") {
+		return false
+	}
+	if strings.Contains(lower, "<local-command-caveat>") {
+		return false
+	}
+	if strings.Contains(lower, "\"type\": \"tool_result\"") || strings.Contains(lower, "'type': 'tool_result'") {
+		return false
+	}
+	return true
+}
+
+func appendMergedClaudeExchange(items []agenttypes.ImportedExchange, role, content string, ts time.Time) []agenttypes.ImportedExchange {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return items
+	}
+	if len(items) > 0 && items[len(items)-1].Role == role {
+		last := &items[len(items)-1]
+		last.Content = strings.TrimSpace(last.Content + "\n\n" + content)
+		if !ts.IsZero() {
+			last.Timestamp = ts
+		}
+		return items
+	}
+	items = append(items, agenttypes.ImportedExchange{
+		Role:      role,
+		Content:   content,
+		Timestamp: ts,
+	})
+	return items
 }
 
 func appendSortedClaudeSession(items []claudeSessionFile, item claudeSessionFile) []claudeSessionFile {
