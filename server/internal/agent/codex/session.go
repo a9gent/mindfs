@@ -231,6 +231,15 @@ func (s *session) AnswerQuestion(context.Context, types.AskUserAnswer) error {
 	return errors.New("ask user question is not supported by codex sessions")
 }
 
+func (s *session) CurrentModel() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return strings.TrimSpace(s.threadOpts.Model)
+}
+
 func (s *session) SetModel(_ context.Context, model string) error {
 	if s == nil || s.client == nil {
 		return errors.New("codex session not initialized")

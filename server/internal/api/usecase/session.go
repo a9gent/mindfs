@@ -1053,6 +1053,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		log.Printf("[session/model] validate.error root=%s session=%s agent=%s model=%q err=%v", in.RootID, in.Key, strings.TrimSpace(in.Agent), strings.TrimSpace(in.Model), err)
 		return err
 	}
+	log.Printf("[session] turn.begin root=%s session=%s agent=%s model=%q", in.RootID, in.Key, strings.TrimSpace(in.Agent), strings.TrimSpace(in.Model))
 	turnCtx, turnCancel := context.WithCancel(ctx)
 	registerActiveTurn(in.RootID, in.Key, turnCancel)
 	defer unregisterActiveTurn(in.RootID, in.Key)
@@ -1168,7 +1169,17 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	})
 	sendErr := sess.SendMessage(turnCtx, prompt)
 	flushThought()
-	resolvedModel := resolveRuntimeModel(current, in.Model)
+	if sendErr != nil {
+		log.Printf("[session] turn.send.error root=%s session=%s agent=%s err=%v", in.RootID, current.Key, in.Agent, sendErr)
+	}
+	persistedModel := strings.TrimSpace(in.Model)
+	if persistedModel == "" {
+		persistedModel = sess.CurrentModel()
+	}
+	if persistedModel == "" {
+		persistedModel = resolveRuntimeModel(current, in.Model)
+	}
+	resolvedModel := persistedModel
 	resolvedEffort := resolveRuntimeEffort(in.Agent, current, in.Effort)
 	if prefs := s.Registry.GetPreferences(); prefs != nil {
 		if changed, err := prefs.UpdateAgentDefaultsIfChanged(in.Agent, resolvedModel, resolvedEffort); err != nil {
@@ -1182,9 +1193,11 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	}
 	resolvedMode := resolveRuntimeMode(current, in.Mode)
 	if err := manager.AddExchangeForAgent(ctx, current, "user", in.Content, in.Agent, resolvedMode, resolvedEffort); err != nil {
+		log.Printf("[session] persist.user.error root=%s session=%s agent=%s err=%v", in.RootID, current.Key, in.Agent, err)
 		return err
 	}
 	if err := manager.AddExchangeForAgent(ctx, current, "agent", responseText, in.Agent, resolvedMode, resolvedEffort); err != nil {
+		log.Printf("[session] persist.agent.error root=%s session=%s agent=%s err=%v", in.RootID, current.Key, in.Agent, err)
 		return err
 	}
 	for _, aux := range dedupeExchangeAuxBuffer(auxBuffer) {
@@ -1204,6 +1217,11 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		return sendErr
 	} else if prober != nil {
 		prober.ReportSuccess(in.Agent)
+	}
+	if isCanceledTurnError(sendErr) {
+		log.Printf("[session] turn.canceled root=%s session=%s agent=%s", in.RootID, current.Key, in.Agent)
+	} else {
+		log.Printf("[session] turn.complete root=%s session=%s agent=%s", in.RootID, current.Key, in.Agent)
 	}
 
 	return nil
@@ -1446,11 +1464,17 @@ func (s *Service) CancelSessionTurn(ctx context.Context, in CancelSessionTurnInp
 	}
 	active := getActiveTurn(in.RootID, current.Key)
 	if active == nil {
+		log.Printf("[session] turn.cancel.skip root=%s session=%s reason=no_active_turn", in.RootID, current.Key)
 		return nil
 	}
+	log.Printf("[session] turn.cancel.begin root=%s session=%s", in.RootID, current.Key)
 	active.cancel()
 	if active.session != nil {
-		return active.session.CancelCurrentTurn()
+		if err := active.session.CancelCurrentTurn(); err != nil {
+			log.Printf("[session] turn.cancel.error root=%s session=%s err=%v", in.RootID, current.Key, err)
+			return err
+		}
 	}
+	log.Printf("[session] turn.cancel.done root=%s session=%s", in.RootID, current.Key)
 	return nil
 }

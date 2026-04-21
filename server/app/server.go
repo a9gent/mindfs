@@ -112,7 +112,7 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	mux.Handle("/", httpHandler.Routes())
 	mux.Handle("/ws", wsHandler)
 
-	handler := api.LoggingMiddleware(mux)
+	handler := api.LoggingMiddleware(api.CORSMiddleware(mux))
 
 	server := &http.Server{
 		Addr:              addr,
@@ -154,6 +154,12 @@ func resolveStaticDir() string {
 		candidate := filepath.Join(prefix, "share", "mindfs", "web")
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return candidate
+		}
+		
+		// Fallback for development (running from workspace root)
+		cwdCandidate := filepath.Join(filepath.Dir(exe), "web", "dist")
+		if info, err := os.Stat(cwdCandidate); err == nil && info.IsDir() {
+			return cwdCandidate
 		}
 	}
 	return ""

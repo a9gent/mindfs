@@ -280,6 +280,13 @@ func (s *session) AnswerQuestion(context.Context, types.AskUserAnswer) error {
 	return errors.New("ask user question is not supported by acp sessions")
 }
 
+func (s *session) CurrentModel() string {
+	if s == nil || s.proc == nil {
+		return ""
+	}
+	return strings.TrimSpace(mapModelState(s.proc.SessionModelState(s.sessionKey)).CurrentModelID)
+}
+
 func (s *session) SetModel(ctx context.Context, model string) error {
 	if s == nil || s.proc == nil {
 		return errors.New("acp session not initialized")

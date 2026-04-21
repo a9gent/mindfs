@@ -15,6 +15,9 @@ type Session interface {
 	// AnswerQuestion sends a response for a pending AskUserQuestion tool call.
 	AnswerQuestion(ctx context.Context, answer AskUserAnswer) error
 
+	// CurrentModel returns the model currently used by the runtime session.
+	CurrentModel() string
+
 	// SetModel updates the model used by the current session.
 	SetModel(ctx context.Context, model string) error
 
