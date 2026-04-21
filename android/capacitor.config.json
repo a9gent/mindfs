@@ -1,0 +1,8 @@
+{
+  "appId": "com.mindfs.app",
+  "appName": "MindFS",
+  "webDir": "app/src/main/assets/public",
+  "server": {
+    "androidScheme": "http"
+  }
+}

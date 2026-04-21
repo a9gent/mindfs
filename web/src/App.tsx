@@ -59,6 +59,7 @@ import { SessionList } from "./components/SessionList";
 import { ExternalSessionList } from "./components/ExternalSessionList";
 import { AgentIcon } from "./components/AgentIcon";
 import { ActionBar } from "./components/ActionBar";
+import { ToastContainer } from "./components/Toast";
 import { BottomSheet } from "./components/BottomSheet";
 import {
   type GitHubImportState,
@@ -71,8 +72,8 @@ import { fetchAgents, type AgentStatus } from "./services/agents";
 // 类型定义
 type SessionMode = "chat" | "plugin";
 export type SessionItem = {
-  key?: string;
-  session_key?: string;
+  key: string;
+  session_key: string;
   root_id?: string;
   name?: string;
   type?: SessionMode;
@@ -2668,7 +2669,7 @@ export function App() {
         !!selectedKey &&
         (((selected as any)?.root_id as string | undefined) || activeRoot) ===
           activeRoot;
-      let sendSessionKey =
+      let sendSessionKey: string | null | undefined =
         isMainSessionView && selectedKey && !selectedKey.startsWith("pending-")
           ? selectedKey
           : activeBoundSessionKey;
@@ -2714,7 +2715,7 @@ export function App() {
           (effectiveAgent === previousAgent ? (session as any).effort || "" : "");
         updateSessionAgentForKey(
           activeRoot,
-          sendSessionKey,
+          sendSessionKey || undefined,
           effectiveAgent,
           effectiveModel,
           effectiveAgentMode,
@@ -2728,7 +2729,7 @@ export function App() {
           effort: effectiveEffort,
         } as Session;
         setBoundSessionForRoot(activeRoot, sendSessionKey);
-        setSelectedPendingByKey(sendSessionKey, true);
+        setSelectedPendingByKey(sendSessionKey || undefined, true);
         setDrawerSessionForRoot(activeRoot, {
           ...(session as any),
           pending: true,
@@ -2771,7 +2772,7 @@ export function App() {
         message,
         timestamp: now,
         requestId,
-        sessionKey: sendSessionKey,
+        sessionKey: sendSessionKey || undefined,
         tempKey,
       };
       if (sendSessionKey) {
@@ -2846,7 +2847,7 @@ export function App() {
       });
       const sent = await sessionService.sendMessage(
         activeRoot,
-        sendSessionKey,
+        sendSessionKey || undefined,
         message,
         effectiveMode,
         effectiveAgent,
@@ -2856,11 +2857,20 @@ export function App() {
         context,
         requestId,
       );
+      console.info("[session/send] dispatched", { requestId, rootId: activeRoot, sessionKey: sendSessionKey || null, tempKey: tempKey || null, sent });
       if (!sent) {
+        console.warn("[session/send] dispatch_failed", { requestId, rootId: activeRoot, sessionKey: sendSessionKey || null });
+        reportError("network.disconnected", "消息发送失败：连接未就绪，请稍后重试", {
+          details: {
+            requestId,
+            rootId: activeRoot,
+            sessionKey: sendSessionKey || null,
+          },
+        });
         delete pendingRequestRef.current[requestId];
       }
       if (!sent && sendSessionKey) {
-        setSelectedPendingByKey(sendSessionKey, false);
+        setSelectedPendingByKey(sendSessionKey || undefined, false);
         const latest = drawerSessionByRootRef.current[activeRoot];
         if (latest && latest.key === sendSessionKey) {
           setDrawerSessionForRoot(activeRoot, {
@@ -4363,9 +4373,10 @@ export function App() {
           pending = draft;
           pendingBySessionRef.current[ck] = draft;
           pendingDraftRef.current = null;
+          console.info("[session/stream] attach_pending_draft", { rootId: activeRoot, streamKey, requestId: draft.requestId, tempKey: draft.tempKey || null });
         }
       }
-      const boundKey = boundSessionByRootRef.current[activeRoot] || null;
+      const boundKey = boundSessionByRootRef.current[activeRoot] || "";
       if (
         !boundKey ||
         (typeof boundKey === "string" && boundKey.startsWith("pending-"))
@@ -4428,6 +4439,7 @@ export function App() {
         }
       }
       if (pending?.tempKey) {
+        console.info("[session/stream] promote_pending", { rootId: activeRoot, tempKey: pending.tempKey, streamKey, requestId: pending.requestId });
         promotePendingSessionForRoot(
           activeRoot,
           pending.tempKey,
@@ -4510,6 +4522,17 @@ export function App() {
           handleSessionStreamDone(activeRoot, streamKey);
           break;
         case "error":
+          reportError(
+            "session.resume_failed",
+            event.data?.message || "会话处理失败，请稍后重试",
+            {
+              details: {
+                rootId: activeRoot,
+                sessionKey: streamKey,
+                eventType: event.type,
+              },
+            },
+          );
           handleSessionStreamDone(activeRoot, streamKey);
           break;
       }
@@ -4681,8 +4704,10 @@ export function App() {
             typeof payload?.request_id === "string" ? payload.request_id : "";
           const pending = pendingRequestRef.current[requestId];
           if (!requestId || !pending) {
+            console.warn("[session/ws] accepted_without_pending", { requestId, payloadSessionKey: typeof payload?.session_key === "string" ? payload.session_key : null });
             break;
           }
+          console.info("[session/ws] accepted", { requestId, rootId: pending.rootId, sessionKey: pending.sessionKey || null, tempKey: pending.tempKey || null });
           delete pendingRequestRef.current[requestId];
           const markAccepted = (
             sess: Session | null | undefined,
@@ -4727,8 +4752,10 @@ export function App() {
             ? pendingRequestRef.current[requestId]
             : null;
           if (!requestId || !pending) {
+            console.warn("[session/ws] error_without_pending", { requestId, payloadSessionKey: typeof payload?.session_key === "string" ? payload.session_key : null });
             break;
           }
+          console.warn("[session/ws] error", { requestId, rootId: pending.rootId, sessionKey: pending.sessionKey || null, tempKey: pending.tempKey || null });
           delete pendingRequestRef.current[requestId];
           const targetKey = pending.tempKey || "";
           const rootID = pending.rootId;
@@ -4755,6 +4782,7 @@ export function App() {
         case "session.done": {
           const sessionKey =
             typeof payload?.session_key === "string" ? payload.session_key : "";
+          console.info("[session/ws] done", { rootId: typeof payload?.root_id === "string" ? payload.root_id : null, sessionKey: sessionKey || null });
           const rootID =
             typeof payload?.root_id === "string" && payload.root_id
               ? payload.root_id
@@ -4782,6 +4810,7 @@ export function App() {
             typeof payload?.session_key === "string" &&
             typeof payload?.root_id === "string"
           ) {
+            console.info("[session/ws] user_message", { rootId: payload.root_id, sessionKey: payload.session_key });
             const rootID = payload.root_id;
             const sessionKey = payload.session_key;
             const exchange = payload.exchange;
@@ -6436,6 +6465,7 @@ export function App() {
           </BottomSheet>
         }
       />
+      <ToastContainer />
     </>
   );
 }

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -302,6 +303,7 @@ func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role,
 		Timestamp: m.now().UTC(),
 	}
 	if err := m.appendExchange(session.Key, record); err != nil {
+		log.Printf("[session/store] append.error session=%s seq=%d role=%s agent=%s err=%v", session.Key, record.Seq, role, resolvedAgent, err)
 		return err
 	}
 	session.Exchanges = append(session.Exchanges, record)

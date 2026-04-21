@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"mime"
@@ -732,6 +733,9 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", mimeType)
 		} else {
 			w.Header().Set("Content-Type", "application/octet-stream")
+		}
+		if r.URL.Query().Get("download") == "1" {
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(rawOut.RelPath)))
 		}
 		w.WriteHeader(http.StatusOK)
 		io.Copy(w, rawOut.File)

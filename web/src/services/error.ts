@@ -6,6 +6,13 @@ export type ErrorCode =
   | "session.create_failed"
   | "session.closed"
   | "session.resume_failed"
+  | "session.delete_failed"
+  | "session.import_failed"
+  | "session.rename_failed"
+  | "app.init_failed"
+  // Root/project errors
+  | "root.create_failed"
+  | "root.delete_failed"
   // Agent errors
   | "agent.unavailable"
   | "agent.timeout"
@@ -113,6 +120,36 @@ class ErrorService {
       },
       "session.resume_failed": {
         message: "恢复会话失败",
+        severity: "error",
+        recoverable: true,
+      },
+      "session.delete_failed": {
+        message: "删除会话失败",
+        severity: "error",
+        recoverable: true,
+      },
+      "session.import_failed": {
+        message: "导入会话失败",
+        severity: "error",
+        recoverable: true,
+      },
+      "session.rename_failed": {
+        message: "重命名会话失败",
+        severity: "error",
+        recoverable: true,
+      },
+      "app.init_failed": {
+        message: "初始化失败",
+        severity: "error",
+        recoverable: true,
+      },
+      "root.create_failed": {
+        message: "创建项目失败",
+        severity: "error",
+        recoverable: true,
+      },
+      "root.delete_failed": {
+        message: "删除项目失败",
         severity: "error",
         recoverable: true,
       },

@@ -19,3 +19,4 @@ build/
 vendor/
 *.out
 design/
+/mindfs
