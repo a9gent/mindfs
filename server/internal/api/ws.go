@@ -310,6 +310,7 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 	agentMode := getString(req.Payload, "agent_mode")
 	effort := getString(req.Payload, "effort")
 	requestID := strings.TrimSpace(req.ID)
+	log.Printf("[ws] session.message.begin root=%s session=%s request=%s type=%s agent=%s model=%q client=%s", rootID, key, requestID, sessionType, agentName, model, clientID)
 	if content == "" || sessionType == "" || agentName == "" {
 		h.sendWSError(conn, req.ID, "invalid_request", "content, type and agent required")
 		return
@@ -393,12 +394,15 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 		},
 	})
 	if err != nil {
+		log.Printf("[ws] session.message.error root=%s session=%s request=%s err=%v", rootID, key, req.ID, err)
 		errorMessage := normalizeAgentErrorMessage(err)
 		event := &StreamEvent{
 			Type: "error",
 			Data: map[string]string{"message": errorMessage},
 		}
 		streamHub.BroadcastSessionStream(rootID, key, event)
+	} else {
+		log.Printf("[ws] session.message.success root=%s session=%s request=%s", rootID, key, req.ID)
 	}
 	streamHub.ClearSessionPending(key)
 
@@ -444,8 +448,11 @@ func (h *WSHandler) handleSessionCancel(ctx context.Context, conn *websocket.Con
 		RootID: rootID,
 		Key:    key,
 	}); err != nil {
+		log.Printf("[ws] session.cancel.error root=%s session=%s request=%s err=%v", rootID, key, req.ID, err)
 		h.sendWSError(conn, req.ID, "session.cancel_failed", err.Error())
+		return
 	}
+	log.Printf("[ws] session.cancel.done root=%s session=%s request=%s", rootID, key, req.ID)
 }
 
 func (h *WSHandler) sendWSError(conn *websocket.Conn, id, code, message string) {

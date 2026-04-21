@@ -80,19 +80,15 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 	}
 
 	selectedModel := strings.TrimSpace(opts.Model)
-	if selectedModel == "" {
-		for _, model := range client.SupportedModelsFromInit() {
-			candidate := strings.TrimSpace(model.Value)
-			if candidate == "" {
-				continue
-			}
-			if err := stream.SetModel(ctx, candidate); err != nil {
-				_ = stream.Close()
-				_ = client.Close()
-				return nil, err
-			}
+	if selectedModel == "" && opts.ResumeSessionID == "" {
+		if candidate, ok := claudeFirstAvailableModel(client); ok {
 			selectedModel = candidate
-			break
+		}
+	}
+	if selectedModel != "" {
+		if err := stream.SetModel(ctx, selectedModel); err != nil {
+			client.Close()
+			return nil, err
 		}
 	}
 
@@ -109,6 +105,20 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 }
 
 func (r *Runtime) CloseAll() {}
+
+func claudeFirstAvailableModel(client *claudeagent.Client) (string, bool) {
+	if client == nil {
+		return "", false
+	}
+	for _, item := range client.SupportedModelsFromInit() {
+		candidate := strings.TrimSpace(item.Value)
+		if candidate == "" || strings.EqualFold(candidate, "default") {
+			continue
+		}
+		return candidate, true
+	}
+	return "", false
+}
 
 type session struct {
 	client *claudeagent.Client
@@ -169,6 +179,15 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 		log.Printf("[agent/claude] send.error session=%s err=%v", s.sessionKey, turnCtx.Err())
 		return turnCtx.Err()
 	}
+}
+
+func (s *session) CurrentModel() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return strings.TrimSpace(s.model)
 }
 
 func (s *session) SetModel(ctx context.Context, model string) error {
@@ -268,14 +287,18 @@ func (s *session) SessionID() string {
 }
 
 func (s *session) CancelCurrentTurn() error {
+	log.Printf("[agent/claude] cancel.begin session=%s", s.sessionKey)
 	if s.stream == nil {
 		s.turn.Cancel()
+		log.Printf("[agent/claude] cancel.done session=%s mode=turn_only", s.sessionKey)
 		return nil
 	}
 	if err := s.stream.Interrupt(context.Background()); err == nil {
+		log.Printf("[agent/claude] cancel.done session=%s mode=interrupt", s.sessionKey)
 		return nil
 	}
 	s.turn.Cancel()
+	log.Printf("[agent/claude] cancel.done session=%s mode=fallback_turn_only", s.sessionKey)
 	return nil
 }
 
