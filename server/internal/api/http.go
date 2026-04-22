@@ -457,7 +457,12 @@ func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		RootID: rootID,
 		Key:    key,
 	})
-	respondJSON(w, http.StatusOK, sessionResponse(out, pendingUser, contextWindow))
+	exchangeAux, _ := uc.GetSessionExchangeAux(r.Context(), usecase.GetSessionExchangeAuxInput{
+		RootID: rootID,
+		Key:    key,
+		Seq:    afterSeq,
+	})
+	respondJSON(w, http.StatusOK, sessionResponse(out, pendingUser, contextWindow, exchangeAux))
 }
 
 func (h *HTTPHandler) handleSessionRelatedFilesGet(w http.ResponseWriter, r *http.Request) {
@@ -573,7 +578,12 @@ func (h *HTTPHandler) handleSessionDelete(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func sessionResponse(s *session.Session, pendingUser *session.Exchange, contextWindow agenttypes.ContextWindow) map[string]any {
+func sessionResponse(
+	s *session.Session,
+	pendingUser *session.Exchange,
+	contextWindow agenttypes.ContextWindow,
+	exchangeAux map[int][]session.ExchangeAux,
+) map[string]any {
 	if s == nil {
 		return map[string]any{}
 	}
@@ -581,6 +591,13 @@ func sessionResponse(s *session.Session, pendingUser *session.Exchange, contextW
 	if pendingUser != nil {
 		pendingUser.Seq = 0
 		exchanges = append(exchanges, *pendingUser)
+	}
+	auxPayload := make(map[string][]session.ExchangeAux, len(exchangeAux))
+	for seq, items := range exchangeAux {
+		if seq <= 0 || len(items) == 0 {
+			continue
+		}
+		auxPayload[strconv.Itoa(seq)] = append([]session.ExchangeAux(nil), items...)
 	}
 	return map[string]any{
 		"key":            s.Key,
@@ -591,6 +608,7 @@ func sessionResponse(s *session.Session, pendingUser *session.Exchange, contextW
 		"effort":         session.InferEffortFromSession(s),
 		"name":           s.Name,
 		"exchanges":      exchanges,
+		"exchange_aux":   auxPayload,
 		"related_files":  s.RelatedFiles,
 		"context_window": contextWindow,
 		"created_at":     s.CreatedAt,

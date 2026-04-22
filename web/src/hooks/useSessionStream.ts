@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { sessionService, type TodoUpdate, type ToolCall } from "../services/session";
+import {
+  sessionService,
+  type ExchangeAux,
+  type TodoUpdate,
+  type ToolCall,
+} from "../services/session";
 
 type ExchangeLike = {
   seq?: number;
@@ -15,6 +20,8 @@ type ExchangeLike = {
   todoUpdate?: TodoUpdate;
   pending_ack?: boolean;
 };
+
+type ExchangeAuxMapLike = Record<string, ExchangeAux[]>;
 
 export type TimelineItem =
   | {
@@ -91,7 +98,11 @@ function settleRunningTools(items: TimelineItem[]): TimelineItem[] {
   return items.map((item) => {
     if (item.type !== "tool") return item;
     const status = (item.toolCall.status || "").toLowerCase();
-    if (status === "running" || status === "in_progress" || status === "pending") {
+    if (
+      status === "running" ||
+      status === "in_progress" ||
+      status === "pending"
+    ) {
       return {
         ...item,
         toolCall: {
@@ -104,7 +115,139 @@ function settleRunningTools(items: TimelineItem[]): TimelineItem[] {
   });
 }
 
-function buildBaseTimeline(exchanges: ExchangeLike[]): TimelineItem[] {
+function assistantSegmentItem(
+  index: number,
+  ex: ExchangeLike,
+  content: string,
+  segmentIndex: number,
+  includeContextWindow: boolean,
+): TimelineItem | null {
+  if (!content) {
+    return null;
+  }
+  return {
+    id: stableTimelineID(
+      "assistant",
+      index * 1000 + segmentIndex,
+      content,
+      ex.timestamp,
+      ex.agent,
+    ),
+    type: "assistant_text",
+    content,
+    timestamp: ex.timestamp,
+    agent: ex.agent,
+    seq: ex.seq,
+    contextWindow: includeContextWindow ? ex.context_window : undefined,
+  };
+}
+
+function buildAssistantTimeline(
+  ex: ExchangeLike,
+  index: number,
+  auxList: ExchangeAux[],
+): TimelineItem[] {
+  const content = ex.content || "";
+  if (!auxList.length) {
+    const single = assistantSegmentItem(index, ex, content, 0, true);
+    return single ? [single] : [];
+  }
+
+  const lines = content === "" ? [] : content.split("\n");
+  const totalLines = lines.length;
+  const out: TimelineItem[] = [];
+  const normalizedAux = auxList.map((aux, auxIndex) => ({
+    ...aux,
+    auxIndex,
+    line: Math.max(0, Math.min(totalLines, Number(aux.line || 0))),
+  }));
+  normalizedAux.sort((left, right) => {
+    if (left.line !== right.line) {
+      return left.line - right.line;
+    }
+    return left.auxIndex - right.auxIndex;
+  });
+
+  let emittedLines = 0;
+  let segmentIndex = 0;
+  for (const aux of normalizedAux) {
+    if (aux.line > emittedLines) {
+      const segment = assistantSegmentItem(
+        index,
+        ex,
+        lines.slice(emittedLines, aux.line).join("\n"),
+        segmentIndex,
+        false,
+      );
+      if (segment) {
+        out.push(segment);
+        segmentIndex += 1;
+      }
+      emittedLines = aux.line;
+    }
+    if (aux.thought) {
+      out.push({
+        id: stableTimelineID(
+          "thought",
+          index * 1000 + segmentIndex,
+          aux.thought,
+          ex.timestamp,
+          ex.agent,
+        ),
+        type: "thought",
+        content: aux.thought,
+      });
+      segmentIndex += 1;
+    } else if (aux.toolcall) {
+      const normalizedTool = normalizeToolCall(aux.toolcall);
+      out.push({
+        id:
+          normalizedTool.callId ||
+          stableTimelineID(
+            "tool",
+            index * 1000 + segmentIndex,
+            JSON.stringify(normalizedTool),
+            ex.timestamp,
+            ex.agent,
+          ),
+        type: "tool",
+        toolCall: normalizedTool,
+      });
+      segmentIndex += 1;
+    }
+  }
+
+  if (emittedLines < totalLines) {
+    const segment = assistantSegmentItem(
+      index,
+      ex,
+      lines.slice(emittedLines).join("\n"),
+      segmentIndex,
+      true,
+    );
+    if (segment) {
+      out.push(segment);
+      segmentIndex += 1;
+    }
+  } else {
+    for (let i = out.length - 1; i >= 0; i -= 1) {
+      if (out[i].type === "assistant_text") {
+        out[i] = {
+          ...out[i],
+          contextWindow: ex.context_window,
+        };
+        break;
+      }
+    }
+  }
+
+  return out;
+}
+
+function buildBaseTimeline(
+  exchanges: ExchangeLike[],
+  exchangeAux: ExchangeAuxMapLike,
+): TimelineItem[] {
   const out: TimelineItem[] = [];
   for (let index = 0; index < exchanges.length; index += 1) {
     const ex = exchanges[index];
@@ -124,16 +267,8 @@ function buildBaseTimeline(exchanges: ExchangeLike[]): TimelineItem[] {
       continue;
     }
     if (role === "agent" || role === "assistant") {
-      if (!content) continue;
-      out.push({
-        id: stableTimelineID("assistant", index, content, ex.timestamp, ex.agent),
-        type: "assistant_text",
-        content,
-        timestamp: ex.timestamp,
-        agent: ex.agent,
-        seq: ex.seq,
-        contextWindow: ex.context_window,
-      });
+      const auxList = ex.seq ? exchangeAux[String(ex.seq)] || [] : [];
+      out.push(...buildAssistantTimeline(ex, index, auxList));
       continue;
     }
     if (role === "thought") {
@@ -187,7 +322,10 @@ function applySessionContextWindow(
   contextWindow?: ContextWindowLike,
 ): TimelineItem[] {
   const totalTokens = Math.max(0, Number(contextWindow?.totalTokens || 0));
-  const modelContextWindow = Math.max(0, Number(contextWindow?.modelContextWindow || 0));
+  const modelContextWindow = Math.max(
+    0,
+    Number(contextWindow?.modelContextWindow || 0),
+  );
   if (!totalTokens || !modelContextWindow) {
     return items;
   }
@@ -196,7 +334,10 @@ function applySessionContextWindow(
     if (item.type !== "assistant_text") {
       continue;
     }
-    if (item.contextWindow?.totalTokens && item.contextWindow?.modelContextWindow) {
+    if (
+      item.contextWindow?.totalTokens &&
+      item.contextWindow?.modelContextWindow
+    ) {
       return items;
     }
     const next = [...items];
@@ -215,13 +356,18 @@ function applySessionContextWindow(
 export function useSessionStream(
   sessionKey: string | null,
   exchanges: ExchangeLike[] = [],
+  exchangeAux: ExchangeAuxMapLike = {},
   sessionContextWindow?: ContextWindowLike,
 ): UseSessionStreamResult {
   const [isStreaming, setIsStreaming] = useState(false);
 
   const baseTimeline = useMemo(
-    () => applySessionContextWindow(buildBaseTimeline(exchanges), sessionContextWindow),
-    [exchanges, sessionContextWindow],
+    () =>
+      applySessionContextWindow(
+        buildBaseTimeline(exchanges, exchangeAux),
+        sessionContextWindow,
+      ),
+    [exchanges, exchangeAux, sessionContextWindow],
   );
 
   useEffect(() => {

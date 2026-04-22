@@ -25,6 +25,7 @@ import (
 const (
 	sessionDBPath    = "sessions/session-list.db"
 	exchangeFileTpl  = "sessions/%s.jsonl"
+	auxFileTpl       = "sessions/%s.aux.jsonl"
 	selectSessionSQL = `
 SELECT key, type, model, name, related_files_json, created_at, updated_at, closed_at
 FROM sessions`
@@ -207,6 +208,12 @@ func (m *Manager) Get(_ context.Context, key string, afterSeq int) (*Session, er
 	return m.getSessionUnsafe(key, afterSeq)
 }
 
+func (m *Manager) GetExchangeAux(_ context.Context, key string, afterSeq int) (map[int][]ExchangeAux, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.loadExchangeAux(key, afterSeq)
+}
+
 func (m *Manager) List(_ context.Context, opts ListOptions) ([]*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -318,6 +325,21 @@ func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role,
 		return err
 	}
 	return nil
+}
+
+func (m *Manager) AddExchangeAux(_ context.Context, sessionKey string, aux ExchangeAux) error {
+	if strings.TrimSpace(sessionKey) == "" {
+		return errors.New("session key required")
+	}
+	if aux.Seq <= 0 {
+		return errors.New("aux seq required")
+	}
+	if aux.ToolCall == nil && strings.TrimSpace(aux.Thought) == "" {
+		return errors.New("aux content required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.appendExchangeAux(sessionKey, aux)
 }
 
 func (m *Manager) AddRelatedFile(_ context.Context, key string, file RelatedFile) error {
@@ -631,6 +653,13 @@ func (m *Manager) deleteSessionUnsafe(key string) error {
 		return err
 	}
 	if err := os.Remove(filepath.Join(metaDir, filepath.FromSlash(path))); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	auxPath, err := m.auxPath(key)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(metaDir, filepath.FromSlash(auxPath))); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
@@ -958,6 +987,63 @@ func (m *Manager) appendExchange(key string, exchange Exchange) error {
 	return nil
 }
 
+func (m *Manager) loadExchangeAux(key string, afterSeq int) (map[int][]ExchangeAux, error) {
+	path, err := m.auxPath(key)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := m.root.ReadMetaFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[int][]ExchangeAux{}, nil
+		}
+		return nil, err
+	}
+	items := make(map[int][]ExchangeAux)
+	scanner := bufio.NewScanner(strings.NewReader(string(payload)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var entry ExchangeAux
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if entry.Seq <= 0 {
+			continue
+		}
+		if afterSeq > 0 && entry.Seq <= afterSeq {
+			continue
+		}
+		items[entry.Seq] = append(items[entry.Seq], entry)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (m *Manager) appendExchangeAux(key string, aux ExchangeAux) error {
+	path, err := m.auxPath(key)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(aux)
+	if err != nil {
+		return err
+	}
+	file, err := m.root.OpenMetaFileAppend(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if _, err := file.Write(append(payload, '\n')); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (m *Manager) exchangePath(key string) (string, error) {
 	if strings.TrimSpace(m.root.MetaDir()) == "" {
 		return "", errors.New("managed dir required")
@@ -969,6 +1055,19 @@ func (m *Manager) exchangePath(key string) (string, error) {
 		return "", fmt.Errorf("invalid session key: %s", key)
 	}
 	return filepath.ToSlash(fmt.Sprintf(exchangeFileTpl, key)), nil
+}
+
+func (m *Manager) auxPath(key string) (string, error) {
+	if strings.TrimSpace(m.root.MetaDir()) == "" {
+		return "", errors.New("managed dir required")
+	}
+	if key == "" {
+		return "", errors.New("session key required")
+	}
+	if strings.Contains(key, "..") || strings.ContainsRune(key, filepath.Separator) || strings.Contains(key, "/") {
+		return "", fmt.Errorf("invalid session key: %s", key)
+	}
+	return filepath.ToSlash(fmt.Sprintf(auxFileTpl, key)), nil
 }
 
 func (m *Manager) ensureSessionMetaDBUnsafe() (*sql.DB, error) {

@@ -7,7 +7,7 @@ import { AgentIcon } from "./AgentIcon";
 import { InlineTokenText } from "./InlineTokenText";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { fetchProofProtectedBlob } from "../services/file";
-import type { RelatedFile, ToolCall } from "../services/session";
+import type { ExchangeAux, RelatedFile, ToolCall } from "../services/session";
 import { savePrompt } from "../services/prompts";
 import { reportError } from "../services/error";
 
@@ -37,6 +37,7 @@ type SessionItem = {
   }>;
   closed_at?: string;
   related_files?: RelatedFile[];
+  exchange_aux?: Record<string, ExchangeAux[]>;
 };
 
 type SessionViewerProps = {
@@ -46,7 +47,10 @@ type SessionViewerProps = {
   rootPath?: string | null;
   interactionMode?: "main" | "drawer";
   targetSeq?: number;
-  gitFileStatsByPath?: Record<string, { status: string; additions: number; deletions: number }>;
+  gitFileStatsByPath?: Record<
+    string,
+    { status: string; additions: number; deletions: number }
+  >;
   onFileClick?: (path: string) => void;
   onRemoveRelatedFile?: (path: string) => void;
 };
@@ -57,7 +61,15 @@ type UploadAttachment = {
   isImage: boolean;
 };
 
-function AttachmentImage({ rootId, path, name }: { rootId: string; path: string; name: string }) {
+function AttachmentImage({
+  rootId,
+  path,
+  name,
+}: {
+  rootId: string;
+  path: string;
+  name: string;
+}) {
   const [url, setURL] = useState("");
 
   useEffect(() => {
@@ -90,7 +102,13 @@ function AttachmentImage({ rootId, path, name }: { rootId: string; path: string;
     <img
       src={url}
       alt={name}
-      style={{ display: "block", width: "100%", maxHeight: "220px", objectFit: "cover", background: "rgba(15,23,42,0.06)" }}
+      style={{
+        display: "block",
+        width: "100%",
+        maxHeight: "220px",
+        objectFit: "cover",
+        background: "rgba(15,23,42,0.06)",
+      }}
     />
   );
 }
@@ -126,16 +144,17 @@ function stripImageAttachmentTokens(content: string): string {
   if (!content) {
     return "";
   }
-  const stripped = content.replace(uploadTokenPattern, (fullMatch, rawPath: string) => {
-    const path = String(rawPath || "").trim();
-    if (!isImagePath(path)) {
-      return fullMatch;
-    }
-    return "";
-  });
-  return stripped
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/^[\n\s]+|[\n\s]+$/g, "");
+  const stripped = content.replace(
+    uploadTokenPattern,
+    (fullMatch, rawPath: string) => {
+      const path = String(rawPath || "").trim();
+      if (!isImagePath(path)) {
+        return fullMatch;
+      }
+      return "";
+    },
+  );
+  return stripped.replace(/\n{3,}/g, "\n\n").replace(/^[\n\s]+|[\n\s]+$/g, "");
 }
 
 function stripUploadAttachmentTokens(content: string): string {
@@ -148,9 +167,15 @@ function stripUploadAttachmentTokens(content: string): string {
     .replace(/^[\n\s]+|[\n\s]+$/g, "");
 }
 
-function formatContextWindowPercent(contextWindow?: { totalTokens: number; modelContextWindow: number }) {
+function formatContextWindowPercent(contextWindow?: {
+  totalTokens: number;
+  modelContextWindow: number;
+}) {
   const usedTokens = Math.max(0, Number(contextWindow?.totalTokens || 0));
-  const modelContextWindow = Math.max(0, Number(contextWindow?.modelContextWindow || 0));
+  const modelContextWindow = Math.max(
+    0,
+    Number(contextWindow?.modelContextWindow || 0),
+  );
   if (!usedTokens || !modelContextWindow) {
     return null;
   }
@@ -178,12 +203,21 @@ function formatCompactTokenCount(value: number) {
   return String(Math.round(value));
 }
 
-function ContextWindowBadge({ contextWindow }: { contextWindow?: { totalTokens: number; modelContextWindow: number } }) {
+function ContextWindowBadge({
+  contextWindow,
+}: {
+  contextWindow?: { totalTokens: number; modelContextWindow: number };
+}) {
   const metrics = formatContextWindowPercent(contextWindow);
   if (!metrics) {
     return null;
   }
-  const hue = metrics.percent <= 10 ? "#dc2626" : metrics.percent <= 25 ? "#ea580c" : "#0f766e";
+  const hue =
+    metrics.percent <= 10
+      ? "#dc2626"
+      : metrics.percent <= 25
+        ? "#ea580c"
+        : "#0f766e";
   return (
     <span
       title={`Context Window ${metrics.percent}% left (${metrics.usedTokens}/${contextWindow?.modelContextWindow} used)`}
@@ -192,7 +226,6 @@ function ContextWindowBadge({ contextWindow }: { contextWindow?: { totalTokens: 
         alignItems: "center",
         justifyContent: "center",
         color: hue,
-        opacity: 0.88,
         lineHeight: 1.1,
         flexShrink: 0,
         fontSize: "10px",
@@ -202,7 +235,7 @@ function ContextWindowBadge({ contextWindow }: { contextWindow?: { totalTokens: 
       }}
     >
       <span>{metrics.percent}%</span>
-      <span style={{ opacity: 0.72 }}>
+      <span>
         {`(${formatCompactTokenCount(metrics.usedTokens)}/${formatCompactTokenCount(
           contextWindow?.modelContextWindow || 0,
         )})`}
@@ -218,13 +251,19 @@ const formatTime = (isoString?: string) => {
     const now = new Date();
     const isToday = date.toDateString() === now.toDateString();
     const isThisYear = date.getFullYear() === now.getFullYear();
-    const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const timeStr = date.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
     if (isToday) return timeStr;
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
+    const month = (date.getMonth() + 1).toString().padStart(2, "0");
+    const day = date.getDate().toString().padStart(2, "0");
     if (isThisYear) return `${month}-${day} ${timeStr}`;
     return `${date.getFullYear()}-${month}-${day} ${timeStr}`;
-  } catch { return ""; }
+  } catch {
+    return "";
+  }
 };
 
 const formatToolCallFallbackResult = (toolCall: Partial<ToolCall>): string => {
@@ -237,7 +276,8 @@ const formatToolCallFallbackResult = (toolCall: Partial<ToolCall>): string => {
     return rawInput;
   }
   const rawOutput = toolCall.meta?.output;
-  if (typeof rawOutput === "string" && rawOutput.trim() !== "") return rawOutput;
+  if (typeof rawOutput === "string" && rawOutput.trim() !== "")
+    return rawOutput;
   return "";
 };
 
@@ -277,7 +317,9 @@ const formatTodoToolCallInput = (rawInput: string): string => {
 };
 
 function isAuxiliaryTimelineItem(item: TimelineItem | null): boolean {
-  return item?.type === "tool" || item?.type === "thought" || item?.type === "todo";
+  return (
+    item?.type === "tool" || item?.type === "thought" || item?.type === "todo"
+  );
 }
 
 function TodoUpdateCard({ todoUpdate }: { todoUpdate: TodoUpdate }) {
@@ -289,7 +331,8 @@ function TodoUpdateCard({ todoUpdate }: { todoUpdate: TodoUpdate }) {
         minWidth: 0,
         borderRadius: "10px",
         border: "1px solid rgba(16, 185, 129, 0.22)",
-        background: "linear-gradient(180deg, rgba(16, 185, 129, 0.08), rgba(16, 185, 129, 0.03))",
+        background:
+          "linear-gradient(180deg, rgba(16, 185, 129, 0.08), rgba(16, 185, 129, 0.03))",
         overflow: "hidden",
       }}
     >
@@ -304,12 +347,22 @@ function TodoUpdateCard({ todoUpdate }: { todoUpdate: TodoUpdate }) {
       >
         ✅ todos
       </div>
-      <div style={{ padding: "10px", display: "flex", flexDirection: "column", gap: "6px" }}>
+      <div
+        style={{
+          padding: "10px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "6px",
+        }}
+      >
         {items.map((item, index) => {
           const status = `${item?.status || ""}`.trim().toLowerCase();
           const content = `${item?.content || ""}`.trim();
           const activeForm = `${item?.activeForm || ""}`.trim();
-          const label = status === "in_progress" && activeForm ? activeForm : (content || activeForm);
+          const label =
+            status === "in_progress" && activeForm
+              ? activeForm
+              : content || activeForm;
           const checked = status === "completed";
           return (
             <div
@@ -331,7 +384,10 @@ function TodoUpdateCard({ todoUpdate }: { todoUpdate: TodoUpdate }) {
   );
 }
 
-function timelineItemSpacing(previous: TimelineItem | null, current: TimelineItem): string {
+function timelineItemSpacing(
+  previous: TimelineItem | null,
+  current: TimelineItem,
+): string {
   if (!previous) {
     return "0";
   }
@@ -341,7 +397,10 @@ function timelineItemSpacing(previous: TimelineItem | null, current: TimelineIte
   return "16px";
 }
 
-function collectAssistantFlowMarkdown(timeline: TimelineItem[], startIndex: number): string {
+function collectAssistantFlowMarkdown(
+  timeline: TimelineItem[],
+  startIndex: number,
+): string {
   const segments: string[] = [];
 
   for (let index = startIndex; index >= 0; index -= 1) {
@@ -364,7 +423,7 @@ function collectAssistantFlowMarkdown(timeline: TimelineItem[], startIndex: numb
     }
   }
 
-  return segments.join("\n\n").trim();
+  return segments.join("").trim();
 }
 
 async function copyText(text: string): Promise<void> {
@@ -412,14 +471,27 @@ async function copyText(text: string): Promise<void> {
   }
 }
 
-function shouldDefaultCollapseRelatedFiles(isMobile: boolean, relatedFileCount: number): boolean {
+function shouldDefaultCollapseRelatedFiles(
+  isMobile: boolean,
+  relatedFileCount: number,
+): boolean {
   if (isMobile) {
     return relatedFileCount > 0;
   }
   return relatedFileCount > 5;
 }
 
-function SessionViewerInner({ session, loading = false, rootId, rootPath, interactionMode = "main", targetSeq = 0, gitFileStatsByPath = {}, onFileClick, onRemoveRelatedFile }: SessionViewerProps) {
+function SessionViewerInner({
+  session,
+  loading = false,
+  rootId,
+  rootPath,
+  interactionMode = "main",
+  targetSeq = 0,
+  gitFileStatsByPath = {},
+  onFileClick,
+  onRemoveRelatedFile,
+}: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
   const [relatedFilesCollapsed, setRelatedFilesCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(() => {
@@ -428,8 +500,12 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
     }
     return window.matchMedia("(max-width: 767px)").matches;
   });
-  const [savedPromptKeys, setSavedPromptKeys] = useState<Record<string, true>>({});
-  const [copiedMessageKeys, setCopiedMessageKeys] = useState<Record<string, true>>({});
+  const [savedPromptKeys, setSavedPromptKeys] = useState<Record<string, true>>(
+    {},
+  );
+  const [copiedMessageKeys, setCopiedMessageKeys] = useState<
+    Record<string, true>
+  >({});
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const onFileClickRef = useRef(onFileClick);
@@ -440,6 +516,7 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
   const { timeline, isStreaming } = useSessionStream(
     sessionKey,
     exchanges,
+    session?.exchange_aux || {},
     session?.context_window,
   );
   const isAwaiting = !!(session as any)?.pending;
@@ -469,13 +546,17 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
     setSavedPromptKeys({});
     setCopiedMessageKeys({});
     relatedFilesDefaultStateRef.current = "";
-    Object.values(copyResetTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+    Object.values(copyResetTimersRef.current).forEach((timer) =>
+      window.clearTimeout(timer),
+    );
     copyResetTimersRef.current = {};
   }, [sessionKey]);
 
   useEffect(() => {
     return () => {
-      Object.values(copyResetTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+      Object.values(copyResetTimersRef.current).forEach((timer) =>
+        window.clearTimeout(timer),
+      );
       copyResetTimersRef.current = {};
     };
   }, []);
@@ -500,7 +581,8 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
     const el = scrollRef.current;
     if (!el) return;
     const updateStickiness = () => {
-      const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop;
+      const distanceFromBottom =
+        el.scrollHeight - el.clientHeight - el.scrollTop;
       shouldStickToBottomRef.current = distanceFromBottom < 32;
     };
     updateStickiness();
@@ -532,12 +614,17 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
   const rawRelated = session?.related_files || (session as any)?.outputs || [];
   const relatedFiles = (Array.isArray(rawRelated) ? rawRelated : [])
     .map((f: any) => {
-      const path = typeof f === "string" ? f : (typeof f?.path === "string" ? f.path : "");
-      const name = typeof f?.name === "string" ? f.name : path.split("/").pop() || path;
+      const path =
+        typeof f === "string" ? f : typeof f?.path === "string" ? f.path : "";
+      const name =
+        typeof f?.name === "string" ? f.name : path.split("/").pop() || path;
       return { path, name };
     })
-    .filter(f => f.path);
-  const defaultRelatedFilesCollapsed = shouldDefaultCollapseRelatedFiles(isMobile, relatedFiles.length);
+    .filter((f) => f.path);
+  const defaultRelatedFilesCollapsed = shouldDefaultCollapseRelatedFiles(
+    isMobile,
+    relatedFiles.length,
+  );
   const relatedFilesDefaultStateKey = `${sessionKey || ""}:${isMobile ? "mobile" : "desktop"}:${defaultRelatedFilesCollapsed ? "collapsed" : "expanded"}`;
 
   useEffect(() => {
@@ -550,7 +637,13 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
 
   if (!session) {
     return (
-      <div style={{ padding: "40px", textAlign: "center", color: "var(--text-secondary)" }}>
+      <div
+        style={{
+          padding: "40px",
+          textAlign: "center",
+          color: "var(--text-secondary)",
+        }}
+      >
         选择一个会话查看内容
       </div>
     );
@@ -558,7 +651,12 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
 
   const displayFiles = showAllFiles ? relatedFiles : relatedFiles.slice(0, 10);
   const hasMoreFiles = relatedFiles.length > 10;
-  const displayName = session.name || session.purpose || session.key || session.session_key || "Session";
+  const displayName =
+    session.name ||
+    session.purpose ||
+    session.key ||
+    session.session_key ||
+    "Session";
   const hasVisibleTimeline = timeline.length > 0;
   const userMetaButtonStyle: React.CSSProperties = {
     width: "18px",
@@ -580,12 +678,18 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
     flexShrink: 0,
   };
 
-  const makePromptKey = (item: TimelineItem): string => `${item.id}\n${item.timestamp || ""}\n${item.content || ""}`;
+  const makePromptKey = (item: TimelineItem): string =>
+    `${item.id}\n${item.timestamp || ""}\n${item.content || ""}`;
 
-  const renderTimelineItem = (item: TimelineItem, idx: number, spacing: string = "0") => {
+  const renderTimelineItem = (
+    item: TimelineItem,
+    idx: number,
+    spacing: string = "0",
+  ) => {
+    const timelineItemKey = item.id || `${item.type}-${idx}`;
     if (item.type === "thought") {
       return (
-        <div style={{ marginTop: spacing }}>
+        <div key={timelineItemKey} style={{ marginTop: spacing }}>
           <ThinkingBlock content={item.content || ""} defaultExpanded={false} />
         </div>
       );
@@ -593,10 +697,15 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
     if (item.type === "tool") {
       const tc = item.toolCall || {};
       return (
-        <div style={{ marginTop: spacing }}>
+        <div key={timelineItemKey} style={{ marginTop: spacing }}>
           <ToolCallCard
             kind={tc.kind}
-            title={(tc as any).title || (tc.meta && typeof tc.meta.title === "string" ? (tc.meta.title as string) : "")}
+            title={
+              (tc as any).title ||
+              (tc.meta && typeof tc.meta.title === "string"
+                ? (tc.meta.title as string)
+                : "")
+            }
             callId={tc.callId || ""}
             status={tc.status || "running"}
             content={tc.content}
@@ -610,34 +719,68 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
     }
     if (item.type === "todo") {
       return (
-        <div style={{ marginTop: spacing }}>
+        <div key={timelineItemKey} style={{ marginTop: spacing }}>
           <TodoUpdateCard todoUpdate={item.todoUpdate} />
         </div>
       );
     }
     const isUser = item.type === "user_text";
     const next = idx + 1 < timeline.length ? timeline[idx + 1] : null;
-    const hasFollowingAssistantFlow = !isUser && !!next && next.type !== "user_text";
-    const hideAssistantMeta = !isUser && (hasFollowingAssistantFlow || (isStreaming && idx === timeline.length - 1));
+    const hasFollowingAssistantFlow =
+      !isUser && !!next && next.type !== "user_text";
+    const hideAssistantMeta =
+      !isUser &&
+      (hasFollowingAssistantFlow ||
+        (isStreaming && idx === timeline.length - 1));
     const time = formatTime(item.timestamp);
-    const uploadAttachments = isUser ? extractUploadAttachments(item.content || "") : [];
-    const imageAttachments = uploadAttachments.filter((attachment) => attachment.isImage);
-    const displayContent = isUser ? stripImageAttachmentTokens(item.content || "") : (item.content || "");
-    const promptSaveContent = isUser ? stripUploadAttachmentTokens(item.content || "") : "";
+    const uploadAttachments = isUser
+      ? extractUploadAttachments(item.content || "")
+      : [];
+    const imageAttachments = uploadAttachments.filter(
+      (attachment) => attachment.isImage,
+    );
+    const displayContent = isUser
+      ? stripImageAttachmentTokens(item.content || "")
+      : item.content || "";
+    const promptSaveContent = isUser
+      ? stripUploadAttachmentTokens(item.content || "")
+      : "";
     const promptKey = makePromptKey(item);
     const promptSaved = !!savedPromptKeys[promptKey];
     const copySucceeded = !!copiedMessageKeys[promptKey];
-    const userMessageWidth = imageAttachments.length > 0 ? "min(320px, 100%)" : "auto";
+    const userMessageWidth =
+      imageAttachments.length > 0 ? "min(320px, 100%)" : "auto";
     const hasRichUserAttachments = imageAttachments.length > 0;
-    const assistantMarkdownContent = !isUser ? collectAssistantFlowMarkdown(timeline, idx) : "";
+    const assistantMarkdownContent = !isUser
+      ? collectAssistantFlowMarkdown(timeline, idx)
+      : "";
     return (
       <div
-        key={idx}
+        key={timelineItemKey}
         data-session-seq={item.seq || undefined}
-        style={{ marginTop: spacing, alignSelf: isUser ? "flex-end" : "flex-start", width: isUser ? userMessageWidth : "100%", maxWidth: isUser ? "80%" : "100%", minWidth: 0, position: "relative", display: "flex", flexDirection: "column" }}
+        style={{
+          marginTop: spacing,
+          alignSelf: isUser ? "flex-end" : "flex-start",
+          width: isUser ? userMessageWidth : "100%",
+          maxWidth: isUser ? "80%" : "100%",
+          minWidth: 0,
+          position: "relative",
+          display: "flex",
+          flexDirection: "column",
+        }}
       >
         {isUser ? (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: "6px", width: userMessageWidth, maxWidth: "100%", minWidth: 0 }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "stretch",
+              gap: "6px",
+              width: userMessageWidth,
+              maxWidth: "100%",
+              minWidth: 0,
+            }}
+          >
             {hasRichUserAttachments ? (
               <div
                 style={{
@@ -654,12 +797,24 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                 }}
               >
                 {imageAttachments.length > 0 ? (
-                  <div style={{ display: "grid", gridTemplateColumns: imageAttachments.length > 1 ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)", gap: "8px", width: "100%" }}>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns:
+                        imageAttachments.length > 1
+                          ? "repeat(2, minmax(0, 1fr))"
+                          : "minmax(0, 1fr)",
+                      gap: "8px",
+                      width: "100%",
+                    }}
+                  >
                     {imageAttachments.map((attachment) => (
                       <button
                         key={attachment.path}
                         type="button"
-                        onClick={() => onFileClickRef.current?.(attachment.path)}
+                        onClick={() =>
+                          onFileClickRef.current?.(attachment.path)
+                        }
                         style={{
                           border: "none",
                           padding: 0,
@@ -680,18 +835,63 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                   </div>
                 ) : null}
                 {displayContent ? (
-                  <div style={{ padding: imageAttachments.length > 0 ? "2px 6px 0" : "6px 8px", color: "var(--text-primary)", fontSize: "14px", lineHeight: "1.5", whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word" }}>
-                    <InlineTokenText content={displayContent} isDark={false} variant="inverse" />
+                  <div
+                    style={{
+                      padding:
+                        imageAttachments.length > 0 ? "2px 6px 0" : "6px 8px",
+                      color: "var(--text-primary)",
+                      fontSize: "14px",
+                      lineHeight: "1.5",
+                      whiteSpace: "pre-wrap",
+                      overflowWrap: "anywhere",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    <InlineTokenText
+                      content={displayContent}
+                      isDark={false}
+                      variant="inverse"
+                    />
                   </div>
                 ) : null}
               </div>
             ) : null}
             {!hasRichUserAttachments && displayContent ? (
-              <div style={{ padding: "10px 16px", borderRadius: "18px 18px 4px 18px", background: "rgba(148,163,184,0.14)", color: "var(--text-primary)", fontSize: "14px", lineHeight: "1.5", boxShadow: "none", whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word", alignSelf: "flex-end", maxWidth: "100%", minWidth: 0 }}>
-                <InlineTokenText content={displayContent} isDark={false} variant="inverse" />
+              <div
+                style={{
+                  padding: "10px 16px",
+                  borderRadius: "18px 18px 4px 18px",
+                  background: "rgba(148,163,184,0.14)",
+                  color: "var(--text-primary)",
+                  fontSize: "14px",
+                  lineHeight: "1.5",
+                  boxShadow: "none",
+                  whiteSpace: "pre-wrap",
+                  overflowWrap: "anywhere",
+                  wordBreak: "break-word",
+                  alignSelf: "flex-end",
+                  maxWidth: "100%",
+                  minWidth: 0,
+                }}
+              >
+                <InlineTokenText
+                  content={displayContent}
+                  isDark={false}
+                  variant="inverse"
+                />
               </div>
             ) : null}
-            <span style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, alignSelf: 'flex-end', display: "inline-flex", alignItems: "center", gap: "4px" }}>
+            <span
+              style={{
+                fontSize: "10px",
+                color: "var(--text-secondary)",
+                opacity: 0.5,
+                alignSelf: "flex-end",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "4px",
+              }}
+            >
               {item.pendingAck ? (
                 <span
                   aria-label="发送中"
@@ -711,7 +911,11 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                 <span
                   aria-label="已添加提示词"
                   title="已添加提示词"
-                  style={{ ...userMetaButtonStyle, color: "#2563eb", fontSize: "13px" }}
+                  style={{
+                    ...userMetaButtonStyle,
+                    color: "#2563eb",
+                    fontSize: "13px",
+                  }}
                 >
                   ✓
                 </span>
@@ -720,23 +924,44 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                   type="button"
                   onClick={() => {
                     if (!promptSaveContent) {
-                      reportError("file.write_failed", "消息内容为空，无法加入常用提示词");
+                      reportError(
+                        "file.write_failed",
+                        "消息内容为空，无法加入常用提示词",
+                      );
                       return;
                     }
                     void savePrompt(promptSaveContent)
                       .then(() => {
-                        setSavedPromptKeys((prev) => ({ ...prev, [promptKey]: true }));
+                        setSavedPromptKeys((prev) => ({
+                          ...prev,
+                          [promptKey]: true,
+                        }));
                       })
                       .catch((err) => {
-                        reportError("file.write_failed", String((err as Error)?.message || "保存提示词失败"));
+                        reportError(
+                          "file.write_failed",
+                          String((err as Error)?.message || "保存提示词失败"),
+                        );
                       });
                   }}
                   style={userMetaButtonStyle}
                   aria-label="加入常用提示词"
                   title="加入常用提示词"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-                    <path fill="currentColor" stroke="currentColor" strokeWidth="0.45" strokeLinejoin="round" d="M1.086 5.183A2.5 2.5 0 0 1 2.854 2.12l3.863-1.035A2.5 2.5 0 0 1 9.78 2.854L10.354 5H9.32l-.506-1.888a1.5 1.5 0 0 0-1.837-1.06L3.112 3.087a1.5 1.5 0 0 0-1.06 1.837l1.035 3.864a1.5 1.5 0 0 0 1.837 1.06L5 9.828v1.028a2.5 2.5 0 0 1-2.879-1.81zM8 6a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zM7 8a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1zm4 .5a.5.5 0 0 0-1 0V10H8.5a.5.5 0 0 0 0 1H10v1.5a.5.5 0 0 0 1 0V11h1.5a.5.5 0 0 0 0-1H11z"/>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 16 16"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fill="currentColor"
+                      stroke="currentColor"
+                      strokeWidth="0.45"
+                      strokeLinejoin="round"
+                      d="M1.086 5.183A2.5 2.5 0 0 1 2.854 2.12l3.863-1.035A2.5 2.5 0 0 1 9.78 2.854L10.354 5H9.32l-.506-1.888a1.5 1.5 0 0 0-1.837-1.06L3.112 3.087a1.5 1.5 0 0 0-1.06 1.837l1.035 3.864a1.5 1.5 0 0 0 1.837 1.06L5 9.828v1.028a2.5 2.5 0 0 1-2.879-1.81zM8 6a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zM7 8a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1zm4 .5a.5.5 0 0 0-1 0V10H8.5a.5.5 0 0 0 0 1H10v1.5a.5.5 0 0 0 1 0V11h1.5a.5.5 0 0 0 0-1H11z"
+                    />
                   </svg>
                 </button>
               )}
@@ -749,21 +974,32 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                   }
                   void copyText(promptSaveContent)
                     .then(() => {
-                      setCopiedMessageKeys((prev) => ({ ...prev, [promptKey]: true }));
+                      setCopiedMessageKeys((prev) => ({
+                        ...prev,
+                        [promptKey]: true,
+                      }));
                       if (copyResetTimersRef.current[promptKey]) {
-                        window.clearTimeout(copyResetTimersRef.current[promptKey]);
+                        window.clearTimeout(
+                          copyResetTimersRef.current[promptKey],
+                        );
                       }
-                      copyResetTimersRef.current[promptKey] = window.setTimeout(() => {
-                        setCopiedMessageKeys((prev) => {
-                          const next = { ...prev };
-                          delete next[promptKey];
-                          return next;
-                        });
-                        delete copyResetTimersRef.current[promptKey];
-                      }, 1000);
+                      copyResetTimersRef.current[promptKey] = window.setTimeout(
+                        () => {
+                          setCopiedMessageKeys((prev) => {
+                            const next = { ...prev };
+                            delete next[promptKey];
+                            return next;
+                          });
+                          delete copyResetTimersRef.current[promptKey];
+                        },
+                        1000,
+                      );
                     })
                     .catch((err) => {
-                      reportError("file.write_failed", String((err as Error)?.message || "复制失败"));
+                      reportError(
+                        "file.write_failed",
+                        String((err as Error)?.message || "复制失败"),
+                      );
                     });
                 }}
                 style={userMetaButtonStyle}
@@ -771,52 +1007,107 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                 title="复制消息"
               >
                 {copySucceeded ? (
-                  <span aria-hidden="true" style={{ fontSize: "13px", fontWeight: 800, lineHeight: 1 }}>
+                  <span
+                    aria-hidden="true"
+                    style={{ fontSize: "13px", fontWeight: 800, lineHeight: 1 }}
+                  >
                     ✓
                   </span>
                 ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
-                    <path fill="currentColor" d="M20 2H10c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2m0 12H10V4h10z"/>
-                    <path fill="currentColor" d="M14 20H4V10h2V8H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2v-2h-2z"/>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fill="currentColor"
+                      d="M20 2H10c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2m0 12H10V4h10z"
+                    />
+                    <path
+                      fill="currentColor"
+                      d="M14 20H4V10h2V8H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2v-2h-2z"
+                    />
                   </svg>
                 )}
               </button>
             </span>
           </div>
         ) : (
-          <div style={{ width: "100%", minWidth: 0, display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
-            <div style={{ color: "var(--text-primary)", fontSize: "15px", lineHeight: "1.7", width: "100%", minWidth: 0 }}>
+          <div
+            style={{
+              width: "100%",
+              minWidth: 0,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "flex-start",
+            }}
+          >
+            <div
+              style={{
+                color: "var(--text-primary)",
+                fontSize: "15px",
+                lineHeight: "1.7",
+                width: "100%",
+                minWidth: 0,
+              }}
+            >
               <MarkdownViewer
                 content={item.content || ""}
                 onFileClick={onFileClickRef.current}
               />
             </div>
             {!hideAssistantMeta && (
-              <span style={{ alignSelf: 'flex-start', display: "inline-flex", alignItems: "center", gap: "6px", fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, marginTop: '-10px', marginBottom: '4px' }}>
+              <span
+                style={{
+                  alignSelf: "flex-start",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  fontSize: "10px",
+                  color: "var(--text-secondary)",
+                  opacity: 0.5,
+                  marginTop: "-10px",
+                  marginBottom: "4px",
+                }}
+              >
                 <button
                   type="button"
                   onClick={() => {
                     if (!assistantMarkdownContent) {
-                      reportError("file.write_failed", "消息内容为空，无法复制");
+                      reportError(
+                        "file.write_failed",
+                        "消息内容为空，无法复制",
+                      );
                       return;
                     }
                     void copyText(assistantMarkdownContent)
                       .then(() => {
-                        setCopiedMessageKeys((prev) => ({ ...prev, [promptKey]: true }));
+                        setCopiedMessageKeys((prev) => ({
+                          ...prev,
+                          [promptKey]: true,
+                        }));
                         if (copyResetTimersRef.current[promptKey]) {
-                          window.clearTimeout(copyResetTimersRef.current[promptKey]);
+                          window.clearTimeout(
+                            copyResetTimersRef.current[promptKey],
+                          );
                         }
-                        copyResetTimersRef.current[promptKey] = window.setTimeout(() => {
-                          setCopiedMessageKeys((prev) => {
-                            const next = { ...prev };
-                            delete next[promptKey];
-                            return next;
-                          });
-                          delete copyResetTimersRef.current[promptKey];
-                        }, 1000);
+                        copyResetTimersRef.current[promptKey] =
+                          window.setTimeout(() => {
+                            setCopiedMessageKeys((prev) => {
+                              const next = { ...prev };
+                              delete next[promptKey];
+                              return next;
+                            });
+                            delete copyResetTimersRef.current[promptKey];
+                          }, 1000);
                       })
                       .catch((err) => {
-                        reportError("file.write_failed", String((err as Error)?.message || "复制失败"));
+                        reportError(
+                          "file.write_failed",
+                          String((err as Error)?.message || "复制失败"),
+                        );
                       });
                   }}
                   style={userMetaButtonStyle}
@@ -824,17 +1115,39 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                   title="复制 Markdown"
                 >
                   {copySucceeded ? (
-                    <span aria-hidden="true" style={{ fontSize: "13px", fontWeight: 800, lineHeight: 1 }}>
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        fontSize: "13px",
+                        fontWeight: 800,
+                        lineHeight: 1,
+                      }}
+                    >
                       ✓
                     </span>
                   ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
-                      <path fill="currentColor" d="M20 2H10c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2m0 12H10V4h10z"/>
-                      <path fill="currentColor" d="M14 20H4V10h2V8H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2v-2h-2z"/>
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                    >
+                      <path
+                        fill="currentColor"
+                        d="M20 2H10c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2m0 12H10V4h10z"
+                      />
+                      <path
+                        fill="currentColor"
+                        d="M14 20H4V10h2V8H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2v-2h-2z"
+                      />
                     </svg>
                   )}
                 </button>
-                <AgentIcon agentName={item.agent || ""} style={{ width: "12px", height: "12px" }} />
+                <AgentIcon
+                  agentName={item.agent || ""}
+                  style={{ width: "12px", height: "12px" }}
+                />
                 <span>{time}</span>
                 <ContextWindowBadge contextWindow={item.contextWindow} />
               </span>
@@ -846,24 +1159,78 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
   };
 
   return (
-    <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", background: "transparent" }}>
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        minWidth: 0,
+        display: "flex",
+        flexDirection: "column",
+        background: "transparent",
+      }}
+    >
       {interactionMode === "drawer" ? null : (
-        <header style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", background: "transparent", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
-          <h1 style={{ fontSize: "14px", fontWeight: 600, margin: 0, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayName}</h1>
+        <header
+          style={{
+            height: "36px",
+            padding: "0 16px",
+            borderBottom: "1px solid var(--border-color)",
+            display: "flex",
+            alignItems: "center",
+            background: "transparent",
+            boxSizing: "border-box",
+            zIndex: 10,
+            flexShrink: 0,
+          }}
+        >
+          <h1
+            style={{
+              fontSize: "14px",
+              fontWeight: 600,
+              margin: 0,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {displayName}
+          </h1>
         </header>
       )}
 
       {/* 滚动容器 */}
-      <div ref={scrollRef} style={{ flex: 1, minHeight: 0, minWidth: 0, overflowY: "auto", overflowX: "hidden", position: "relative", WebkitOverflowScrolling: "touch" }}>
-        <div style={{ 
-          width: "100%",
+      <div
+        ref={scrollRef}
+        style={{
+          flex: 1,
+          minHeight: 0,
           minWidth: 0,
-          display: "block", 
-          padding: "24px 16px", 
-          boxSizing: "border-box",
+          overflowY: "auto",
           overflowX: "hidden",
-        }}>
-          <div style={{ width: "100%", minWidth: 0, margin: "0", display: "flex", flexDirection: "column" }}>
+          position: "relative",
+          WebkitOverflowScrolling: "touch",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            minWidth: 0,
+            display: "block",
+            padding: "24px 16px",
+            boxSizing: "border-box",
+            overflowX: "hidden",
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              minWidth: 0,
+              margin: "0",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
             {loading && !hasVisibleTimeline ? (
               <div
                 style={{
@@ -879,12 +1246,18 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                     style={{
                       width: index === 1 ? "78%" : index === 2 ? "64%" : "52%",
                       height: index === 0 ? "18px" : "72px",
-                      alignSelf: index === 0 ? "flex-start" : index === 1 ? "flex-end" : "flex-start",
+                      alignSelf:
+                        index === 0
+                          ? "flex-start"
+                          : index === 1
+                            ? "flex-end"
+                            : "flex-start",
                       borderRadius: index === 0 ? "8px" : "18px",
                       background:
                         "linear-gradient(90deg, rgba(148,163,184,0.12) 0%, rgba(148,163,184,0.24) 50%, rgba(148,163,184,0.12) 100%)",
                       backgroundSize: "200% 100%",
-                      animation: "sessionLoadingPulse 1.1s ease-in-out infinite",
+                      animation:
+                        "sessionLoadingPulse 1.1s ease-in-out infinite",
                     }}
                   />
                 ))}
@@ -898,32 +1271,86 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
               ),
             )}
             {(isAwaiting || isStreaming) && (
-              <div style={{ marginTop: "16px", display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--text-secondary)" }}>
-                <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "var(--accent-color)", animation: "pulse 1s infinite" }} />
+              <div
+                style={{
+                  marginTop: "16px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  fontSize: "12px",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                <span
+                  style={{
+                    width: "8px",
+                    height: "8px",
+                    borderRadius: "50%",
+                    background: "var(--accent-color)",
+                    animation: "pulse 1s infinite",
+                  }}
+                />
                 {isStreaming ? "正在生成..." : "已发送，等待响应..."}
               </div>
             )}
 
             {/* 关联文件区域 */}
             {relatedFiles.length > 0 && (
-              <div style={{ marginTop: "18px", paddingTop: "14px", borderTop: "1px solid var(--border-color)", width: "100%", boxSizing: "border-box" }}>
-                <div style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", marginBottom: "6px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div
+                style={{
+                  marginTop: "18px",
+                  paddingTop: "14px",
+                  borderTop: "1px solid var(--border-color)",
+                  width: "100%",
+                  boxSizing: "border-box",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "12px",
+                    fontWeight: 500,
+                    color: "var(--text-secondary)",
+                    marginBottom: "6px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                >
                   <span>关联文件 {relatedFiles.length}</span>
-                  <div style={{ display: "inline-flex", alignItems: "center", gap: "10px" }}>
+                  <div
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "10px",
+                    }}
+                  >
                     {hasMoreFiles ? (
                       <button
                         type="button"
                         onClick={() => setShowAllFiles(!showAllFiles)}
-                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--text-secondary)", fontSize: "11px" }}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          padding: 0,
+                          cursor: "pointer",
+                          color: "var(--text-secondary)",
+                          fontSize: "11px",
+                        }}
                       >
                         {showAllFiles ? "收起" : "更多"}
                       </button>
                     ) : null}
                     <button
                       type="button"
-                      onClick={() => setRelatedFilesCollapsed((value) => !value)}
-                      aria-label={relatedFilesCollapsed ? "展开关联文件" : "折叠关联文件"}
-                      title={relatedFilesCollapsed ? "展开关联文件" : "折叠关联文件"}
+                      onClick={() =>
+                        setRelatedFilesCollapsed((value) => !value)
+                      }
+                      aria-label={
+                        relatedFilesCollapsed ? "展开关联文件" : "折叠关联文件"
+                      }
+                      title={
+                        relatedFilesCollapsed ? "展开关联文件" : "折叠关联文件"
+                      }
                       style={{
                         border: "none",
                         background: "transparent",
@@ -943,14 +1370,25 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                         aria-hidden="true"
                         style={{
                           flexShrink: 0,
-                          transform: relatedFilesCollapsed ? "rotate(0deg)" : "rotate(90deg)",
+                          transform: relatedFilesCollapsed
+                            ? "rotate(0deg)"
+                            : "rotate(90deg)",
                           transition: "transform 0.2s",
                           color: "var(--text-secondary)",
                           display: "inline-flex",
                           alignItems: "center",
                         }}
                       >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.25"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
                           <polyline points="9 18 15 12 9 6" />
                         </svg>
                       </span>
@@ -958,10 +1396,43 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                   </div>
                 </div>
                 {!relatedFilesCollapsed ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "4px",
+                    }}
+                  >
                     {displayFiles.map((file, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        <div onClick={() => onFileClickRef.current?.(file.path)} style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1, minWidth: 0, padding: "3px 6px", borderRadius: "6px", cursor: "pointer", transition: "background 0.15s" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.04)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                      <div
+                        key={i}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px",
+                        }}
+                      >
+                        <div
+                          onClick={() => onFileClickRef.current?.(file.path)}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            flex: 1,
+                            minWidth: 0,
+                            padding: "3px 6px",
+                            borderRadius: "6px",
+                            cursor: "pointer",
+                            transition: "background 0.15s",
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background =
+                              "rgba(0,0,0,0.04)";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = "transparent";
+                          }}
+                        >
                           <svg
                             xmlns="http://www.w3.org/2000/svg"
                             width="13"
@@ -981,11 +1452,46 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                             <line x1="16" x2="8" y1="17" y2="17" />
                             <line x1="10" x2="8" y1="9" y2="9" />
                           </svg>
-                          <div style={{ flex: 1, minWidth: 0, fontSize: "12px", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</div>
+                          <div
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              fontSize: "12px",
+                              color: "var(--text-primary)",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {file.name}
+                          </div>
                           {gitFileStatsByPath[file.path] ? (
-                            <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>
-                              <span style={{ color: "#15803d", fontVariantNumeric: "tabular-nums" }}>+{gitFileStatsByPath[file.path].additions}</span>
-                              <span style={{ color: "#b91c1c", fontVariantNumeric: "tabular-nums" }}>-{gitFileStatsByPath[file.path].deletions}</span>
+                            <div
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "8px",
+                                fontSize: "11px",
+                                color: "var(--text-secondary)",
+                                flexShrink: 0,
+                              }}
+                            >
+                              <span
+                                style={{
+                                  color: "#15803d",
+                                  fontVariantNumeric: "tabular-nums",
+                                }}
+                              >
+                                +{gitFileStatsByPath[file.path].additions}
+                              </span>
+                              <span
+                                style={{
+                                  color: "#b91c1c",
+                                  fontVariantNumeric: "tabular-nums",
+                                }}
+                              >
+                                -{gitFileStatsByPath[file.path].deletions}
+                              </span>
                             </div>
                           ) : null}
                         </div>
@@ -1038,11 +1544,13 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
   );
 }
 
-export const SessionViewer = memo(SessionViewerInner, (prev, next) => (
-  prev.session === next.session &&
-  prev.loading === next.loading &&
-  prev.rootId === next.rootId &&
-  prev.rootPath === next.rootPath &&
-  prev.interactionMode === next.interactionMode &&
-  prev.gitFileStatsByPath === next.gitFileStatsByPath
-));
+export const SessionViewer = memo(
+  SessionViewerInner,
+  (prev, next) =>
+    prev.session === next.session &&
+    prev.loading === next.loading &&
+    prev.rootId === next.rootId &&
+    prev.rootPath === next.rootPath &&
+    prev.interactionMode === next.interactionMode &&
+    prev.gitFileStatsByPath === next.gitFileStatsByPath,
+);

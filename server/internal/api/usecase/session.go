@@ -120,6 +120,23 @@ func (s *Service) GetSession(ctx context.Context, in GetSessionInput) (*session.
 	return manager.Get(ctx, in.Key, in.Seq)
 }
 
+type GetSessionExchangeAuxInput struct {
+	RootID string
+	Key    string
+	Seq    int
+}
+
+func (s *Service) GetSessionExchangeAux(ctx context.Context, in GetSessionExchangeAuxInput) (map[int][]session.ExchangeAux, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return nil, err
+	}
+	manager, err := s.Registry.GetSessionManager(in.RootID)
+	if err != nil {
+		return nil, err
+	}
+	return manager.GetExchangeAux(ctx, in.Key, in.Seq)
+}
+
 type GetSessionContextWindowInput struct {
 	RootID string
 	Key    string
@@ -1073,9 +1090,33 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		IsInitial:     isInitial,
 	})
 	var responseText string
+	plannedAssistantSeq := len(current.Exchanges) + 2
+	auxBuffer := make([]session.ExchangeAux, 0, 8)
+	var thoughtBuffer strings.Builder
+	flushThought := func() {
+		thought := thoughtBuffer.String()
+		if strings.TrimSpace(thought) == "" {
+			thoughtBuffer.Reset()
+			return
+		}
+		thoughtBuffer.Reset()
+		auxBuffer = append(auxBuffer, session.ExchangeAux{
+			Seq:     plannedAssistantSeq,
+			Line:    currentAssistantLine(responseText),
+			Thought: thought,
+		})
+	}
 	lastResponseUpdateType := ""
 	sess.OnUpdate(func(update agenttypes.Event) {
 		update = normalizeAgentUpdatePaths(root, update)
+		switch update.Type {
+		case agenttypes.EventTypeThoughtChunk:
+			if chunk, ok := update.Data.(agenttypes.ThoughtChunk); ok && chunk.Content != "" {
+				thoughtBuffer.WriteString(chunk.Content)
+			}
+		case agenttypes.EventTypeToolCall, agenttypes.EventTypeToolUpdate, agenttypes.EventTypeTodoUpdate, agenttypes.EventTypeMessageChunk, agenttypes.EventTypeMessageDone:
+			flushThought()
+		}
 		if update.Type == agenttypes.EventTypeToolCall || update.Type == agenttypes.EventTypeToolUpdate {
 			if toolCall, ok := update.Data.(agenttypes.ToolCall); ok && toolCall.IsWriteOperation() {
 				for _, path := range toolCall.GetAffectedPaths() {
@@ -1089,6 +1130,14 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 						watcher.RecordSessionFile(current.Key, path)
 					}
 				}
+			}
+			if toolCall, ok := update.Data.(agenttypes.ToolCall); ok {
+				toolCallCopy := toolCall
+				auxBuffer = append(auxBuffer, session.ExchangeAux{
+					Seq:      plannedAssistantSeq,
+					Line:     currentAssistantLine(responseText),
+					ToolCall: &toolCallCopy,
+				})
 			}
 		}
 		if update.Type == agenttypes.EventTypeMessageChunk {
@@ -1110,6 +1159,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		}
 	})
 	sendErr := sess.SendMessage(turnCtx, prompt)
+	flushThought()
 	if err := manager.UpdateModel(ctx, current, in.Model); err != nil {
 		return err
 	}
@@ -1120,6 +1170,11 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	}
 	if err := manager.AddExchangeForAgent(ctx, current, "agent", responseText, in.Agent, resolvedMode, resolvedEffort); err != nil {
 		return err
+	}
+	for _, aux := range dedupeExchangeAuxBuffer(auxBuffer) {
+		if err := manager.AddExchangeAux(ctx, current.Key, aux); err != nil {
+			return err
+		}
 	}
 	if err := manager.UpdateAgentState(ctx, current, in.Agent, contextLineCount(current.Exchanges), sess.SessionID()); err != nil {
 		return err
@@ -1136,6 +1191,39 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	}
 
 	return nil
+}
+
+func currentAssistantLine(responseText string) int {
+	if responseText == "" {
+		return 0
+	}
+	return strings.Count(responseText, "\n") + 1
+}
+
+func dedupeExchangeAuxBuffer(items []session.ExchangeAux) []session.ExchangeAux {
+	if len(items) == 0 {
+		return nil
+	}
+	seenToolCallIDs := make(map[string]struct{}, len(items))
+	out := make([]session.ExchangeAux, 0, len(items))
+	for i := len(items) - 1; i >= 0; i-- {
+		item := items[i]
+		callID := ""
+		if item.ToolCall != nil {
+			callID = strings.TrimSpace(item.ToolCall.CallID)
+		}
+		if callID != "" {
+			if _, exists := seenToolCallIDs[callID]; exists {
+				continue
+			}
+			seenToolCallIDs[callID] = struct{}{}
+		}
+		out = append(out, item)
+	}
+	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
+		out[left], out[right] = out[right], out[left]
+	}
+	return out
 }
 
 func appendResponseChunk(responseText, lastResponseUpdateType, chunk string) string {

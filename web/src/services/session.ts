@@ -11,6 +11,13 @@ export type RelatedFile = {
   created_by_session?: boolean;
 };
 
+export type ExchangeAux = {
+  seq: number;
+  line: number;
+  toolcall?: ToolCall | null;
+  thought?: string | null;
+};
+
 export type Session = {
   key: string;
   type: SessionType;
@@ -27,6 +34,7 @@ export type Session = {
     modelContextWindow: number;
   };
   related_files?: RelatedFile[];
+  exchange_aux?: Record<string, ExchangeAux[]>;
   exchanges?: Array<{
     seq?: number;
     role?: string;
@@ -426,7 +434,12 @@ class SessionService {
     this.emitDecrypted(type, sessionKey, payload, msg);
   }
 
-  private emitDecrypted(type: string, sessionKey: string, payload: Record<string, unknown>, msg: any) {
+  private emitDecrypted(
+    type: string,
+    sessionKey: string,
+    payload: Record<string, unknown>,
+    msg: any,
+  ) {
     const nextPayload = { ...payload };
     this.emit({ type, sessionKey, payload: nextPayload });
 
@@ -474,7 +487,9 @@ class SessionService {
     return e2eeService.decodeWSMessage<any>(raw);
   }
 
-  private async sendWSMessage(message: Record<string, unknown>): Promise<boolean> {
+  private async sendWSMessage(
+    message: Record<string, unknown>,
+  ): Promise<boolean> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return false;
     }
@@ -658,7 +673,9 @@ class SessionService {
         throw new Error("Failed to search sessions");
       }
       const data = await res.json();
-      return Array.isArray(data?.items) ? (data.items as SessionSearchHit[]) : [];
+      return Array.isArray(data?.items)
+        ? (data.items as SessionSearchHit[])
+        : [];
     } catch (err) {
       console.error("[Session] Failed to search sessions:", err);
       return [];
@@ -683,12 +700,17 @@ class SessionService {
       const headers = e2eeService.isRequired()
         ? e2eeService.sessionProtectedHeaders()
         : undefined;
-      const res = await fetch(appURL(`/api/sessions/${encodeURIComponent(sessionKey)}`, params), {
-        headers,
-      });
+      const res = await fetch(
+        appURL(`/api/sessions/${encodeURIComponent(sessionKey)}`, params),
+        {
+          headers,
+        },
+      );
       if (!res.ok) {
         if (res.status === 401 && e2eeService.isRequired()) {
-          const payload = (await res.json().catch(() => ({}))) as { error?: string };
+          const payload = (await res.json().catch(() => ({}))) as {
+            error?: string;
+          };
           if (e2eeService.handleServerError(String(payload.error || ""))) {
             return this.getSession(rootId, sessionKey, seq);
           }
@@ -779,7 +801,10 @@ class SessionService {
     try {
       const params = new URLSearchParams({ root: rootId });
       const res = await fetch(
-        appURL(`/api/sessions/${encodeURIComponent(sessionKey)}/rename`, params),
+        appURL(
+          `/api/sessions/${encodeURIComponent(sessionKey)}/rename`,
+          params,
+        ),
         {
           method: "POST",
           headers: {
@@ -859,7 +884,6 @@ class SessionService {
       return null;
     }
   }
-
 }
 
 export const sessionService = new SessionService();
@@ -944,6 +968,49 @@ function getSessionMaxSeq(session: Session | null | undefined): number {
   }, 0);
 }
 
+function cloneExchangeAux(
+  exchangeAux?: Record<string, ExchangeAux[]>,
+): Record<string, ExchangeAux[]> {
+  const out: Record<string, ExchangeAux[]> = {};
+  for (const [seq, items] of Object.entries(exchangeAux || {})) {
+    out[seq] = Array.isArray(items) ? [...items] : [];
+  }
+  return out;
+}
+
+function toPersistentExchangeAux(
+  exchangeAux?: Record<string, ExchangeAux[]>,
+): Record<string, ExchangeAux[]> {
+  const out: Record<string, ExchangeAux[]> = {};
+  for (const [seq, items] of Object.entries(exchangeAux || {})) {
+    const seqNum = Number(seq || 0);
+    if (!Number.isFinite(seqNum) || seqNum <= 0) {
+      continue;
+    }
+    const nextItems = Array.isArray(items)
+      ? items.filter((item) => Number(item?.seq || 0) > 0)
+      : [];
+    if (nextItems.length > 0) {
+      out[String(seqNum)] = nextItems;
+    }
+  }
+  return out;
+}
+
+function appendExchangeAuxDelta(
+  base?: Record<string, ExchangeAux[]>,
+  incoming?: Record<string, ExchangeAux[]>,
+): Record<string, ExchangeAux[]> {
+  const out = cloneExchangeAux(base);
+  for (const [seq, items] of Object.entries(incoming || {})) {
+    if (!Array.isArray(items) || items.length === 0) {
+      continue;
+    }
+    out[seq] = [...(out[seq] || []), ...items];
+  }
+  return out;
+}
+
 function preferIncomingText(next?: string, prev?: string) {
   const normalizedNext = (next || "").trim();
   if (normalizedNext) {
@@ -983,6 +1050,7 @@ function withSessionMeta(
     mode: preferIncomingText((incoming as any).mode, (base as any).mode),
     name: preferIncomingText(incoming.name, base.name) || "",
     exchanges: Array.isArray(incoming.exchanges) ? [...incoming.exchanges] : [],
+    exchange_aux: cloneExchangeAux(incoming.exchange_aux || base.exchange_aux),
   };
 }
 
@@ -1004,9 +1072,12 @@ function appendSessionDelta(
         (exchange) => Number((exchange as any)?.seq || 0) > 0,
       )
     : [];
+  const baseExchangeAux = toPersistentExchangeAux(base?.exchange_aux);
+  const incomingExchangeAux = toPersistentExchangeAux(incoming?.exchange_aux);
   return {
     ...baseWithMeta,
     exchanges: [...baseExchanges, ...incomingExchanges],
+    exchange_aux: appendExchangeAuxDelta(baseExchangeAux, incomingExchangeAux),
   };
 }
 
@@ -1070,6 +1141,7 @@ function cloneSession(session: Session): Session {
       ? [...session.related_files]
       : [],
     exchanges: Array.isArray(session.exchanges) ? [...session.exchanges] : [],
+    exchange_aux: cloneExchangeAux(session.exchange_aux),
   };
 }
 
@@ -1082,6 +1154,7 @@ function toPersistentSession(session: Session): Session {
           return Number.isFinite(seq) && seq > 0;
         })
       : [],
+    exchange_aux: toPersistentExchangeAux(session.exchange_aux),
   };
 }
 
@@ -1134,6 +1207,7 @@ export async function syncSession(
     ...incoming,
     key: sessionKey,
     exchanges: persistedDelta,
+    exchange_aux: toPersistentExchangeAux(incoming.exchange_aux),
   });
   if (!persistedSession) {
     return { session: null, hasDelta: false };
@@ -1143,6 +1217,7 @@ export async function syncSession(
     ...incoming,
     key: sessionKey,
     exchanges: [...(persistedSession.exchanges || []), ...transientTail],
+    exchange_aux: persistedSession.exchange_aux,
   });
   return {
     session: displaySession ? cloneSession(displaySession) : null,

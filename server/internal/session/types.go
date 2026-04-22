@@ -3,6 +3,8 @@ package session
 import (
 	"strings"
 	"time"
+
+	agenttypes "mindfs/server/internal/agent/types"
 )
 
 const (
@@ -32,6 +34,13 @@ type Exchange struct {
 	Effort    string    `json:"effort,omitempty"`
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
+}
+
+type ExchangeAux struct {
+	Seq      int                  `json:"seq"`
+	Line     int                  `json:"line"`
+	ToolCall *agenttypes.ToolCall `json:"toolcall,omitempty"`
+	Thought  string               `json:"thought,omitempty"`
 }
 
 type RelatedFile struct {
