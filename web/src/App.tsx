@@ -18,6 +18,7 @@ import {
   type Session,
 } from "./services/session";
 import { buildClientContext } from "./services/context";
+import { e2eeService, type E2EEState } from "./services/e2ee";
 import { reportError } from "./services/error";
 import {
   fetchFile,
@@ -224,9 +225,11 @@ type RelayStatusPayload = {
   pending_code?: string;
   node_name?: string;
   node_id?: string;
+  e2ee_node_id?: string;
   relay_base_url?: string;
   node_url?: string;
   last_error?: string;
+  e2ee_required?: boolean;
 };
 const RELAY_LAST_NODE_ID_STORAGE_KEY = "mindfs.relay.last_node_id";
 const PLUGIN_QUERY_STORAGE_PREFIX = "vp-progress:";
@@ -874,6 +877,12 @@ export function App() {
   const [relayStatus, setRelayStatus] = useState<RelayStatusPayload | null>(
     null,
   );
+  const [e2eeState, setE2eeState] = useState<E2EEState>(() =>
+    e2eeService.snapshot(),
+  );
+  const [e2eeSecretInput, setE2eeSecretInput] = useState("");
+  const [e2eePromptError, setE2eePromptError] = useState("");
+  const [e2eePromptBusy, setE2eePromptBusy] = useState(false);
   const [entriesByPath, setEntriesByPath] = useState<
     Record<string, FileEntry[]>
   >({});
@@ -3608,11 +3617,8 @@ export function App() {
   }, [handleRelayNavigationFailure, replaceURLState]);
 
   const refreshRelayStatus = useCallback(async () => {
-    if (typeof window !== "undefined" && isRelayNodePage()) {
-      return;
-    }
     try {
-      const response = await fetch("/api/relay/status");
+      const response = await fetch(appPath("/api/relay/status"));
       if (!response.ok) {
         return;
       }
@@ -5314,6 +5320,49 @@ export function App() {
   ]);
 
   useEffect(() => {
+    return e2eeService.subscribe((state) => {
+      setE2eeState(state);
+    });
+  }, []);
+
+  useEffect(() => {
+    const nodeId = String(relayStatus?.e2ee_node_id || relayStatus?.node_id || "").trim();
+    const required = relayStatus?.e2ee_required === true;
+    e2eeService.configure(required, nodeId);
+  }, [relayStatus?.e2ee_required, relayStatus?.e2ee_node_id, relayStatus?.node_id]);
+
+  useEffect(() => {
+    if (e2eeState.required && !e2eeState.secretPresent) {
+      setE2eePromptError("");
+      return;
+    }
+    if (!e2eeState.required) {
+      setE2eeSecretInput("");
+      setE2eePromptError("");
+    }
+  }, [e2eeState.required, e2eeState.secretPresent]);
+
+  const submitE2EESecret = useCallback(async () => {
+    const trimmed = e2eeSecretInput.trim();
+    if (!trimmed) {
+      setE2eePromptError("请输入端到端配对码");
+      return;
+    }
+    setE2eePromptBusy(true);
+    setE2eePromptError("");
+    try {
+      e2eeService.setSecret(trimmed);
+      await e2eeService.ensureSession();
+      setE2eeSecretInput("");
+    } catch (err) {
+      e2eeService.clearSecret();
+      setE2eePromptError("端到端配对码无效或握手失败");
+    } finally {
+      setE2eePromptBusy(false);
+    }
+  }, [e2eeSecretInput]);
+
+  useEffect(() => {
     if (!isRelayPWAContext()) {
       return;
     }
@@ -6563,6 +6612,102 @@ export function App() {
           </BottomSheet>
         }
       />
+      {e2eeState.required && !e2eeState.secretPresent ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.46)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+            zIndex: 2000,
+          }}
+        >
+          <div
+            style={{
+              width: "min(460px, 100%)",
+              background: "#fff",
+              borderRadius: "20px",
+              padding: "24px",
+              boxShadow: "0 28px 80px rgba(15, 23, 42, 0.22)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "14px",
+            }}
+	          >
+	            <div style={{ fontSize: "20px", fontWeight: 700, color: "#0f172a" }}>
+	              端到端配对码
+	            </div>
+	            <input
+	              type="text"
+              value={e2eeSecretInput}
+              onChange={(event) => {
+                setE2eeSecretInput(event.target.value);
+                if (e2eePromptError) {
+                  setE2eePromptError("");
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !e2eePromptBusy) {
+                  void submitE2EESecret();
+                }
+              }}
+	              placeholder="输入终端中显示的端到端配对码"
+              autoFocus
+              spellCheck={false}
+              style={{
+                width: "100%",
+                borderRadius: "14px",
+                border: "1px solid rgba(148, 163, 184, 0.4)",
+                padding: "14px 16px",
+                fontSize: "14px",
+                outline: "none",
+              }}
+            />
+            {e2eePromptError ? (
+              <div style={{ color: "#dc2626", fontSize: "13px" }}>
+                {e2eePromptError}
+              </div>
+            ) : null}
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setE2eeSecretInput("");
+                  setE2eePromptError("");
+                }}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "#64748b",
+                  padding: 0,
+                  cursor: "pointer",
+                }}
+              >
+                清空
+              </button>
+              <button
+                type="button"
+                onClick={() => void submitE2EESecret()}
+                disabled={e2eePromptBusy}
+                style={{
+                  border: "none",
+                  borderRadius: "999px",
+                  background: e2eePromptBusy ? "#94a3b8" : "#0f172a",
+                  color: "#fff",
+                  padding: "10px 18px",
+                  cursor: e2eePromptBusy ? "not-allowed" : "pointer",
+                  fontWeight: 600,
+                }}
+              >
+                {e2eePromptBusy ? "验证中..." : "继续"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

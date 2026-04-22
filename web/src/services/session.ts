@@ -1,4 +1,5 @@
 import { appURL, wsURL } from "./base";
+import { e2eeService } from "./e2ee";
 
 // Session service for managing agent sessions
 
@@ -145,6 +146,7 @@ class SessionService {
   private contextCache = new Map<string, { selectionKey: string }>();
 
   constructor() {
+    e2eeService.setClientId(this.clientId);
     if (typeof window !== "undefined") {
       window.addEventListener("online", () => this.ensureConnection());
       window.addEventListener("pageshow", () => this.ensureConnection());
@@ -199,18 +201,28 @@ class SessionService {
         this.emit({ type: "ws.connected" });
       }
       this.hasConnected = true;
+      if (e2eeService.isRequired() && e2eeService.hasSecret()) {
+        void e2eeService.ensureSession().catch((err) => {
+          console.error("[Session] Failed to open E2EE session:", err);
+        });
+      }
       this.resendPendingMessages();
     };
 
     ws.onmessage = (event) => {
       if (this.ws !== ws) return;
       this.clearProbe();
-      try {
-        const msg = JSON.parse(event.data);
-        this.handleMessage(msg);
-      } catch (err) {
-        console.error("[Session] Failed to parse message:", err);
-      }
+      void (async () => {
+        try {
+          const msg = await this.parseWSMessage(event.data);
+          if (!msg) {
+            return;
+          }
+          this.handleMessage(msg);
+        } catch (err) {
+          console.error("[Session] Failed to parse message:", err);
+        }
+      })();
     };
 
     ws.onclose = () => {
@@ -288,13 +300,13 @@ class SessionService {
     if (this.activeProbeId) return;
     const probeId = this.createRequestId("ping");
     this.activeProbeId = probeId;
-    this.ws.send(
-      JSON.stringify({
-        id: probeId,
-        type: "ping",
-        payload: {},
-      }),
-    );
+    void this.sendWSMessage({
+      id: probeId,
+      type: "ping",
+      payload: {},
+    }).catch((err) => {
+      console.error("[Session] Failed to send probe:", err);
+    });
     this.probeTimeoutTimer = window.setTimeout(() => {
       if (this.activeProbeId !== probeId) return;
       console.warn("[Session] WebSocket probe timed out, reconnecting");
@@ -362,6 +374,12 @@ class SessionService {
     if (type === "pong") {
       return;
     }
+    if (type === "e2ee.error") {
+      const code = typeof payload.code === "string" ? payload.code : "";
+      e2eeService.handleServerError(code);
+      this.emit({ type, payload });
+      return;
+    }
     const sessionKey = payload.session_key as string;
     if (type === "session.accepted") {
       const requestId =
@@ -377,13 +395,18 @@ class SessionService {
       this.pendingMessages.delete(msg.id);
       payload.request_id = msg.id;
     }
-    this.emit({ type, sessionKey, payload });
+    this.emitDecrypted(type, sessionKey, payload, msg);
+  }
+
+  private emitDecrypted(type: string, sessionKey: string, payload: Record<string, unknown>, msg: any) {
+    const nextPayload = { ...payload };
+    this.emit({ type, sessionKey, payload: nextPayload });
 
     if (!sessionKey) return;
 
     const handlers = this.handlers.get(sessionKey);
     if ((!handlers || handlers.size === 0) && type === "session.stream") {
-      const event = payload.event as StreamEvent;
+      const event = nextPayload.event as StreamEvent;
       if (event) {
         const queued = this.pendingStreams.get(sessionKey) || [];
         queued.push(event);
@@ -396,7 +419,7 @@ class SessionService {
     switch (type) {
       case "session.stream":
         for (const handler of handlers) {
-          handler.onStream?.(payload.event as StreamEvent);
+          handler.onStream?.(nextPayload.event as StreamEvent);
         }
         break;
       case "session.done":
@@ -410,6 +433,30 @@ class SessionService {
         }
         break;
     }
+  }
+
+  private async parseWSMessage(raw: unknown): Promise<any | null> {
+    if (typeof raw !== "string") {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    if (!e2eeService.isRequired() || parsed?.type === "e2ee.error") {
+      return parsed;
+    }
+    return e2eeService.decodeWSMessage<any>(raw);
+  }
+
+  private async sendWSMessage(message: Record<string, unknown>): Promise<boolean> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    let serialized = JSON.stringify(message);
+    if (e2eeService.isRequired()) {
+      await e2eeService.ensureSession();
+      serialized = await e2eeService.encodeWSMessage(message);
+    }
+    this.ws.send(serialized);
+    return true;
   }
 
   subscribeEvents(listener: (event: SessionServiceEvent) => void) {
@@ -485,8 +532,7 @@ class SessionService {
     };
 
     this.pendingMessages.set(requestId, { id: requestId, message: msg });
-    this.ws.send(JSON.stringify(msg));
-    return true;
+    return this.sendWSMessage(msg);
   }
 
   private resendPendingMessages() {
@@ -494,7 +540,9 @@ class SessionService {
       return;
     }
     for (const pending of this.pendingMessages.values()) {
-      this.ws.send(JSON.stringify(pending.message));
+      void this.sendWSMessage(pending.message).catch((err) => {
+        console.error("[Session] Failed to resend message:", err);
+      });
     }
   }
 
@@ -516,8 +564,7 @@ class SessionService {
       },
     };
 
-    this.ws.send(JSON.stringify(msg));
-    return true;
+    return this.sendWSMessage(msg);
   }
 
   async markSessionReady(rootId: string, sessionKey: string): Promise<boolean> {
@@ -527,17 +574,17 @@ class SessionService {
     if (!rootId || !sessionKey) {
       return false;
     }
-    this.ws.send(
-      JSON.stringify({
-        id: `ready-${Date.now()}`,
-        type: "session.ready",
-        payload: {
-          root_id: rootId,
-          session_key: sessionKey,
-        },
-      }),
-    );
-    return true;
+    if (e2eeService.isRequired()) {
+      await e2eeService.ensureSession();
+    }
+    return this.sendWSMessage({
+      id: `ready-${Date.now()}`,
+      type: "session.ready",
+      payload: {
+        root_id: rootId,
+        session_key: sessionKey,
+      },
+    });
   }
 
   async fetchSessions(
@@ -596,20 +643,33 @@ class SessionService {
     seq?: number,
   ): Promise<Session | null> {
     try {
-      const params = new URLSearchParams({
-        root: rootId,
-        client_id: this.clientId,
-      });
+      const params = new URLSearchParams({ root: rootId });
       if (typeof seq === "number" && seq > 0) {
         params.set("seq", String(seq));
       }
-      const res = await fetch(
-        appURL(`/api/sessions/${encodeURIComponent(sessionKey)}`, params),
-      );
+      if (e2eeService.isRequired()) {
+        if (!(await e2eeService.ensureSession())) {
+          return null;
+        }
+      }
+      const headers = e2eeService.isRequired()
+        ? e2eeService.sessionProtectedHeaders()
+        : undefined;
+      const res = await fetch(appURL(`/api/sessions/${encodeURIComponent(sessionKey)}`, params), {
+        headers,
+      });
       if (!res.ok) {
+        if (res.status === 401 && e2eeService.isRequired()) {
+          const payload = (await res.json().catch(() => ({}))) as { error?: string };
+          if (e2eeService.handleServerError(String(payload.error || ""))) {
+            return this.getSession(rootId, sessionKey, seq);
+          }
+        }
         throw new Error("Failed to get session");
       }
-      const data = await res.json();
+      const data = await (e2eeService.isRequired()
+        ? e2eeService.parseProtectedJSONResponse<Session>(res)
+        : res.json());
       return data as Session;
     } catch (err) {
       console.error("[Session] Failed to get session:", err);
@@ -771,6 +831,7 @@ class SessionService {
       return null;
     }
   }
+
 }
 
 export const sessionService = new SessionService();

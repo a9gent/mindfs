@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log"
@@ -16,6 +19,7 @@ import (
 
 	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/api/usecase"
+	"mindfs/server/internal/e2ee"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/gitview"
@@ -30,14 +34,156 @@ type HTTPHandler struct {
 	StaticDir  string
 }
 
+type protectedResponseWriter struct {
+	http.ResponseWriter
+	status int
+	body   bytes.Buffer
+}
+
 const (
 	maxUploadRequestBytes = 64 << 20
 	maxUploadFileCount    = 20
 	sessionListPageSize   = 50
+	e2eeHeaderName        = "X-MindFS-E2EE"
+	clientIDHeaderName    = "X-MindFS-Client-ID"
+	e2eeProofHeaderName   = "X-MindFS-Proof"
+	e2eeTSHeaderName      = "X-MindFS-TS"
+	fileProofMaxSkew      = 5 * time.Minute
 )
 
 func (h *HTTPHandler) service() *usecase.Service {
 	return &usecase.Service{Registry: h.AppContext}
+}
+
+func (h *HTTPHandler) requireProtectedHTTPSession(r *http.Request) (*e2ee.Session, bool, error) {
+	manager := h.AppContext.GetE2EEManager()
+	if manager == nil || !manager.Enabled() {
+		return nil, false, nil
+	}
+	if strings.TrimSpace(r.Header.Get(e2eeHeaderName)) == "" {
+		return nil, true, errInvalidRequest("e2ee_required")
+	}
+	clientID := strings.TrimSpace(r.Header.Get(clientIDHeaderName))
+	if clientID == "" {
+		return nil, true, errInvalidRequest("client_id required")
+	}
+	sess, err := manager.SessionForClient(clientID)
+	if err != nil {
+		return nil, true, errInvalidRequest(err.Error())
+	}
+	return sess, true, nil
+}
+
+func (h *HTTPHandler) requireFileProof(r *http.Request) error {
+	manager := h.AppContext.GetE2EEManager()
+	if manager == nil || !manager.Enabled() {
+		return nil
+	}
+	clientID := strings.TrimSpace(r.Header.Get(clientIDHeaderName))
+	ts := strings.TrimSpace(r.Header.Get(e2eeTSHeaderName))
+	proof := strings.TrimSpace(r.Header.Get(e2eeProofHeaderName))
+	if clientID == "" || ts == "" || proof == "" {
+		return errInvalidRequest("e2ee_proof_required")
+	}
+	sess, err := manager.SessionForClient(clientID)
+	if err != nil {
+		return errInvalidRequest(err.Error())
+	}
+	timestamp, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return errInvalidRequest("invalid_e2ee_ts")
+	}
+	now := time.Now().UTC()
+	if timestamp.Before(now.Add(-fileProofMaxSkew)) || timestamp.After(now.Add(fileProofMaxSkew)) {
+		return errInvalidRequest("e2ee_proof_expired")
+	}
+	expected := e2ee.BuildRequestProof(sess.Key, r.Method, requestProofPath(r), ts, clientID)
+	if !e2ee.VerifyProof(expected, proof) {
+		return errInvalidRequest("e2ee_proof_invalid")
+	}
+	return nil
+}
+
+func requestProofPath(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return ""
+	}
+	if r.URL.RawQuery == "" {
+		return r.URL.Path
+	}
+	return r.URL.Path + "?" + r.URL.RawQuery
+}
+
+func writeProtectedJSON(w http.ResponseWriter, status int, key []byte, value any) error {
+	envelope, err := e2ee.EncryptJSON(key, value)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(e2eeHeaderName, "1")
+	w.WriteHeader(status)
+	return json.NewEncoder(w).Encode(envelope)
+}
+
+func (w *protectedResponseWriter) Header() http.Header {
+	return w.ResponseWriter.Header()
+}
+
+func (w *protectedResponseWriter) WriteHeader(status int) {
+	w.status = status
+}
+
+func (w *protectedResponseWriter) Write(payload []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.body.Write(payload)
+}
+
+func (h *HTTPHandler) protectedEndpoint(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sess, protected, err := h.requireProtectedHTTPSession(r)
+		if !protected {
+			next(w, r)
+			return
+		}
+		if err != nil {
+			respondError(w, http.StatusUnauthorized, err)
+			return
+		}
+		if r.Body != nil && r.ContentLength != 0 && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			var envelope e2ee.CipherEnvelope
+			if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&envelope); err != nil {
+				respondError(w, http.StatusBadRequest, errInvalidRequest("invalid protected payload"))
+				return
+			}
+			plaintext, err := e2ee.DecryptBytes(sess.Key, &envelope)
+			if err != nil {
+				respondError(w, http.StatusBadRequest, errInvalidRequest("e2ee_proof_invalid"))
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(plaintext))
+			r.ContentLength = int64(len(plaintext))
+		}
+		recorder := &protectedResponseWriter{ResponseWriter: w}
+		next(recorder, r)
+		if recorder.status == 0 {
+			recorder.status = http.StatusOK
+		}
+		if recorder.status == http.StatusNoContent || recorder.status == http.StatusNotModified || recorder.body.Len() == 0 {
+			w.WriteHeader(recorder.status)
+			return
+		}
+		var payload any
+		if err := json.Unmarshal(recorder.body.Bytes(), &payload); err != nil {
+			respondError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		if err := writeProtectedJSON(w, recorder.status, sess.Key, payload); err != nil {
+			respondError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+	}
 }
 
 func (h *HTTPHandler) broadcastRootChanged(action, rootID string) {
@@ -69,7 +215,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/sessions/search", h.handleSessionSearch)
 	r.Get("/api/sessions/external", h.handleExternalSessionsList)
 	r.Post("/api/sessions/import", h.handleExternalSessionImport)
-	r.Get("/api/sessions/{key}", h.handleSessionGet)
+	r.Get("/api/sessions/{key}", h.protectedEndpoint(h.handleSessionGet))
 	r.Get("/api/sessions/{key}/related-files", h.handleSessionRelatedFilesGet)
 	r.Post("/api/sessions/{key}/rename", h.handleSessionRename)
 	r.Delete("/api/sessions/{key}/related-files", h.handleSessionRelatedFilesDelete)
@@ -80,6 +226,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/local_dirs", h.handleLocalDirs)
 	r.Get("/api/relay/status", h.handleRelayStatus)
 	r.Get("/api/relay/tips", h.handleRelayTips)
+	r.Post("/api/e2ee/open", h.handleE2EEOpen)
 	r.Get("/api/app/update", h.handleAppUpdateGet)
 	r.Post("/api/app/update", h.handleAppUpdatePost)
 	r.Post("/api/imports/github", h.handleGitHubImportStart)
@@ -716,6 +863,10 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	raw := r.URL.Query().Get("raw")
+	if err := h.requireFileProof(r); err != nil {
+		respondError(w, http.StatusUnauthorized, err)
+		return
+	}
 	if raw == "1" {
 		rawOut, err := uc.OpenFileRaw(r.Context(), usecase.OpenFileRawInput{
 			RootID: rootID,
@@ -809,6 +960,10 @@ func (h *HTTPHandler) handleUpload(w http.ResponseWriter, r *http.Request) {
 	rootID := strings.TrimSpace(r.URL.Query().Get("root"))
 	if rootID == "" {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("root required"))
+		return
+	}
+	if err := h.requireFileProof(r); err != nil {
+		respondError(w, http.StatusUnauthorized, err)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadRequestBytes)
@@ -995,7 +1150,17 @@ func (h *HTTPHandler) handleRelayStatus(w http.ResponseWriter, _ *http.Request) 
 		respondError(w, http.StatusServiceUnavailable, errServiceUnavailable("relay manager not configured"))
 		return
 	}
-	respondJSON(w, http.StatusOK, manager.Status())
+	status := manager.Status()
+	if e2eeManager := h.AppContext.GetE2EEManager(); e2eeManager != nil {
+		status.E2EERequired = e2eeManager.Enabled()
+		if status.E2EERequired {
+			status.E2EENodeID = e2eeManager.NodeID()
+			if strings.TrimSpace(status.NodeID) == "" {
+				status.NodeID = e2eeManager.NodeID()
+			}
+		}
+	}
+	respondJSON(w, http.StatusOK, status)
 }
 
 func (h *HTTPHandler) handleRelayTips(w http.ResponseWriter, _ *http.Request) {
@@ -1004,6 +1169,74 @@ func (h *HTTPHandler) handleRelayTips(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, h.AppContext.GetRelayTipsService().Get())
+}
+
+func (h *HTTPHandler) handleE2EEOpen(w http.ResponseWriter, r *http.Request) {
+	manager := h.AppContext.GetE2EEManager()
+	if manager == nil || !manager.Enabled() {
+		respondError(w, http.StatusForbidden, errServiceUnavailable("e2ee_required"))
+		return
+	}
+	var req struct {
+		ClientID    string `json:"client_id"`
+		NodeID      string `json:"node_id"`
+		ClientEphPK string `json:"client_eph_pk"`
+		ClientNonce string `json:"client_nonce"`
+		Proof       string `json:"proof"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid e2ee open payload"))
+		return
+	}
+	req.ClientID = strings.TrimSpace(req.ClientID)
+	req.NodeID = strings.TrimSpace(req.NodeID)
+	req.ClientEphPK = strings.TrimSpace(req.ClientEphPK)
+	req.ClientNonce = strings.TrimSpace(req.ClientNonce)
+	req.Proof = strings.TrimSpace(req.Proof)
+	if req.ClientID == "" || req.NodeID == "" || req.ClientEphPK == "" || req.ClientNonce == "" || req.Proof == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("client_id, node_id, client_eph_pk, client_nonce and proof are required"))
+		return
+	}
+	if req.NodeID != manager.NodeID() {
+		respondError(w, http.StatusForbidden, errInvalidRequest("e2ee_proof_invalid"))
+		return
+	}
+	expectedProof := e2ee.BuildOpenProof(manager.PairingSecret(), req.NodeID, req.ClientEphPK, req.ClientNonce)
+	if !e2ee.VerifyProof(expectedProof, req.Proof) {
+		respondError(w, http.StatusForbidden, errInvalidRequest("e2ee_proof_invalid"))
+		return
+	}
+	nodePriv, nodeEphPK, err := e2ee.GenerateECDHKeypair()
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	clientPub, err := e2ee.DecodePublicKey(req.ClientEphPK)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid client_eph_pk"))
+		return
+	}
+	serverNonceBytes := make([]byte, 16)
+	if _, err := rand.Read(serverNonceBytes); err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	serverNonce := base64.StdEncoding.EncodeToString(serverNonceBytes)
+	derived, err := e2ee.DeriveKey(manager.PairingSecret(), req.NodeID, req.ClientEphPK, nodeEphPK, req.ClientNonce, serverNonce, nodePriv, clientPub)
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	if _, err := manager.OpenSessionForClient(req.ClientID, derived); err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":           true,
+		"node_eph_pk":  nodeEphPK,
+		"server_nonce": serverNonce,
+		"server_proof": e2ee.BuildAcceptProof(manager.PairingSecret(), req.NodeID, req.ClientEphPK, nodeEphPK, req.ClientNonce, serverNonce),
+	})
 }
 
 func managedDirResponse(dir fs.RootInfo) map[string]any {

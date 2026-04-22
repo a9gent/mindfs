@@ -9,6 +9,7 @@ import (
 	"mindfs/server/internal/agent"
 	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/api/usecase"
+	"mindfs/server/internal/e2ee"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/relay"
@@ -30,6 +31,7 @@ type AppContext struct {
 	RelayTips *relay.TipsService
 	Update    *update.Service
 	GitHub    *githubimport.Service
+	E2EE      *e2ee.Manager
 
 	mu                       sync.RWMutex
 	roots                    map[string]*RootContext // root id -> root context
@@ -206,6 +208,10 @@ func (s *AppContext) GetGitHubImportService() *githubimport.Service {
 	return s.GitHub
 }
 
+func (s *AppContext) GetE2EEManager() *e2ee.Manager {
+	return s.E2EE
+}
+
 func (s *AppContext) UpsertRoot(path string) (fs.RootInfo, error) {
 	if s.Dirs == nil {
 		return fs.RootInfo{}, errors.New("registry not configured")
@@ -296,7 +302,7 @@ func (s *AppContext) GetSessionStreamHub() *StreamHub {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.streamHub == nil {
-		s.streamHub = NewStreamHub()
+		s.streamHub = NewStreamHub(s.E2EE)
 	}
 	return s.streamHub
 }

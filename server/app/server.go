@@ -9,6 +9,7 @@ import (
 
 	"mindfs/server/internal/agent"
 	"mindfs/server/internal/api"
+	"mindfs/server/internal/e2ee"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/relay"
@@ -20,6 +21,33 @@ type StartOptions struct {
 	RelayBaseURL string
 	Version      string
 	Args         []string
+	E2EEConfig   E2EEConfig
+}
+
+type E2EEConfig struct {
+	Enabled       bool
+	NodeID        string
+	PairingSecret string
+}
+
+type E2EEEnsureResult struct {
+	Config    E2EEConfig
+	Generated bool
+}
+
+func EnsureE2EEConfig(enabled bool) (E2EEEnsureResult, error) {
+	result, err := e2ee.EnsureConfig(enabled)
+	if err != nil {
+		return E2EEEnsureResult{}, err
+	}
+	return E2EEEnsureResult{
+		Config: E2EEConfig{
+			Enabled:       result.Config.Enabled,
+			NodeID:        result.Config.NodeID,
+			PairingSecret: result.Config.PairingSecret,
+		},
+		Generated: result.Generated,
+	}, nil
 }
 
 // Start boots the HTTP/WS server.
@@ -52,6 +80,11 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 		Agents: agentPool,
 		Prober: agentProber,
 		Update: updateSvc,
+		E2EE: e2ee.NewManager(e2ee.Config{
+			Enabled:       opts.E2EEConfig.Enabled,
+			NodeID:        opts.E2EEConfig.NodeID,
+			PairingSecret: opts.E2EEConfig.PairingSecret,
+		}),
 	}
 	githubImportSvc, err := githubimport.NewService(services)
 	if err != nil {
@@ -93,6 +126,10 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 		agentPool.CloseAll()
 		server.Shutdown(context.Background())
 	}()
+
+	if services.E2EE != nil {
+		services.E2EE.StartCleanup(ctx.Done())
+	}
 
 	return server.ListenAndServe()
 }

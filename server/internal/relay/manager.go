@@ -20,9 +20,11 @@ type Status struct {
 	PendingCode  string `json:"pending_code"`
 	NodeName     string `json:"node_name"`
 	NodeID       string `json:"node_id"`
+	E2EENodeID   string `json:"e2ee_node_id,omitempty"`
 	RelayBaseURL string `json:"relay_base_url"`
 	NodeURL      string `json:"node_url"`
 	LastError    string `json:"last_error,omitempty"`
+	E2EERequired bool   `json:"e2ee_required"`
 }
 
 type Manager struct {

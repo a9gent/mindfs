@@ -1,5 +1,5 @@
-import React, { memo, useMemo } from "react";
-import { appURL } from "../services/base";
+import React, { memo, useEffect, useState } from "react";
+import { fetchProofProtectedBlob } from "../services/file";
 
 type ImageViewerProps = {
   path: string;
@@ -7,13 +7,32 @@ type ImageViewerProps = {
 };
 
 function ImageViewerInner({ path, root }: ImageViewerProps) {
-  const url = useMemo(
-    () =>
-      root
-        ? appURL("/api/file", new URLSearchParams({ raw: "1", root, path }))
-        : appURL("/api/file", new URLSearchParams({ raw: "1", path })),
-    [path, root]
-  );
+  const [url, setURL] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectURL = "";
+    async function run() {
+      if (!root) return;
+      try {
+        const blob = await fetchProofProtectedBlob({ rootId: root, path });
+        if (cancelled) return;
+        objectURL = URL.createObjectURL(blob);
+        setURL(objectURL);
+      } catch {
+        if (!cancelled) {
+          setURL("");
+        }
+      }
+    }
+    void run();
+    return () => {
+      cancelled = true;
+      if (objectURL) {
+        URL.revokeObjectURL(objectURL);
+      }
+    };
+  }, [path, root]);
   return (
     <div
       style={{
@@ -25,16 +44,20 @@ function ImageViewerInner({ path, root }: ImageViewerProps) {
         alignItems: "center",
       }}
     >
-      <img
-        src={url}
-        alt={path}
-        style={{
-          maxWidth: "100%",
-          maxHeight: "100%",
-          borderRadius: "12px",
-          boxShadow: "0 12px 24px rgba(31, 37, 48, 0.1)",
-        }}
-      />
+      {url ? (
+        <img
+          src={url}
+          alt={path}
+          style={{
+            maxWidth: "100%",
+            maxHeight: "100%",
+            borderRadius: "12px",
+            boxShadow: "0 12px 24px rgba(31, 37, 48, 0.1)",
+          }}
+        />
+      ) : (
+        <div style={{ color: "var(--text-secondary)" }}>Loading image...</div>
+      )}
     </div>
   );
 }

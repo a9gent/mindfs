@@ -1,10 +1,12 @@
 package api
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"time"
 
+	"mindfs/server/internal/e2ee"
 	"mindfs/server/internal/session"
 
 	"github.com/gorilla/websocket"
@@ -12,6 +14,7 @@ import (
 
 type StreamHub struct {
 	mu              sync.RWMutex
+	e2eeManager     *e2ee.Manager
 	clients         map[string]*websocket.Conn
 	connLocks       map[*websocket.Conn]*sync.Mutex
 	sessionClients  map[string]map[string]struct{}
@@ -60,8 +63,9 @@ func blank(value string) bool {
 	return strings.TrimSpace(value) == ""
 }
 
-func NewStreamHub() *StreamHub {
+func NewStreamHub(e2eeManager *e2ee.Manager) *StreamHub {
 	return &StreamHub{
+		e2eeManager:     e2eeManager,
 		clients:         make(map[string]*websocket.Conn),
 		connLocks:       make(map[*websocket.Conn]*sync.Mutex),
 		sessionClients:  make(map[string]map[string]struct{}),
@@ -349,7 +353,7 @@ func (h *StreamHub) SendToClient(clientID string, resp WSResponse) {
 	if conn == nil {
 		return
 	}
-	h.WriteJSON(conn, resp)
+	_ = h.WriteJSON(clientID, conn, resp)
 }
 
 func (h *StreamHub) BroadcastAll(resp WSResponse) {
@@ -363,8 +367,8 @@ func (h *StreamHub) BroadcastSessionStream(rootID, sessionKey string, event *Str
 		return
 	}
 	h.AppendReplyEvent(sessionKey, *event)
-	resp := buildSessionStreamResponse(rootID, sessionKey, event)
 	for _, clientID := range h.GetSessionClientIDs(sessionKey, true) {
+		resp := buildSessionStreamResponse(rootID, sessionKey, event)
 		h.SendToClient(clientID, resp)
 	}
 }
@@ -404,13 +408,31 @@ func (h *StreamHub) BroadcastSessionUserMessage(
 	}
 }
 
-func (h *StreamHub) WriteJSON(conn *websocket.Conn, value any) error {
+func (h *StreamHub) WriteJSON(clientID string, conn *websocket.Conn, value any) error {
 	if conn == nil {
 		return nil
 	}
 	lock := h.getConnLock(conn)
 	lock.Lock()
 	defer lock.Unlock()
+	if h.e2eeManager != nil && h.e2eeManager.Enabled() {
+		if resp, ok := value.(WSResponse); ok && resp.Type == "e2ee.error" {
+			return conn.WriteJSON(resp)
+		}
+		sess, err := h.e2eeManager.SessionForClient(clientID)
+		if err != nil {
+			return nil
+		}
+		payload, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		envelope, err := e2ee.EncryptBytes(sess.Key, payload)
+		if err != nil {
+			return err
+		}
+		return conn.WriteJSON(envelope)
+	}
 	return conn.WriteJSON(value)
 }
 

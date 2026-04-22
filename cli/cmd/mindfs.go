@@ -57,6 +57,7 @@ func main() {
 
 	addr := flag.String("addr", "127.0.0.1:7331", "listen address")
 	noRelayer := flag.Bool("no-relayer", false, "disable relay integration")
+	e2eeFlag := flag.Bool("e2ee", false, "enable end-to-end encryption for sensitive data")
 	foreground := flag.Bool("foreground", false, "run in the foreground instead of as a background service")
 	stop := flag.Bool("stop", false, "stop the background mindfs service")
 	restart := flag.Bool("restart", false, "restart the background mindfs service")
@@ -124,6 +125,16 @@ func main() {
 		return
 	}
 
+	e2eeResult, err := app.EnsureE2EEConfig(*e2eeFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+	if *e2eeFlag && strings.TrimSpace(e2eeResult.Config.PairingSecret) != "" {
+		fmt.Fprintln(os.Stdout, "E2EE enabled")
+		fmt.Fprintln(os.Stdout, "pairing secret:", e2eeResult.Config.PairingSecret)
+	}
+
 	if !internalRestart && !*restart && serverRunning(*addr) {
 		fmt.Fprintf(os.Stdout, "server already running on %s, reusing existing process\n", *addr)
 		rootInfo, err := addManagedDir(*addr, absRoot)
@@ -172,9 +183,10 @@ func main() {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- app.Start(ctx, *addr, app.StartOptions{
-			NoRelayer: *noRelayer,
-			Version:   version,
-			Args:      os.Args[1:],
+			NoRelayer:  *noRelayer,
+			Version:    version,
+			Args:       os.Args[1:],
+			E2EEConfig: e2eeResult.Config,
 		})
 	}()
 	if err := waitForServer(*addr, 8*time.Second); err != nil {

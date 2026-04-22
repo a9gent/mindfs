@@ -1,4 +1,5 @@
 import { appURL } from "./base";
+import { e2eeService } from "./e2ee";
 
 export type ReadMode = "full" | "incremental";
 
@@ -547,9 +548,13 @@ export async function fetchFile(params: FetchFileParams): Promise<FilePayload | 
   const request = createFetchOptions(params.timeoutMs);
 
   try {
+    const requestURL = buildFileURL(params.rootId, params.path, readMode, cursor, validationMTime || undefined);
+    const headers = e2eeService.isRequired()
+      ? await e2eeService.fileProofHeaders("GET", requestURL)
+      : undefined;
     const response = await fetchResponse(
-      buildFileURL(params.rootId, params.path, readMode, cursor, validationMTime || undefined),
-      request.init,
+      requestURL,
+      { ...request.init, headers },
     );
 
     if (response.status === 304) {
@@ -561,15 +566,21 @@ export async function fetchFile(params: FetchFileParams): Promise<FilePayload | 
         writeMemoryCache(cacheKey, record!.file);
         return record!.file;
       }
+      const retryURL = buildFileURL(params.rootId, params.path, readMode, cursor);
       const retry = await fetchResponse(
-        buildFileURL(params.rootId, params.path, readMode, cursor),
-        request.init,
+        retryURL,
+        {
+          ...request.init,
+          headers: e2eeService.isRequired()
+            ? await e2eeService.fileProofHeaders("GET", retryURL)
+            : headers,
+        },
       );
       if (!retry.ok) {
         throw new Error(`open file failed after 304 retry: status=${retry.status}`);
       }
       const retryPayload = (await retry.json()) as FileResponse;
-      const retryFile = retryPayload?.file || null;
+      const retryFile = await unwrapFileResponse(retryPayload);
       if (!retryFile) {
         return null;
       }
@@ -578,11 +589,17 @@ export async function fetchFile(params: FetchFileParams): Promise<FilePayload | 
     }
 
     if (!response.ok) {
+      if (response.status === 401 && e2eeService.isRequired()) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        if (e2eeService.handleServerError(String(payload.error || ""))) {
+          return fetchFile(params);
+        }
+      }
       throw new Error(`open file failed: status=${response.status}`);
     }
 
     const payload = (await response.json()) as FileResponse;
-    const file = payload?.file || null;
+    const file = await unwrapFileResponse(payload);
     if (!file) {
       return null;
     }
@@ -594,4 +611,52 @@ export async function fetchFile(params: FetchFileParams): Promise<FilePayload | 
       window.clearTimeout(request.timer);
     }
   }
+}
+
+export async function fetchProofProtectedBlob(params: {
+  rootId: string;
+  path: string;
+  timeoutMs?: number;
+}): Promise<Blob> {
+  const request = createFetchOptions(params.timeoutMs);
+  try {
+    const baseURL = buildFileURL(params.rootId, params.path, "full", 0);
+    const rawURL = withRawFlag(
+      baseURL,
+    );
+    const headers = e2eeService.isRequired()
+      ? await e2eeService.fileProofHeaders("GET", rawURL)
+      : undefined;
+    const response = await fetchResponse(rawURL, { ...request.init, headers });
+    if (!response.ok) {
+      if (response.status === 401 && e2eeService.isRequired()) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        if (e2eeService.handleServerError(String(payload.error || ""))) {
+          return fetchProofProtectedBlob(params);
+        }
+      }
+      throw new Error(`open raw file failed: status=${response.status}`);
+    }
+    return response.blob();
+  } finally {
+    if (request.timer !== null) {
+      window.clearTimeout(request.timer);
+    }
+  }
+}
+
+async function unwrapFileResponse(payload: FileResponse): Promise<FilePayload | null> {
+  if (payload?.file) {
+    return payload.file;
+  }
+  return null;
+}
+
+function withRawFlag(url: string): string {
+  const target = new URL(url, window.location.origin);
+  target.searchParams.set("raw", "1");
+  if (target.origin === window.location.origin) {
+    return `${target.pathname}${target.search}`;
+  }
+  return target.toString();
 }
