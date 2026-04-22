@@ -283,7 +283,8 @@ func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role,
 	if session == nil || strings.TrimSpace(session.Key) == "" {
 		return errors.New("session required")
 	}
-	if strings.TrimSpace(content) == "" {
+	normalizedRole := strings.ToLower(strings.TrimSpace(role))
+	if strings.TrimSpace(content) == "" && normalizedRole != "agent" && normalizedRole != "assistant" {
 		return nil
 	}
 	m.mu.Lock()
