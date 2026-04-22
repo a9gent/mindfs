@@ -552,7 +552,10 @@ func updateToEvent(update agenttypes.Event) *StreamEvent {
 			return &StreamEvent{Type: "tool_call_update", Data: tu}
 		}
 	case agenttypes.EventTypeMessageDone:
-		return &StreamEvent{Type: "message_done"}
+		if done, ok := update.Data.(agenttypes.MessageDone); ok {
+			return &StreamEvent{Type: "message_done", Data: done}
+		}
+		return &StreamEvent{Type: "message_done", Data: agenttypes.MessageDone{}}
 	}
 	return nil
 }

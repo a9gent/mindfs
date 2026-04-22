@@ -119,6 +119,7 @@ type session struct {
 	sessionID  string
 	sessionKey string
 	model      string
+	context    types.ContextWindow
 
 	sendMu sync.Mutex
 	turnMu sync.Mutex
@@ -267,6 +268,12 @@ func (s *session) SessionID() string {
 	return s.sessionID
 }
 
+func (s *session) ContextWindow(_ context.Context) (types.ContextWindow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.context, nil
+}
+
 func (s *session) CancelCurrentTurn() error {
 	if s.stream == nil {
 		s.turn.Cancel()
@@ -342,8 +349,14 @@ func (s *session) consumeMessages() {
 			if !s.sawMessageText && strings.TrimSpace(m.Result) != "" {
 				s.emitMessageChunk(m.Result)
 			}
+			s.updateContextWindow(m)
 			s.logRawMessage(raw)
-			s.emit(types.Event{Type: types.EventTypeMessageDone, SessionID: s.SessionID()})
+			contextWindow, _ := s.ContextWindow(context.Background())
+			s.emit(types.Event{
+				Type:      types.EventTypeMessageDone,
+				SessionID: s.SessionID(),
+				Data:      types.MessageDone{ContextWindow: contextWindow},
+			})
 			s.completeTurn(resultErr(m))
 			s.sawDelta = false
 			s.sawMessageText = false
@@ -778,6 +791,43 @@ func (s *session) setSessionID(sessionID string) {
 	}
 	s.mu.Lock()
 	s.sessionID = sessionID
+	s.mu.Unlock()
+}
+
+func (s *session) updateContextWindow(msg claudeagent.ResultMessage) {
+	totalTokens := 0
+	modelContextWindow := 0
+	switch len(msg.ModelUsage) {
+	case 0:
+		if msg.Usage != nil {
+			totalTokens = msg.Usage.InputTokens + msg.Usage.OutputTokens
+		}
+	case 1:
+		for _, usage := range msg.ModelUsage {
+			totalTokens = usage.InputTokens + usage.OutputTokens
+			modelContextWindow = usage.ContextWindow
+		}
+	default:
+		maxUsageTokens := -1
+		for _, usage := range msg.ModelUsage {
+			usageTokens := usage.InputTokens + usage.OutputTokens
+			if usageTokens <= maxUsageTokens {
+				continue
+			}
+			maxUsageTokens = usageTokens
+			totalTokens = usageTokens
+			modelContextWindow = usage.ContextWindow
+		}
+	}
+	if totalTokens == 0 && modelContextWindow == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	s.context = types.ContextWindow{
+		TotalTokens:        totalTokens,
+		ModelContextWindow: modelContextWindow,
+	}
 	s.mu.Unlock()
 }
 

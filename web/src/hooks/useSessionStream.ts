@@ -6,19 +6,40 @@ type ExchangeLike = {
   role?: string;
   agent?: string;
   content?: string;
+  context_window?: {
+    totalTokens: number;
+    modelContextWindow: number;
+  };
   timestamp?: string;
   toolCall?: ToolCall;
   pending_ack?: boolean;
 };
 
 export type TimelineItem =
-  | { id: string; type: "user_text" | "assistant_text"; content: string; timestamp?: string; agent?: string; pendingAck?: boolean; seq?: number }
+  | {
+      id: string;
+      type: "user_text" | "assistant_text";
+      content: string;
+      timestamp?: string;
+      agent?: string;
+      pendingAck?: boolean;
+      seq?: number;
+      contextWindow?: {
+        totalTokens: number;
+        modelContextWindow: number;
+      };
+    }
   | { id: string; type: "thought"; content: string }
   | { id: string; type: "tool"; toolCall: ToolCall };
 
 type UseSessionStreamResult = {
   timeline: TimelineItem[];
   isStreaming: boolean;
+};
+
+type ContextWindowLike = {
+  totalTokens: number;
+  modelContextWindow: number;
 };
 
 function hashText(input: string): string {
@@ -109,6 +130,7 @@ function buildBaseTimeline(exchanges: ExchangeLike[]): TimelineItem[] {
         timestamp: ex.timestamp,
         agent: ex.agent,
         seq: ex.seq,
+        contextWindow: ex.context_window,
       });
       continue;
     }
@@ -142,13 +164,47 @@ function buildBaseTimeline(exchanges: ExchangeLike[]): TimelineItem[] {
   return out;
 }
 
+function applySessionContextWindow(
+  items: TimelineItem[],
+  contextWindow?: ContextWindowLike,
+): TimelineItem[] {
+  const totalTokens = Math.max(0, Number(contextWindow?.totalTokens || 0));
+  const modelContextWindow = Math.max(0, Number(contextWindow?.modelContextWindow || 0));
+  if (!totalTokens || !modelContextWindow) {
+    return items;
+  }
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const item = items[i];
+    if (item.type !== "assistant_text") {
+      continue;
+    }
+    if (item.contextWindow?.totalTokens && item.contextWindow?.modelContextWindow) {
+      return items;
+    }
+    const next = [...items];
+    next[i] = {
+      ...item,
+      contextWindow: {
+        totalTokens,
+        modelContextWindow,
+      },
+    };
+    return next;
+  }
+  return items;
+}
+
 export function useSessionStream(
   sessionKey: string | null,
-  exchanges: ExchangeLike[] = []
+  exchanges: ExchangeLike[] = [],
+  sessionContextWindow?: ContextWindowLike,
 ): UseSessionStreamResult {
   const [isStreaming, setIsStreaming] = useState(false);
 
-  const baseTimeline = useMemo(() => buildBaseTimeline(exchanges), [exchanges]);
+  const baseTimeline = useMemo(
+    () => applySessionContextWindow(buildBaseTimeline(exchanges), sessionContextWindow),
+    [exchanges, sessionContextWindow],
+  );
 
   useEffect(() => {
     setIsStreaming(false);

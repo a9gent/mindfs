@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	types "mindfs/server/internal/agent/types"
+
 	acp "github.com/coder/acp-go-sdk"
 )
 
@@ -64,12 +66,13 @@ type activePromptState struct {
 var stderrMessagePattern = regexp.MustCompile(`"message"\s*:\s*"([^"]+)"`)
 
 type sessionState struct {
-	ID       acp.SessionId
-	models   *acp.SessionModelState
-	modes    *acp.SessionModeState
-	commands []acp.AvailableCommand
-	onUpdate func(SessionUpdate)
-	mu       sync.RWMutex
+	ID            acp.SessionId
+	models        *acp.SessionModelState
+	modes         *acp.SessionModeState
+	commands      []acp.AvailableCommand
+	contextWindow types.ContextWindow
+	onUpdate      func(SessionUpdate)
+	mu            sync.RWMutex
 }
 
 type qwenSlashCommandNotification struct {
@@ -134,6 +137,18 @@ func (s *sessionState) getCommands() []acp.AvailableCommand {
 		return nil
 	}
 	return append([]acp.AvailableCommand(nil), s.commands...)
+}
+
+func (s *sessionState) setContextWindow(contextWindow types.ContextWindow) {
+	s.mu.Lock()
+	s.contextWindow = contextWindow
+	s.mu.Unlock()
+}
+
+func (s *sessionState) getContextWindow() types.ContextWindow {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.contextWindow
 }
 
 // SessionUpdate is the internal session update type.
@@ -201,6 +216,14 @@ func (c *mindfsClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 			c.proc.modes = state
 			c.proc.mu.Unlock()
 		}
+	}
+	if params.Update.UsageUpdate != nil {
+		current := session.getContextWindow()
+		current.ModelContextWindow = params.Update.UsageUpdate.Size
+		if current.TotalTokens == 0 {
+			current.TotalTokens = params.Update.UsageUpdate.Used
+		}
+		session.setContextWindow(current)
 	}
 
 	if internalUpdate.Type != "" {
@@ -550,7 +573,7 @@ func (p *Process) SendMessage(ctx context.Context, sessionKey, content string) e
 		promptCancel()
 	}()
 
-	_, err := p.conn.Prompt(promptCtx, acp.PromptRequest{
+	resp, err := p.conn.Prompt(promptCtx, acp.PromptRequest{
 		SessionId: sess.ID,
 		Prompt: []acp.ContentBlock{
 			acp.TextBlock(content),
@@ -558,6 +581,11 @@ func (p *Process) SendMessage(ctx context.Context, sessionKey, content string) e
 	})
 	if err != nil {
 		return p.wrapPromptError(sessionKey, string(sess.ID), err)
+	}
+	if resp.Usage != nil {
+		current := sess.getContextWindow()
+		current.TotalTokens = resp.Usage.TotalTokens
+		sess.setContextWindow(current)
 	}
 
 	// Signal completion
@@ -722,6 +750,14 @@ func (p *Process) SessionCommands(sessionKey string) []acp.AvailableCommand {
 		return nil
 	}
 	return sess.getCommands()
+}
+
+func (p *Process) SessionContextWindow(sessionKey string) types.ContextWindow {
+	sess := p.getSessionByKey(sessionKey)
+	if sess == nil {
+		return types.ContextWindow{}
+	}
+	return sess.getContextWindow()
 }
 
 func (p *Process) RecentStderrHint() (string, bool) {

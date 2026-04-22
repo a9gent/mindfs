@@ -157,6 +157,10 @@ type Exchange = {
   mode?: string;
   effort?: string;
   content?: string;
+  context_window?: {
+    totalTokens: number;
+    modelContextWindow: number;
+  };
   timestamp?: string;
   toolCall?: any;
   pending_ack?: boolean;
@@ -1987,6 +1991,67 @@ export function App() {
       bumpCacheVersion();
     },
     [rootSessionKey, bumpCacheVersion],
+  );
+
+  const attachContextWindowToLatestAssistant = useCallback(
+    (
+      rootID: string,
+      sessionKey: string,
+      contextWindow?: { totalTokens?: number; modelContextWindow?: number },
+    ) => {
+      const totalTokens = Math.max(0, Number(contextWindow?.totalTokens || 0));
+      const modelContextWindow = Math.max(0, Number(contextWindow?.modelContextWindow || 0));
+      if (!totalTokens || !modelContextWindow) {
+        return;
+      }
+      const cacheKey = rootSessionKey(rootID, sessionKey);
+      const stampList = (prevList: Exchange[]) => {
+        const list = [...(prevList || [])];
+        for (let i = list.length - 1; i >= 0; i -= 1) {
+          const item = list[i];
+          if (item?.role === "agent" || item?.role === "assistant") {
+            list[i] = {
+              ...item,
+              context_window: {
+                totalTokens,
+                modelContextWindow,
+              },
+            };
+            break;
+          }
+        }
+        return list;
+      };
+      const cached = sessionCacheRef.current[cacheKey];
+      if (cached) {
+        const exchanges = stampList((((cached as any).exchanges || []) as Exchange[]));
+        sessionCacheRef.current[cacheKey] = {
+          ...(cached as any),
+          exchanges,
+          updated_at: new Date().toISOString(),
+        } as Session;
+      }
+      setSelectedSession((prev) => {
+        const prevRoot =
+          (prev?.root_id as string | undefined) || currentRootIdRef.current;
+        if (!prev || prevRoot !== rootID || (prev.key || prev.session_key) !== sessionKey) {
+          return prev;
+        }
+        return {
+          ...(prev as any),
+          exchanges: stampList((((prev as any).exchanges || []) as Exchange[])),
+        } as SessionItem;
+      });
+      const drawer = drawerSessionByRootRef.current[rootID];
+      if (drawer && drawer.key === sessionKey) {
+        setDrawerSessionForRoot(rootID, {
+          ...(drawer as any),
+          exchanges: stampList((((drawer as any).exchanges || []) as Exchange[])),
+        } as Session);
+      }
+      bumpCacheVersion();
+    },
+    [bumpCacheVersion, rootSessionKey],
   );
 
   const normalizeTreeResponse = useCallback((payload: any) => {
@@ -4643,6 +4708,11 @@ export function App() {
           }
           break;
         case "message_done":
+          attachContextWindowToLatestAssistant(
+            activeRoot,
+            streamKey,
+            event.data?.contextWindow,
+          );
           playCompletionSound();
           handleSessionStreamDone(activeRoot, streamKey);
           break;

@@ -16,10 +16,24 @@ type SessionItem = {
   type?: string;
   name?: string;
   agent?: string;
+  context_window?: {
+    totalTokens: number;
+    modelContextWindow: number;
+  };
   search_seq?: number;
   scope?: string;
   purpose?: string;
-  exchanges?: Array<{ seq?: number; role?: string; agent?: string; content?: string; timestamp?: string }>;
+  exchanges?: Array<{
+    seq?: number;
+    role?: string;
+    agent?: string;
+    content?: string;
+    timestamp?: string;
+    context_window?: {
+      totalTokens: number;
+      modelContextWindow: number;
+    };
+  }>;
   closed_at?: string;
   related_files?: RelatedFile[];
 };
@@ -131,6 +145,69 @@ function stripUploadAttachmentTokens(content: string): string {
     .replace(uploadTokenPattern, "")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/^[\n\s]+|[\n\s]+$/g, "");
+}
+
+function formatContextWindowPercent(contextWindow?: { totalTokens: number; modelContextWindow: number }) {
+  const usedTokens = Math.max(0, Number(contextWindow?.totalTokens || 0));
+  const modelContextWindow = Math.max(0, Number(contextWindow?.modelContextWindow || 0));
+  if (!usedTokens || !modelContextWindow) {
+    return null;
+  }
+  const usedRatio = Math.max(0, Math.min(1, usedTokens / modelContextWindow));
+  const leftRatio = Math.max(0, 1 - usedRatio);
+  return {
+    usedTokens,
+    leftTokens: Math.max(0, modelContextWindow - usedTokens),
+    usedRatio,
+    leftRatio,
+    percent: Math.round(leftRatio * 100),
+  };
+}
+
+function formatCompactTokenCount(value: number) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0";
+  }
+  if (value >= 1_000_000) {
+    return `${Math.round(value / 1_000_000)}M`;
+  }
+  if (value >= 1_000) {
+    return `${Math.round(value / 1_000)}K`;
+  }
+  return String(Math.round(value));
+}
+
+function ContextWindowBadge({ contextWindow }: { contextWindow?: { totalTokens: number; modelContextWindow: number } }) {
+  const metrics = formatContextWindowPercent(contextWindow);
+  if (!metrics) {
+    return null;
+  }
+  const hue = metrics.percent <= 10 ? "#dc2626" : metrics.percent <= 25 ? "#ea580c" : "#0f766e";
+  return (
+    <span
+      title={`Context Window ${metrics.percent}% left (${metrics.usedTokens}/${contextWindow?.modelContextWindow} used)`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: hue,
+        opacity: 0.88,
+        lineHeight: 1.1,
+        flexShrink: 0,
+        fontSize: "10px",
+        fontWeight: 700,
+        letterSpacing: "0.01em",
+        fontVariantNumeric: "tabular-nums",
+      }}
+    >
+      <span>{metrics.percent}%</span>
+      <span style={{ opacity: 0.72 }}>
+        {`(${formatCompactTokenCount(metrics.usedTokens)}/${formatCompactTokenCount(
+          contextWindow?.modelContextWindow || 0,
+        )})`}
+      </span>
+    </span>
+  );
 }
 
 const formatTime = (isoString?: string) => {
@@ -269,7 +346,11 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
   const relatedFilesDefaultStateRef = useRef<string>("");
   const sessionKey = session?.key || session?.session_key || null;
   const exchanges = Array.isArray(session?.exchanges) ? session.exchanges : [];
-  const { timeline, isStreaming } = useSessionStream(sessionKey, exchanges);
+  const { timeline, isStreaming } = useSessionStream(
+    sessionKey,
+    exchanges,
+    session?.context_window,
+  );
   const isAwaiting = !!(session as any)?.pending;
   const shouldStickToBottomRef = useRef(true);
   const lastSessionKeyRef = useRef<string | null>(null);
@@ -657,6 +738,7 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
                 </button>
                 <AgentIcon agentName={item.agent || ""} style={{ width: "12px", height: "12px" }} />
                 <span>{time}</span>
+                <ContextWindowBadge contextWindow={item.contextWindow} />
               </span>
             )}
           </div>

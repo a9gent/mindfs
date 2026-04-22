@@ -22,6 +22,10 @@ export type Session = {
   created_at: string;
   updated_at: string;
   closed_at?: string;
+  context_window?: {
+    totalTokens: number;
+    modelContextWindow: number;
+  };
   related_files?: RelatedFile[];
   exchanges?: Array<{
     seq?: number;
@@ -31,6 +35,10 @@ export type Session = {
     mode?: string;
     effort?: string;
     content?: string;
+    context_window?: {
+      totalTokens: number;
+      modelContextWindow: number;
+    };
     timestamp?: string;
     toolCall?: ToolCall;
     pending_ack?: boolean;
@@ -88,7 +96,15 @@ export type StreamEvent =
   | { type: "thought_chunk"; data: { content: string } }
   | { type: "tool_call"; data: ToolCall }
   | { type: "tool_call_update"; data: ToolCall }
-  | { type: "message_done"; data?: Record<string, never> }
+  | {
+      type: "message_done";
+      data?: {
+        contextWindow?: {
+          totalTokens: number;
+          modelContextWindow: number;
+        };
+      };
+    }
   | { type: "error"; data: { message: string } };
 
 export type SyncSessionResult = {

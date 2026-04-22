@@ -453,7 +453,11 @@ func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 	if h.AppContext != nil {
 		pendingUser = h.AppContext.GetSessionStreamHub().GetPendingUserExchange(key)
 	}
-	respondJSON(w, http.StatusOK, sessionResponse(out, pendingUser))
+	contextWindow, _ := uc.GetSessionContextWindow(r.Context(), usecase.GetSessionContextWindowInput{
+		RootID: rootID,
+		Key:    key,
+	})
+	respondJSON(w, http.StatusOK, sessionResponse(out, pendingUser, contextWindow))
 }
 
 func (h *HTTPHandler) handleSessionRelatedFilesGet(w http.ResponseWriter, r *http.Request) {
@@ -569,7 +573,7 @@ func (h *HTTPHandler) handleSessionDelete(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func sessionResponse(s *session.Session, pendingUser *session.Exchange) map[string]any {
+func sessionResponse(s *session.Session, pendingUser *session.Exchange, contextWindow agenttypes.ContextWindow) map[string]any {
 	if s == nil {
 		return map[string]any{}
 	}
@@ -579,18 +583,19 @@ func sessionResponse(s *session.Session, pendingUser *session.Exchange) map[stri
 		exchanges = append(exchanges, *pendingUser)
 	}
 	return map[string]any{
-		"key":           s.Key,
-		"type":          s.Type,
-		"agent":         session.InferAgentFromSession(s),
-		"model":         s.Model,
-		"mode":          session.InferModeFromSession(s),
-		"effort":        session.InferEffortFromSession(s),
-		"name":          s.Name,
-		"exchanges":     exchanges,
-		"related_files": s.RelatedFiles,
-		"created_at":    s.CreatedAt,
-		"updated_at":    s.UpdatedAt,
-		"closed_at":     s.ClosedAt,
+		"key":            s.Key,
+		"type":           s.Type,
+		"agent":          session.InferAgentFromSession(s),
+		"model":          s.Model,
+		"mode":           session.InferModeFromSession(s),
+		"effort":         session.InferEffortFromSession(s),
+		"name":           s.Name,
+		"exchanges":      exchanges,
+		"related_files":  s.RelatedFiles,
+		"context_window": contextWindow,
+		"created_at":     s.CreatedAt,
+		"updated_at":     s.UpdatedAt,
+		"closed_at":      s.ClosedAt,
 	}
 }
 

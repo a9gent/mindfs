@@ -36,8 +36,16 @@ type Session interface {
 	// SessionID returns the current session ID.
 	SessionID() string
 
+	// ContextWindow returns the latest known context window usage for the session.
+	ContextWindow(ctx context.Context) (ContextWindow, error)
+
 	// Close terminates the session (not the process).
 	Close() error
+}
+
+type ContextWindow struct {
+	TotalTokens        int `json:"totalTokens"`
+	ModelContextWindow int `json:"modelContextWindow"`
 }
 
 type OpenSessionInput struct {
@@ -156,6 +164,10 @@ type MessageChunk struct {
 
 type ThoughtChunk struct {
 	Content string `json:"content"`
+}
+
+type MessageDone struct {
+	ContextWindow ContextWindow `json:"contextWindow"`
 }
 
 type ToolKind string

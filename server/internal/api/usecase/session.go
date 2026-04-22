@@ -120,6 +120,41 @@ func (s *Service) GetSession(ctx context.Context, in GetSessionInput) (*session.
 	return manager.Get(ctx, in.Key, in.Seq)
 }
 
+type GetSessionContextWindowInput struct {
+	RootID string
+	Key    string
+}
+
+func (s *Service) GetSessionContextWindow(ctx context.Context, in GetSessionContextWindowInput) (agenttypes.ContextWindow, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return agenttypes.ContextWindow{}, err
+	}
+	if strings.TrimSpace(in.Key) == "" {
+		return agenttypes.ContextWindow{}, errors.New("session key required")
+	}
+	manager, err := s.Registry.GetSessionManager(in.RootID)
+	if err != nil {
+		return agenttypes.ContextWindow{}, err
+	}
+	current, err := manager.Get(ctx, in.Key, 0)
+	if err != nil {
+		return agenttypes.ContextWindow{}, err
+	}
+	pool := s.Registry.GetAgentPool()
+	if pool == nil {
+		return agenttypes.ContextWindow{}, nil
+	}
+	agentName := strings.TrimSpace(session.InferAgentFromSession(current))
+	if agentName == "" {
+		return agenttypes.ContextWindow{}, nil
+	}
+	sess, ok := pool.Get(agentPoolSessionKey(in.Key, agentName))
+	if !ok || sess == nil {
+		return agenttypes.ContextWindow{}, nil
+	}
+	return sess.ContextWindow(ctx)
+}
+
 type GetSessionRelatedFilesInput struct {
 	RootID string
 	Key    string

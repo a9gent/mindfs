@@ -133,9 +133,10 @@ type session struct {
 	threadID   string
 	sessionKey string
 
-	mu       sync.RWMutex
-	onUpdate func(types.Event)
-	turn     types.TurnCanceler
+	mu            sync.RWMutex
+	onUpdate      func(types.Event)
+	turn          types.TurnCanceler
+	contextWindow types.ContextWindow
 
 	agentDebugLog *logs.AgentLogger
 }
@@ -200,13 +201,23 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 		case *codexsdk.TurnCompletedEvent:
 			s.updateThreadIDFromThread()
 			log.Printf("[agent/codex] output.done session=%s", s.sessionKey)
-			s.emit(types.Event{Type: types.EventTypeMessageDone, SessionID: s.SessionID()})
+			contextWindow, _ := s.ContextWindow(context.Background())
+			s.emit(types.Event{
+				Type:      types.EventTypeMessageDone,
+				SessionID: s.SessionID(),
+				Data:      types.MessageDone{ContextWindow: contextWindow},
+			})
 		case *codexsdk.TurnFailedEvent:
 			log.Printf("[agent/codex] send.error session=%s err=%s", s.sessionKey, e.Error.Message)
 			return errors.New("codex turn failed: " + e.Error.Message)
 		case *codexsdk.ThreadErrorEvent:
 			log.Printf("[agent/codex] send.error session=%s err=%s", s.sessionKey, e.Message)
 			return errors.New("codex thread error: " + e.Message)
+		case *codexsdk.RawEvent:
+			if s.handleRawEvent(e) {
+				continue
+			}
+			logUnhandledEvent(s.sessionKey, "raw_event", raw)
 		default:
 			logUnhandledEvent(s.sessionKey, "event", raw)
 		}
@@ -337,6 +348,12 @@ func (s *session) SessionID() string {
 	return s.threadID
 }
 
+func (s *session) ContextWindow(_ context.Context) (types.ContextWindow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.contextWindow, nil
+}
+
 func (s *session) Close() error { return nil }
 
 func (s *session) updateThreadIDFromThread() {
@@ -368,6 +385,48 @@ func (s *session) logRawToolItem(item codexsdk.ThreadItem) {
 		return
 	}
 	s.agentDebugLog.AppendRaw(raw)
+}
+
+func (s *session) handleRawEvent(event *codexsdk.RawEvent) bool {
+	if event == nil || strings.TrimSpace(event.Type) != "thread.tokenUsage.updated" {
+		return false
+	}
+	usage, ok := parseContextWindow(event.Raw)
+	if !ok {
+		return false
+	}
+	s.mu.Lock()
+	s.contextWindow = usage
+	s.mu.Unlock()
+	return true
+}
+
+func parseContextWindow(raw json.RawMessage) (types.ContextWindow, bool) {
+	var payload struct {
+		TokenUsage struct {
+			Last struct {
+				TotalTokens int `json:"totalTokens"`
+			} `json:"last"`
+			Total struct {
+				TotalTokens int `json:"totalTokens"`
+			} `json:"total"`
+			ModelContextWindow int `json:"modelContextWindow"`
+		} `json:"tokenUsage"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return types.ContextWindow{}, false
+	}
+	totalTokens := payload.TokenUsage.Last.TotalTokens
+	if totalTokens == 0 {
+		totalTokens = payload.TokenUsage.Total.TotalTokens
+	}
+	if totalTokens == 0 && payload.TokenUsage.ModelContextWindow == 0 {
+		return types.ContextWindow{}, false
+	}
+	return types.ContextWindow{
+		TotalTokens:        totalTokens,
+		ModelContextWindow: payload.TokenUsage.ModelContextWindow,
+	}, true
 }
 
 func messageDelta(prev, next string) string {
