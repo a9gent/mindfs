@@ -148,6 +148,7 @@ const (
 	EventTypeThoughtChunk EventType = "thought_chunk"
 	EventTypeToolCall     EventType = "tool_call"
 	EventTypeToolUpdate   EventType = "tool_update"
+	EventTypeTodoUpdate   EventType = "todo_update"
 	EventTypeMessageDone  EventType = "message_done"
 )
 
@@ -170,6 +171,16 @@ type MessageDone struct {
 	ContextWindow ContextWindow `json:"contextWindow"`
 }
 
+type TodoItem struct {
+	Content    string `json:"content"`
+	ActiveForm string `json:"activeForm,omitempty"`
+	Status     string `json:"status"`
+}
+
+type TodoUpdate struct {
+	Items []TodoItem `json:"items"`
+}
+
 type ToolKind string
 
 const (
@@ -178,9 +189,13 @@ const (
 	ToolKindDelete     ToolKind = "delete"
 	ToolKindMove       ToolKind = "move"
 	ToolKindSearch     ToolKind = "search"
+	ToolKindWebSearch  ToolKind = "web_search"
 	ToolKindExecute    ToolKind = "execute"
 	ToolKindThink      ToolKind = "think"
 	ToolKindFetch      ToolKind = "fetch"
+	ToolKindTask       ToolKind = "task"
+	ToolKindAskUser    ToolKind = "ask_user"
+	ToolKindTodo       ToolKind = "todo"
 	ToolKindSwitchMode ToolKind = "switch_mode"
 	ToolKindOther      ToolKind = "other"
 )

@@ -551,6 +551,10 @@ func updateToEvent(update agenttypes.Event) *StreamEvent {
 		if tu, ok := update.Data.(agenttypes.ToolCall); ok {
 			return &StreamEvent{Type: "tool_call_update", Data: tu}
 		}
+	case agenttypes.EventTypeTodoUpdate:
+		if todo, ok := update.Data.(agenttypes.TodoUpdate); ok {
+			return &StreamEvent{Type: "todo_update", Data: todo}
+		}
 	case agenttypes.EventTypeMessageDone:
 		if done, ok := update.Data.(agenttypes.MessageDone); ok {
 			return &StreamEvent{Type: "message_done", Data: done}

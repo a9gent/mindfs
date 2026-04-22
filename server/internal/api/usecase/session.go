@@ -1098,7 +1098,8 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 			}
 		} else if update.Type == agenttypes.EventTypeThoughtChunk ||
 			update.Type == agenttypes.EventTypeToolCall ||
-			update.Type == agenttypes.EventTypeToolUpdate {
+			update.Type == agenttypes.EventTypeToolUpdate ||
+			update.Type == agenttypes.EventTypeTodoUpdate {
 			lastResponseUpdateType = string(update.Type)
 		}
 		if watcher != nil {
@@ -1141,7 +1142,8 @@ func appendResponseChunk(responseText, lastResponseUpdateType, chunk string) str
 	if responseText != "" &&
 		(lastResponseUpdateType == string(agenttypes.EventTypeThoughtChunk) ||
 			lastResponseUpdateType == string(agenttypes.EventTypeToolCall) ||
-			lastResponseUpdateType == string(agenttypes.EventTypeToolUpdate)) &&
+			lastResponseUpdateType == string(agenttypes.EventTypeToolUpdate) ||
+			lastResponseUpdateType == string(agenttypes.EventTypeTodoUpdate)) &&
 		!strings.HasSuffix(responseText, "\n\n") &&
 		!strings.HasSuffix(responseText, "\n") {
 		responseText += "\n\n"

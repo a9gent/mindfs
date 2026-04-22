@@ -163,6 +163,7 @@ type Exchange = {
   };
   timestamp?: string;
   toolCall?: any;
+  todoUpdate?: any;
   pending_ack?: boolean;
 };
 type PendingSend = {
@@ -1966,6 +1967,50 @@ export function App() {
           }
         }
         list.push({ role: "tool", content: "", timestamp: now, toolCall });
+        return list;
+      };
+      const cached = sessionCacheRef.current[cacheKey];
+      const base =
+        cached ||
+        ({
+          key: sessionKey,
+          type: "chat",
+          agent: "",
+          name: "",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          exchanges: [],
+        } as any);
+      const nextList = updateList(
+        ((base as any).exchanges || []) as Exchange[],
+      );
+      sessionCacheRef.current[cacheKey] = {
+        ...(base as any),
+        exchanges: nextList,
+        updated_at: new Date().toISOString(),
+      } as Session;
+      bumpCacheVersion();
+    },
+    [rootSessionKey, bumpCacheVersion],
+  );
+
+  const appendTodoUpdateForSession = useCallback(
+    (rootID: string, sessionKey: string, todoUpdate: any) => {
+      if (!todoUpdate) return;
+      const now = new Date().toISOString();
+      const cacheKey = rootSessionKey(rootID, sessionKey);
+      const updateList = (prevList: Exchange[]) => {
+        const list = [...(prevList || [])];
+        for (let i = list.length - 1; i >= 0; i -= 1) {
+          if (list[i]?.role !== "todo") continue;
+          list[i] = {
+            ...list[i],
+            timestamp: now,
+            todoUpdate,
+          };
+          return list;
+        }
+        list.push({ role: "todo", content: "", timestamp: now, todoUpdate });
         return list;
       };
       const cached = sessionCacheRef.current[cacheKey];
@@ -4707,6 +4752,22 @@ export function App() {
             }
           }
           break;
+        case "todo_update":
+          appendTodoUpdateForSession(
+            activeRoot,
+            streamKey,
+            event.data || {},
+          );
+          {
+            const latest = sessionCacheRef.current[ck];
+            if (latest) {
+              setDrawerSessionForRoot(activeRoot, {
+                ...(latest as any),
+                pending: true,
+              } as Session);
+            }
+          }
+          break;
         case "message_done":
           attachContextWindowToLatestAssistant(
             activeRoot,
@@ -5227,6 +5288,7 @@ export function App() {
     appendAgentChunkForSession,
     appendThoughtChunkForSession,
     appendToolCallForSession,
+    appendTodoUpdateForSession,
     clearSessionStale,
     markSessionStale,
     resolvePendingForSession,

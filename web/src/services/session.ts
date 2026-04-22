@@ -41,6 +41,7 @@ export type Session = {
     };
     timestamp?: string;
     toolCall?: ToolCall;
+    todoUpdate?: TodoUpdate;
     pending_ack?: boolean;
   }>;
 };
@@ -91,11 +92,22 @@ export type ToolCall = {
   rawType?: string;
 };
 
+export type TodoItem = {
+  content: string;
+  activeForm?: string;
+  status: string;
+};
+
+export type TodoUpdate = {
+  items: TodoItem[];
+};
+
 export type StreamEvent =
   | { type: "message_chunk"; data: { content: string } }
   | { type: "thought_chunk"; data: { content: string } }
   | { type: "tool_call"; data: ToolCall }
   | { type: "tool_call_update"; data: ToolCall }
+  | { type: "todo_update"; data: TodoUpdate }
   | {
       type: "message_done";
       data?: {

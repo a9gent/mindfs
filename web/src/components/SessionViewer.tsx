@@ -1,5 +1,6 @@
 import React, { memo, useEffect, useRef, useState } from "react";
 import { useSessionStream, type TimelineItem } from "../hooks/useSessionStream";
+import type { TodoUpdate } from "../services/session";
 import { ThinkingBlock } from "./stream/ThinkingBlock";
 import { ToolCallCard } from "./stream/ToolCallCard";
 import { AgentIcon } from "./AgentIcon";
@@ -230,14 +231,104 @@ const formatToolCallFallbackResult = (toolCall: Partial<ToolCall>): string => {
   const kind = (toolCall.kind || "").toLowerCase();
   if (kind === "read") return "";
   const rawInput = toolCall.meta?.input;
-  if (typeof rawInput === "string" && rawInput.trim() !== "") return rawInput;
+  if (typeof rawInput === "string" && rawInput.trim() !== "") {
+    const todoMarkdown = formatTodoToolCallInput(rawInput);
+    if (todoMarkdown) return todoMarkdown;
+    return rawInput;
+  }
   const rawOutput = toolCall.meta?.output;
   if (typeof rawOutput === "string" && rawOutput.trim() !== "") return rawOutput;
   return "";
 };
 
+const formatTodoToolCallInput = (rawInput: string): string => {
+  try {
+    const parsed = JSON.parse(rawInput) as {
+      todos?: Array<{
+        content?: string;
+        status?: string;
+        activeForm?: string;
+      }>;
+    };
+    if (!Array.isArray(parsed?.todos) || parsed.todos.length === 0) {
+      return "";
+    }
+    const lines = parsed.todos
+      .map((todo) => {
+        const content = `${todo?.content || ""}`.trim();
+        const activeForm = `${todo?.activeForm || ""}`.trim();
+        const status = `${todo?.status || ""}`.trim().toLowerCase();
+        if (status === "completed") {
+          const label = content || activeForm;
+          return label ? `- [x] ${label}` : "";
+        }
+        if (status === "in_progress") {
+          const label = activeForm || content;
+          return label ? `- [ ] ${label} _(in progress)_` : "";
+        }
+        const label = content || activeForm;
+        return label ? `- [ ] ${label}` : "";
+      })
+      .filter(Boolean);
+    return lines.join("\n");
+  } catch {
+    return "";
+  }
+};
+
 function isAuxiliaryTimelineItem(item: TimelineItem | null): boolean {
-  return item?.type === "tool" || item?.type === "thought";
+  return item?.type === "tool" || item?.type === "thought" || item?.type === "todo";
+}
+
+function TodoUpdateCard({ todoUpdate }: { todoUpdate: TodoUpdate }) {
+  const items = Array.isArray(todoUpdate?.items) ? todoUpdate.items : [];
+  return (
+    <div
+      style={{
+        width: "100%",
+        minWidth: 0,
+        borderRadius: "10px",
+        border: "1px solid rgba(16, 185, 129, 0.22)",
+        background: "linear-gradient(180deg, rgba(16, 185, 129, 0.08), rgba(16, 185, 129, 0.03))",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          padding: "6px 8px",
+          fontSize: "12px",
+          fontWeight: 600,
+          color: "var(--text-primary)",
+          borderBottom: "1px solid var(--border-color)",
+        }}
+      >
+        ✅ todos
+      </div>
+      <div style={{ padding: "10px", display: "flex", flexDirection: "column", gap: "6px" }}>
+        {items.map((item, index) => {
+          const status = `${item?.status || ""}`.trim().toLowerCase();
+          const content = `${item?.content || ""}`.trim();
+          const activeForm = `${item?.activeForm || ""}`.trim();
+          const label = status === "in_progress" && activeForm ? activeForm : (content || activeForm);
+          const checked = status === "completed";
+          return (
+            <div
+              key={`${index}-${label}`}
+              style={{
+                fontSize: "13px",
+                color: "var(--text-primary)",
+                opacity: checked ? 0.78 : 1,
+                textDecoration: checked ? "line-through" : "none",
+              }}
+            >
+              {checked ? "☑" : "☐"} {label}
+              {status === "in_progress" ? " (in progress)" : ""}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function timelineItemSpacing(previous: TimelineItem | null, current: TimelineItem): string {
@@ -514,6 +605,13 @@ function SessionViewerInner({ session, loading = false, rootId, rootPath, intera
             rootPath={rootPath || undefined}
             defaultExpanded={false}
           />
+        </div>
+      );
+    }
+    if (item.type === "todo") {
+      return (
+        <div style={{ marginTop: spacing }}>
+          <TodoUpdateCard todoUpdate={item.todoUpdate} />
         </div>
       );
     }

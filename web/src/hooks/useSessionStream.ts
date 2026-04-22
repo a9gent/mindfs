@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { sessionService, type ToolCall } from "../services/session";
+import { sessionService, type TodoUpdate, type ToolCall } from "../services/session";
 
 type ExchangeLike = {
   seq?: number;
@@ -12,6 +12,7 @@ type ExchangeLike = {
   };
   timestamp?: string;
   toolCall?: ToolCall;
+  todoUpdate?: TodoUpdate;
   pending_ack?: boolean;
 };
 
@@ -30,7 +31,8 @@ export type TimelineItem =
       };
     }
   | { id: string; type: "thought"; content: string }
-  | { id: string; type: "tool"; toolCall: ToolCall };
+  | { id: string; type: "tool"; toolCall: ToolCall }
+  | { id: string; type: "todo"; todoUpdate: TodoUpdate; timestamp?: string };
 
 type UseSessionStreamResult = {
   timeline: TimelineItem[];
@@ -158,6 +160,22 @@ function buildBaseTimeline(exchanges: ExchangeLike[]): TimelineItem[] {
           ),
         type: "tool",
         toolCall: normalizedTool,
+      });
+      continue;
+    }
+    if (role === "todo") {
+      if (!ex.todoUpdate) continue;
+      out.push({
+        id: stableTimelineID(
+          "todo",
+          index,
+          JSON.stringify(ex.todoUpdate),
+          ex.timestamp,
+          ex.agent,
+        ),
+        type: "todo",
+        todoUpdate: ex.todoUpdate,
+        timestamp: ex.timestamp,
       });
     }
   }

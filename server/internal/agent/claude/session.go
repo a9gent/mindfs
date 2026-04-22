@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"path/filepath"
 	"strings"
@@ -136,7 +137,7 @@ type session struct {
 	pendingThinking strings.Builder
 
 	pendingToolMu    sync.Mutex
-	pendingToolCalls []types.ToolCall
+	pendingToolCalls map[string]types.ToolCall
 }
 
 func (s *session) SendMessage(ctx context.Context, content string) error {
@@ -338,6 +339,9 @@ func (s *session) consumeMessages() {
 			s.flushAllDeltas()
 			s.logRawToolResult(m)
 			s.handleUserMessage(m)
+		case claudeagent.TodoUpdateMessage:
+			s.flushAllDeltas()
+			s.handleTodoUpdateMessage(m)
 		case claudeagent.ToolProgressMessage:
 			// Lightweight progress heartbeat for a tool call that is still running.
 			s.flushAllDeltas()
@@ -473,6 +477,22 @@ func (s *session) handleUserMessage(msg claudeagent.UserMessage) {
 	})
 }
 
+func (s *session) handleTodoUpdateMessage(msg claudeagent.TodoUpdateMessage) {
+	items := make([]types.TodoItem, 0, len(msg.Items))
+	for _, item := range msg.Items {
+		items = append(items, types.TodoItem{
+			Content:    item.Content,
+			ActiveForm: item.ActiveForm,
+			Status:     string(item.Status),
+		})
+	}
+	s.emit(types.Event{
+		Type:      types.EventTypeTodoUpdate,
+		SessionID: s.SessionID(),
+		Data:      types.TodoUpdate{Items: items},
+	})
+}
+
 func newRunningToolCall(callID, name, rawType string, input json.RawMessage) types.ToolCall {
 	title, meta, locations, content := summarizeToolCall(name, input)
 	return types.ToolCall{
@@ -503,6 +523,18 @@ func summarizeToolCall(name string, input json.RawMessage) (string, map[string]a
 	case types.ToolKindSearch:
 		title, nextMeta := summarizeSearchToolCall(name, input, meta)
 		return title, nextMeta, nil, nil
+	case types.ToolKindWebSearch:
+		title, nextMeta, content := summarizeWebSearchToolCall(input, meta)
+		return title, nextMeta, nil, content
+	case types.ToolKindTask:
+		title, nextMeta, content := summarizeTaskToolCall(input, meta)
+		return title, nextMeta, nil, content
+	case types.ToolKindAskUser:
+		title, nextMeta, content := summarizeAskUserToolCall(input, meta)
+		return title, nextMeta, nil, content
+	case types.ToolKindTodo:
+		title, nextMeta, content := summarizeTodoToolCall(input, meta)
+		return title, nextMeta, nil, content
 	default:
 		return name, meta, nil, nil
 	}
@@ -567,10 +599,7 @@ func summarizePathToolCall(name string, input json.RawMessage, fallbackMeta map[
 }
 
 func summarizeExecuteToolCall(name string, input json.RawMessage, fallbackMeta map[string]any) (string, map[string]any) {
-	var payload struct {
-		Command     string `json:"command"`
-		Description string `json:"description"`
-	}
+	var payload claudeagent.BashInput
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return name, fallbackMeta
 	}
@@ -609,18 +638,246 @@ func summarizeSearchToolCall(name string, input json.RawMessage, fallbackMeta ma
 	}
 }
 
+func summarizeTodoToolCall(input json.RawMessage, fallbackMeta map[string]any) (string, map[string]any, []types.ToolCallContentItem) {
+	var payload claudeagent.TodoWriteInput
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return "todos", fallbackMeta, nil
+	}
+	if len(payload.Todos) == 0 {
+		return "todos", fallbackMeta, nil
+	}
+
+	lines := make([]string, 0, len(payload.Todos))
+	for _, todo := range payload.Todos {
+		label := strings.TrimSpace(todo.Content)
+		active := strings.TrimSpace(todo.ActiveForm)
+		status := strings.ToLower(strings.TrimSpace(todo.Status))
+		switch status {
+		case "completed":
+			if label == "" {
+				label = active
+			}
+			if label == "" {
+				continue
+			}
+			lines = append(lines, "- [x] "+label)
+		case "in_progress":
+			if active != "" {
+				label = active
+			}
+			if label == "" {
+				continue
+			}
+			lines = append(lines, "- [ ] "+label+" _(in progress)_")
+		default:
+			if label == "" {
+				label = active
+			}
+			if label == "" {
+				continue
+			}
+			lines = append(lines, "- [ ] "+label)
+		}
+	}
+	if len(lines) == 0 {
+		return "todos", fallbackMeta, nil
+	}
+
+	meta := map[string]any{"todoCount": len(lines)}
+	if fallbackMeta != nil {
+		for k, v := range fallbackMeta {
+			meta[k] = v
+		}
+	}
+
+	return "todos", meta, []types.ToolCallContentItem{{
+		Type: "text",
+		Text: strings.Join(lines, "\n"),
+	}}
+}
+
+func summarizeTaskToolCall(input json.RawMessage, fallbackMeta map[string]any) (string, map[string]any, []types.ToolCallContentItem) {
+	var payload claudeagent.TaskInput
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return "task", fallbackMeta, nil
+	}
+
+	description := strings.TrimSpace(payload.Description)
+	prompt := strings.TrimSpace(payload.Prompt)
+	subagentType := strings.TrimSpace(payload.SubagentType)
+
+	title := description
+	if title == "" {
+		title = prompt
+	}
+	if title == "" {
+		title = "task"
+	}
+
+	meta := cloneToolMeta(fallbackMeta)
+	if subagentType != "" {
+		meta["subagentType"] = subagentType
+	}
+	if description != "" {
+		meta["description"] = description
+	}
+	if prompt != "" {
+		meta["prompt"] = prompt
+	}
+
+	lines := make([]string, 0, 3)
+	if subagentType != "" {
+		lines = append(lines, "**Subagent:** "+subagentType)
+	}
+	if description != "" {
+		lines = append(lines, "**Description:** "+description)
+	}
+	if prompt != "" && prompt != description {
+		lines = append(lines, "**Prompt:**\n"+prompt)
+	}
+	if len(lines) == 0 {
+		return title, meta, nil
+	}
+
+	return title, meta, []types.ToolCallContentItem{{
+		Type: "text",
+		Text: strings.Join(lines, "\n\n"),
+	}}
+}
+
+func summarizeAskUserToolCall(input json.RawMessage, fallbackMeta map[string]any) (string, map[string]any, []types.ToolCallContentItem) {
+	var payload claudeagent.AskUserQuestionInput
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return "ask user", fallbackMeta, nil
+	}
+	if len(payload.Questions) == 0 {
+		return "ask user", fallbackMeta, nil
+	}
+
+	meta := cloneToolMeta(fallbackMeta)
+	meta["questionCount"] = len(payload.Questions)
+
+	sections := make([]string, 0, len(payload.Questions))
+	for index, question := range payload.Questions {
+		lines := make([]string, 0, 2+len(question.Options))
+		header := strings.TrimSpace(question.Header)
+		text := strings.TrimSpace(question.Question)
+		if header != "" {
+			lines = append(lines, fmt.Sprintf("**Q%d · %s**", index+1, header))
+		} else {
+			lines = append(lines, fmt.Sprintf("**Q%d**", index+1))
+		}
+		if text != "" {
+			lines = append(lines, text)
+		}
+		if question.MultiSelect {
+			lines = append(lines, "_Multiple selection allowed._")
+		}
+		for _, option := range question.Options {
+			label := strings.TrimSpace(option.Label)
+			description := strings.TrimSpace(option.Description)
+			if label == "" {
+				continue
+			}
+			if description != "" {
+				lines = append(lines, fmt.Sprintf("- **%s**: %s", label, description))
+			} else {
+				lines = append(lines, "- "+label)
+			}
+		}
+		sections = append(sections, strings.Join(lines, "\n"))
+	}
+
+	title := "ask user"
+	if len(payload.Questions) == 1 {
+		if header := strings.TrimSpace(payload.Questions[0].Header); header != "" {
+			title = header
+		} else if text := strings.TrimSpace(payload.Questions[0].Question); text != "" {
+			title = text
+		}
+	}
+
+	return title, meta, []types.ToolCallContentItem{{
+		Type: "text",
+		Text: strings.Join(sections, "\n\n"),
+	}}
+}
+
+func summarizeWebSearchToolCall(input json.RawMessage, fallbackMeta map[string]any) (string, map[string]any, []types.ToolCallContentItem) {
+	var payload claudeagent.WebSearchInput
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return "web search", fallbackMeta, nil
+	}
+
+	query := strings.TrimSpace(payload.Query)
+	title := query
+	if title == "" {
+		title = "web search"
+	}
+
+	meta := cloneToolMeta(fallbackMeta)
+	if query != "" {
+		meta["query"] = query
+	}
+	if len(payload.AllowedDomains) > 0 {
+		meta["allowedDomains"] = payload.AllowedDomains
+	}
+	if len(payload.BlockedDomains) > 0 {
+		meta["blockedDomains"] = payload.BlockedDomains
+	}
+
+	lines := make([]string, 0, 3)
+	if query != "" {
+		lines = append(lines, "**Query:** "+query)
+	}
+	if len(payload.AllowedDomains) > 0 {
+		lines = append(lines, "**Allowed domains:** "+strings.Join(payload.AllowedDomains, ", "))
+	}
+	if len(payload.BlockedDomains) > 0 {
+		lines = append(lines, "**Blocked domains:** "+strings.Join(payload.BlockedDomains, ", "))
+	}
+	if len(lines) == 0 {
+		return title, meta, nil
+	}
+
+	return title, meta, []types.ToolCallContentItem{{
+		Type: "text",
+		Text: strings.Join(lines, "\n\n"),
+	}}
+}
+
+func cloneToolMeta(meta map[string]any) map[string]any {
+	if len(meta) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(meta))
+	for k, v := range meta {
+		out[k] = v
+	}
+	return out
+}
+
 func (s *session) trackPendingToolCall(toolCall types.ToolCall) {
 	s.pendingToolMu.Lock()
 	defer s.pendingToolMu.Unlock()
-	s.pendingToolCalls = append(s.pendingToolCalls, toolCall)
+	if strings.TrimSpace(toolCall.CallID) == "" {
+		return
+	}
+	if s.pendingToolCalls == nil {
+		s.pendingToolCalls = make(map[string]types.ToolCall)
+	}
+	s.pendingToolCalls[toolCall.CallID] = toolCall
 }
 
 func (s *session) toolResultUpdate(msg claudeagent.UserMessage) (types.ToolCall, bool) {
 	if msg.ToolUseResult == nil {
 		return types.ToolCall{}, false
 	}
+	if msg.ParentToolUseID == nil || strings.TrimSpace(*msg.ParentToolUseID) == "" {
+		return types.ToolCall{}, false
+	}
 
-	base, ok := s.popPendingToolCall()
+	base, ok := s.popPendingToolCall(*msg.ParentToolUseID)
 	if !ok {
 		return types.ToolCall{}, false
 	}
@@ -651,15 +908,19 @@ func mergeToolCallMeta(base map[string]any, extra map[string]any) map[string]any
 	return out
 }
 
-func (s *session) popPendingToolCall() (types.ToolCall, bool) {
+func (s *session) popPendingToolCall(callID string) (types.ToolCall, bool) {
 	s.pendingToolMu.Lock()
 	defer s.pendingToolMu.Unlock()
 
-	if len(s.pendingToolCalls) == 0 {
+	callID = strings.TrimSpace(callID)
+	if callID == "" || len(s.pendingToolCalls) == 0 {
 		return types.ToolCall{}, false
 	}
-	toolCall := s.pendingToolCalls[0]
-	s.pendingToolCalls = s.pendingToolCalls[1:]
+	toolCall, ok := s.pendingToolCalls[callID]
+	if !ok {
+		return types.ToolCall{}, false
+	}
+	delete(s.pendingToolCalls, callID)
 	return toolCall, true
 }
 
@@ -936,10 +1197,18 @@ func mapToolKind(name string) types.ToolKind {
 		return types.ToolKindMove
 	case "glob", "grep", "search":
 		return types.ToolKindSearch
+	case "websearch":
+		return types.ToolKindWebSearch
 	case "bash", "execute":
 		return types.ToolKindExecute
 	case "webfetch", "fetch":
 		return types.ToolKindFetch
+	case "task":
+		return types.ToolKindTask
+	case "askuserquestion":
+		return types.ToolKindAskUser
+	case "todowrite", "todos":
+		return types.ToolKindTodo
 	case "think":
 		return types.ToolKindThink
 	case "switchmode":
