@@ -387,6 +387,7 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onS
               <MarkdownViewer
                 content={file.content}
                 currentPath={file.path}
+                root={file.root}
                 onFileClick={onFileClick}
                 targetLine={file.targetLine}
                 contentRef={contentRootRef}

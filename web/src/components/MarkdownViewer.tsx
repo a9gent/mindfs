@@ -1,8 +1,10 @@
 import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeSanitize from "rehype-sanitize";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import Prism from "prismjs";
+import { fetchProofProtectedBlob } from "../services/file";
 import "prismjs/themes/prism.css";
 // Reuse the language imports from global Prism context (since they are imported in CodeViewer, they might be available if loaded, 
 // but strictly speaking we should import them here or centralize. For simplicity, we rely on the side-effects of CodeViewer imports 
@@ -212,15 +214,112 @@ function isExternalHref(href: string): boolean {
   return /^(https?:|mailto:|tel:)/i.test(href);
 }
 
+function isDirectImageSrc(src: string): boolean {
+  return /^(https?:|data:|blob:)/i.test(src);
+}
+
+const markdownSanitizeSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    p: [...(defaultSchema.attributes?.p || []), "align"],
+    img: [...(defaultSchema.attributes?.img || []), "alt", "title", "width"],
+  },
+};
+
+function MarkdownImage({
+  src = "",
+  alt = "",
+  title,
+  width,
+  currentPath = "",
+  root,
+}: {
+  src?: string;
+  alt?: string;
+  title?: string;
+  width?: number | string;
+  currentPath?: string;
+  root?: string;
+}) {
+  const [resolvedSrc, setResolvedSrc] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectURL = "";
+
+    async function loadImage() {
+      const trimmedSrc = src.trim();
+      if (!trimmedSrc) {
+        setResolvedSrc("");
+        return;
+      }
+
+      if (isDirectImageSrc(trimmedSrc)) {
+        setResolvedSrc(trimmedSrc);
+        return;
+      }
+
+      if (!root) {
+        setResolvedSrc(trimmedSrc);
+        return;
+      }
+
+      try {
+        const resolvedPath = resolveMarkdownHref(currentPath, trimmedSrc);
+        if (!resolvedPath) {
+          setResolvedSrc("");
+          return;
+        }
+        const blob = await fetchProofProtectedBlob({ rootId: root, path: resolvedPath });
+        if (cancelled) return;
+        objectURL = URL.createObjectURL(blob);
+        setResolvedSrc(objectURL);
+      } catch {
+        if (!cancelled) {
+          setResolvedSrc("");
+        }
+      }
+    }
+
+    void loadImage();
+
+    return () => {
+      cancelled = true;
+      if (objectURL) {
+        URL.revokeObjectURL(objectURL);
+      }
+    };
+  }, [currentPath, root, src]);
+
+  if (!resolvedSrc) {
+    return (
+      <span
+        style={{
+          display: "inline-block",
+          color: "var(--text-secondary)",
+          fontSize: "13px",
+        }}
+      >
+        {alt || title || src}
+      </span>
+    );
+  }
+
+  return <img src={resolvedSrc} alt={alt} title={title} width={width} />;
+}
+
 function MarkdownViewerInner({
   content,
   currentPath = "",
+  root,
   onFileClick,
   targetLine,
   contentRef,
 }: {
   content: string;
   currentPath?: string;
+  root?: string;
   onFileClick?: (path: string) => void;
   targetLine?: number;
   contentRef?: React.RefObject<HTMLDivElement | null>;
@@ -280,7 +379,8 @@ function MarkdownViewerInner({
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeSanitize]}
+        remarkRehypeOptions={{ allowDangerousHtml: true }}
+        rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]]}
         components={{
           h1: ({ node, ...props }: any) => (
             <h1 style={{ fontSize: "24px", marginTop: 0 }} {...getSourceLineProps(node)} {...props} />
@@ -302,6 +402,16 @@ function MarkdownViewerInner({
           ),
           li: (props) => (
             <li style={{ margin: "0.2em 0" }} {...props} />
+          ),
+          img: ({ src, alt, title, width }) => (
+            <MarkdownImage
+              src={src}
+              alt={alt}
+              title={title}
+              width={width}
+              currentPath={currentPath}
+              root={root}
+            />
           ),
           a: ({ href = "", children, ...props }) => {
             if (!href || href.startsWith("#") || isExternalHref(href) || !onFileClick) {
@@ -523,5 +633,6 @@ function MarkdownViewerInner({
 export const MarkdownViewer = memo(MarkdownViewerInner, (prev, next) => (
   prev.content === next.content &&
   prev.currentPath === next.currentPath &&
+  prev.root === next.root &&
   prev.targetLine === next.targetLine
 ));

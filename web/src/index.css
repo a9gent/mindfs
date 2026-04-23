@@ -316,6 +316,15 @@ body[data-plugin-theme="1"] [data-slot="drawer-content"] {
   margin-bottom: 0.25em;
 }
 
+.markdown-viewer img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1em 0;
+  border-radius: 12px;
+  box-shadow: 0 12px 24px rgba(31, 37, 48, 0.08);
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
