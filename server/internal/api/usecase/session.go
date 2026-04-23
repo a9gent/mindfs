@@ -1168,11 +1168,19 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	})
 	sendErr := sess.SendMessage(turnCtx, prompt)
 	flushThought()
-	if err := manager.UpdateModel(ctx, current, in.Model); err != nil {
+	resolvedModel := resolveRuntimeModel(current, in.Model)
+	resolvedEffort := resolveRuntimeEffort(in.Agent, current, in.Effort)
+	if prefs := s.Registry.GetPreferences(); prefs != nil {
+		if changed, err := prefs.UpdateAgentDefaultsIfChanged(in.Agent, resolvedModel, resolvedEffort); err != nil {
+			log.Printf("[preferences] agent_defaults.update.error agent=%s err=%v", strings.TrimSpace(in.Agent), err)
+		} else if changed {
+			log.Printf("[preferences] agent_defaults.update.done agent=%s model=%q effort=%q", strings.TrimSpace(in.Agent), resolvedModel, resolvedEffort)
+		}
+	}
+	if err := manager.UpdateModel(ctx, current, resolvedModel); err != nil {
 		return err
 	}
 	resolvedMode := resolveRuntimeMode(current, in.Mode)
-	resolvedEffort := resolveRuntimeEffort(in.Agent, current, in.Effort)
 	if err := manager.AddExchangeForAgent(ctx, current, "user", in.Content, in.Agent, resolvedMode, resolvedEffort); err != nil {
 		return err
 	}

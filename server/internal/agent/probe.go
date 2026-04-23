@@ -25,6 +25,8 @@ type Status struct {
 	LastProbe      time.Time                `json:"last_probe"`
 	CurrentModelID string                   `json:"current_model_id,omitempty"`
 	CurrentModeID  string                   `json:"current_mode_id,omitempty"`
+	DefaultModelID string                   `json:"default_model_id,omitempty"`
+	DefaultEffort  string                   `json:"default_effort,omitempty"`
 	Efforts        []string                 `json:"efforts,omitempty"`
 	Models         []agenttypes.ModelInfo   `json:"models,omitempty"`
 	Modes          []agenttypes.ModeInfo    `json:"modes"`

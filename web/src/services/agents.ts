@@ -11,6 +11,8 @@ export type AgentStatus = {
   last_probe?: string;
   current_model_id?: string;
   current_mode_id?: string;
+  default_model_id?: string;
+  default_effort?: string;
   efforts?: string[];
   models?: AgentModelInfo[];
   modes?: AgentModeInfo[];

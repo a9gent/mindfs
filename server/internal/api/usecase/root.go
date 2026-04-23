@@ -6,6 +6,7 @@ import (
 	"mindfs/server/internal/agent"
 	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/fs"
+	"mindfs/server/internal/preferences"
 	"mindfs/server/internal/session"
 )
 
@@ -16,6 +17,7 @@ type Registry interface {
 	RemoveRoot(path string) (fs.RootInfo, error)
 	ListRoots() []fs.RootInfo
 	GetAgentPool() *agent.Pool
+	GetPreferences() *preferences.Store
 	GetExternalSessionImporter(agentName string) (agenttypes.ExternalSessionImporter, error)
 	GetProber() *agent.Prober
 	GetCandidateRegistry() *CandidateRegistry

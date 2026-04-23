@@ -15,6 +15,7 @@ import (
 	"mindfs/server/internal/agent"
 	agenttypes "mindfs/server/internal/agent/types"
 	rootfs "mindfs/server/internal/fs"
+	"mindfs/server/internal/preferences"
 	"mindfs/server/internal/session"
 )
 
@@ -514,6 +515,10 @@ func (uploadTestRegistry) ListRoots() []rootfs.RootInfo {
 }
 
 func (uploadTestRegistry) GetAgentPool() *agent.Pool {
+	return nil
+}
+
+func (uploadTestRegistry) GetPreferences() *preferences.Store {
 	return nil
 }
 

@@ -82,6 +82,13 @@ const chatBlurPlaceholders = [
 const MOBILE_BREAKPOINT = 768;
 const IME_ENTER_GUARD_MS = 120;
 
+function getAgentDefaults(agent?: AgentStatus | null) {
+  return {
+    model: agent?.default_model_id || agent?.current_model_id || "",
+    effort: agent?.default_effort || "",
+  };
+}
+
 function buildPendingAttachment(file: File): PendingAttachment {
   const isImage = file.type.startsWith("image/");
   const fallbackExt = file.type.split("/")[1] || "png";
@@ -230,10 +237,11 @@ export function ActionBar({
     if (!preferred) {
       return;
     }
+    const defaults = getAgentDefaults(preferred);
     setAgent(preferred.name);
-    setModel("");
+    setModel(defaults.model);
     setAgentMode("");
-    setEffort("");
+    setEffort(defaults.effort);
   }, [agent, agents, currentSession]);
 
   useEffect(() => {
@@ -254,7 +262,7 @@ export function ActionBar({
   const selectedModelInfo =
     (selectedAgent?.models ?? []).find((item) => item.id === model)
     || (selectedAgent?.models ?? []).find(
-      (item) => item.id === selectedAgent?.current_model_id,
+      (item) => item.id === (selectedAgent?.default_model_id || selectedAgent?.current_model_id),
     );
   const availableEfforts = selectedAgent?.efforts ?? [];
   const isCodexEffortAgent = selectedAgent?.name === "codex";
@@ -777,10 +785,12 @@ export function ActionBar({
                 effort={effort}
                 agents={agents}
                 onAgentChange={(nextAgent, nextModel) => {
+                  const nextStatus = agents.find((item) => item.name === nextAgent);
+                  const defaults = getAgentDefaults(nextStatus);
                   setAgent(nextAgent);
-                  setModel(nextModel || "");
+                  setModel(nextModel || defaults.model);
                   setAgentMode("");
-                  setEffort("");
+                  setEffort(defaults.effort);
                 }}
                 onModeChange={(nextAgentMode) => setAgentMode(nextAgentMode || "")}
                 onEffortChange={(nextEffort) => setEffort(nextEffort || "")}

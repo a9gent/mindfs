@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"mindfs/server/internal/e2ee"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/githubimport"
+	"mindfs/server/internal/preferences"
 	"mindfs/server/internal/relay"
 	"mindfs/server/internal/update"
 )
@@ -71,6 +73,10 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	agentPool := agent.NewPool(agentConfig)
 	agentProber := agent.NewProber(&agentConfig, agentPool, 5*time.Minute)
 	agentProber.Start(ctx)
+	prefs, err := preferences.NewStore()
+	if err != nil {
+		log.Printf("[preferences] init.error err=%v", err)
+	}
 	executable, _ := os.Executable()
 	updateSvc := update.NewService("a9gent/mindfs", opts.Version, executable, opts.Args, 10*time.Minute)
 	updateSvc.Start(ctx)
@@ -80,6 +86,7 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 		Agents: agentPool,
 		Prober: agentProber,
 		Update: updateSvc,
+		Prefs:  prefs,
 		E2EE: e2ee.NewManager(e2ee.Config{
 			Enabled:       opts.E2EEConfig.Enabled,
 			NodeID:        opts.E2EEConfig.NodeID,

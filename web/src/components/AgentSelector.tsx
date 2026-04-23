@@ -122,7 +122,10 @@ export function AgentSelector({
   );
   const submenuSelectedModel = useMemo(() => {
     if (!submenuAgentStatus) return null;
-    const fallbackModel = submenuAgentStatus.current_model_id || "";
+    const fallbackModel =
+      submenuAgentStatus.default_model_id ||
+      submenuAgentStatus.current_model_id ||
+      "";
     const targetModel =
       submenuAgentStatus.name === agent ? model || fallbackModel : fallbackModel;
     return (
@@ -148,7 +151,8 @@ export function AgentSelector({
     () => submenuEfforts.length > 0 && !!submenuSelectedModel?.supportEffort,
     [submenuEfforts, submenuSelectedModel]
   );
-  const displayedEffort = submenuIsCodex ? effort || "medium" : effort || "Auto";
+  const fallbackEffort = submenuAgentStatus?.default_effort || (submenuIsCodex ? "medium" : "");
+  const displayedEffort = submenuIsCodex ? effort || fallbackEffort : effort || fallbackEffort || "Auto";
   const buttonTitle = useMemo(() => {
     if (warnUnavailable) {
       return `当前会话的 Agent（${agent}）不可用`;

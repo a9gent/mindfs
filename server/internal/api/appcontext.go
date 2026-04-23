@@ -12,6 +12,7 @@ import (
 	"mindfs/server/internal/e2ee"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/githubimport"
+	"mindfs/server/internal/preferences"
 	"mindfs/server/internal/relay"
 	"mindfs/server/internal/session"
 	"mindfs/server/internal/update"
@@ -32,6 +33,7 @@ type AppContext struct {
 	Update    *update.Service
 	GitHub    *githubimport.Service
 	E2EE      *e2ee.Manager
+	Prefs     *preferences.Store
 
 	mu                       sync.RWMutex
 	roots                    map[string]*RootContext // root id -> root context
@@ -154,6 +156,10 @@ func (s *AppContext) ReleaseFileWatcher(rootID, sessionKey string) {
 
 func (s *AppContext) GetAgentPool() *agent.Pool {
 	return s.Agents
+}
+
+func (s *AppContext) GetPreferences() *preferences.Store {
+	return s.Prefs
 }
 
 func (s *AppContext) GetExternalSessionImporter(agentName string) (agenttypes.ExternalSessionImporter, error) {

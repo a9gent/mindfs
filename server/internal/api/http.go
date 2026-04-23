@@ -660,6 +660,9 @@ func (h *HTTPHandler) handleAgentsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	statuses := h.AppContext.GetProber().GetInstalledStatuses()
+	if prefs := h.AppContext.GetPreferences(); prefs != nil {
+		statuses = prefs.ApplyAgentDefaults(statuses)
+	}
 	respondJSON(w, http.StatusOK, statuses)
 }
 
