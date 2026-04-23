@@ -610,6 +610,36 @@ class SessionService {
     return this.sendWSMessage(msg);
   }
 
+  async answerQuestion(
+    rootId: string,
+    sessionKey: string,
+    agent: string | undefined,
+    toolUseId: string,
+    answers: Record<string, string>,
+  ): Promise<boolean> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.error("[Session] WebSocket not connected");
+      return false;
+    }
+    if (!rootId || !sessionKey || !toolUseId) {
+      return false;
+    }
+
+    const msg = {
+      id: this.createRequestId("answer"),
+      type: "session.answer_question",
+      payload: {
+        root_id: rootId,
+        session_key: sessionKey,
+        agent,
+        tool_use_id: toolUseId,
+        answers,
+      },
+    };
+
+    return this.sendWSMessage(msg);
+  }
+
   async markSessionReady(rootId: string, sessionKey: string): Promise<boolean> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return false;

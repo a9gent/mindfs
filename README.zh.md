@@ -11,10 +11,10 @@
 ## 界面预览
 
 <p align="center">
-  <img src="docs/images/mindfs-desktop.webp" alt="MindFS 桌面端界面" width="72%" />
+  <img src="docs/images/mindfs-desktop.webp" alt="MindFS 桌面端界面" width="92%" />
 </p>
 <p align="center">
-  <img src="docs/images/mindfs-mobile.webp" alt="MindFS 移动端界面" width="72%" />
+  <img src="docs/images/mindfs-mobile.webp" alt="MindFS 移动端界面" width="92%" />
 </p>
 
 ---

@@ -48,14 +48,19 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 		return nil, errors.New("session key required")
 	}
 
+	s := &session{
+		sessionKey:    opts.SessionKey,
+		model:         strings.TrimSpace(opts.Model),
+		agentDebugLog: logs.NewAgentLogger(opts.RootPath, opts.SessionKey, opts.AgentName),
+		questionWaits: make(map[string]chan askUserAnswerResult),
+	}
+
 	optionList := []claudeagent.Option{
 		claudeagent.WithCwd(opts.RootPath),
 		claudeagent.WithEnv(opts.Env),
 		claudeagent.WithVerbose(true),
 		claudeagent.WithIncludePartialMessages(true),
-		claudeagent.WithCanUseTool(func(context.Context, claudeagent.ToolPermissionRequest) claudeagent.PermissionResult {
-			return claudeagent.PermissionAllow{}
-		}),
+		claudeagent.WithCanUseTool(s.handleCanUseTool),
 	}
 	if strings.TrimSpace(opts.Command) != "" {
 		optionList = append(optionList, claudeagent.WithCLIPath(opts.Command))
@@ -97,14 +102,10 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 		}
 	}
 
-	s := &session{
-		client:        client,
-		stream:        stream,
-		sessionID:     stream.SessionID(),
-		sessionKey:    opts.SessionKey,
-		model:         selectedModel,
-		agentDebugLog: logs.NewAgentLogger(opts.RootPath, opts.SessionKey, opts.AgentName),
-	}
+	s.client = client
+	s.stream = stream
+	s.sessionID = stream.SessionID()
+	s.model = selectedModel
 	go s.consumeMessages()
 	return s, nil
 }
@@ -138,6 +139,14 @@ type session struct {
 
 	pendingToolMu    sync.Mutex
 	pendingToolCalls map[string]types.ToolCall
+
+	questionMu    sync.Mutex
+	questionWaits map[string]chan askUserAnswerResult
+}
+
+type askUserAnswerResult struct {
+	answers claudeagent.Answers
+	err     error
 }
 
 func (s *session) SendMessage(ctx context.Context, content string) error {
@@ -171,6 +180,79 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 		log.Printf("[agent/claude] send.error session=%s err=%v", s.sessionKey, turnCtx.Err())
 		return turnCtx.Err()
 	}
+}
+
+func (s *session) AnswerQuestion(ctx context.Context, answer types.AskUserAnswer) error {
+	callID := strings.TrimSpace(answer.ToolUseID)
+	if callID == "" {
+		return errors.New("toolUseId required")
+	}
+	if len(answer.Answers) == 0 {
+		return errors.New("answers required")
+	}
+
+	s.questionMu.Lock()
+	waiter, ok := s.questionWaits[callID]
+	s.questionMu.Unlock()
+	if !ok {
+		return errors.New("question is not pending: " + callID)
+	}
+
+	answers := make(claudeagent.Answers, len(answer.Answers))
+	for key, value := range answer.Answers {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			answers[key] = value
+		}
+	}
+	if len(answers) == 0 {
+		return errors.New("answers required")
+	}
+
+	select {
+	case waiter <- askUserAnswerResult{answers: answers}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *session) handleCanUseTool(ctx context.Context, req claudeagent.ToolPermissionRequest) claudeagent.PermissionResult {
+	if req.ToolName != "AskUserQuestion" {
+		return claudeagent.PermissionAllow{}
+	}
+
+	var input claudeagent.AskUserQuestionInput
+	if err := json.Unmarshal(req.Arguments, &input); err != nil || len(input.Questions) == 0 {
+		return claudeagent.PermissionAllow{}
+	}
+
+	callID := strings.TrimSpace(req.Context.ToolUseID)
+	if callID == "" {
+		return claudeagent.PermissionDeny{Reason: "ask user question missing tool use id"}
+	}
+
+	answers, err := s.awaitAskUserQuestion(ctx, claudeagent.QuestionSet{
+		ToolUseID: callID,
+		Questions: input.Questions,
+		SessionID: req.Context.SessionID,
+	})
+	if err != nil {
+		return claudeagent.PermissionDeny{Reason: err.Error()}
+	}
+
+	updatedInput := make(map[string]interface{})
+	if err := json.Unmarshal(req.Arguments, &updatedInput); err != nil {
+		updatedInput["questions"] = input.Questions
+	}
+	updatedAnswers := make(map[string]string, len(answers))
+	for key, value := range answers {
+		updatedAnswers[key] = value
+	}
+	updatedInput["answers"] = updatedAnswers
+
+	return claudeagent.PermissionAllow{UpdatedInput: updatedInput}
 }
 
 func (s *session) SetModel(ctx context.Context, model string) error {
@@ -276,6 +358,7 @@ func (s *session) ContextWindow(_ context.Context) (types.ContextWindow, error) 
 }
 
 func (s *session) CancelCurrentTurn() error {
+	s.cancelPendingQuestions(errors.New("turn canceled"))
 	if s.stream == nil {
 		s.turn.Cancel()
 		return nil
@@ -287,9 +370,41 @@ func (s *session) CancelCurrentTurn() error {
 	return nil
 }
 
+func (s *session) cancelPendingQuestions(err error) {
+	if err == nil {
+		err = errors.New("turn canceled")
+	}
+	s.questionMu.Lock()
+	type pendingQuestion struct {
+		callID string
+		waiter chan askUserAnswerResult
+	}
+	waiters := make([]pendingQuestion, 0, len(s.questionWaits))
+	for callID, waiter := range s.questionWaits {
+		waiters = append(waiters, pendingQuestion{callID: callID, waiter: waiter})
+		delete(s.questionWaits, callID)
+	}
+	s.questionMu.Unlock()
+
+	for _, pending := range waiters {
+		select {
+		case pending.waiter <- askUserAnswerResult{err: err}:
+		default:
+		}
+		if update, ok := s.cancelPendingToolCall(pending.callID, err.Error()); ok {
+			s.emit(types.Event{
+				Type:      types.EventTypeToolUpdate,
+				SessionID: s.SessionID(),
+				Data:      update,
+			})
+		}
+	}
+}
+
 func (s *session) Close() error {
 	var closeErr error
 	s.closeOnce.Do(func() {
+		s.cancelPendingQuestions(errors.New("claude session closed"))
 		if s.stream != nil {
 			closeErr = s.stream.Close()
 		}
@@ -491,6 +606,83 @@ func (s *session) handleTodoUpdateMessage(msg claudeagent.TodoUpdateMessage) {
 		SessionID: s.SessionID(),
 		Data:      types.TodoUpdate{Items: items},
 	})
+}
+
+func (s *session) awaitAskUserQuestion(ctx context.Context, qs claudeagent.QuestionSet) (claudeagent.Answers, error) {
+	callID := strings.TrimSpace(qs.ToolUseID)
+	if callID == "" {
+		return nil, errors.New("ask user question missing tool use id")
+	}
+
+	waiter := make(chan askUserAnswerResult, 1)
+	s.questionMu.Lock()
+	if s.questionWaits == nil {
+		s.questionWaits = make(map[string]chan askUserAnswerResult)
+	}
+	if _, exists := s.questionWaits[callID]; exists {
+		s.questionMu.Unlock()
+		return nil, errors.New("ask user question already pending: " + callID)
+	}
+	s.questionWaits[callID] = waiter
+	s.questionMu.Unlock()
+	defer func() {
+		s.questionMu.Lock()
+		delete(s.questionWaits, callID)
+		s.questionMu.Unlock()
+	}()
+
+	toolCall := askUserQuestionToolCall(qs)
+	s.trackPendingToolCall(toolCall)
+	s.emit(types.Event{
+		Type:      types.EventTypeToolCall,
+		SessionID: s.SessionID(),
+		Data:      toolCall,
+	})
+
+	select {
+	case result := <-waiter:
+		if result.err != nil {
+			return nil, result.err
+		}
+		if len(result.answers) == 0 {
+			return nil, errors.New("empty ask user answers")
+		}
+		return result.answers, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func askUserQuestionToolCall(qs claudeagent.QuestionSet) types.ToolCall {
+	questions := make([]types.AskUserQuestionItem, 0, len(qs.Questions))
+	for _, question := range qs.Questions {
+		options := make([]types.AskUserQuestionOption, 0, len(question.Options))
+		for _, option := range question.Options {
+			options = append(options, types.AskUserQuestionOption{
+				Label:       option.Label,
+				Description: option.Description,
+			})
+		}
+		questions = append(questions, types.AskUserQuestionItem{
+			Question:    question.Question,
+			Header:      question.Header,
+			Options:     options,
+			MultiSelect: question.MultiSelect,
+		})
+	}
+
+	payload := claudeagent.AskUserQuestionInput{Questions: qs.Questions}
+	raw, _ := json.Marshal(payload)
+	toolCall := newRunningToolCall(qs.ToolUseID, "AskUserQuestion", "tool_use", raw)
+	if toolCall.Meta == nil {
+		toolCall.Meta = map[string]any{}
+	}
+	toolCall.Meta["toolUseId"] = qs.ToolUseID
+	toolCall.Meta["questions"] = questions
+	if qs.ParentToolUseID != nil && strings.TrimSpace(*qs.ParentToolUseID) != "" {
+		toolCall.Meta["parentToolUseId"] = strings.TrimSpace(*qs.ParentToolUseID)
+	}
+	return toolCall
 }
 
 func newRunningToolCall(callID, name, rawType string, input json.RawMessage) types.ToolCall {
@@ -867,6 +1059,29 @@ func (s *session) trackPendingToolCall(toolCall types.ToolCall) {
 		s.pendingToolCalls = make(map[string]types.ToolCall)
 	}
 	s.pendingToolCalls[toolCall.CallID] = toolCall
+}
+
+func (s *session) cancelPendingToolCall(callID, reason string) (types.ToolCall, bool) {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return types.ToolCall{}, false
+	}
+	s.pendingToolMu.Lock()
+	defer s.pendingToolMu.Unlock()
+	if len(s.pendingToolCalls) == 0 {
+		return types.ToolCall{}, false
+	}
+	toolCall, ok := s.pendingToolCalls[callID]
+	if !ok {
+		return types.ToolCall{}, false
+	}
+	delete(s.pendingToolCalls, callID)
+	toolCall.Status = "failed"
+	toolCall.Meta = mergeToolCallMeta(toolCall.Meta, map[string]any{"error": reason, "canceled": true})
+	if len(toolCall.Content) == 0 && strings.TrimSpace(reason) != "" {
+		toolCall.Content = []types.ToolCallContentItem{{Type: "text", Text: reason}}
+	}
+	return toolCall, true
 }
 
 func (s *session) toolResultUpdate(msg claudeagent.UserMessage) (types.ToolCall, bool) {

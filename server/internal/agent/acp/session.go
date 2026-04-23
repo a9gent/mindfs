@@ -276,6 +276,10 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 	return s.proc.SendMessage(ctx, s.sessionKey, content)
 }
 
+func (s *session) AnswerQuestion(context.Context, types.AskUserAnswer) error {
+	return errors.New("ask user question is not supported by acp sessions")
+}
+
 func (s *session) SetModel(ctx context.Context, model string) error {
 	if s == nil || s.proc == nil {
 		return errors.New("acp session not initialized")

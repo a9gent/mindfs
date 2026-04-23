@@ -300,6 +300,8 @@ func (h *WSHandler) handleWSRequest(ctx context.Context, conn *websocket.Conn, c
 		h.handleWSPing(conn, clientID, req)
 	case "session.message":
 		go h.handleSessionMessage(ctx, conn, clientID, req)
+	case "session.answer_question":
+		go h.handleSessionAnswerQuestion(ctx, conn, clientID, req)
 	case "session.ready":
 		go h.handleSessionReady(clientID, req)
 	case "session.cancel":
@@ -307,6 +309,38 @@ func (h *WSHandler) handleWSRequest(ctx context.Context, conn *websocket.Conn, c
 	default:
 		h.sendWSError(conn, clientID, req.ID, "method_not_found", "method not found")
 	}
+}
+
+func (h *WSHandler) handleSessionAnswerQuestion(ctx context.Context, conn *websocket.Conn, clientID string, req WSRequest) {
+	rootID := getString(req.Payload, "root_id")
+	key := getString(req.Payload, "session_key")
+	agentName := getString(req.Payload, "agent")
+	toolUseID := getString(req.Payload, "tool_use_id")
+	if key == "" || toolUseID == "" {
+		h.sendWSError(conn, clientID, req.ID, "invalid_request", "session_key and tool_use_id required")
+		return
+	}
+	answers := parseStringMap(req.Payload["answers"])
+	if len(answers) == 0 {
+		h.sendWSError(conn, clientID, req.ID, "invalid_request", "answers required")
+		return
+	}
+	uc := &usecase.Service{Registry: h.AppContext}
+	if err := uc.AnswerQuestion(ctx, usecase.AnswerQuestionInput{
+		RootID:     rootID,
+		SessionKey: key,
+		Agent:      agentName,
+		ToolUseID:  toolUseID,
+		Answers:    answers,
+	}); err != nil {
+		h.sendWSError(conn, clientID, req.ID, "session.answer_question_failed", err.Error())
+		return
+	}
+	_ = h.writeWSJSON(clientID, conn, WSResponse{
+		ID:      req.ID,
+		Type:    "session.answer_question.accepted",
+		Payload: map[string]any{"root_id": rootID, "session_key": key, "tool_use_id": toolUseID},
+	})
 }
 
 func (h *WSHandler) handleWSPing(conn *websocket.Conn, clientID string, req WSRequest) {
@@ -591,6 +625,37 @@ func getString(payload map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+func parseStringMap(raw any) map[string]string {
+	items, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(items))
+	for key, value := range items {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		switch v := value.(type) {
+		case string:
+			if trimmed := strings.TrimSpace(v); trimmed != "" {
+				out[key] = trimmed
+			}
+		case []any:
+			parts := make([]string, 0, len(v))
+			for _, item := range v {
+				if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+					parts = append(parts, strings.TrimSpace(text))
+				}
+			}
+			if len(parts) > 0 {
+				out[key] = strings.Join(parts, ", ")
+			}
+		}
+	}
+	return out
 }
 
 func parseClientContext(payload map[string]any, rootID string) usecase.ClientContext {

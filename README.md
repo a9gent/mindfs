@@ -11,10 +11,10 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 ## Screenshots
 
 <p align="center">
-  <img src="docs/images/mindfs-desktop.webp" alt="MindFS desktop UI" width="72%" />
+  <img src="docs/images/mindfs-desktop.webp" alt="MindFS desktop UI" width="92%" />
 </p>
 <p align="center">
-  <img src="docs/images/mindfs-mobile.webp" alt="MindFS mobile UI" width="72%" />
+  <img src="docs/images/mindfs-mobile.webp" alt="MindFS mobile UI" width="92%" />
 </p>
 
 ---

@@ -1943,13 +1943,26 @@ export function App() {
         const merged = { ...(existing || {}), ...incoming };
         if (!incoming.kind && existing?.kind) merged.kind = existing.kind;
         if (!incoming.title && existing?.title) merged.title = existing.title;
+        const existingStatus = `${existing?.status || ""}`.toLowerCase();
+        const incomingStatus = `${incoming?.status || ""}`.toLowerCase();
+        if (
+          (existingStatus === "failed" ||
+            existingStatus === "error" ||
+            existingStatus === "complete" ||
+            existingStatus === "success") &&
+          (incomingStatus === "running" ||
+            incomingStatus === "pending" ||
+            incomingStatus === "in_progress")
+        ) {
+          merged.status = existing.status;
+        }
         return merged;
       };
       const updateList = (prevList: Exchange[]) => {
         const list = [...(prevList || [])];
         const callId =
           toolCall.callId || toolCall.toolCallId || toolCall.tool_call_id || "";
-        if (update && callId) {
+        if (callId) {
           for (let i = list.length - 1; i >= 0; i--) {
             if (
               list[i]?.role === "tool" &&
@@ -5854,6 +5867,25 @@ export function App() {
     [updateSessionRelatedFilesForKey],
   );
 
+  const handleAskUserAnswer = useCallback(
+    async (input: {
+      rootId: string;
+      sessionKey: string;
+      agent?: string;
+      toolUseId: string;
+      answers: Record<string, string>;
+    }) => {
+      await sessionService.answerQuestion(
+        input.rootId,
+        input.sessionKey,
+        input.agent,
+        input.toolUseId,
+        input.answers,
+      );
+    },
+    [],
+  );
+
   const currentFileScrollKey = buildFileScrollKey(
     file?.root || currentRootId,
     file?.path,
@@ -5878,6 +5910,7 @@ export function App() {
           path,
         )
       }
+      onAskUserAnswer={handleAskUserAnswer}
     />
   );
 
@@ -6735,6 +6768,7 @@ export function App() {
                     path,
                   )
                 }
+                onAskUserAnswer={handleAskUserAnswer}
               />
             ) : (
               <div style={{ padding: "40px", textAlign: "center" }}>

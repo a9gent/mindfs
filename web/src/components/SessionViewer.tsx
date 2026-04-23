@@ -53,6 +53,25 @@ type SessionViewerProps = {
   >;
   onFileClick?: (path: string) => void;
   onRemoveRelatedFile?: (path: string) => void;
+  onAskUserAnswer?: (input: {
+    rootId: string;
+    sessionKey: string;
+    agent?: string;
+    toolUseId: string;
+    answers: Record<string, string>;
+  }) => void | Promise<void>;
+};
+
+type AskUserQuestionOption = {
+  label?: string;
+  description?: string;
+};
+
+type AskUserQuestionItem = {
+  question?: string;
+  header?: string;
+  options?: AskUserQuestionOption[];
+  multiSelect?: boolean;
 };
 
 type UploadAttachment = {
@@ -384,6 +403,305 @@ function TodoUpdateCard({ todoUpdate }: { todoUpdate: TodoUpdate }) {
   );
 }
 
+function getAskUserQuestions(toolCall: Partial<ToolCall>): AskUserQuestionItem[] {
+  const raw = toolCall.meta?.questions;
+  if (Array.isArray(raw)) {
+    return raw as AskUserQuestionItem[];
+  }
+  const input = toolCall.meta?.input;
+  if (typeof input !== "string" || input.trim() === "") {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(input) as { questions?: AskUserQuestionItem[] };
+    return Array.isArray(parsed.questions) ? parsed.questions : [];
+  } catch {
+    return [];
+  }
+}
+
+function AskUserIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      style={{ color: "#ef4444", flexShrink: 0 }}
+    >
+      <g fill="currentColor">
+        <path d="M8 11a.75.75 0 1 1 0 1.5a.75.75 0 0 1 0-1.5m0-7c1.262 0 2.25.988 2.25 2.25c0 1.083-.566 1.648-1.021 2.104c-.408.407-.729.728-.729 1.396a.5.5 0 0 1-1 0c0-1.083.566-1.648 1.021-2.104c.408-.407.729-.728.729-1.396C9.25 5.538 8.712 5 8 5s-1.25.538-1.25 1.25a.5.5 0 0 1-1 0C5.75 4.988 6.738 4 8 4" />
+        <path
+          fillRule="evenodd"
+          d="M8 1a7 7 0 0 1 6.999 7.001a7 7 0 0 1-10.504 6.06l-2.728.91a.582.582 0 0 1-.744-.714l.83-2.906A7 7 0 0 1 8 1m.001 1.001c-3.308 0-6 2.692-6 6c0 1.003.252 1.996.73 2.871l.196.36l-.726 2.54l1.978-.659l.428-.143l.39.226A6 6 0 0 0 8 14l.001.001c3.308 0 6-2.692 6-6s-2.692-6-6-6"
+          clipRule="evenodd"
+        />
+      </g>
+    </svg>
+  );
+}
+
+function AskUserQuestionCard({
+  toolCall,
+  rootId,
+  sessionKey,
+  agent,
+  active,
+  onAnswer,
+}: {
+  toolCall: ToolCall;
+  rootId?: string | null;
+  sessionKey?: string | null;
+  agent?: string;
+  active: boolean;
+  onAnswer?: SessionViewerProps["onAskUserAnswer"];
+}) {
+  const questions = getAskUserQuestions(toolCall);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const status = `${toolCall.status || ""}`.toLowerCase();
+  const isCurrent =
+    status === "running" || status === "pending" || status === "in_progress";
+  const [expanded, setExpanded] = useState(isCurrent);
+  const toolUseId =
+    toolCall.callId ||
+    (typeof toolCall.meta?.toolUseId === "string" ? toolCall.meta.toolUseId : "");
+  const firstQuestion = questions[0] || {};
+  const questionTitle = `${firstQuestion.question || ""}`.trim();
+  const questionHeader = `${firstQuestion.header || ""}`.trim();
+  const title =
+    questionHeader && questionTitle
+      ? `${questionHeader}：${questionTitle}`
+      : questionTitle ||
+    `${toolCall.title || ""}`.trim() ||
+    (typeof toolCall.meta?.title === "string" ? toolCall.meta.title : "") ||
+    questionHeader ||
+    "ask user";
+  const canSubmit =
+    !!rootId &&
+    !!sessionKey &&
+    !!toolUseId &&
+    !!onAnswer &&
+    questions.length > 0 &&
+    questions.every((_, index) => (answers[`q_${index}`] || "").trim() !== "") &&
+    !submitting &&
+    !submitted;
+
+  useEffect(() => {
+    if (submitted) {
+      setExpanded(false);
+      return;
+    }
+    setExpanded(active && isCurrent);
+  }, [active, isCurrent, submitted, toolUseId]);
+
+  const setAnswer = (index: number, value: string) => {
+    setAnswers((prev) => ({ ...prev, [`q_${index}`]: value }));
+  };
+  const toggleMultiAnswer = (index: number, label: string) => {
+    const key = `q_${index}`;
+    setAnswers((prev) => {
+      const current = (prev[key] || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      const next = current.includes(label)
+        ? current.filter((item) => item !== label)
+        : [...current, label];
+      return { ...prev, [key]: next.join(", ") };
+    });
+  };
+
+  return (
+    <div
+      style={{
+        width: "100%",
+        minWidth: 0,
+        borderRadius: "10px",
+        border: "1px solid rgba(239, 68, 68, 0.28)",
+        background:
+          "linear-gradient(180deg, rgba(239, 68, 68, 0.08), rgba(239, 68, 68, 0.03))",
+        overflow: "hidden",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "flex-start",
+          padding: "6px 8px",
+          background: "rgba(239, 68, 68, 0.04)",
+          border: "none",
+          borderBottom: expanded ? "1px solid var(--border-color)" : "none",
+          cursor: "pointer",
+          fontSize: "12px",
+          gap: "6px",
+          minWidth: 0,
+        }}
+      >
+        <AskUserIcon />
+        <span
+          style={{
+            minWidth: 0,
+            flex: 1,
+            fontWeight: 500,
+            color: "var(--text-primary)",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            textAlign: "left",
+          }}
+        >
+          {title}
+        </span>
+        <span
+          style={{
+            flexShrink: 0,
+            transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
+            transition: "transform 0.2s",
+            color: "var(--text-secondary)",
+            display: "inline-flex",
+            alignItems: "center",
+          }}
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.25"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+        </span>
+      </button>
+      {expanded ? (
+        <div style={{ padding: "10px", display: "flex", flexDirection: "column", gap: "12px" }}>
+        {questions.map((question, index) => {
+          const key = `q_${index}`;
+          const options = Array.isArray(question.options) ? question.options : [];
+          const selected = answers[key] || "";
+          const selectedSet = new Set(
+            selected
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean),
+          );
+          return (
+            <div key={key} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              {options.length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  {options.map((option) => {
+                    const label = `${option.label || ""}`.trim();
+                    if (!label) return null;
+                    const checked = question.multiSelect
+                      ? selectedSet.has(label)
+                      : selected === label;
+                    return (
+                      <label
+                        key={label}
+                        style={{
+                          display: "flex",
+                          gap: "8px",
+                          alignItems: "flex-start",
+                          padding: "7px 8px",
+                          borderRadius: "8px",
+                          border: checked
+                            ? "1px solid rgba(239, 68, 68, 0.42)"
+                            : "1px solid var(--border-color)",
+                          background: checked ? "rgba(239, 68, 68, 0.10)" : "var(--content-bg)",
+                          cursor: submitted ? "default" : "pointer",
+                        }}
+                      >
+                        <input
+                          type={question.multiSelect ? "checkbox" : "radio"}
+                          name={`${toolUseId}-${key}`}
+                          checked={checked}
+                          disabled={submitted}
+                          onChange={() =>
+                            question.multiSelect
+                              ? toggleMultiAnswer(index, label)
+                              : setAnswer(index, label)
+                          }
+                          style={{ marginTop: "2px" }}
+                        />
+                        <span style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                          <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>{label}</span>
+                          {option.description ? (
+                            <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                              {option.description}
+                            </span>
+                          ) : null}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : (
+                <textarea
+                  value={selected}
+                  disabled={submitted}
+                  onChange={(event) => setAnswer(index, event.target.value)}
+                  placeholder="输入回答..."
+                  rows={3}
+                  style={{
+                    width: "100%",
+                    resize: "vertical",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border-color)",
+                    background: "var(--content-bg)",
+                    color: "var(--text-primary)",
+                    padding: "8px",
+                    fontSize: "13px",
+                    boxSizing: "border-box",
+                  }}
+                />
+              )}
+            </div>
+          );
+        })}
+        <button
+          type="button"
+          disabled={!canSubmit}
+          onClick={async () => {
+            if (!canSubmit || !rootId || !sessionKey || !toolUseId || !onAnswer) return;
+            setSubmitting(true);
+            try {
+              await onAnswer({ rootId, sessionKey, agent, toolUseId, answers });
+              setSubmitted(true);
+              setExpanded(false);
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+          style={{
+            alignSelf: "flex-start",
+            border: "none",
+            borderRadius: "999px",
+            padding: "6px 12px",
+            background: canSubmit ? "#ef4444" : "var(--border-color)",
+            color: canSubmit ? "#fff" : "var(--text-secondary)",
+            fontSize: "12px",
+            fontWeight: 700,
+            cursor: canSubmit ? "pointer" : "default",
+          }}
+        >
+          {submitted ? "已提交" : submitting ? "提交中..." : "提交回答"}
+        </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function timelineItemSpacing(
   previous: TimelineItem | null,
   current: TimelineItem,
@@ -491,6 +809,7 @@ function SessionViewerInner({
   gitFileStatsByPath = {},
   onFileClick,
   onRemoveRelatedFile,
+  onAskUserAnswer,
 }: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
   const [relatedFilesCollapsed, setRelatedFilesCollapsed] = useState(false);
@@ -621,6 +940,37 @@ function SessionViewerInner({
       return { path, name };
     })
     .filter((f) => f.path);
+  const activeAskUserCallId = (() => {
+    if (!isAwaiting) {
+      return "";
+    }
+    for (let i = timeline.length - 1; i >= 0; i -= 1) {
+      const item = timeline[i];
+      if (item.type === "user_text" || item.type === "assistant_text") {
+        return "";
+      }
+      if (item.type !== "tool") continue;
+      const toolCall = item.toolCall || {};
+      const kind = `${toolCall.kind || ""}`.toLowerCase();
+      const status = `${toolCall.status || ""}`.toLowerCase();
+      if (kind !== "ask_user") continue;
+      if (
+        status !== "running" &&
+        status !== "pending" &&
+        status !== "in_progress"
+      ) {
+        continue;
+      }
+      if (getAskUserQuestions(toolCall).length === 0) continue;
+      return (
+        toolCall.callId ||
+        (typeof toolCall.meta?.toolUseId === "string"
+          ? toolCall.meta.toolUseId
+          : "")
+      );
+    }
+    return "";
+  })();
   const defaultRelatedFilesCollapsed = shouldDefaultCollapseRelatedFiles(
     isMobile,
     relatedFiles.length,
@@ -696,24 +1046,42 @@ function SessionViewerInner({
     }
     if (item.type === "tool") {
       const tc = item.toolCall || {};
+      const isAskUser =
+        `${tc.kind || ""}`.toLowerCase() === "ask_user" &&
+        `${tc.status || ""}`.toLowerCase() !== "complete" &&
+        getAskUserQuestions(tc).length > 0;
+      const toolUseId =
+        tc.callId ||
+        (typeof tc.meta?.toolUseId === "string" ? tc.meta.toolUseId : "");
       return (
         <div key={timelineItemKey} style={{ marginTop: spacing }}>
-          <ToolCallCard
-            kind={tc.kind}
-            title={
-              (tc as any).title ||
-              (tc.meta && typeof tc.meta.title === "string"
-                ? (tc.meta.title as string)
-                : "")
-            }
-            callId={tc.callId || ""}
-            status={tc.status || "running"}
-            content={tc.content}
-            result={formatToolCallFallbackResult(tc)}
-            locations={tc.locations}
-            rootPath={rootPath || undefined}
-            defaultExpanded={false}
-          />
+          {isAskUser ? (
+            <AskUserQuestionCard
+              toolCall={tc}
+              rootId={rootId}
+              sessionKey={sessionKey}
+              agent={session?.agent}
+              active={!!toolUseId && toolUseId === activeAskUserCallId}
+              onAnswer={onAskUserAnswer}
+            />
+          ) : (
+            <ToolCallCard
+              kind={tc.kind}
+              title={
+                (tc as any).title ||
+                (tc.meta && typeof tc.meta.title === "string"
+                  ? (tc.meta.title as string)
+                  : "")
+              }
+              callId={tc.callId || ""}
+              status={tc.status || "running"}
+              content={tc.content}
+              result={formatToolCallFallbackResult(tc)}
+              locations={tc.locations}
+              rootPath={rootPath || undefined}
+              defaultExpanded={false}
+            />
+          )}
         </div>
       );
     }

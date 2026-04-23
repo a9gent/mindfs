@@ -26,8 +26,8 @@ github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/stretchr/testify v1.8.1 h1:w7B6lhMri9wdJUVmEZPGGhZzrYTPvgJArz7wNPgYKsk=
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
-github.com/yandc/claude-agent-sdk-go v0.0.0-20260415081401-f78dd361a27a h1:W4SAQw1HfJ13jsQ8qKhiz1DJubHFQ1qe3nYpguKarl8=
-github.com/yandc/claude-agent-sdk-go v0.0.0-20260415081401-f78dd361a27a/go.mod h1:F0UH/dW/gpCuTfWRWa2qwT18HeiYwUTSd+Q6KSFHIjo=
+github.com/yandc/claude-agent-sdk-go v0.0.0-20260423113330-380f586b1dc2 h1:pNTr24c5qSIzgnz1NTHjHGlQ7pvYeab1gC/RFprW5Qk=
+github.com/yandc/claude-agent-sdk-go v0.0.0-20260423113330-380f586b1dc2/go.mod h1:F0UH/dW/gpCuTfWRWa2qwT18HeiYwUTSd+Q6KSFHIjo=
 github.com/yandc/codex-go-sdk v0.0.0-20260328100956-33306a720611 h1:cjzyLwhWPt1nYBr6EpNSFpYrHwA/LdCqSocJJ/Weq0s=
 github.com/yandc/codex-go-sdk v0.0.0-20260328100956-33306a720611/go.mod h1:YTvQqlQmaABafBpZf5dftTiLj03hBgoR8a9UTZR/TNQ=
 golang.org/x/crypto v0.50.0 h1:zO47/JPrL6vsNkINmLoo/PH1gcxpls50DNogFvB5ZGI=

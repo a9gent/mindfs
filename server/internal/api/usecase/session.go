@@ -335,6 +335,14 @@ type SendMessageInput struct {
 	OnUpdate  func(agenttypes.Event)
 }
 
+type AnswerQuestionInput struct {
+	RootID     string
+	SessionKey string
+	Agent      string
+	ToolUseID  string
+	Answers    map[string]string
+}
+
 type CancelSessionTurnInput struct {
 	RootID string
 	Key    string
@@ -1191,6 +1199,43 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	}
 
 	return nil
+}
+
+func (s *Service) AnswerQuestion(ctx context.Context, in AnswerQuestionInput) error {
+	if err := s.ensureRegistry(); err != nil {
+		return err
+	}
+	sessionKey := strings.TrimSpace(in.SessionKey)
+	if sessionKey == "" {
+		return errors.New("session key required")
+	}
+	agentName := strings.TrimSpace(in.Agent)
+	if agentName == "" {
+		manager, err := s.Registry.GetSessionManager(in.RootID)
+		if err != nil {
+			return err
+		}
+		current, err := manager.Get(ctx, sessionKey, 0)
+		if err != nil {
+			return err
+		}
+		agentName = strings.TrimSpace(session.InferAgentFromSession(current))
+	}
+	if agentName == "" {
+		return errors.New("agent required")
+	}
+	pool := s.Registry.GetAgentPool()
+	if pool == nil {
+		return errors.New("agent pool unavailable")
+	}
+	sess, ok := pool.Get(agentPoolSessionKey(sessionKey, agentName))
+	if !ok {
+		return errors.New("agent session not found")
+	}
+	return sess.AnswerQuestion(ctx, agenttypes.AskUserAnswer{
+		ToolUseID: strings.TrimSpace(in.ToolUseID),
+		Answers:   in.Answers,
+	})
 }
 
 func currentAssistantLine(responseText string) int {

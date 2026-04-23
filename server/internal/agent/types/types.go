@@ -12,6 +12,9 @@ type Session interface {
 	// SendMessage sends a message to the current session.
 	SendMessage(ctx context.Context, content string) error
 
+	// AnswerQuestion sends a response for a pending AskUserQuestion tool call.
+	AnswerQuestion(ctx context.Context, answer AskUserAnswer) error
+
 	// SetModel updates the model used by the current session.
 	SetModel(ctx context.Context, model string) error
 
@@ -179,6 +182,23 @@ type TodoItem struct {
 
 type TodoUpdate struct {
 	Items []TodoItem `json:"items"`
+}
+
+type AskUserQuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+type AskUserQuestionItem struct {
+	Question    string                  `json:"question"`
+	Header      string                  `json:"header,omitempty"`
+	Options     []AskUserQuestionOption `json:"options,omitempty"`
+	MultiSelect bool                    `json:"multiSelect,omitempty"`
+}
+
+type AskUserAnswer struct {
+	ToolUseID string            `json:"toolUseId"`
+	Answers   map[string]string `json:"answers"`
 }
 
 type ToolKind string

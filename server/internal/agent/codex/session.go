@@ -227,6 +227,10 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 	return nil
 }
 
+func (s *session) AnswerQuestion(context.Context, types.AskUserAnswer) error {
+	return errors.New("ask user question is not supported by codex sessions")
+}
+
 func (s *session) SetModel(_ context.Context, model string) error {
 	if s == nil || s.client == nil {
 		return errors.New("codex session not initialized")

@@ -97,6 +97,8 @@ function normalizeToolCall(input: ToolCall): ToolCall {
 function settleRunningTools(items: TimelineItem[]): TimelineItem[] {
   return items.map((item) => {
     if (item.type !== "tool") return item;
+    const kind = (item.toolCall.kind || "").toLowerCase();
+    if (kind === "ask_user") return item;
     const status = (item.toolCall.status || "").toLowerCase();
     if (
       status === "running" ||

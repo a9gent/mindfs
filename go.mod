@@ -9,7 +9,7 @@ require (
 	github.com/go-chi/chi/v5 v5.0.10
 	github.com/gorilla/websocket v1.5.1
 	github.com/hashicorp/yamux v0.1.2
-	github.com/roasbeef/claude-agent-sdk-go v0.0.0
+	github.com/roasbeef/claude-agent-sdk-go v0.0.0-20260423113330-380f586b1dc2
 	golang.org/x/crypto v0.50.0
 	golang.org/x/text v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -31,4 +31,4 @@ require (
 
 replace github.com/fanwenlin/codex-go-sdk => github.com/yandc/codex-go-sdk v0.0.0-20260328100956-33306a720611
 
-replace github.com/roasbeef/claude-agent-sdk-go => github.com/yandc/claude-agent-sdk-go v0.0.0-20260415081401-f78dd361a27a
+replace github.com/roasbeef/claude-agent-sdk-go => github.com/yandc/claude-agent-sdk-go v0.0.0-20260423113330-380f586b1dc2
