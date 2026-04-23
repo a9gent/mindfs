@@ -67,7 +67,8 @@ function MermaidBlock({ chart }: { chart: string }) {
         return;
       }
 
-      const mermaid = await ensureMermaidInitialized();
+      await ensureMermaidInitialized();
+      const mermaid = await getMermaid();
       const renderId = `mindfs-mermaid-${mermaidRenderId += 1}`;
 
       try {
