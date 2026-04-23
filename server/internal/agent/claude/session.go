@@ -488,6 +488,11 @@ func (s *session) consumeMessages() {
 }
 
 func (s *session) handlePartialAssistantMessage(rawEvent json.RawMessage) {
+	if contextTokens := contextTokensFromPartialEvent(rawEvent); contextTokens > 0 {
+		s.mu.Lock()
+		s.context.TotalTokens = contextTokens
+		s.mu.Unlock()
+	}
 	textDelta, thinkingDelta := extractDeltas(rawEvent)
 	if textDelta == "" && thinkingDelta == "" && len(rawEvent) > 0 {
 		log.Printf("[agent/claude] output.unhandled.partial session=%s raw=%s", s.sessionKey, truncateRaw(rawEvent))
@@ -1271,16 +1276,11 @@ func (s *session) setSessionID(sessionID string) {
 }
 
 func (s *session) updateContextWindow(msg claudeagent.ResultMessage) {
-	totalTokens := 0
 	modelContextWindow := 0
 	switch len(msg.ModelUsage) {
 	case 0:
-		if msg.Usage != nil {
-			totalTokens = msg.Usage.InputTokens + msg.Usage.OutputTokens
-		}
 	case 1:
 		for _, usage := range msg.ModelUsage {
-			totalTokens = usage.InputTokens + usage.OutputTokens
 			modelContextWindow = usage.ContextWindow
 		}
 	default:
@@ -1291,19 +1291,15 @@ func (s *session) updateContextWindow(msg claudeagent.ResultMessage) {
 				continue
 			}
 			maxUsageTokens = usageTokens
-			totalTokens = usageTokens
 			modelContextWindow = usage.ContextWindow
 		}
 	}
-	if totalTokens == 0 && modelContextWindow == 0 {
+	if modelContextWindow == 0 {
 		return
 	}
 
 	s.mu.Lock()
-	s.context = types.ContextWindow{
-		TotalTokens:        totalTokens,
-		ModelContextWindow: modelContextWindow,
-	}
+	s.context.ModelContextWindow = modelContextWindow
 	s.mu.Unlock()
 }
 
@@ -1364,6 +1360,24 @@ func resultErr(msg claudeagent.ResultMessage) error {
 		return errors.New("claude result: " + msg.Subtype)
 	}
 	return errors.New("claude turn failed")
+}
+
+func contextTokensFromPartialEvent(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var event struct {
+		Type  string `json:"type"`
+		Usage struct {
+			InputTokens              int `json:"input_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &event); err != nil || strings.TrimSpace(event.Type) != "message_delta" {
+		return 0
+	}
+	return event.Usage.InputTokens + event.Usage.CacheReadInputTokens + event.Usage.CacheCreationInputTokens
 }
 
 func extractDeltas(raw json.RawMessage) (string, string) {

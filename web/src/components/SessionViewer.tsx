@@ -199,13 +199,10 @@ function formatContextWindowPercent(contextWindow?: {
     return null;
   }
   const usedRatio = Math.max(0, Math.min(1, usedTokens / modelContextWindow));
-  const leftRatio = Math.max(0, 1 - usedRatio);
   return {
     usedTokens,
-    leftTokens: Math.max(0, modelContextWindow - usedTokens),
     usedRatio,
-    leftRatio,
-    percent: Math.round(leftRatio * 100),
+    percent: Math.round(usedRatio * 100),
   };
 }
 
@@ -232,14 +229,14 @@ function ContextWindowBadge({
     return null;
   }
   const hue =
-    metrics.percent <= 10
+    metrics.percent >= 90
       ? "#dc2626"
-      : metrics.percent <= 25
+      : metrics.percent >= 75
         ? "#ea580c"
         : "#0f766e";
   return (
     <span
-      title={`Context Window ${metrics.percent}% left (${metrics.usedTokens}/${contextWindow?.modelContextWindow} used)`}
+      title={`Context Window ${metrics.percent}% used (${metrics.usedTokens}/${contextWindow?.modelContextWindow} used)`}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -254,6 +251,7 @@ function ContextWindowBadge({
       }}
     >
       <span>{metrics.percent}%</span>
+      <span>&middot;used</span>
       <span>
         {`(${formatCompactTokenCount(metrics.usedTokens)}/${formatCompactTokenCount(
           contextWindow?.modelContextWindow || 0,
