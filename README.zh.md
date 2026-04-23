@@ -14,7 +14,7 @@
   <img src="docs/images/mindfs-desktop.webp" alt="MindFS 桌面端界面" width="72%" />
 </p>
 <p align="center">
-  <img src="docs/images/mindfs-mobile.webp" alt="MindFS 移动端界面" width="28%" />
+  <img src="docs/images/mindfs-mobile.webp" alt="MindFS 移动端界面" width="72%" />
 </p>
 
 ---
@@ -24,7 +24,7 @@
 ### Agent 会话
 
 - **多 Agent 支持**：Claude Code · OpenAI Codex · Gemini CLI · Cursor · GitHub Copilot · Cline · Augment · Kimi · Kiro · Qwen · Qoder · Pi · OpenCode · OpenClaw，自动探测已安装的 Agent。
-- **实时流式输出**：逐 token 推送，工具调用、思考过程、权限请求均以结构化卡片实时渲染。
+- **实时流式输出**：逐 token 推送，工具调用、思考过程、权限请求均以结构化卡片实时渲染，上下文窗口实时余量。
 - **灵活切换**：会话中随时切换 Agent 或模型，多 Agent 共享同一上下文，无需重新描述背景。
 - **会话搜索**：支持按会话标题或对话内容搜索，并可直接跳转到命中的会话和片段。
 - **外部会话双向导入**：可浏览受支持 Agent CLI 的已有会话，选择后导入到 MindFS，并作为原生 MindFS 会话继续使用，同时 MindFS 中的会话亦可在cli中恢复。
@@ -42,6 +42,7 @@
 
 - **`/` 斜杠命令**：输入 `/` 触发命令候选列表，快速执行预设操作。
 - **`@` 文件引用**：输入 `@` 触发文件路径补全，将任意文件作为上下文附件发送给 Agent。
+- **`#` 快捷提示词**：输入 `#` 触发已收藏的快截提示词输入。
 - **文件与会话双向跳转**：打开文件可跳转到产生它的会话；打开会话可查看所有相关文件。
 - **浏览器应用（PWA）**：可安装到桌面或手机主屏幕，体验更优。
 - **手机界面优化**：底部操作栏拇指可及，界面更简洁。
@@ -51,6 +52,7 @@
 - **本地模式**：服务启动后即可在局域网内通过浏览器访问，无需任何账号或配置。
 - **Relay 远程模式**：无需开放防火墙端口，通过relayer从公网任意设备访问本地实例，实现随时随地的 agent 访问。（本地模式页面中点击绑定按钮）
 - **私有通道**：通过私有通道（tailscale等），直接通过 ip:port 访问。
+- **端到端加密**：会话、文件支持端到端加密保护。
 
 ### 插件系统
 
@@ -60,7 +62,7 @@
 
 ### 安装运行
 
-- **单二进制**：生产构建是一个静态编译的单二进制文件，内嵌所有 Web 资源。
+- **单二进制**：生产构建是一个静态编译的单二进制文件，内嵌所有 Web 资源，安装包小于 10M。
 - **零依赖**：宿主机无需安装 Node.js、Docker 或任何守护进程管理器。
 - **多平台**：支持 macOS（Intel + Apple Silicon）、Linux（x86-64、ARM64、ARMv7）、Windows（x86-64、ARM64）。
 
