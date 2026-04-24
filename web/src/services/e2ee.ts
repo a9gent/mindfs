@@ -246,6 +246,12 @@ class E2EEService {
   }
 
   private async open(secret: string): Promise<SessionContext> {
+    if (!globalThis.isSecureContext) {
+      throw new Error("e2ee_secure_context_required");
+    }
+    if (!globalThis.crypto?.subtle) {
+      throw new Error("e2ee_webcrypto_unavailable");
+    }
     const clientKeys = await crypto.subtle.generateKey(
       {
         name: "ECDH",

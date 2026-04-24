@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -87,6 +89,7 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 	if file, ok := i.lookupSessionFile(targetID, rootPath); ok {
 		exchanges, err := readClaudeImportedExchanges(file.Path)
 		if err != nil {
+			log.Printf("[agent/claude/importer] import session read failed session_id=%s path=%s err=%v", targetID, file.Path, err)
 			return agenttypes.ImportedExternalSession{}, err
 		}
 		return agenttypes.ImportedExternalSession{
@@ -106,6 +109,7 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		}
 		exchanges, err := readClaudeImportedExchanges(file.Path)
 		if err != nil {
+			log.Printf("[agent/claude/importer] import session read failed session_id=%s path=%s err=%v", targetID, file.Path, err)
 			return agenttypes.ImportedExternalSession{}, err
 		}
 		return agenttypes.ImportedExternalSession{
@@ -148,7 +152,11 @@ func (i *Importer) scanSessionFiles(rootPath string, before, after time.Time, li
 			return nil
 		}
 		item, ok, err := inspectClaudeSessionFile(path)
-		if err != nil || !ok {
+		if err != nil {
+			log.Printf("[agent/claude/importer] inspect session file failed path=%s err=%v", path, err)
+			return nil
+		}
+		if !ok {
 			return nil
 		}
 		if !before.IsZero() && !item.UpdatedAt.Before(before) {
@@ -213,18 +221,15 @@ func inspectClaudeSessionFile(path string) (claudeSessionFile, bool, error) {
 	if err != nil {
 		return claudeSessionFile{}, false, err
 	}
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
-
 	var sessionID, cwd, firstUserText string
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	err = forEachJSONLLine(file, func(line string) error {
+		line = strings.TrimSpace(line)
 		if line == "" {
-			continue
+			return nil
 		}
 		var raw map[string]any
 		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			continue
+			return nil
 		}
 		if sessionID == "" {
 			sessionID = strings.TrimSpace(asString(raw["sessionId"]))
@@ -240,10 +245,11 @@ func inspectClaudeSessionFile(path string) (claudeSessionFile, bool, error) {
 			}
 		}
 		if sessionID != "" && cwd != "" && firstUserText != "" {
-			break
+			return errStopJSONL
 		}
-	}
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil && !errors.Is(err, errStopJSONL) {
 		return claudeSessionFile{}, false, err
 	}
 	if sessionID == "" || cwd == "" {
@@ -265,29 +271,27 @@ func readClaudeImportedExchanges(path string) ([]agenttypes.ImportedExchange, er
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 	items := make([]agenttypes.ImportedExchange, 0)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	err = forEachJSONLLine(file, func(line string) error {
+		line = strings.TrimSpace(line)
 		if line == "" {
-			continue
+			return nil
 		}
 		var raw map[string]any
 		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			continue
+			return nil
 		}
 		role := strings.ToLower(strings.TrimSpace(asString(raw["type"])))
 		if role != "user" && role != "assistant" {
-			continue
+			return nil
 		}
 		message, _ := raw["message"].(map[string]any)
 		if message == nil {
-			continue
+			return nil
 		}
 		text := strings.TrimSpace(extractClaudeMessageText(message["content"]))
 		if text == "" {
-			continue
+			return nil
 		}
 		ts := parseTimeRFC3339(asString(raw["timestamp"]))
 		if role == "user" {
@@ -296,18 +300,40 @@ func readClaudeImportedExchanges(path string) ([]agenttypes.ImportedExchange, er
 				Content:   text,
 				Timestamp: ts,
 			})
-			continue
+			return nil
 		}
 		items = append(items, agenttypes.ImportedExchange{
 			Role:      "agent",
 			Content:   text,
 			Timestamp: ts,
 		})
-	}
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return items, nil
+}
+
+var errStopJSONL = errors.New("stop jsonl")
+
+func forEachJSONLLine(file *os.File, fn func(string) error) error {
+	reader := bufio.NewReader(file)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			if callErr := fn(string(line)); callErr != nil {
+				return callErr
+			}
+		}
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
 }
 
 func extractClaudeMessageText(raw any) string {

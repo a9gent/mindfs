@@ -5477,15 +5477,31 @@ export function App() {
   }, [relayStatus?.e2ee_required, relayStatus?.e2ee_node_id, relayStatus?.node_id]);
 
   useEffect(() => {
-    if (e2eeState.required && !e2eeState.secretPresent) {
-      setE2eePromptError("");
-      return;
-    }
     if (!e2eeState.required) {
       setE2eeSecretInput("");
       setE2eePromptError("");
     }
   }, [e2eeState.required, e2eeState.secretPresent]);
+
+  const describeE2EEPromptError = useCallback((err: unknown) => {
+    const code = err instanceof Error ? String(err.message || "").trim() : "";
+    switch (code) {
+      case "e2ee_proof_invalid":
+        return "端到端配对码无效，或当前节点标识已变化";
+      case "e2ee_secure_context_required":
+      case "e2ee_webcrypto_unavailable":
+        return "当前连接不是安全上下文，局域网配对请改用 HTTPS 或 localhost";
+      case "e2ee_secret_missing":
+        return "配对初始化失败，请刷新页面后重试";
+      case "e2ee_open_invalid_response":
+        return "握手响应无效，请稍后重试";
+      default:
+        if (code.startsWith("e2ee_open_failed_")) {
+          return "握手请求失败，请检查当前节点连接状态";
+        }
+        return "端到端握手失败，请重试";
+    }
+  }, []);
 
   const submitE2EESecret = useCallback(async () => {
     const trimmed = e2eeSecretInput.trim();
@@ -5500,12 +5516,16 @@ export function App() {
       await e2eeService.ensureSession();
       setE2eeSecretInput("");
     } catch (err) {
-      e2eeService.clearSecret();
-      setE2eePromptError("端到端配对码无效或握手失败");
+      if (err instanceof Error && err.message === "e2ee_proof_invalid") {
+        e2eeService.clearSecret();
+      } else {
+        e2eeService.clearSession();
+      }
+      setE2eePromptError(describeE2EEPromptError(err));
     } finally {
       setE2eePromptBusy(false);
     }
-  }, [e2eeSecretInput]);
+  }, [describeE2EEPromptError, e2eeSecretInput]);
 
   useEffect(() => {
     if (!isRelayPWAContext()) {

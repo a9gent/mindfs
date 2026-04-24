@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -83,6 +85,7 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 	if file, ok := i.lookupSessionFile(targetID, rootPath); ok {
 		exchanges, err := readCodexImportedExchanges(file.Path)
 		if err != nil {
+			log.Printf("[agent/codex/importer] import session read failed session_id=%s path=%s err=%v", targetID, file.Path, err)
 			return agenttypes.ImportedExternalSession{}, err
 		}
 		return agenttypes.ImportedExternalSession{
@@ -102,6 +105,7 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		}
 		exchanges, err := readCodexImportedExchanges(file.Path)
 		if err != nil {
+			log.Printf("[agent/codex/importer] import session read failed session_id=%s path=%s err=%v", targetID, file.Path, err)
 			return agenttypes.ImportedExternalSession{}, err
 		}
 		return agenttypes.ImportedExternalSession{
@@ -130,7 +134,11 @@ func (i *Importer) scanSessionFiles(before, after time.Time, limit int) ([]codex
 			return nil
 		}
 		item, ok, err := inspectCodexSessionFile(path)
-		if err != nil || !ok {
+		if err != nil {
+			log.Printf("[agent/codex/importer] inspect session file failed path=%s err=%v", path, err)
+			return nil
+		}
+		if !ok {
 			return nil
 		}
 		if !before.IsZero() && !item.UpdatedAt.Before(before) {
@@ -187,30 +195,27 @@ func inspectCodexSessionFile(path string) (codexSessionFile, bool, error) {
 	if err != nil {
 		return codexSessionFile{}, false, err
 	}
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
-
 	var sessionID, cwd, firstUserText string
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	err = forEachJSONLLine(file, func(line string) error {
+		line = strings.TrimSpace(line)
 		if line == "" {
-			continue
+			return nil
 		}
 		var raw map[string]any
 		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			continue
+			return nil
 		}
 		if sessionID == "" && raw["type"] == "session_meta" {
 			if payload, _ := raw["payload"].(map[string]any); payload != nil {
 				sessionID = strings.TrimSpace(asString(payload["id"]))
 			}
-			continue
+			return nil
 		}
 		if cwd == "" && raw["type"] == "turn_context" {
 			if payload, _ := raw["payload"].(map[string]any); payload != nil {
 				cwd = normalizeComparablePath(asString(payload["cwd"]))
 			}
-			continue
+			return nil
 		}
 		if firstUserText == "" && raw["type"] == "response_item" {
 			if payload, _ := raw["payload"].(map[string]any); payload != nil {
@@ -222,10 +227,11 @@ func inspectCodexSessionFile(path string) (codexSessionFile, bool, error) {
 			}
 		}
 		if sessionID != "" && cwd != "" && firstUserText != "" {
-			break
+			return errStopJSONL
 		}
-	}
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil && !errors.Is(err, errStopJSONL) {
 		return codexSessionFile{}, false, err
 	}
 	if sessionID == "" || cwd == "" {
@@ -247,45 +253,65 @@ func readCodexImportedExchanges(path string) ([]agenttypes.ImportedExchange, err
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 	items := make([]agenttypes.ImportedExchange, 0)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	err = forEachJSONLLine(file, func(line string) error {
+		line = strings.TrimSpace(line)
 		if line == "" {
-			continue
+			return nil
 		}
 		var raw map[string]any
 		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			continue
+			return nil
 		}
 		timestamp := parseTimeRFC3339(asString(raw["timestamp"]))
 		switch raw["type"] {
 		case "response_item":
 			payload, _ := raw["payload"].(map[string]any)
 			if payload == nil || payload["type"] != "message" {
-				continue
+				return nil
 			}
 			role := strings.ToLower(strings.TrimSpace(asString(payload["role"])))
 			text := strings.TrimSpace(extractCodexMessageText(payload["content"]))
 			switch role {
 			case "user":
 				if !isMeaningfulCodexUserText(text) {
-					continue
+					return nil
 				}
 				items = appendMergedExchange(items, "user", text, timestamp)
 			case "assistant":
 				if text == "" {
-					continue
+					return nil
 				}
 				items = appendMergedExchange(items, "agent", text, timestamp)
 			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return items, nil
+}
+
+var errStopJSONL = errors.New("stop jsonl")
+
+func forEachJSONLLine(file *os.File, fn func(string) error) error {
+	reader := bufio.NewReader(file)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			if callErr := fn(string(line)); callErr != nil {
+				return callErr
+			}
+		}
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
 }
 
 func appendMergedExchange(items []agenttypes.ImportedExchange, role, content string, ts time.Time) []agenttypes.ImportedExchange {
