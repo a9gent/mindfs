@@ -944,7 +944,7 @@ func (m *Manager) loadExchanges(key string, afterSeq int) ([]Exchange, int, erro
 	}
 	exchanges := make([]Exchange, 0)
 	total := 0
-	scanner := bufio.NewScanner(strings.NewReader(string(payload)))
+	scanner := jsonlScanner(payload)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -964,6 +964,9 @@ func (m *Manager) loadExchanges(key string, afterSeq int) ([]Exchange, int, erro
 			continue
 		}
 		exchanges = append(exchanges, entry)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, 0, err
 	}
 	return exchanges, total, nil
 }
@@ -1001,7 +1004,7 @@ func (m *Manager) loadExchangeAux(key string, afterSeq int) (map[int][]ExchangeA
 		return nil, err
 	}
 	items := make(map[int][]ExchangeAux)
-	scanner := bufio.NewScanner(strings.NewReader(string(payload)))
+	scanner := jsonlScanner(payload)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -1023,6 +1026,16 @@ func (m *Manager) loadExchangeAux(key string, afterSeq int) (map[int][]ExchangeA
 		return nil, err
 	}
 	return items, nil
+}
+
+func jsonlScanner(payload []byte) *bufio.Scanner {
+	scanner := bufio.NewScanner(strings.NewReader(string(payload)))
+	maxTokenSize := len(payload) + 1
+	if maxTokenSize < 64*1024 {
+		maxTokenSize = 64 * 1024
+	}
+	scanner.Buffer(make([]byte, 0, 64*1024), maxTokenSize)
+	return scanner
 }
 
 func (m *Manager) appendExchangeAux(key string, aux ExchangeAux) error {
