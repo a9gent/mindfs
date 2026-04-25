@@ -129,6 +129,23 @@ mindfs -addr :9000 /path/to/your/project  # custom port
 
 Open [http://localhost:7331](http://localhost:7331) in your browser.
 
+#### HTTPS (TLS)
+
+Enable HTTPS with a self-signed certificate (auto-generated and reused across restarts):
+
+```bash
+mindfs -tls
+mindfs -tls -addr :9000 /path/to/your/project
+```
+
+Open [https://localhost:7331](https://localhost:7331) in your browser. The auto-generated certificate includes SANs for `localhost`, `127.0.0.1`, `::1`, and all non-loopback interface IPs, so LAN clients can connect without certificate name mismatches. Certificates are stored under the user config directory (e.g., `~/.config/mindfs/` on Linux).
+
+Use custom certificate and key files:
+
+```bash
+mindfs -tls -cert /path/to/cert.pem -key /path/to/key.pem
+```
+
 MindFS automatically detects the availability of installed agents. This usually takes about one minute.
 
 ### Enable Remote Access (Optional)
@@ -146,6 +163,9 @@ Flags:
   -addr string   Listen address (default "127.0.0.1:7331")
   -no-relayer    Disable relay integration
   -remove        Unregister a managed directory from a running server
+  -tls           Enable HTTPS (auto-generates self-signed cert if -cert/-key not provided)
+  -cert string   TLS certificate file (PEM); requires -tls
+  -key string    TLS private key file (PEM); requires -tls
 ```
 
 ---

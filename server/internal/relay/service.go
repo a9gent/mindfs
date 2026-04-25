@@ -3,6 +3,7 @@ package relay
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,7 @@ type Service struct {
 	localURL  string
 	store     *CredentialsStore
 	client    *http.Client
+	useTLS    bool
 }
 
 type credentialResponse struct {
@@ -54,7 +56,7 @@ type BindPollResult struct {
 	Credentials   RelayCredentials
 }
 
-func NewService(localAddr string) (*Service, error) {
+func NewService(localAddr string, useTLS bool) (*Service, error) {
 	store, err := NewCredentialsStore()
 	if err != nil {
 		return nil, err
@@ -62,15 +64,31 @@ func NewService(localAddr string) (*Service, error) {
 	if _, err := getOrCreateDeviceID(); err != nil {
 		return nil, err
 	}
-	return &Service{
-		localAddr: localAddr,
-		localURL:  addrToURL(localAddr, ""),
-		store:     store,
+
+	var client *http.Client
+	if useTLS {
+		// InsecureSkipVerify is used because the relay connects to the local
+		// MindFS server (loopback or same machine), which may present a
+		// self-signed certificate. No traffic leaves the host.
+		client = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		}
+	} else {
 		// Do not apply a whole-request timeout here. Relay traffic can include
 		// large static assets and streamed responses; http.Client.Timeout would
 		// abort the body read mid-transfer and surface as a 502 on the relayed
 		// path even when the local server is healthy.
-		client: &http.Client{},
+		client = &http.Client{}
+	}
+
+	return &Service{
+		localAddr: localAddr,
+		localURL:  addrToURL(localAddr, "", useTLS),
+		store:     store,
+		client:    client,
+		useTLS:    useTLS,
 	}, nil
 }
 
@@ -287,6 +305,12 @@ func (s *Service) proxyWebSocket(req *http.Request, stream io.ReadWriter) error 
 	headers.Del("Sec-WebSocket-Extensions")
 
 	dialer := *websocket.DefaultDialer
+	if s.useTLS {
+		// InsecureSkipVerify is used because the relay connects to the local
+		// MindFS server (loopback or same machine), which may present a
+		// self-signed certificate. No traffic leaves the host.
+		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
 	if protocol := strings.TrimSpace(req.Header.Get("Sec-WebSocket-Protocol")); protocol != "" {
 		dialer.Subprotocols = splitHeaderValues(protocol)
 	}
@@ -339,7 +363,7 @@ func (s *Service) waitForLocalServer(ctx context.Context) error {
 	}
 }
 
-func addrToURL(addr, path string) string {
+func addrToURL(addr, path string, useTLS bool) string {
 	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
 		return strings.TrimSuffix(addr, "/") + path
 	}
@@ -351,10 +375,17 @@ func addrToURL(addr, path string) string {
 	if host == "" {
 		host = "localhost"
 	}
+	if host == "0.0.0.0" {
+		host = "127.0.0.1"
+	}
 	if port == "" {
 		port = "7331"
 	}
-	return fmt.Sprintf("http://%s:%s%s", host, port, path)
+	scheme := "http"
+	if useTLS {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%s%s", scheme, host, port, path)
 }
 
 func localTargetURL(base string, requestURL *url.URL) (*url.URL, error) {

@@ -42,8 +42,8 @@ type Manager struct {
 	lastError    string
 }
 
-func NewManager(localAddr string, noRelayer bool, relayBaseURL string) (*Manager, error) {
-	service, err := NewService(localAddr)
+func NewManager(localAddr string, noRelayer bool, relayBaseURL string, useTLS bool) (*Manager, error) {
+	service, err := NewService(localAddr, useTLS)
 	if err != nil {
 		return nil, err
 	}

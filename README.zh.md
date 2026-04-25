@@ -129,6 +129,23 @@ mindfs -addr :9000 /path/to/your/project # 指定端口
 
 在浏览器中打开（默认端口） [http://localhost:7331](http://localhost:7331)。
 
+#### HTTPS (TLS)
+
+启用 HTTPS，使用自动生成的自签名证书（重启后可复用）：
+
+```bash
+mindfs -tls
+mindfs -tls -addr :9000 /path/to/your/project
+```
+
+在浏览器中打开 [https://localhost:7331](https://localhost:7331)。自动生成的证书包含 `localhost`、`127.0.0.1`、`::1` 以及所有非回环网卡 IP 的 SAN，局域网内其他设备访问时不会出现证书名称不匹配警告。证书存储在用户配置目录下（如 Linux 的 `~/.config/mindfs/`）。
+
+使用自定义证书和私钥文件：
+
+```bash
+mindfs -tls -cert /path/to/cert.pem -key /path/to/key.pem
+```
+
 MindFS 会自动探测已安装 Agent 的可用性，通常需要大约一分钟。
 
 ### 通过 relayer远程访问
@@ -146,6 +163,9 @@ Flags:
   -addr string   监听地址（默认 ":7331"）
   -no-relayer    禁用 Relay 集成
   -remove        从运行中的服务器移除托管目录
+  -tls           启用 HTTPS（如未指定 -cert/-key，则自动生成自签名证书）
+  -cert string   TLS 证书文件（PEM）；需配合 -tls 使用
+  -key string    TLS 私钥文件（PEM）；需配合 -tls 使用
 ```
 
 ---

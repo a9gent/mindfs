@@ -113,7 +113,7 @@ func TestServicePollBind(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	t.Setenv("HOME", configRoot)
 
-	svc, err := NewService(":7331")
+	svc, err := NewService(":7331", false)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
@@ -151,7 +151,7 @@ func TestManagerStartGeneratesPendingCode(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	t.Setenv("HOME", configRoot)
 
-	manager, err := NewManager(":7331", false, "https://relay.example.com")
+	manager, err := NewManager(":7331", false, "https://relay.example.com", false)
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
@@ -180,7 +180,7 @@ func TestManagerNoRelayerDoesNotGeneratePendingCode(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	t.Setenv("HOME", configRoot)
 
-	manager, err := NewManager(":7331", true, "https://relay.example.com")
+	manager, err := NewManager(":7331", true, "https://relay.example.com", false)
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
@@ -203,7 +203,7 @@ func TestManagerPollConfirmedStartsRelay(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	t.Setenv("HOME", configRoot)
 
-	manager, err := NewManager(":7331", false, "https://relay.example.com")
+	manager, err := NewManager(":7331", false, "https://relay.example.com", false)
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
@@ -264,7 +264,7 @@ func TestManagerPollTerminalBindStatusRefreshesPendingCode(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	t.Setenv("HOME", configRoot)
 
-	manager, err := NewManager(":7331", false, "https://relay.example.com")
+	manager, err := NewManager(":7331", false, "https://relay.example.com", false)
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
@@ -321,7 +321,7 @@ func TestManagerDefaultsRelayBaseToLocalhost(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	t.Setenv("HOME", configRoot)
 
-	manager, err := NewManager(":7331", false, "")
+	manager, err := NewManager(":7331", false, "", false)
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
@@ -344,7 +344,7 @@ func TestManagerPermanentRelayErrorClearsCredentialsAndRebinds(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	t.Setenv("HOME", configRoot)
 
-	manager, err := NewManager(":7331", false, "https://relay.example.com")
+	manager, err := NewManager(":7331", false, "https://relay.example.com", false)
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
@@ -412,7 +412,7 @@ func TestManagerStartClearsCredentialsWhenRelayBaseChanges(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	t.Setenv("HOME", configRoot)
 
-	manager, err := NewManager(":7331", false, "https://relay-new.example.com")
+	manager, err := NewManager(":7331", false, "https://relay-new.example.com", false)
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}

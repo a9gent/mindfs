@@ -15,6 +15,7 @@ import (
 	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/preferences"
 	"mindfs/server/internal/relay"
+	"mindfs/server/internal/tlsutil"
 	"mindfs/server/internal/update"
 )
 
@@ -24,6 +25,9 @@ type StartOptions struct {
 	Version      string
 	Args         []string
 	E2EEConfig   E2EEConfig
+	UseTLS       bool
+	CertFile     string
+	KeyFile      string
 }
 
 type E2EEConfig struct {
@@ -116,7 +120,7 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	relayMgr, err := relay.NewManager(addr, opts.NoRelayer, relayBaseURL)
+	relayMgr, err := relay.NewManager(addr, opts.NoRelayer, relayBaseURL, opts.UseTLS)
 	if err != nil {
 		return err
 	}
@@ -138,6 +142,9 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 		services.E2EE.StartCleanup(ctx.Done())
 	}
 
+	if opts.UseTLS {
+		return server.ListenAndServeTLS(opts.CertFile, opts.KeyFile)
+	}
 	return server.ListenAndServe()
 }
 
@@ -162,4 +169,11 @@ func RemoveManagedDirFromRegistry(path string) error {
 	}
 	_, err = registry.Remove(path)
 	return err
+}
+
+// EnsureTLSCert resolves TLS certificate and key file paths for the server.
+// When certFlag or keyFlag are empty, a self-signed certificate is generated
+// under os.UserConfigDir/mindfs/ and reused across restarts.
+func EnsureTLSCert(certFlag, keyFlag string) (string, string, error) {
+	return tlsutil.EnsureCert(certFlag, keyFlag)
 }
