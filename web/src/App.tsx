@@ -3344,6 +3344,8 @@ export function App() {
         if (currentRootIdRef.current !== root) {
           setCurrentRootId(root);
         }
+        setSelectedDir(String(root));
+        setSelectedDirKey(null);
         const requestedCursor = normalizeCursor(params.cursor);
         const cursor = requestedCursor === null ? 0 : requestedCursor;
         const preserveQuery = !!params.preservePluginQuery;
@@ -3507,7 +3509,8 @@ export function App() {
         fileOpenRequestRef.current += 1;
         const path = params.path,
           rootParam = params.root || currentRootIdRef.current,
-          isToggle = !!params.toggle;
+          isToggle = !!params.toggle,
+          forceDirectory = !!params.forceDirectory;
         if (!path || !rootParam) return;
         setGitDiff(null);
         const isActuallyRoot = params.isRoot === true;
@@ -3636,14 +3639,16 @@ export function App() {
         if (isActuallyRoot) {
           setCurrentRootId(path);
           setExpanded((prev) => Array.from(new Set([...prev, path])));
-          const restored = await tryShowBoundSessionForRoot(path, {
-            pluginQuery: nextPluginQuery,
-            closeLeftSidebar: true,
-          });
-          if (restored) {
-            void loadSessionsForRoot(path, { replace: true, force: true });
-            await refreshTreeDir(path, ".", false);
-            return;
+          if (!forceDirectory) {
+            const restored = await tryShowBoundSessionForRoot(path, {
+              pluginQuery: nextPluginQuery,
+              closeLeftSidebar: true,
+            });
+            if (restored) {
+              void loadSessionsForRoot(path, { replace: true, force: true });
+              await refreshTreeDir(path, ".", false);
+              return;
+            }
           }
         } else {
           setExpanded((prev) => Array.from(new Set([...prev, expandedKey])));
@@ -5923,6 +5928,14 @@ export function App() {
       }
       gitFileStatsByPath={gitFileStatsByPath}
       onFileClick={handleSelectedSessionFileClick}
+      onRootClick={(root) => {
+        void actionHandlers.open_dir({
+          path: root,
+          root,
+          isRoot: true,
+          forceDirectory: true,
+        });
+      }}
       onRemoveRelatedFile={(path) =>
         void handleRemoveSessionRelatedFile(
           selectedSession?.root_id || currentRootId,
@@ -6781,6 +6794,14 @@ export function App() {
                 interactionMode="drawer"
                 gitFileStatsByPath={gitFileStatsByPath}
                 onFileClick={handleDrawerSessionFileClick}
+                onRootClick={(root) => {
+                  void actionHandlers.open_dir({
+                    path: root,
+                    root,
+                    isRoot: true,
+                    forceDirectory: true,
+                  });
+                }}
                 onRemoveRelatedFile={(path) =>
                   void handleRemoveSessionRelatedFile(
                     currentRootId,

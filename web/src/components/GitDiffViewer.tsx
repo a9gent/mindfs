@@ -1,5 +1,6 @@
 import React from "react";
 import type { GitDiffPayload } from "../services/git";
+import { rootBadgeStyle } from "./rootBadgeStyle";
 
 type GitDiffViewerProps = {
   diff: GitDiffPayload;
@@ -32,7 +33,12 @@ function Breadcrumbs({ root, path, onPathClick }: { root?: string | null; path: 
         <>
           <span
             onClick={() => onPathClick?.(".")}
-            style={{ fontWeight: 500, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }}
+            style={{
+              ...rootBadgeStyle,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              cursor: "pointer",
+            }}
             onMouseEnter={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
             onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}
           >

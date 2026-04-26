@@ -1,4 +1,5 @@
 import React from "react";
+import { rootBadgeStyle } from "./rootBadgeStyle";
 import {
   DIRECTORY_SORT_OPTIONS,
   type DirectorySortMode,
@@ -617,10 +618,11 @@ export function FileTree({
         const cKey = childKeyFor(entry, entryRoot);
         const children = childrenByPath[cKey] ?? [];
         
-        // 关键修复：增加 rootId 匹配校验，防止不同 root 下同名目录同时高亮
+        const isCurrentRootNode = isManagedRootNode && entry.path === rootId;
+        // 普通目录沿用 selectedDirKey；当前 managed root 永远跟随 current root 高亮。
         const isSelected =
           entry.is_dir
-            ? selectedDirKey === expandedKey
+            ? isCurrentRootNode || selectedDirKey === expandedKey
             : entry.path === selectedPath && entryRoot === rootId;
 
         const meta = fileMetas[entry.path];
@@ -661,8 +663,25 @@ export function FileTree({
               <div style={{ width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                  {entry.is_dir ? <ChevronRight isOpen={isOpen} /> : getFileIcon(entry.name)}
               </div>
-              <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1, marginLeft: "4px" }}>
-                {entry.name}
+              <span
+                style={{
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  flex: 1,
+                  marginLeft: "4px",
+                }}
+              >
+                <span
+                  style={{
+                    ...(isManagedRootNode ? rootBadgeStyle : {}),
+                    maxWidth: "100%",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {entry.name}
+                </span>
               </span>
               {showRootIndicator ? (
                 <span

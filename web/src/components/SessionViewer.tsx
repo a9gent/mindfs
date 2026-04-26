@@ -10,6 +10,7 @@ import { fetchProofProtectedBlob } from "../services/file";
 import type { ExchangeAux, RelatedFile, ToolCall } from "../services/session";
 import { savePrompt } from "../services/prompts";
 import { reportError } from "../services/error";
+import { rootBadgeButtonStyle } from "./rootBadgeStyle";
 
 type SessionItem = {
   key?: string;
@@ -52,6 +53,7 @@ type SessionViewerProps = {
     { status: string; additions: number; deletions: number }
   >;
   onFileClick?: (path: string) => void;
+  onRootClick?: (rootId: string) => void;
   onRemoveRelatedFile?: (path: string) => void;
   onAskUserAnswer?: (input: {
     rootId: string;
@@ -806,6 +808,7 @@ function SessionViewerInner({
   targetSeq = 0,
   gitFileStatsByPath = {},
   onFileClick,
+  onRootClick,
   onRemoveRelatedFile,
   onAskUserAnswer,
 }: SessionViewerProps) {
@@ -1551,16 +1554,38 @@ function SessionViewerInner({
         >
           <h1
             style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
               fontSize: "14px",
               fontWeight: 600,
               margin: 0,
               minWidth: 0,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
             }}
           >
-            {displayName}
+            {rootId ? (
+              <button
+                type="button"
+                onClick={() => onRootClick?.(rootId)}
+                style={{
+                  ...rootBadgeButtonStyle,
+                  flexShrink: 0,
+                  cursor: onRootClick ? "pointer" : "default",
+                }}
+              >
+                {rootId}
+              </button>
+            ) : null}
+            <span
+              style={{
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {displayName}
+            </span>
           </h1>
         </header>
       )}
@@ -1918,5 +1943,6 @@ export const SessionViewer = memo(
     prev.rootId === next.rootId &&
     prev.rootPath === next.rootPath &&
     prev.interactionMode === next.interactionMode &&
-    prev.gitFileStatsByPath === next.gitFileStatsByPath,
+    prev.gitFileStatsByPath === next.gitFileStatsByPath &&
+    prev.onRootClick === next.onRootClick,
 );

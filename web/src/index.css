@@ -24,6 +24,9 @@
   --accent-color: #2563eb;
   --accent-hover: #1d4ed8;
   --selection-bg: rgba(37, 99, 235, 0.1);
+  --root-badge-bg: rgba(99, 102, 241, 0.14);
+  --root-badge-border: rgba(99, 102, 241, 0.24);
+  --root-badge-text: #4f46e5;
 }
 
 html {
@@ -56,6 +59,9 @@ html {
     --accent-color: #3b82f6;
     --accent-hover: #60a5fa;
     --selection-bg: rgba(59, 130, 246, 0.2);
+    --root-badge-bg: rgba(129, 140, 248, 0.22);
+    --root-badge-border: rgba(165, 180, 252, 0.34);
+    --root-badge-text: #c7d2fe;
   }
 
   /* 仅修正语法高亮代码块，避免全局 pre/code 叠出双层边框 */

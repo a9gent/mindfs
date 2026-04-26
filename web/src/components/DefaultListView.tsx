@@ -1,4 +1,5 @@
 import React from "react";
+import { rootBadgeStyle } from "./rootBadgeStyle";
 import {
   DIRECTORY_SORT_OPTIONS,
   type DirectorySortMode,
@@ -79,7 +80,10 @@ function Breadcrumbs({ root, path, onPathClick }: { root?: string; path: string;
         <>
           <span
             onClick={() => onPathClick?.(".")}
-            style={{ fontWeight: 500, color: "var(--text-primary)", cursor: "pointer" }}
+            style={{
+              ...rootBadgeStyle,
+              cursor: "pointer",
+            }}
             onMouseEnter={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
             onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}
           >
@@ -172,7 +176,7 @@ export function DefaultListView({
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
           <div style={{ fontSize: "11px", color: "var(--text-secondary)", opacity: 0.6 }}>
-            {sortedEntries.length} 个项目
+            {sortedEntries.length}项
           </div>
           <div ref={menuRef} style={{ position: "relative" }}>
             <button

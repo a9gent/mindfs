@@ -3,6 +3,7 @@ import { MarkdownViewer } from "./MarkdownViewer";
 import { CodeViewer, supportsLineSelection } from "./CodeViewer";
 import { ImageViewer } from "./ImageViewer";
 import { BinaryViewer } from "./BinaryViewer";
+import { rootBadgeStyle } from "./rootBadgeStyle";
 
 type FilePayload = {
   name: string;
@@ -94,7 +95,12 @@ function Breadcrumbs({ root, path, onPathClick }: { root?: string; path: string;
         <>
           <span
             onClick={() => onPathClick?.(".")}
-            style={{ fontWeight: 500, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }}
+            style={{
+              ...rootBadgeStyle,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              cursor: "pointer",
+            }}
             onMouseEnter={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
             onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}
           >
