@@ -23,15 +23,22 @@ function AppRoot() {
     };
 
     let removeListener: (() => void) | undefined;
-    void import("@capacitor/app").then(({ App: CapApp }) => {
-      void CapApp.addListener("backButton", () => {
-        onBackRequest();
-      }).then((handle) => {
-        removeListener = () => {
-          void handle.remove();
-        };
+    void import("@capacitor/app")
+      .then(async ({ App: CapApp }) => {
+        try {
+          const handle = await CapApp.addListener("backButton", () => {
+            onBackRequest();
+          });
+          removeListener = () => {
+            void handle.remove();
+          };
+        } catch (error) {
+          console.warn("[capacitor-app] backButton listener unavailable", error);
+        }
+      })
+      .catch((error) => {
+        console.warn("[capacitor-app] failed to load plugin", error);
       });
-    });
 
     return () => {
       removeListener?.();

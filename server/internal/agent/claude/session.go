@@ -378,18 +378,14 @@ func (s *session) ContextWindow(_ context.Context) (types.ContextWindow, error) 
 
 func (s *session) CancelCurrentTurn() error {
 	s.cancelPendingQuestions(errors.New("turn canceled"))
-	log.Printf("[agent/claude] cancel.begin session=%s", s.sessionKey)
 	if s.stream == nil {
 		s.turn.Cancel()
-		log.Printf("[agent/claude] cancel.done session=%s mode=turn_only", s.sessionKey)
 		return nil
 	}
 	if err := s.stream.Interrupt(context.Background()); err == nil {
-		log.Printf("[agent/claude] cancel.done session=%s mode=interrupt", s.sessionKey)
 		return nil
 	}
 	s.turn.Cancel()
-	log.Printf("[agent/claude] cancel.done session=%s mode=fallback_turn_only", s.sessionKey)
 	return nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"mindfs/server/internal/agent"
@@ -149,20 +150,34 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 }
 
 func resolveStaticDir() string {
+	if shouldPreferWorkingDirStaticDir() {
+		if exe, err := os.Executable(); err == nil {
+			candidate := filepath.Join(filepath.Dir(exe), "web", "dist")
+			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+				return candidate
+			}
+		}
+	}
+
 	if exe, err := os.Executable(); err == nil {
 		prefix := filepath.Dir(filepath.Dir(exe))
 		candidate := filepath.Join(prefix, "share", "mindfs", "web")
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return candidate
 		}
-		
-		// Fallback for development (running from workspace root)
-		cwdCandidate := filepath.Join(filepath.Dir(exe), "web", "dist")
-		if info, err := os.Stat(cwdCandidate); err == nil && info.IsDir() {
-			return cwdCandidate
-		}
 	}
 	return ""
+}
+
+func shouldPreferWorkingDirStaticDir() bool {
+	if len(os.Args) == 0 {
+		return false
+	}
+	arg0 := strings.TrimSpace(os.Args[0])
+	if arg0 == "" {
+		return false
+	}
+	return strings.HasPrefix(arg0, "."+string(os.PathSeparator))
 }
 
 func RemoveManagedDirFromRegistry(path string) error {

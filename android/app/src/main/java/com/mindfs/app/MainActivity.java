@@ -4,6 +4,7 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.WebSettings;
 import android.webkit.WebView;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
@@ -18,6 +19,9 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(NativeDownloadPlugin.class);
         super.onCreate(savedInstanceState);
         WebView.setWebContentsDebuggingEnabled(true);
+        getBridge().getWebView().getSettings().setMixedContentMode(
+            WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        );
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         fixWebViewMargin();
     }

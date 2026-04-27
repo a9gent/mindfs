@@ -849,7 +849,7 @@ func (s *Service) ensureAgentSession(
 	rootAbs string,
 ) (agenttypes.Session, *int, error) {
 	poolSessionKey := agentPoolSessionKey(current.Key, agentName)
-	nextModel := resolveRuntimeModel(current, model)
+	nextModel := resolveRuntimeModel(current, nil, model)
 	nextMode := resolveRuntimeMode(current, mode)
 	nextEffort := resolveRuntimeEffort(agentName, current, effort)
 	currentModel := ""
@@ -986,9 +986,14 @@ func shouldReopenSessionForEffort(pool *agent.Pool, agentName, currentEffort, ne
 	return protocol == agent.ProtocolCodexSDK || protocol == agent.ProtocolClaudeSDK
 }
 
-func resolveRuntimeModel(current *session.Session, requested string) string {
+func resolveRuntimeModel(current *session.Session, runtime agenttypes.Session, requested string) string {
 	if model := strings.TrimSpace(requested); model != "" {
 		return model
+	}
+	if runtime != nil {
+		if model := strings.TrimSpace(runtime.CurrentModel()); model != "" {
+			return model
+		}
 	}
 	if model := resolveSessionExchangeModel(current); model != "" {
 		return model
@@ -1053,7 +1058,6 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		log.Printf("[session/model] validate.error root=%s session=%s agent=%s model=%q err=%v", in.RootID, in.Key, strings.TrimSpace(in.Agent), strings.TrimSpace(in.Model), err)
 		return err
 	}
-	log.Printf("[session] turn.begin root=%s session=%s agent=%s model=%q", in.RootID, in.Key, strings.TrimSpace(in.Agent), strings.TrimSpace(in.Model))
 	turnCtx, turnCancel := context.WithCancel(ctx)
 	registerActiveTurn(in.RootID, in.Key, turnCancel)
 	defer unregisterActiveTurn(in.RootID, in.Key)
@@ -1172,14 +1176,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	if sendErr != nil {
 		log.Printf("[session] turn.send.error root=%s session=%s agent=%s err=%v", in.RootID, current.Key, in.Agent, sendErr)
 	}
-	persistedModel := strings.TrimSpace(in.Model)
-	if persistedModel == "" {
-		persistedModel = sess.CurrentModel()
-	}
-	if persistedModel == "" {
-		persistedModel = resolveRuntimeModel(current, in.Model)
-	}
-	resolvedModel := persistedModel
+	resolvedModel := resolveRuntimeModel(current, sess, in.Model)
 	resolvedEffort := resolveRuntimeEffort(in.Agent, current, in.Effort)
 	if prefs := s.Registry.GetPreferences(); prefs != nil {
 		if changed, err := prefs.UpdateAgentDefaultsIfChanged(in.Agent, resolvedModel, resolvedEffort); err != nil {
@@ -1218,12 +1215,6 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	} else if prober != nil {
 		prober.ReportSuccess(in.Agent)
 	}
-	if isCanceledTurnError(sendErr) {
-		log.Printf("[session] turn.canceled root=%s session=%s agent=%s", in.RootID, current.Key, in.Agent)
-	} else {
-		log.Printf("[session] turn.complete root=%s session=%s agent=%s", in.RootID, current.Key, in.Agent)
-	}
-
 	return nil
 }
 
@@ -1464,10 +1455,8 @@ func (s *Service) CancelSessionTurn(ctx context.Context, in CancelSessionTurnInp
 	}
 	active := getActiveTurn(in.RootID, current.Key)
 	if active == nil {
-		log.Printf("[session] turn.cancel.skip root=%s session=%s reason=no_active_turn", in.RootID, current.Key)
 		return nil
 	}
-	log.Printf("[session] turn.cancel.begin root=%s session=%s", in.RootID, current.Key)
 	active.cancel()
 	if active.session != nil {
 		if err := active.session.CancelCurrentTurn(); err != nil {
@@ -1475,6 +1464,5 @@ func (s *Service) CancelSessionTurn(ctx context.Context, in CancelSessionTurnInp
 			return err
 		}
 	}
-	log.Printf("[session] turn.cancel.done root=%s session=%s", in.RootID, current.Key)
 	return nil
 }

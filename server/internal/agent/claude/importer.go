@@ -303,14 +303,15 @@ func readClaudeImportedExchanges(path string) ([]agenttypes.ImportedExchange, er
 		ts := parseTimeRFC3339(asString(raw["timestamp"]))
 		if role == "user" {
 			if !isMeaningfulClaudeUserText(text) {
-				continue
+				return nil
 			}
 			items = appendMergedClaudeExchange(items, "user", text, ts)
-			continue
+			return nil
 		}
 		items = appendMergedClaudeExchange(items, "agent", text, ts)
-	}
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return items, nil
