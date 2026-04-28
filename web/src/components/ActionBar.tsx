@@ -421,13 +421,18 @@ export function ActionBar({
         return [];
       });
       setIsMultiLine(false);
+      if (isMobile) {
+        requestAnimationFrame(() => editorRef.current?.blur());
+      }
     } catch (err) {
       reportError("file.write_failed", String((err as Error)?.message || "附件上传失败"));
     } finally {
       setSending(false);
-      requestAnimationFrame(() => editorRef.current?.focus());
+      if (!isMobile) {
+        requestAnimationFrame(() => editorRef.current?.focus());
+      }
     }
-  }, [serializedInput, pendingAttachments, isConnected, sending, agent, model, agentMode, onSendMessage, mode, currentRootId, supportsEffort, effort]);
+  }, [serializedInput, pendingAttachments, isConnected, sending, agent, model, agentMode, onSendMessage, mode, currentRootId, supportsEffort, effort, isMobile]);
 
   const handleCancel = useCallback(async () => {
     const sessionKey = currentSession?.key;

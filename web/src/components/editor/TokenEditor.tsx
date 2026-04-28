@@ -34,6 +34,7 @@ type ActiveToken = {
 
 export type TokenEditorHandle = {
   focus: () => void;
+  blur: () => void;
   getHeight: () => number;
   clear: () => void;
   insertCandidate: (type: CandidateType, value: string) => void;
@@ -383,6 +384,9 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
   useImperativeHandle(ref, () => ({
     focus() {
       rootRef.current?.focus({ preventScroll: true });
+    },
+    blur() {
+      rootRef.current?.blur();
     },
     getHeight() {
       return rootRef.current?.scrollHeight || 44;
