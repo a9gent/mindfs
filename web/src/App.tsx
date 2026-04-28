@@ -811,6 +811,7 @@ export function App({ onGoHome }: AppProps) {
   const staleSessionKeysRef = useRef<Set<string>>(new Set());
   const invalidTreeCacheKeysRef = useRef<Set<string>>(new Set());
   const boundSessionByRootRef = useRef<Record<string, string | null>>({});
+  const suppressedAutoBindSessionByRootRef = useRef<Record<string, string | null>>({});
   const drawerSessionByRootRef = useRef<Record<string, SessionItem | null>>({});
   const selectedSessionByRootRef = useRef<Record<string, string | null>>({});
   const mainViewPreferenceByRootRef = useRef<
@@ -2977,15 +2978,18 @@ export function App({ onGoHome }: AppProps) {
       }
       const selected = selectedSessionRef.current;
       const selectedKey = selected?.key || selected?.session_key;
+      const selectedRoot =
+        (selected?.root_id as string | undefined) || activeRoot;
+      const currentBoundSessionKey =
+        boundSessionByRootRef.current[activeRoot] || null;
       const isMainSessionView =
         interactionModeRef.current !== "drawer" &&
         !!selectedKey &&
-        (((selected as any)?.root_id as string | undefined) || activeRoot) ===
-          activeRoot;
+        selectedRoot === activeRoot;
       let sendSessionKey: string | null | undefined =
         isMainSessionView && selectedKey && !selectedKey.startsWith("pending-")
           ? selectedKey
-          : activeBoundSessionKey;
+          : currentBoundSessionKey;
       let session: Session | null = null;
       if (sendSessionKey) {
         session =
@@ -3000,7 +3004,11 @@ export function App({ onGoHome }: AppProps) {
           session = { ...(selected as any), key: sendSessionKey } as Session;
         }
       } else {
-        if (selectedKey && !selectedKey.startsWith("pending-")) {
+        if (
+          selectedRoot === activeRoot &&
+          selectedKey &&
+          !selectedKey.startsWith("pending-")
+        ) {
           sendSessionKey = selectedKey;
           session =
             sessionCacheRef.current[
@@ -3194,7 +3202,6 @@ export function App({ onGoHome }: AppProps) {
       }
     },
     [
-      activeBoundSessionKey,
       attachedFileContext,
       rootSessionKey,
       setSelectedPendingByKey,
@@ -3222,7 +3229,14 @@ export function App({ onGoHome }: AppProps) {
 
   const handleNewSession = useCallback(() => {
     const rootID = currentRootIdRef.current;
+    const previousBoundKey = rootID ? boundSessionByRootRef.current[rootID] : "";
+    if (rootID && previousBoundKey && !previousBoundKey.startsWith("pending-")) {
+      suppressedAutoBindSessionByRootRef.current[rootID] = previousBoundKey;
+    }
     setMainViewPreferenceForRoot(rootID, "session");
+    selectedSessionRef.current = null;
+    currentSessionRef.current = null;
+    interactionModeRef.current = "main";
     setSelectedSession(null);
     if (rootID) {
       selectedSessionByRootRef.current[rootID] = null;
@@ -4644,9 +4658,15 @@ export function App({ onGoHome }: AppProps) {
       }
       setSelectedPendingByKey(sessionKey, false);
       setSelectedSession((prev) => {
+        const prevKey = prev?.key || prev?.session_key;
         const prevRoot =
           (prev?.root_id as string | undefined) || currentRootIdRef.current;
-        if (!prev || prevRoot !== rootID || !(prev as any).pending) {
+        if (
+          !prev ||
+          prevKey !== sessionKey ||
+          prevRoot !== rootID ||
+          !(prev as any).pending
+        ) {
           return prev;
         }
         return {
@@ -4654,17 +4674,13 @@ export function App({ onGoHome }: AppProps) {
           pending: false,
         } as SessionItem;
       });
-      const latest = wasCanceled
-        ? sessionCacheRef.current[cacheKey]
-        : drawerSessionByRootRef.current[rootID];
-      if (latest && latest.key === sessionKey) {
+      const drawer = drawerSessionByRootRef.current[rootID];
+      if (drawer && drawer.key === sessionKey) {
+        const latest = wasCanceled
+          ? sessionCacheRef.current[cacheKey] || drawer
+          : drawer;
         setDrawerSessionForRoot(rootID, {
           ...(latest as any),
-          pending: false,
-        } as Session);
-      } else if (drawerSessionByRootRef.current[rootID] && (drawerSessionByRootRef.current[rootID] as any)?.pending) {
-        setDrawerSessionForRoot(rootID, {
-          ...(drawerSessionByRootRef.current[rootID] as any),
           pending: false,
         } as Session);
       }
@@ -4683,7 +4699,12 @@ export function App({ onGoHome }: AppProps) {
       let pending = pendingBySessionRef.current[ck];
       if (!pending) {
         const draft = pendingDraftRef.current;
-        if (draft && draft.rootId === activeRoot) {
+        if (
+          draft &&
+          draft.rootId === activeRoot &&
+          streamKey !==
+            (suppressedAutoBindSessionByRootRef.current[activeRoot] || "")
+        ) {
           pending = draft;
           pendingBySessionRef.current[ck] = draft;
           pendingDraftRef.current = null;
@@ -4691,10 +4712,16 @@ export function App({ onGoHome }: AppProps) {
         }
       }
       const boundKey = boundSessionByRootRef.current[activeRoot] || "";
+      const suppressedAutoBindKey =
+        suppressedAutoBindSessionByRootRef.current[activeRoot] || "";
       if (
-        !boundKey ||
-        (typeof boundKey === "string" && boundKey.startsWith("pending-"))
+        streamKey !== suppressedAutoBindKey &&
+        (!boundKey ||
+          (typeof boundKey === "string" && boundKey.startsWith("pending-")))
       ) {
+        if (suppressedAutoBindKey && streamKey !== suppressedAutoBindKey) {
+          suppressedAutoBindSessionByRootRef.current[activeRoot] = null;
+        }
         setBoundSessionForRoot(activeRoot, streamKey);
         if (pending) {
           const pendingName =
@@ -4763,6 +4790,22 @@ export function App({ onGoHome }: AppProps) {
       }
       const event = payload.event;
       if (!event?.type) return;
+      const updateDrawerIfShowingStream = () => {
+        const drawerKey = drawerSessionByRootRef.current[activeRoot]?.key || "";
+        if (
+          drawerKey !== streamKey &&
+          (!pending?.tempKey || drawerKey !== pending.tempKey)
+        ) {
+          return;
+        }
+        const latest = sessionCacheRef.current[ck];
+        if (latest) {
+          setDrawerSessionForRoot(activeRoot, {
+            ...(latest as any),
+            pending: true,
+          } as Session);
+        }
+      };
       switch (event.type) {
         case "message_chunk":
           appendAgentChunkForSession(
@@ -4771,15 +4814,7 @@ export function App({ onGoHome }: AppProps) {
             event.data?.content || "",
             pending?.agent,
           );
-          {
-            const latest = sessionCacheRef.current[ck];
-            if (latest) {
-              setDrawerSessionForRoot(activeRoot, {
-                ...(latest as any),
-                pending: true,
-              } as Session);
-            }
-          }
+          updateDrawerIfShowingStream();
           break;
         case "thought_chunk":
           appendThoughtChunkForSession(
@@ -4787,15 +4822,7 @@ export function App({ onGoHome }: AppProps) {
             streamKey,
             event.data?.content || "",
           );
-          {
-            const latest = sessionCacheRef.current[ck];
-            if (latest) {
-              setDrawerSessionForRoot(activeRoot, {
-                ...(latest as any),
-                pending: true,
-              } as Session);
-            }
-          }
+          updateDrawerIfShowingStream();
           break;
         case "tool_call":
           appendToolCallForSession(
@@ -4804,15 +4831,7 @@ export function App({ onGoHome }: AppProps) {
             event.data || {},
             false,
           );
-          {
-            const latest = sessionCacheRef.current[ck];
-            if (latest) {
-              setDrawerSessionForRoot(activeRoot, {
-                ...(latest as any),
-                pending: true,
-              } as Session);
-            }
-          }
+          updateDrawerIfShowingStream();
           break;
         case "tool_call_update":
           appendToolCallForSession(
@@ -4821,15 +4840,7 @@ export function App({ onGoHome }: AppProps) {
             event.data || {},
             true,
           );
-          {
-            const latest = sessionCacheRef.current[ck];
-            if (latest) {
-              setDrawerSessionForRoot(activeRoot, {
-                ...(latest as any),
-                pending: true,
-              } as Session);
-            }
-          }
+          updateDrawerIfShowingStream();
           break;
         case "todo_update":
           appendTodoUpdateForSession(
@@ -4837,15 +4848,7 @@ export function App({ onGoHome }: AppProps) {
             streamKey,
             event.data || {},
           );
-          {
-            const latest = sessionCacheRef.current[ck];
-            if (latest) {
-              setDrawerSessionForRoot(activeRoot, {
-                ...(latest as any),
-                pending: true,
-              } as Session);
-            }
-          }
+          updateDrawerIfShowingStream();
           break;
         case "message_done":
           attachContextWindowToLatestAssistant(
@@ -5044,6 +5047,24 @@ export function App({ onGoHome }: AppProps) {
           }
           console.info("[session/ws] accepted", { requestId, rootId: pending.rootId, sessionKey: pending.sessionKey || null, tempKey: pending.tempKey || null });
           delete pendingRequestRef.current[requestId];
+          const acceptedSessionKey =
+            typeof payload?.session_key === "string" ? payload.session_key : "";
+          if (!pending.sessionKey && pending.tempKey && acceptedSessionKey) {
+            const cacheKey = rootSessionKey(pending.rootId, acceptedSessionKey);
+            pendingBySessionRef.current[cacheKey] = {
+              ...pending,
+              sessionKey: acceptedSessionKey,
+            };
+            if (pendingDraftRef.current?.requestId === pending.requestId) {
+              pendingDraftRef.current = null;
+            }
+            promotePendingSessionForRoot(
+              pending.rootId,
+              pending.tempKey,
+              acceptedSessionKey,
+              sessionCacheRef.current[cacheKey] || null,
+            );
+          }
           const markAccepted = (
             sess: Session | null | undefined,
           ): Session | null => {
@@ -5059,8 +5080,9 @@ export function App({ onGoHome }: AppProps) {
               : [];
             return { ...(sess as any), exchanges } as Session;
           };
-          if (pending.sessionKey) {
-            const cacheKey = rootSessionKey(pending.rootId, pending.sessionKey);
+          const acceptedTargetKey = pending.sessionKey || acceptedSessionKey;
+          if (acceptedTargetKey) {
+            const cacheKey = rootSessionKey(pending.rootId, acceptedTargetKey);
             const accepted = markAccepted(sessionCacheRef.current[cacheKey]);
             if (accepted) {
               sessionCacheRef.current[cacheKey] = accepted;
@@ -5071,7 +5093,9 @@ export function App({ onGoHome }: AppProps) {
           const drawerKey = latestDrawer?.key || "";
           if (
             drawerKey &&
-            (drawerKey === pending.sessionKey || drawerKey === pending.tempKey)
+            (drawerKey === pending.sessionKey ||
+              drawerKey === pending.tempKey ||
+              drawerKey === acceptedSessionKey)
           ) {
             const accepted = markAccepted(latestDrawer);
             if (accepted) {
