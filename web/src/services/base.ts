@@ -1,7 +1,7 @@
 import { getApiBaseURL, getWsBaseURL, isCapacitorRuntime } from "./runtime";
 
 function relayPrefix(): string {
-  if (typeof window === "undefined" || isCapacitorRuntime()) {
+  if (typeof window === "undefined") {
     return "";
   }
   const match = /^\/n\/[^/]+/.exec(window.location.pathname);
@@ -9,7 +9,7 @@ function relayPrefix(): string {
 }
 
 export function isRelayNodePage(): boolean {
-  if (typeof window === "undefined" || isCapacitorRuntime()) {
+  if (typeof window === "undefined") {
     return false;
   }
   return /^\/n\/[^/]+/.test(window.location.pathname);

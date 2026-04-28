@@ -7,6 +7,17 @@ const config: CapacitorConfig = {
   bundledWebRuntime: false,
   server: {
     androidScheme: 'http',
+    allowNavigation: ['*'],
+  },
+  plugins: {
+    SystemBars: {
+      insetsHandling: 'disable',
+    },
+    StatusBar: {
+      overlaysWebView: true,
+      backgroundColor: '#0f172a',
+      style: 'DARK',
+    },
   },
 };
 

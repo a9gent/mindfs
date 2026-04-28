@@ -15,7 +15,7 @@ export function RightSidebar({ children }: RightSidebarProps) {
           alignItems: "center",
           justifyContent: "space-between",
           borderBottom: "1px solid var(--border-color)",
-          background: "transparent",
+          background: "var(--mindfs-topbar-bg, transparent)",
           position: "sticky",
           top: 0,
           zIndex: 2,

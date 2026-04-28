@@ -5,6 +5,7 @@ import android.content.Context;
 import android.net.Uri;
 import android.os.Environment;
 import android.text.TextUtils;
+import android.webkit.CookieManager;
 import android.webkit.URLUtil;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -39,21 +40,7 @@ public class NativeDownloadPlugin extends Plugin {
         }
 
         try {
-            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-            request.setTitle(filename);
-            request.setDescription("Downloading file");
-            request.setNotificationVisibility(
-                DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
-            );
-            request.setAllowedOverMetered(true);
-            request.setAllowedOverRoaming(true);
-            request.setVisibleInDownloadsUi(true);
-            request.setDestinationInExternalPublicDir(
-                Environment.DIRECTORY_DOWNLOADS,
-                filename
-            );
-
-            long downloadId = downloadManager.enqueue(request);
+            long downloadId = enqueueDownload(downloadManager, url, filename);
 
             JSObject result = new JSObject();
             result.put("downloadId", downloadId);
@@ -65,7 +52,29 @@ public class NativeDownloadPlugin extends Plugin {
         }
     }
 
-    private String sanitizeFilename(String filename) {
+    static long enqueueDownload(DownloadManager downloadManager, String url, String filename) {
+        DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+        request.setTitle(filename);
+        request.setDescription("Downloading file");
+        request.setNotificationVisibility(
+            DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
+        );
+        request.setAllowedOverMetered(true);
+        request.setAllowedOverRoaming(true);
+        request.setVisibleInDownloadsUi(true);
+        request.setDestinationInExternalPublicDir(
+            Environment.DIRECTORY_DOWNLOADS,
+            filename
+        );
+        String cookies = CookieManager.getInstance().getCookie(url);
+        if (!TextUtils.isEmpty(cookies)) {
+            request.addRequestHeader("Cookie", cookies);
+        }
+
+        return downloadManager.enqueue(request);
+    }
+
+    static String sanitizeFilename(String filename) {
         if (filename == null) {
             return "";
         }

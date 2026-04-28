@@ -47,6 +47,10 @@ import {
 } from "./plugins/manager";
 import { appPath, appURL, isRelayNodePage } from "./services/base";
 import { triggerUpdate, type UpdateState } from "./services/update";
+import {
+  cancelScheduledWebViewCacheClear,
+  scheduleWebViewCacheClearOnNextLaunch,
+} from "./services/nativeCacheControl";
 
 // 直接导入标准组件
 import { AppShell } from "./layout/AppShell";
@@ -757,7 +761,11 @@ function useResponsive() {
   return { isMobile };
 }
 
-export function App() {
+type AppProps = {
+  onGoHome?: () => void;
+};
+
+export function App({ onGoHome }: AppProps) {
   const pluginManagerRef = useRef<PluginManager>(new PluginManager());
   const completionAudioContextRef = useRef<AudioContext | null>(null);
   const completionAudioUnlockedRef = useRef(false);
@@ -1027,8 +1035,10 @@ export function App() {
     }
     setUpdateSubmitting(true);
     try {
+      await scheduleWebViewCacheClearOnNextLaunch();
       setUpdateState(normalizeUpdateState(await triggerUpdate()));
     } catch (error) {
+      await cancelScheduledWebViewCacheClear();
       const message =
         error instanceof Error ? error.message : "Failed to start update";
       setUpdateState((prev) =>
@@ -6014,6 +6024,7 @@ export function App() {
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
+              background: "var(--mindfs-topbar-bg, transparent)",
               fontSize: 12,
               color: "var(--text-secondary)",
             }}
@@ -6666,6 +6677,7 @@ export function App() {
             onUpdateAction={() => {
               void handleStartUpdate();
             }}
+            onGoHome={onGoHome}
           />
         }
         rightSidebar={sessionSidebar}

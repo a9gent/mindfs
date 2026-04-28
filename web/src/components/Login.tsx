@@ -1,447 +1,563 @@
-import React, { useState, useCallback, useEffect, type ReactElement } from "react";
-import { appURL } from "../services/base";
+import React, { useEffect, useState, type ReactElement } from "react";
 import {
-  clearStoredToken,
-  getStoredApiBaseURL,
-  getStoredToken,
-  getStoredWsBaseURL,
-  setStoredApiBaseURL,
-  setStoredToken,
-  setStoredWsBaseURL,
+  getStoredLauncherNodes,
+  setStoredLauncherNodes,
+  type LauncherNode,
 } from "../services/storage";
+import { consumePendingRelayNodes } from "../services/launcherNodeSync";
 
 type LoginProps = {
-  onLogin: (token: string) => void;
-  onLogout: () => void;
-  isAuthenticated: boolean;
-  connectionStatus: "connected" | "connecting" | "disconnected" | "error";
-  error?: string;
+  onOpenNode: (nodeURL: string) => void;
 };
 
-export function Login({
-  onLogin,
-  onLogout,
-  isAuthenticated,
-  connectionStatus,
-  error,
-}: LoginProps): ReactElement {
-  const [token, setToken] = useState("");
-  const [apiBaseURL, setApiBaseURL] = useState(() => getStoredApiBaseURL() || "");
-  const [wsBaseURL, setWsBaseURL] = useState(() => getStoredWsBaseURL() || "");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isCheckingEndpoint, setIsCheckingEndpoint] = useState(false);
-  const [endpointMessage, setEndpointMessage] = useState<string | null>(null);
+const RELAY_URL = "http://192.168.3.209:8080/nodes";
+const LAUNCHER_BG =
+  "radial-gradient(circle at top left, rgba(91, 125, 184, 0.07), transparent 22%), radial-gradient(circle at right 18%, rgba(148, 163, 184, 0.18), transparent 24%), linear-gradient(180deg, #f8fafc 0%, #edf2f7 100%)";
+const SURFACE = "var(--mindfs-launcher-surface)";
+const SURFACE_STRONG = "var(--mindfs-launcher-surface-strong)";
+const BORDER = "var(--mindfs-launcher-border)";
+const BORDER_STRONG = "var(--mindfs-launcher-border-strong)";
+const TEXT = "var(--mindfs-launcher-text)";
+const MUTED = "var(--mindfs-launcher-muted)";
+const ACCENT = "var(--mindfs-launcher-accent)";
+const SHADOW = "var(--mindfs-launcher-shadow)";
 
-  const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!token.trim()) return;
+function normalizeNodeURL(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const withScheme = /^[a-z]+:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  try {
+    const parsed = new URL(withScheme);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    parsed.hash = "";
+    const relayNodePath = /^\/n\/[^/]+\/?$/.test(parsed.pathname);
+    const normalized = parsed.toString().replace(/\/+$/, "");
+    return relayNodePath ? `${normalized}/` : normalized;
+  } catch {
+    return "";
+  }
+}
 
-      setStoredApiBaseURL(apiBaseURL.trim());
-      setStoredWsBaseURL(wsBaseURL.trim());
-      setIsSubmitting(true);
-      try {
-        onLogin(token.trim());
-      } finally {
-        setIsSubmitting(false);
-      }
-    },
-    [apiBaseURL, onLogin, token, wsBaseURL]
-  );
+function sortNodes(nodes: LauncherNode[]): LauncherNode[] {
+  return [...nodes].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
 
-  const handleCheckEndpoint = useCallback(async () => {
-    setStoredApiBaseURL(apiBaseURL.trim());
-    setStoredWsBaseURL(wsBaseURL.trim());
-    setIsCheckingEndpoint(true);
-    setEndpointMessage(null);
-    try {
-      const response = await fetch(appURL("/api/relay/status"));
-      if (!response.ok) {
-        setEndpointMessage(`Service check failed: ${response.status}`);
+function buildNodeID(): string {
+  return `node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function Login({ onOpenNode }: LoginProps): ReactElement {
+  const [nodes, setNodes] = useState<LauncherNode[]>(() => sortNodes(getStoredLauncherNodes()));
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [nodeName, setNodeName] = useState("");
+  const [nodeURL, setNodeURL] = useState("");
+  const [formError, setFormError] = useState("");
+  const [editingNodeID, setEditingNodeID] = useState("");
+  const [editingNodeName, setEditingNodeName] = useState("");
+
+  function persistNodes(nextNodes: LauncherNode[]): void {
+    const sorted = sortNodes(nextNodes);
+    setNodes(sorted);
+    setStoredLauncherNodes(sorted);
+  }
+
+  function openNode(node: LauncherNode): void {
+    onOpenNode(node.url);
+  }
+
+  function handleDeleteNode(nodeID: string): void {
+    if (editingNodeID === nodeID) {
+      setEditingNodeID("");
+      setEditingNodeName("");
+    }
+    persistNodes(nodes.filter((item) => item.id !== nodeID));
+  }
+
+  function handleStartRename(node: LauncherNode): void {
+    setEditingNodeID(node.id);
+    setEditingNodeName(node.name);
+  }
+
+  function handleCancelRename(): void {
+    setEditingNodeID("");
+    setEditingNodeName("");
+  }
+
+  function handleCommitRename(node: LauncherNode): void {
+    const trimmedName = editingNodeName.trim();
+    if (!trimmedName) {
+      setEditingNodeName(node.name);
+      setEditingNodeID("");
+      return;
+    }
+    if (trimmedName === node.name) {
+      setEditingNodeID("");
+      setEditingNodeName("");
+      return;
+    }
+    persistNodes(
+      nodes.map((item) =>
+        item.id === node.id ? { ...item, name: trimmedName } : item
+      )
+    );
+    setEditingNodeID("");
+    setEditingNodeName("");
+  }
+
+  function handleSaveNode(event: React.FormEvent): void {
+    event.preventDefault();
+    const trimmedName = nodeName.trim();
+    const normalizedURL = normalizeNodeURL(nodeURL);
+    if (!trimmedName) {
+      setFormError("Node name is required.");
+      return;
+    }
+    if (!normalizedURL) {
+      setFormError("Enter a valid http:// or https:// node URL.");
+      return;
+    }
+    if (nodes.some((item) => item.url === normalizedURL)) {
+      setFormError("This node URL already exists.");
+      return;
+    }
+    const createdAt = new Date().toISOString();
+    const nextNode: LauncherNode = {
+      id: buildNodeID(),
+      name: trimmedName,
+      url: normalizedURL,
+      createdAt,
+    };
+    persistNodes([nextNode, ...nodes]);
+    setNodeName("");
+    setNodeURL("");
+    setFormError("");
+    setComposerOpen(false);
+    onOpenNode(nextNode.url);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const pendingNodes = await consumePendingRelayNodes();
+      if (cancelled || pendingNodes.length === 0) {
         return;
       }
-      setEndpointMessage("Service reachable");
-    } catch {
-      setEndpointMessage("Service unreachable");
-    } finally {
-      setIsCheckingEndpoint(false);
-    }
-  }, [apiBaseURL, wsBaseURL]);
 
-  const statusColors: Record<string, string> = {
-    connected: "#10b981",
-    connecting: "#f59e0b",
-    disconnected: "#6b7280",
-    error: "#ef4444",
-  };
+      const existingNodes = getStoredLauncherNodes();
+      const existingURLSet = new Set(
+        existingNodes.map((item) => normalizeNodeURL(item.url)).filter(Boolean),
+      );
+      const createdAt = new Date().toISOString();
+      const importedNodes: LauncherNode[] = [];
 
-  const statusLabels: Record<string, string> = {
-    connected: "Connected",
-    connecting: "Connecting...",
-    disconnected: "Disconnected",
-    error: "Connection Error",
-  };
+      for (const item of pendingNodes) {
+        const name = String(item?.name || "").trim();
+        const url = normalizeNodeURL(String(item?.url || ""));
+        if (!name || !url || existingURLSet.has(url)) {
+          continue;
+        }
+        existingURLSet.add(url);
+        importedNodes.push({
+          id: buildNodeID(),
+          name,
+          url,
+          createdAt,
+        });
+      }
 
-  if (isAuthenticated) {
-    return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "12px",
-          padding: "8px 16px",
-          background: "#f9fafb",
-          borderRadius: "8px",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-          }}
-        >
-          <span
-            style={{
-              width: "8px",
-              height: "8px",
-              borderRadius: "50%",
-              background: statusColors[connectionStatus],
-            }}
-          />
-          <span
-            style={{
-              fontSize: "13px",
-              color: "var(--text-secondary)",
-            }}
-          >
-            {statusLabels[connectionStatus]}
-          </span>
-        </div>
-        <button
-          type="button"
-          onClick={onLogout}
-          style={{
-            padding: "6px 12px",
-            borderRadius: "6px",
-            border: "1px solid var(--border-color)",
-            background: "#fff",
-            fontSize: "12px",
-            color: "var(--text-secondary)",
-            cursor: "pointer",
-          }}
-        >
-          Logout
-        </button>
-      </div>
-    );
-  }
+      if (importedNodes.length === 0) {
+        return;
+      }
+
+      const nextNodes = sortNodes([...importedNodes, ...existingNodes]);
+      setStoredLauncherNodes(nextNodes);
+      if (!cancelled) {
+        setNodes(nextNodes);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div
       style={{
+        minHeight: "100dvh",
+        background: "var(--mindfs-system-bar-bg)",
+        color: TEXT,
+        padding:
+          "calc(var(--mindfs-safe-area-top, env(safe-area-inset-top, 0px)) + 20px) 16px calc(var(--mindfs-safe-area-bottom, env(safe-area-inset-bottom, 0px)) + 24px)",
         display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
         justifyContent: "center",
-        minHeight: "100vh",
-        padding: "20px",
-        background: "#f9fafb",
       }}
     >
       <div
         style={{
-          width: "100%",
-          maxWidth: "400px",
-          background: "#fff",
-          borderRadius: "16px",
-          boxShadow: "0 4px 24px rgba(0,0,0,0.08)",
-          padding: "32px",
-        }}
-      >
-        <div style={{ textAlign: "center", marginBottom: "24px" }}>
-          <h1
-            style={{
-              fontSize: "24px",
-              fontWeight: 600,
-              color: "var(--text-primary)",
-              marginBottom: "8px",
-            }}
-          >
-            MindFS
-          </h1>
-          <p
-            style={{
-              fontSize: "14px",
-              color: "var(--text-secondary)",
-            }}
-          >
-            Enter your access token to continue
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: "16px" }}>
-            <label
-              htmlFor="apiBaseURL"
-              style={{
-                display: "block",
-                fontSize: "13px",
-                fontWeight: 500,
-                color: "var(--text-primary)",
-                marginBottom: "6px",
-              }}
-            >
-              API Base URL
-            </label>
-            <input
-              id="apiBaseURL"
-              type="url"
-              value={apiBaseURL}
-              onChange={(e) => setApiBaseURL(e.target.value)}
-              placeholder="http://host:port"
-              style={{
-                width: "100%",
-                padding: "12px 16px",
-                borderRadius: "8px",
-                border: "1px solid var(--border-color)",
-                fontSize: "14px",
-                outline: "none",
-                boxSizing: "border-box",
-                marginBottom: "12px",
-              }}
-              autoFocus
-            />
-            <label
-              htmlFor="wsBaseURL"
-              style={{
-                display: "block",
-                fontSize: "13px",
-                fontWeight: 500,
-                color: "var(--text-primary)",
-                marginBottom: "6px",
-              }}
-            >
-              WS Base URL
-            </label>
-            <input
-              id="wsBaseURL"
-              type="url"
-              value={wsBaseURL}
-              onChange={(e) => setWsBaseURL(e.target.value)}
-              placeholder="Optional, derive from API by default"
-              style={{
-                width: "100%",
-                padding: "12px 16px",
-                borderRadius: "8px",
-                border: "1px solid var(--border-color)",
-                fontSize: "14px",
-                outline: "none",
-                boxSizing: "border-box",
-                marginBottom: "12px",
-              }}
-            />
-            <label
-              htmlFor="token"
-              style={{
-                display: "block",
-                fontSize: "13px",
-                fontWeight: 500,
-                color: "var(--text-primary)",
-                marginBottom: "6px",
-              }}
-            >
-              Access Token
-            </label>
-            <input
-              id="token"
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="Enter your token"
-              style={{
-                width: "100%",
-                padding: "12px 16px",
-                borderRadius: "8px",
-                border: "1px solid var(--border-color)",
-                fontSize: "14px",
-                outline: "none",
-                boxSizing: "border-box",
-              }}
-            />
-          </div>
-
-          {error && (
-            <div
-              style={{
-                padding: "12px",
-                borderRadius: "8px",
-                background: "#fef2f2",
-                border: "1px solid #fecaca",
-                marginBottom: "16px",
-              }}
-            >
-              <p
-                style={{
-                  fontSize: "13px",
-                  color: "#dc2626",
-                  margin: 0,
-                }}
-              >
-                {error}
-              </p>
-            </div>
-          )}
-
-          <div style={{ display: "flex", gap: "12px", marginBottom: "12px" }}>
-            <button
-              type="button"
-              onClick={() => { void handleCheckEndpoint(); }}
-              disabled={isCheckingEndpoint || !apiBaseURL.trim()}
-              style={{
-                flex: 1,
-                padding: "12px 16px",
-                borderRadius: "8px",
-                border: "1px solid var(--border-color)",
-                background: "#fff",
-                color: "var(--text-primary)",
-                fontSize: "14px",
-                fontWeight: 500,
-                cursor: isCheckingEndpoint || !apiBaseURL.trim() ? "not-allowed" : "pointer",
-              }}
-            >
-              {isCheckingEndpoint ? "Checking..." : "Check Service"}
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting || !token.trim() || !apiBaseURL.trim()}
-              style={{
-                flex: 1,
-                padding: "12px 16px",
-                borderRadius: "8px",
-                border: "none",
-                background: isSubmitting || !token.trim() || !apiBaseURL.trim() ? "#d1d5db" : "#3b82f6",
-                color: "#fff",
-                fontSize: "14px",
-                fontWeight: 500,
-                cursor: isSubmitting || !token.trim() || !apiBaseURL.trim() ? "not-allowed" : "pointer",
-                transition: "background 0.15s",
-              }}
-            >
-              {isSubmitting ? "Connecting..." : "Connect"}
-            </button>
-          </div>
-          {endpointMessage ? (
-            <p style={{ fontSize: "12px", color: "var(--text-secondary)", margin: "0 0 12px" }}>
-              {endpointMessage}
-            </p>
-          ) : null}
-        </form>
-
-        <div
-          style={{
-            marginTop: "24px",
-            paddingTop: "24px",
-            borderTop: "1px solid var(--border-color)",
-            textAlign: "center",
-          }}
-        >
-          <p
-            style={{
-              fontSize: "12px",
-              color: "var(--text-secondary)",
-            }}
-          >
-            Connection Status:{" "}
-            <span style={{ color: statusColors[connectionStatus] }}>
-              {statusLabels[connectionStatus]}
-            </span>
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Hook for managing authentication state
-export function useAuth(): {
-  token: string | null;
-  isAuthenticated: boolean;
-  login: (token: string) => void;
-  logout: () => void;
-} {
-  const [token, setToken] = useState<string | null>(() => getStoredToken());
-
-  const login = useCallback((newToken: string) => {
-    setToken(newToken);
-    setStoredToken(newToken);
-  }, []);
-
-  const logout = useCallback(() => {
-    setToken(null);
-    clearStoredToken();
-  }, []);
-
-  return {
-    token,
-    isAuthenticated: !!token,
-    login,
-    logout,
-  };
-}
-
-// Compact login status indicator for header
-export function LoginStatus({
-  isAuthenticated,
-  connectionStatus,
-  onLogout,
-}: {
-  isAuthenticated: boolean;
-  connectionStatus: "connected" | "connecting" | "disconnected" | "error";
-  onLogout: () => void;
-}): ReactElement | null {
-  if (!isAuthenticated) {
-    return null;
-  }
-
-  const statusColors: Record<string, string> = {
-    connected: "#10b981",
-    connecting: "#f59e0b",
-    disconnected: "#6b7280",
-    error: "#ef4444",
-  };
-
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "8px",
-      }}
-    >
-      <span
-        style={{
-          width: "6px",
-          height: "6px",
-          borderRadius: "50%",
-          background: statusColors[connectionStatus],
+          position: "fixed",
+          inset: 0,
+          background: `var(--mindfs-launcher-bg, ${LAUNCHER_BG})`,
+          pointerEvents: "none",
+          zIndex: 0,
         }}
       />
-      <button
-        type="button"
-        onClick={onLogout}
+      <div
         style={{
-          padding: "4px 8px",
-          borderRadius: "4px",
-          border: "none",
-          background: "transparent",
-          fontSize: "11px",
-          color: "var(--text-secondary)",
-          cursor: "pointer",
+          position: "relative",
+          zIndex: 1,
+          width: "100%",
+          maxWidth: "640px",
+          minHeight:
+            "calc(100dvh - var(--mindfs-safe-area-top, env(safe-area-inset-top, 0px)) - var(--mindfs-safe-area-bottom, env(safe-area-inset-bottom, 0px)) - 44px)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
         }}
       >
-        Logout
-      </button>
+        <button
+          type="button"
+          onClick={() => onOpenNode(RELAY_URL)}
+          style={{
+            width: "100%",
+            textAlign: "left",
+            border: `1px solid ${BORDER}`,
+            borderRadius: "20px",
+            background: SURFACE_STRONG,
+            padding: "18px",
+            fontSize: "18px",
+            fontWeight: 500,
+            color: TEXT,
+            cursor: "pointer",
+            boxShadow: SHADOW,
+            backdropFilter: "blur(20px)",
+          }}
+        >
+          <div style={{ minWidth: 0, display: "grid", gap: "4px" }}>
+            <div
+              style={{
+                fontSize: "18px",
+                fontWeight: 500,
+                color: TEXT,
+                lineHeight: 1.2,
+              }}
+            >
+              mindfs relayer
+            </div>
+            <div
+              style={{
+                fontSize: "12px",
+                lineHeight: 1.5,
+                color: MUTED,
+                wordBreak: "break-word",
+              }}
+            >
+              {RELAY_URL}
+            </div>
+          </div>
+        </button>
+
+        {nodes.map((node) => (
+          <div
+            key={node.id}
+            style={{
+              width: "100%",
+              borderRadius: "20px",
+              border: `1px solid ${BORDER}`,
+              background: SURFACE,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "16px",
+              boxShadow: SHADOW,
+              backdropFilter: "blur(20px)",
+            }}
+          >
+            <div
+              onClick={() => {
+                if (editingNodeID !== node.id) {
+                  openNode(node);
+                }
+              }}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                textAlign: "left",
+                padding: "16px 0 16px 18px",
+                cursor: editingNodeID === node.id ? "default" : "pointer",
+              }}
+            >
+              <div style={{ minWidth: 0, display: "grid", gap: "4px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    minWidth: 0,
+                  }}
+                >
+                  {editingNodeID === node.id ? (
+                    <input
+                      type="text"
+                      value={editingNodeName}
+                      autoFocus
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) => setEditingNodeName(event.target.value)}
+                      onBlur={() => handleCommitRename(node)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          handleCommitRename(node);
+                        }
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          handleCancelRename();
+                        }
+                      }}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        borderRadius: "10px",
+                        border: `1px solid ${BORDER_STRONG}`,
+                        background: "var(--mindfs-launcher-input-bg)",
+                        padding: "6px 10px",
+                        fontSize: "17px",
+                        fontWeight: 500,
+                        color: TEXT,
+                        lineHeight: 1.2,
+                        outline: "none",
+                      }}
+                    />
+                  ) : (
+                    <>
+                      <div
+                        style={{
+                          fontSize: "17px",
+                          fontWeight: 500,
+                          color: TEXT,
+                          lineHeight: 1.2,
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        {node.name}
+                      </div>
+                      <button
+                        type="button"
+                        aria-label={`重命名 ${node.name}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleStartRename(node);
+                        }}
+                        style={{
+                          border: "none",
+                          background: "transparent",
+                          color: MUTED,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: "22px",
+                          height: "22px",
+                          padding: 0,
+                          cursor: "pointer",
+                          flex: "0 0 auto",
+                        }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M12 20h9" />
+                          <path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
+                </div>
+                <div
+                  style={{
+                    fontSize: "12px",
+                    lineHeight: 1.5,
+                    color: MUTED,
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {node.url}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              aria-label={`删除 ${node.name}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                handleDeleteNode(node.id);
+              }}
+              style={{
+                border: "none",
+                background: "transparent",
+                color: ACCENT,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: "48px",
+                height: "100%",
+                minHeight: "72px",
+                padding: "0 14px 0 0",
+                cursor: "pointer",
+                flex: "0 0 auto",
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M3 6h18" />
+                <path d="M8 6V4h8v2" />
+                <path d="M19 6l-1 14H6L5 6" />
+                <path d="M10 11v6" />
+                <path d="M14 11v6" />
+              </svg>
+            </button>
+          </div>
+        ))}
+
+        <button
+          type="button"
+          onClick={() => {
+            setComposerOpen(true);
+            setFormError("");
+          }}
+          style={{
+            width: "100%",
+            textAlign: "center",
+            border: `1px dashed ${BORDER_STRONG}`,
+            borderRadius: "20px",
+            background: "var(--mindfs-launcher-surface-soft)",
+            padding: "18px",
+            fontSize: "24px",
+            fontWeight: 500,
+            color: MUTED,
+            cursor: "pointer",
+            boxShadow: SHADOW,
+            backdropFilter: "blur(20px)",
+            marginTop: "auto",
+          }}
+        >
+          +
+        </button>
+      </div>
+
+      {composerOpen ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(17, 24, 39, 0.18)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+            zIndex: 40,
+          }}
+        >
+          <form
+            onSubmit={handleSaveNode}
+            style={{
+              width: "100%",
+              maxWidth: "420px",
+              borderRadius: "22px",
+              background: SURFACE_STRONG,
+              border: `1px solid var(--mindfs-launcher-modal-border)`,
+              boxShadow: SHADOW,
+              padding: "18px",
+              backdropFilter: "blur(20px)",
+              display: "grid",
+              gap: "12px",
+            }}
+          >
+            <input
+              type="text"
+              value={nodeName}
+              onChange={(event) => setNodeName(event.target.value)}
+              placeholder="节点名称"
+              autoFocus
+              style={{
+                width: "100%",
+                borderRadius: "14px",
+                border: `1px solid ${formError ? "var(--mindfs-launcher-error-text)" : BORDER_STRONG}`,
+                background: "var(--mindfs-launcher-input-bg)",
+                padding: "14px 15px",
+                fontSize: "15px",
+                color: TEXT,
+                outline: "none",
+                boxSizing: "border-box",
+              }}
+            />
+
+            <input
+              type="text"
+              value={nodeURL}
+              onChange={(event) => setNodeURL(event.target.value)}
+              placeholder="节点 url：http(s)://ip:port"
+              spellCheck={false}
+              style={{
+                width: "100%",
+                borderRadius: "14px",
+                border: `1px solid ${formError ? "var(--mindfs-launcher-error-text)" : BORDER_STRONG}`,
+                background: "var(--mindfs-launcher-input-bg)",
+                padding: "14px 15px",
+                fontSize: "15px",
+                color: TEXT,
+                outline: "none",
+                boxSizing: "border-box",
+              }}
+            />
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "10px",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setComposerOpen(false);
+                  setFormError("");
+                }}
+                style={{
+                  border: `1px solid ${BORDER_STRONG}`,
+                  borderRadius: "14px",
+                  padding: "12px 16px",
+                  background: "transparent",
+                  color: MUTED,
+                  fontSize: "14px",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  width: "100%",
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                style={{
+                  border: "none",
+                  borderRadius: "14px",
+                  padding: "12px 16px",
+                  background: ACCENT,
+                  color: "#fff8f2",
+                  fontSize: "14px",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  width: "100%",
+                }}
+              >
+                保存
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -31,7 +31,7 @@ const sidebarStyle: React.CSSProperties = {
   gridArea: "sidebar",
   borderRight: "1px solid var(--border-color)",
   overflow: "auto",
-  background: "var(--sidebar-bg)",
+  background: "var(--mindfs-topbar-bg, var(--sidebar-bg))",
   display: "flex",
   flexDirection: "column",
   position: "relative",
@@ -42,7 +42,7 @@ const mainStyle: React.CSSProperties = {
   gridArea: "main",
   overflow: "hidden",
   padding: "0",
-  background: "var(--content-bg)",
+  background: "var(--mindfs-topbar-bg, var(--mobile-overlay-bg, var(--content-bg)))",
   display: "flex",
   flexDirection: "column",
   minHeight: 0,
@@ -55,7 +55,7 @@ const rightStyle: React.CSSProperties = {
   gridArea: "right",
   borderLeft: "1px solid var(--border-color)",
   overflow: "auto",
-  background: "var(--sidebar-bg)",
+  background: "var(--mindfs-topbar-bg, var(--sidebar-bg))",
   display: "flex",
   flexDirection: "column",
   position: "relative",
@@ -69,7 +69,7 @@ const footerStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "flex-end",
   justifyContent: "center",
-  background: "var(--content-bg)",
+  background: "var(--mindfs-topbar-bg, var(--mobile-overlay-bg, var(--content-bg)))",
   zIndex: 100,
   minWidth: 0,
 };
@@ -91,28 +91,10 @@ export function AppShell({
   onCloseRight?: () => void;
 }) {
   const { isMobile, isTablet } = useResponsive();
-  const [viewportRect, setViewportRect] = useState(() => getVisibleViewportRect());
-
-  useEffect(() => {
-    const updateViewportRect = () => {
-      setViewportRect(getVisibleViewportRect());
-    };
-    updateViewportRect();
-    window.addEventListener("resize", updateViewportRect);
-    window.addEventListener("orientationchange", updateViewportRect);
-    window.visualViewport?.addEventListener("resize", updateViewportRect);
-    window.visualViewport?.addEventListener("scroll", updateViewportRect);
-    return () => {
-      window.removeEventListener("resize", updateViewportRect);
-      window.removeEventListener("orientationchange", updateViewportRect);
-      window.visualViewport?.removeEventListener("resize", updateViewportRect);
-      window.visualViewport?.removeEventListener("scroll", updateViewportRect);
-    };
-  }, []);
   
   const sidebarWidth = isMobile ? "0px" : (isTablet ? "200px" : "260px");
   const rightWidth = isMobile ? "0px" : (rightSidebar ? (isTablet ? "240px" : "280px") : "0px");
-  const mobileHeight = viewportRect.visibleHeight > 0 ? `${viewportRect.visibleHeight}px` : "100%";
+  const mobileHeight = "calc(100vh - var(--mindfs-ime-bottom, 0px))";
 
   const shellStyle: React.CSSProperties & {
     "--mindfs-actionbar-bottom-padding"?: string;
@@ -124,31 +106,29 @@ export function AppShell({
     gridTemplateAreas: isMobile ? undefined : `"sidebar main right" "sidebar footer right"`,
     minHeight: isMobile ? mobileHeight : "100vh",
     height: isMobile ? mobileHeight : "100dvh",
-    background: "var(--bg-gradient-start, #f3f4f6)",
+    background: isMobile
+      ? "var(--mindfs-topbar-bg, var(--mindfs-system-bar-bg, var(--mobile-overlay-bg, var(--content-bg))))"
+      : "var(--bg-gradient-start, #f3f4f6)",
     color: "var(--text-primary)",
-    position: isMobile ? "fixed" : "relative",
-    top: isMobile ? 0 : undefined,
-    left: isMobile ? 0 : undefined,
-    right: isMobile ? 0 : undefined,
+    position: "relative",
     width: isMobile ? "100%" : undefined,
     maxWidth: isMobile ? "100%" : undefined,
+    paddingTop: isMobile ? "var(--mindfs-safe-area-top, env(safe-area-inset-top, 0px))" : undefined,
     overflow: "hidden",
     isolation: "isolate",
     boxSizing: "border-box",
     transition: "grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
-    "--mindfs-actionbar-bottom-padding": viewportRect.keyboardOpen
-      ? "2px"
-      : "calc(env(safe-area-inset-bottom, 0px) + 2px)",
+    "--mindfs-actionbar-bottom-padding": "calc(env(safe-area-inset-bottom, 0px) + 2px)",
   };
 
   const mobileSidebarStyle = (side: 'left' | 'right'): React.CSSProperties => ({
     position: "fixed",
-    top: 0,
+    top: "var(--mindfs-safe-area-top, env(safe-area-inset-top, 0px))",
     bottom: 0,
     [side]: 0,
     width: "75vw",
     zIndex: 2000,
-    background: "var(--mobile-sidebar-bg, var(--sidebar-bg))",
+    background: "var(--mindfs-topbar-bg, var(--mobile-sidebar-bg, var(--sidebar-bg)))",
     boxShadow: side === 'left' ? "4px 0 24px rgba(0,0,0,0.15)" : "-4px 0 24px rgba(0,0,0,0.15)",
     transition: "transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1)",
     display: "flex",
@@ -220,21 +200,4 @@ export function AppShell({
       </footer>
     </div>
   );
-}
-
-function getVisibleViewportRect(): { keyboardOpen: boolean; visibleHeight: number } {
-  const visualViewport = window.visualViewport;
-  if (visualViewport) {
-    const rawInset = window.innerHeight - visualViewport.height - visualViewport.offsetTop;
-    const keyboardInset = Math.max(0, Math.round(rawInset));
-    const keyboardOpen =
-      keyboardInset > 80 ||
-      window.innerHeight - visualViewport.height > 80 ||
-      document.documentElement.clientHeight - visualViewport.height > 80;
-    return {
-      keyboardOpen,
-      visibleHeight: visualViewport.height,
-    };
-  }
-  return { keyboardOpen: false, visibleHeight: window.innerHeight };
 }

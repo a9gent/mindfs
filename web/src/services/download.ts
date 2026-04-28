@@ -1,6 +1,6 @@
 import { registerPlugin } from "@capacitor/core";
 import { appURL } from "./base";
-import { isCapacitorRuntime } from "./runtime";
+import { getApiBaseURL, isCapacitorRuntime } from "./runtime";
 
 type DownloadFileParams = {
   rootId: string;
@@ -18,6 +18,12 @@ type NativeDownloadPlugin = {
 
 const NativeDownload = registerPlugin<NativeDownloadPlugin>("NativeDownload");
 
+type WindowWithNativeDownloadBridge = Window & {
+  MindFSNativeDownload?: {
+    download?: (url: string, filename: string) => string;
+  };
+};
+
 function sanitizeDownloadName(path: string, name?: string): string {
   const candidate = String(name || path || "").trim();
   if (!candidate) {
@@ -34,6 +40,23 @@ function buildDownloadURL(rootId: string, path: string): string {
     path,
     download: "1",
   }));
+}
+
+function toAbsoluteDownloadURL(url: string): string {
+  if (/^https?:\/\//i.test(url)) {
+    return url;
+  }
+
+  const apiBaseURL = getApiBaseURL();
+  if (apiBaseURL) {
+    return new URL(url, `${apiBaseURL.replace(/\/+$/, "")}/`).toString();
+  }
+
+  if (typeof window !== "undefined" && /^https?:$/i.test(window.location.protocol)) {
+    return new URL(url, window.location.href).toString();
+  }
+
+  return url;
 }
 
 function triggerBrowserDownload(url: string, filename: string): void {
@@ -61,13 +84,22 @@ async function downloadWithAndroidDownloadManager(url: string, filename: string)
     throw new Error("下载地址不是完整的 http/https URL，请先配置移动端 API 地址");
   }
 
+  const nativeBridge = (window as WindowWithNativeDownloadBridge).MindFSNativeDownload;
+  if (nativeBridge && typeof nativeBridge.download === "function") {
+    const errorMessage = nativeBridge.download(url, filename);
+    if (errorMessage) {
+      throw new Error(errorMessage);
+    }
+    return;
+  }
+
   await NativeDownload.download({ url, filename });
   // DownloadManager 接管后台下载，通知栏会显示进度和完成提示
 }
 
 export async function downloadFile(params: DownloadFileParams): Promise<void> {
   const filename = sanitizeDownloadName(params.path, params.name);
-  const url = buildDownloadURL(params.rootId, params.path);
+  const url = toAbsoluteDownloadURL(buildDownloadURL(params.rootId, params.path));
 
   if (typeof document === "undefined") {
     throw new Error("download is only available in browser runtime");

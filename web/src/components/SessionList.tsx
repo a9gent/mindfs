@@ -103,6 +103,7 @@ export function SessionList({
           justifyContent: "space-between",
           padding: searchResultsMode ? "0 10px 0 4px" : "0 10px 0 16px",
           borderBottom: "1px solid var(--border-color)",
+          background: "var(--mindfs-topbar-bg, transparent)",
           flexShrink: 0,
           boxSizing: "border-box",
         }}
@@ -172,7 +173,7 @@ export function SessionList({
             padding: "10px 12px",
             borderBottom: "1px solid var(--border-color)",
             flexShrink: 0,
-            background: "transparent",
+            background: "var(--mindfs-topbar-bg, transparent)",
           }}
         >
           <div

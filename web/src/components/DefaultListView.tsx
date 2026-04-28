@@ -165,7 +165,7 @@ export function DefaultListView({
           borderBottom: "1px solid var(--border-color)",
           display: "flex",
           alignItems: "center",
-          background: "transparent",
+          background: "var(--mindfs-topbar-bg, transparent)",
           boxSizing: "border-box",
           zIndex: 10,
           flexShrink: 0

@@ -359,7 +359,7 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onS
           {downloadToast.msg}
         </div>
       )}
-      <header style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "10px", background: "transparent", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
+      <header style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "10px", background: "var(--mindfs-topbar-bg, transparent)", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", overflow: "hidden", flex: 1, minWidth: 0 }}>
           <Breadcrumbs root={file.root} path={file.path} onPathClick={onPathClick} />
           
@@ -431,26 +431,33 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onS
               </div>
             </div>
           )}
+            <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px", flexShrink: 0, opacity: 0.7 }}>{(file.size / 1024).toFixed(1)} KB</div>
             <button
               type="button"
               onClick={() => { void handleDownload(); }}
               disabled={!file.root || isDownloading}
               title={isDownloading ? "下载中..." : "下载文件"}
+              aria-label={isDownloading ? "下载中..." : "下载文件"}
               style={{
-                border: "1px solid var(--border-color)",
+                border: "none",
                 background: "transparent",
                 borderRadius: 6,
-                padding: "4px 8px",
+                padding: 0,
+                width: 20,
+                height: 20,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
                 cursor: !file.root || isDownloading ? "not-allowed" : "pointer",
-                fontSize: 12,
                 color: "var(--text-secondary)",
                 opacity: !file.root || isDownloading ? 0.6 : 1,
                 flexShrink: 0,
               }}
             >
-              {isDownloading ? "下载中..." : "下载"}
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path fill="currentColor" d="M16.59 9H15V4c0-.55-.45-1-1-1h-4c-.55 0-1 .45-1 1v5H7.41c-.89 0-1.34 1.08-.71 1.71l4.59 4.59c.39.39 1.02.39 1.41 0l4.59-4.59c.63-.63.19-1.71-.7-1.71M5 19c0 .55.45 1 1 1h12c.55 0 1-.45 1-1s-.45-1-1-1H6c-.55 0-1 .45-1 1"/>
+              </svg>
             </button>
-            <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px", flexShrink: 0, opacity: 0.7 }}>{(file.size / 1024).toFixed(1)} KB</div>
           </div>
         </div>
       </header>

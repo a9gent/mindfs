@@ -801,9 +801,12 @@ func (h *HTTPHandler) serveStaticAsset(w http.ResponseWriter, r *http.Request) b
 func applyStaticCacheHeaders(w http.ResponseWriter, cleanPath string) {
 	switch cleanPath {
 	case "service-worker.js", "index.html":
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-		w.Header().Set("Pragma", "no-cache")
-		w.Header().Set("Expires", "0")
+		w.Header().Set("Cache-Control", "no-cache")
+		return
+	}
+
+	if strings.HasPrefix(cleanPath, "assets/") {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	}
 }
 

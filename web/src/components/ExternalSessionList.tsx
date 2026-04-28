@@ -50,6 +50,7 @@ export function ExternalSessionList({
           justifyContent: "space-between",
           padding: "0 10px 0 4px",
           borderBottom: "1px solid var(--border-color)",
+          background: "var(--mindfs-topbar-bg, transparent)",
           flexShrink: 0,
           boxSizing: "border-box",
         }}

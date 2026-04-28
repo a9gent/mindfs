@@ -4,6 +4,25 @@
 
 :root {
   color-scheme: light;
+  --mindfs-safe-area-top: 0px;
+  --mindfs-safe-area-bottom: 0px;
+  --mindfs-ime-bottom: 0px;
+  --mindfs-system-bar-bg: #ffffff;
+  --mindfs-topbar-bg: #ffffff;
+  --mindfs-launcher-bg: radial-gradient(circle at top left, rgba(91, 125, 184, 0.07), transparent 22%), radial-gradient(circle at right 18%, rgba(148, 163, 184, 0.18), transparent 24%), linear-gradient(180deg, #f8fafc 0%, #edf2f7 100%);
+  --mindfs-launcher-surface: rgba(255, 255, 255, 0.82);
+  --mindfs-launcher-surface-strong: rgba(255, 255, 255, 0.94);
+  --mindfs-launcher-surface-soft: rgba(255, 255, 255, 0.46);
+  --mindfs-launcher-border: rgba(148, 163, 184, 0.2);
+  --mindfs-launcher-border-strong: rgba(100, 116, 139, 0.34);
+  --mindfs-launcher-modal-border: rgba(255, 255, 255, 0.66);
+  --mindfs-launcher-input-bg: rgba(255, 255, 255, 0.74);
+  --mindfs-launcher-text: #172033;
+  --mindfs-launcher-muted: #5f6f86;
+  --mindfs-launcher-accent: #5b7db8;
+  --mindfs-launcher-shadow: 0 16px 44px rgba(15, 23, 42, 0.08);
+  --mindfs-launcher-error-bg: #fef2f2;
+  --mindfs-launcher-error-text: #c2410c;
   --bg-gradient-start: #f3f4f6;
   --bg-gradient-end: #e5e7eb;
   --text-primary: #0F172A; /* Better contrast */
@@ -39,6 +58,22 @@ html {
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
+    --mindfs-system-bar-bg: #020617;
+    --mindfs-topbar-bg: #020617;
+    --mindfs-launcher-bg: radial-gradient(circle at top left, rgba(59, 130, 246, 0.10), transparent 22%), radial-gradient(circle at right 18%, rgba(15, 23, 42, 0.72), transparent 24%), linear-gradient(180deg, #020617 0%, #0f172a 100%);
+    --mindfs-launcher-surface: rgba(15, 23, 42, 0.82);
+    --mindfs-launcher-surface-strong: rgba(15, 23, 42, 0.94);
+    --mindfs-launcher-surface-soft: rgba(15, 23, 42, 0.56);
+    --mindfs-launcher-border: rgba(148, 163, 184, 0.18);
+    --mindfs-launcher-border-strong: rgba(148, 163, 184, 0.34);
+    --mindfs-launcher-modal-border: rgba(148, 163, 184, 0.26);
+    --mindfs-launcher-input-bg: rgba(2, 6, 23, 0.72);
+    --mindfs-launcher-text: #f8fafc;
+    --mindfs-launcher-muted: #94a3b8;
+    --mindfs-launcher-accent: #60a5fa;
+    --mindfs-launcher-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+    --mindfs-launcher-error-bg: rgba(127, 29, 29, 0.35);
+    --mindfs-launcher-error-text: #fecaca;
     --bg-gradient-start: #0F172A;
     --bg-gradient-end: #020617;
     --text-primary: #F8FAFC;
