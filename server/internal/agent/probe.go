@@ -2,16 +2,20 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	agenttypes "mindfs/server/internal/agent/types"
+	configpkg "mindfs/server/internal/config"
 )
 
 type Status struct {
@@ -41,6 +45,9 @@ const (
 	probeInteractionTimeout = 3 * time.Minute
 	probeModelListTimeout   = 30 * time.Second
 	probeCommandListTimeout = 30 * time.Second
+	probeRotateAfterCount   = 100
+	probeRotateAfterAge     = 24 * time.Hour
+	probeSessionStoreFile   = "probe-sessions.json"
 )
 
 type probePhase string
@@ -50,10 +57,24 @@ const (
 	probePhaseBackground probePhase = "background"
 )
 
+type ProbeSessionBinding struct {
+	AgentSessionID string    `json:"agent_session_id"`
+	ProbeCount     int       `json:"probe_count,omitempty"`
+	CreatedAt      time.Time `json:"created_at,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type probeSessionStore struct {
+	mu   sync.RWMutex
+	path string
+	data map[string]ProbeSessionBinding
+}
+
 // Prober 管理 Agent 可用性探测
 type Prober struct {
 	cfg           *Config
 	pool          *Pool
+	probeSessions *probeSessionStore
 	statuses      map[string]Status
 	mu            sync.RWMutex
 	inFlight      map[string]struct{} // per-agent probe 去重，mu 保护
@@ -66,9 +87,14 @@ func NewProber(cfg *Config, pool *Pool, probeInterval time.Duration) *Prober {
 	if probeInterval <= 0 {
 		probeInterval = 5 * time.Minute
 	}
+	probeSessions, err := loadProbeSessionStore()
+	if err != nil {
+		log.Printf("[agent/probe] probe_session_store.init_error err=%v", err)
+	}
 	p := &Prober{
 		cfg:           cfg,
 		pool:          pool,
+		probeSessions: probeSessions,
 		statuses:      make(map[string]Status),
 		inFlight:      make(map[string]struct{}),
 		probeInterval: probeInterval,
@@ -82,6 +108,139 @@ func NewProber(cfg *Config, pool *Pool, probeInterval time.Duration) *Prober {
 		}
 	}
 	return p
+}
+
+func loadProbeSessionStore() (*probeSessionStore, error) {
+	configDir, err := configpkg.MindFSConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	store := &probeSessionStore{
+		path: filepath.Join(configDir, probeSessionStoreFile),
+		data: make(map[string]ProbeSessionBinding),
+	}
+	if err := store.load(); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *probeSessionStore) Get(agentName string) (ProbeSessionBinding, bool) {
+	if s == nil {
+		return ProbeSessionBinding{}, false
+	}
+	key := strings.TrimSpace(agentName)
+	if key == "" {
+		return ProbeSessionBinding{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	binding, ok := s.data[key]
+	if !ok || strings.TrimSpace(binding.AgentSessionID) == "" {
+		return ProbeSessionBinding{}, false
+	}
+	return binding, true
+}
+
+func (s *probeSessionStore) PutBinding(agentName string, binding ProbeSessionBinding) error {
+	if s == nil {
+		return nil
+	}
+	key := strings.TrimSpace(agentName)
+	if key == "" {
+		return errors.New("agent required")
+	}
+	binding.AgentSessionID = strings.TrimSpace(binding.AgentSessionID)
+	if binding.AgentSessionID == "" {
+		return errors.New("agent session id required")
+	}
+	if binding.ProbeCount <= 0 {
+		binding.ProbeCount = 1
+	}
+	if binding.CreatedAt.IsZero() {
+		binding.CreatedAt = time.Now().UTC()
+	} else {
+		binding.CreatedAt = binding.CreatedAt.UTC()
+	}
+	if binding.UpdatedAt.IsZero() {
+		binding.UpdatedAt = time.Now().UTC()
+	} else {
+		binding.UpdatedAt = binding.UpdatedAt.UTC()
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data == nil {
+		s.data = make(map[string]ProbeSessionBinding)
+	}
+	s.data[key] = binding
+	return s.saveLocked()
+}
+
+func (s *probeSessionStore) Delete(agentName string) error {
+	if s == nil {
+		return nil
+	}
+	key := strings.TrimSpace(agentName)
+	if key == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.data) == 0 {
+		return nil
+	}
+	if _, ok := s.data[key]; !ok {
+		return nil
+	}
+	delete(s.data, key)
+	return s.saveLocked()
+}
+
+func (s *probeSessionStore) load() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	payload, err := os.ReadFile(s.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if len(strings.TrimSpace(string(payload))) == 0 {
+		return nil
+	}
+	var data map[string]ProbeSessionBinding
+	if err := json.Unmarshal(payload, &data); err != nil {
+		return err
+	}
+	if data == nil {
+		data = make(map[string]ProbeSessionBinding)
+	}
+	s.data = data
+	return nil
+}
+
+func (s *probeSessionStore) saveLocked() error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+		return err
+	}
+	payload, err := json.MarshalIndent(s.data, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, append(payload, '\n'), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		_ = os.Remove(s.path)
+		if retryErr := os.Rename(tmp, s.path); retryErr != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Start 启动定期探测
@@ -231,15 +390,15 @@ func (p *Prober) IsAvailable(name string) bool {
 	return ok && status.Available
 }
 
-func probeConfiguredAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool) Status {
+func probeConfiguredAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, probeSessions *probeSessionStore) Status {
 	status := probeInstallStatus(name, def, time.Now().UTC())
 	if !status.Installed {
 		return status
 	}
-	return probeInstalledAgentWithPool(ctx, name, def, pool, status, probePhaseInitial)
+	return probeInstalledAgentWithPool(ctx, name, def, pool, probeSessions, status, probePhaseInitial)
 }
 
-func probeInstalledAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, status Status, phase probePhase) Status {
+func probeInstalledAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, probeSessions *probeSessionStore, status Status, phase probePhase) Status {
 	status.Installed = true
 
 	tmpRoot, err := EnsureStableWorkDir("agent-probe", name)
@@ -253,11 +412,7 @@ func probeInstalledAgentWithPool(ctx context.Context, name string, def Definitio
 		defer pool.CloseAll()
 	}
 
-	sessionKey := fmt.Sprintf(
-		"probe-%s-%s",
-		name,
-		time.Now().UTC().Format("20060102-150405"),
-	)
+	sessionKey := fmt.Sprintf("probe-%s", name)
 	defer pool.Close(sessionKey)
 	openCtx := ctx
 	sessionCancel := func() {}
@@ -265,12 +420,43 @@ func probeInstalledAgentWithPool(ctx context.Context, name string, def Definitio
 		openCtx, sessionCancel = context.WithTimeout(ctx, probeSessionTimeout)
 	}
 	defer sessionCancel()
-	sess, err := pool.GetOrCreate(openCtx, agenttypes.OpenSessionInput{
+	openInput := agenttypes.OpenSessionInput{
 		SessionKey: sessionKey,
 		AgentName:  name,
 		Probe:      true,
 		RootPath:   tmpRoot,
-	})
+	}
+	resumedBinding := ProbeSessionBinding{}
+	resumed := false
+	if binding, ok := loadProbeSessionBinding(probeSessions, name); ok {
+		if shouldRotateProbeSession(binding) {
+			log.Printf("[agent/probe] rotate agent=%s phase=%s probe_count=%d threshold=%d action=open_new_runtime_session", name, phase, binding.ProbeCount, probeRotateAfterCount)
+			if clearErr := clearProbeSessionBinding(probeSessions, name); clearErr != nil {
+				log.Printf("[agent/probe] rotate.clear_failed agent=%s phase=%s err=%v", name, phase, clearErr)
+			}
+		} else {
+			resumedBinding = binding
+			resumed = true
+		}
+	}
+	if resumed {
+		openInput.AgentSessionID = resumedBinding.AgentSessionID
+		log.Printf("[agent/probe] open agent=%s phase=%s action=resume_runtime_session agent_session_id=%s", name, phase, openInput.AgentSessionID)
+	} else {
+		log.Printf("[agent/probe] open agent=%s phase=%s action=open_new_runtime_session", name, phase)
+	}
+
+	sess, err := pool.GetOrCreate(openCtx, openInput)
+	if err != nil && strings.TrimSpace(openInput.AgentSessionID) != "" {
+		log.Printf("[agent/probe] resume.error agent=%s phase=%s agent_session_id=%s err=%v fallback=open_new_runtime_session", name, phase, openInput.AgentSessionID, err)
+		if clearErr := clearProbeSessionBinding(probeSessions, name); clearErr != nil {
+			log.Printf("[agent/probe] resume.clear_failed agent=%s phase=%s err=%v", name, phase, clearErr)
+		}
+		openInput.AgentSessionID = ""
+		resumed = false
+		resumedBinding = ProbeSessionBinding{}
+		sess, err = pool.GetOrCreate(openCtx, openInput)
+	}
 	if err != nil {
 		status.ProbeError = err.Error()
 		return status
@@ -294,6 +480,9 @@ func probeInstalledAgentWithPool(ctx context.Context, name string, def Definitio
 	status.Available = true
 	status.Error = ""
 	status.ProbeError = ""
+	if err := storeProbeSessionBinding(probeSessions, name, sess.SessionID(), resumedBinding, resumed); err != nil {
+		log.Printf("[agent/probe] store_session.error agent=%s phase=%s err=%v", name, phase, err)
+	}
 	populateProbeModels(ctx, sess, &status)
 	populateProbeCommands(ctx, sess, &status)
 	return status
@@ -555,7 +744,7 @@ func (p *Prober) probeConfiguredAgents(ctx context.Context, defs []Definition) {
 		return
 	}
 	p.runDefinitionsConcurrently(defs, func(_ int, def Definition) {
-		status := probeConfiguredAgentWithPool(ctx, def.Name, def, p.pool)
+		status := probeConfiguredAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions)
 		p.setStatus(status)
 	})
 }
@@ -577,9 +766,57 @@ func (p *Prober) probeInstalledAgents(ctx context.Context, defs []Definition) {
 	}
 
 	p.runDefinitionsConcurrently(defs, func(_ int, def Definition) {
-		status := probeInstalledAgentWithPool(ctx, def.Name, def, p.pool, probeInstallStatus(def.Name, def, time.Now().UTC()), probePhaseBackground)
+		status := probeInstalledAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions, probeInstallStatus(def.Name, def, time.Now().UTC()), probePhaseBackground)
 		p.setStatus(status)
 	})
+}
+
+func loadProbeSessionBinding(store *probeSessionStore, agentName string) (ProbeSessionBinding, bool) {
+	if store == nil {
+		return ProbeSessionBinding{}, false
+	}
+	return store.Get(agentName)
+}
+
+func clearProbeSessionBinding(store *probeSessionStore, agentName string) error {
+	if store == nil {
+		return nil
+	}
+	return store.Delete(agentName)
+}
+
+func shouldRotateProbeSession(binding ProbeSessionBinding) bool {
+	if binding.ProbeCount <= probeRotateAfterCount {
+		return false
+	}
+	if binding.CreatedAt.IsZero() {
+		return false
+	}
+	return time.Since(binding.CreatedAt.UTC()) > probeRotateAfterAge
+}
+
+func storeProbeSessionBinding(store *probeSessionStore, agentName, agentSessionID string, previous ProbeSessionBinding, resumed bool) error {
+	if store == nil {
+		return nil
+	}
+	agentSessionID = strings.TrimSpace(agentSessionID)
+	if agentSessionID == "" {
+		return nil
+	}
+	next := ProbeSessionBinding{
+		AgentSessionID: agentSessionID,
+		ProbeCount:     1,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	}
+	if resumed && strings.TrimSpace(previous.AgentSessionID) == agentSessionID && previous.ProbeCount > 0 {
+		next.ProbeCount = previous.ProbeCount + 1
+		next.CreatedAt = previous.CreatedAt
+		if next.CreatedAt.IsZero() {
+			next.CreatedAt = time.Now().UTC()
+		}
+	}
+	return store.PutBinding(agentName, next)
 }
 
 func (p *Prober) runDefinitionsConcurrently(defs []Definition, fn func(i int, def Definition)) {
