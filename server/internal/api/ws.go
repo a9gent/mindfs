@@ -597,6 +597,11 @@ func updateToEvent(update agenttypes.Event) *StreamEvent {
 			return &StreamEvent{Type: "message_done", Data: done}
 		}
 		return &StreamEvent{Type: "message_done", Data: agenttypes.MessageDone{}}
+	case agenttypes.EventTypeRecovery:
+		if recovery, ok := update.Data.(agenttypes.RecoveryStatus); ok {
+			return &StreamEvent{Type: "recovery", Data: recovery}
+		}
+		return &StreamEvent{Type: "recovery", Data: agenttypes.RecoveryStatus{}}
 	}
 	return nil
 }

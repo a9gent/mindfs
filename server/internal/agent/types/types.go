@@ -156,6 +156,7 @@ const (
 	EventTypeToolUpdate   EventType = "tool_update"
 	EventTypeTodoUpdate   EventType = "todo_update"
 	EventTypeMessageDone  EventType = "message_done"
+	EventTypeRecovery     EventType = "recovery"
 )
 
 // Event is a normalized session update emitted by any agent backend.
@@ -175,6 +176,10 @@ type ThoughtChunk struct {
 
 type MessageDone struct {
 	ContextWindow ContextWindow `json:"contextWindow"`
+}
+
+type RecoveryStatus struct {
+	Message string `json:"message"`
 }
 
 type TodoItem struct {

@@ -55,6 +55,7 @@ type probePhase string
 const (
 	probePhaseInitial    probePhase = "initial"
 	probePhaseBackground probePhase = "background"
+	probePhaseRecovery   probePhase = "recovery"
 )
 
 type ProbeSessionBinding struct {
@@ -284,6 +285,24 @@ func (p *Prober) ProbeAll(ctx context.Context) {
 	p.probeConfiguredAgents(ctx, p.cfg.Agents)
 }
 
+// ProbeOne probes a single configured agent with recovery-style timeout control.
+func (p *Prober) ProbeOne(ctx context.Context, name string) Status {
+	if p == nil || p.cfg == nil {
+		return unavailableStatus(strings.TrimSpace(name), false, "config not loaded", time.Now().UTC())
+	}
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return unavailableStatus("", false, "agent required", time.Now().UTC())
+	}
+	def, ok := p.cfg.GetAgent(trimmed)
+	if !ok {
+		return unavailableStatus(trimmed, false, "agent not configured", time.Now().UTC())
+	}
+	status := probeConfiguredAgentWithPool(ctx, trimmed, def, p.pool, p.probeSessions, probePhaseRecovery)
+	p.setStatus(status)
+	return status
+}
+
 // ReportRuntimeFailure marks an agent as unavailable due to a real user-facing runtime failure.
 func (p *Prober) ReportRuntimeFailure(name string, err error) {
 	msg := "unknown failure"
@@ -390,12 +409,12 @@ func (p *Prober) IsAvailable(name string) bool {
 	return ok && status.Available
 }
 
-func probeConfiguredAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, probeSessions *probeSessionStore) Status {
+func probeConfiguredAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, probeSessions *probeSessionStore, phase probePhase) Status {
 	status := probeInstallStatus(name, def, time.Now().UTC())
 	if !status.Installed {
 		return status
 	}
-	return probeInstalledAgentWithPool(ctx, name, def, pool, probeSessions, status, probePhaseInitial)
+	return probeInstalledAgentWithPool(ctx, name, def, pool, probeSessions, status, phase)
 }
 
 func probeInstalledAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, probeSessions *probeSessionStore, status Status, phase probePhase) Status {
@@ -416,8 +435,8 @@ func probeInstalledAgentWithPool(ctx context.Context, name string, def Definitio
 	defer pool.Close(sessionKey)
 	openCtx := ctx
 	sessionCancel := func() {}
-	if phase == probePhaseInitial {
-		openCtx, sessionCancel = context.WithTimeout(ctx, probeSessionTimeout)
+	if timeout, ok := probeSessionTimeoutForPhase(phase); ok {
+		openCtx, sessionCancel = context.WithTimeout(ctx, timeout)
 	}
 	defer sessionCancel()
 	openInput := agenttypes.OpenSessionInput{
@@ -464,8 +483,8 @@ func probeInstalledAgentWithPool(ctx context.Context, name string, def Definitio
 
 	interactionCtx := ctx
 	interactionCancel := func() {}
-	if phase == probePhaseInitial {
-		interactionCtx, interactionCancel = context.WithTimeout(ctx, probeInteractionTimeout)
+	if timeout, ok := probeInteractionTimeoutForPhase(phase); ok {
+		interactionCtx, interactionCancel = context.WithTimeout(ctx, timeout)
 	}
 	defer interactionCancel()
 	if err := VerifySessionInteraction(interactionCtx, sess); err != nil {
@@ -645,6 +664,28 @@ func resolveProbePool(def Definition, shared *Pool) (*Pool, bool) {
 	return NewPool(Config{Agents: []Definition{def}}), true
 }
 
+func probeSessionTimeoutForPhase(phase probePhase) (time.Duration, bool) {
+	switch phase {
+	case probePhaseInitial:
+		return probeSessionTimeout, true
+	case probePhaseRecovery:
+		return 30 * time.Second, true
+	default:
+		return 0, false
+	}
+}
+
+func probeInteractionTimeoutForPhase(phase probePhase) (time.Duration, bool) {
+	switch phase {
+	case probePhaseInitial:
+		return probeInteractionTimeout, true
+	case probePhaseRecovery:
+		return 30 * time.Second, true
+	default:
+		return 0, false
+	}
+}
+
 func populateProbeModels(ctx context.Context, sess agenttypes.Session, status *Status) {
 	modelsCtx, modelsCancel := context.WithTimeout(ctx, probeModelListTimeout)
 	defer modelsCancel()
@@ -744,7 +785,7 @@ func (p *Prober) probeConfiguredAgents(ctx context.Context, defs []Definition) {
 		return
 	}
 	p.runDefinitionsConcurrently(defs, func(_ int, def Definition) {
-		status := probeConfiguredAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions)
+		status := probeConfiguredAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions, probePhaseInitial)
 		p.setStatus(status)
 	})
 }

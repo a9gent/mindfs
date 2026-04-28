@@ -790,7 +790,7 @@ function SessionViewerInner({
   const relatedFilesDefaultStateRef = useRef<string>("");
   const sessionKey = session?.key || session?.session_key || null;
   const exchanges = Array.isArray(session?.exchanges) ? session.exchanges : [];
-  const { timeline, isStreaming, streamVersion } = useSessionStream(
+  const { timeline, isStreaming, streamVersion, streamStatusText } = useSessionStream(
     sessionKey,
     exchanges,
     session?.exchange_aux || {},
@@ -1634,7 +1634,9 @@ if (useInnerScrollContainer && !container) {
                     animation: "pulse 1s infinite",
                   }}
                 />
-                {isStreaming ? "正在生成..." : "已发送，等待响应..."}
+                {isStreaming
+                  ? streamStatusText || "正在生成..."
+                  : "已发送，等待响应..."}
               </div>
             )}
 

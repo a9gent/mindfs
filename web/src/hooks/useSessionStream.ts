@@ -45,6 +45,7 @@ type UseSessionStreamResult = {
   timeline: TimelineItem[];
   isStreaming: boolean;
   streamVersion: number;
+  streamStatusText: string;
 };
 
 type ContextWindowLike = {
@@ -364,6 +365,7 @@ export function useSessionStream(
 ): UseSessionStreamResult {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamVersion, setStreamVersion] = useState(0);
+  const [streamStatusText, setStreamStatusText] = useState("");
 
   const baseTimeline = useMemo(
     () =>
@@ -377,19 +379,35 @@ export function useSessionStream(
   useEffect(() => {
     setIsStreaming(false);
     setStreamVersion(0);
+    setStreamStatusText("");
     if (!sessionKey) return;
 
     const unsubscribe = sessionService.subscribe(sessionKey, {
       onStream: (event) => {
         setStreamVersion((value) => value + 1);
+        if (event.type === "recovery") {
+          setStreamStatusText(event.data?.message || "遇到错误，重试中...");
+          setIsStreaming(true);
+          return;
+        }
+        if (event.type === "message_chunk") {
+          setStreamStatusText("");
+        }
         if (event.type === "message_done" || event.type === "error") {
+          setStreamStatusText("");
           setIsStreaming(false);
         } else {
           setIsStreaming(true);
         }
       },
-      onDone: () => setIsStreaming(false),
-      onError: () => setIsStreaming(false),
+      onDone: () => {
+        setStreamStatusText("");
+        setIsStreaming(false);
+      },
+      onError: () => {
+        setStreamStatusText("");
+        setIsStreaming(false);
+      },
     });
 
     return () => {
@@ -401,5 +419,6 @@ export function useSessionStream(
     timeline: settleRunningTools(baseTimeline),
     isStreaming,
     streamVersion,
+    streamStatusText,
   };
 }

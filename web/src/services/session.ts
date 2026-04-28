@@ -116,6 +116,7 @@ export type StreamEvent =
   | { type: "tool_call"; data: ToolCall }
   | { type: "tool_call_update"; data: ToolCall }
   | { type: "todo_update"; data: TodoUpdate }
+  | { type: "recovery"; data: { message: string } }
   | {
       type: "message_done";
       data?: {

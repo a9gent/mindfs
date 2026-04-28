@@ -352,6 +352,9 @@ const (
 	switchContextTailLines   = 20
 	sessionNameTimeout       = 30 * time.Second
 	sessionNameMinMessageLen = 12
+	sessionRecoveryAttempts  = 3
+	sessionRecoveryDelay     = 30 * time.Second
+	sessionRecoveryProbeWait = 30 * time.Second
 )
 
 type SuggestSessionNameInput struct {
@@ -1103,6 +1106,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		IsInitial:     isInitial,
 	})
 	var responseText string
+	sawAssistantChunk := false
 	plannedAssistantSeq := len(current.Exchanges) + 2
 	auxBuffer := make([]session.ExchangeAux, 0, 8)
 	var thoughtBuffer strings.Builder
@@ -1120,58 +1124,103 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		})
 	}
 	lastResponseUpdateType := ""
-	sess.OnUpdate(func(update agenttypes.Event) {
-		update = normalizeAgentUpdatePaths(root, update)
-		switch update.Type {
-		case agenttypes.EventTypeThoughtChunk:
-			if chunk, ok := update.Data.(agenttypes.ThoughtChunk); ok && chunk.Content != "" {
-				thoughtBuffer.WriteString(chunk.Content)
+	attachSessionUpdates := func(runtime agenttypes.Session) {
+		runtime.OnUpdate(func(update agenttypes.Event) {
+			update = normalizeAgentUpdatePaths(root, update)
+			switch update.Type {
+			case agenttypes.EventTypeThoughtChunk:
+				if chunk, ok := update.Data.(agenttypes.ThoughtChunk); ok && chunk.Content != "" {
+					thoughtBuffer.WriteString(chunk.Content)
+				}
+			case agenttypes.EventTypeToolCall, agenttypes.EventTypeToolUpdate, agenttypes.EventTypeTodoUpdate, agenttypes.EventTypeMessageChunk, agenttypes.EventTypeMessageDone:
+				flushThought()
 			}
-		case agenttypes.EventTypeToolCall, agenttypes.EventTypeToolUpdate, agenttypes.EventTypeTodoUpdate, agenttypes.EventTypeMessageChunk, agenttypes.EventTypeMessageDone:
-			flushThought()
-		}
-		if update.Type == agenttypes.EventTypeToolCall || update.Type == agenttypes.EventTypeToolUpdate {
-			if toolCall, ok := update.Data.(agenttypes.ToolCall); ok && toolCall.IsWriteOperation() {
-				for _, path := range toolCall.GetAffectedPaths() {
-					if watcher == nil {
-						continue
-					}
-					if update.Type == agenttypes.EventTypeToolCall && toolCall.Status == "running" {
-						watcher.RecordPendingWrite(current.Key, path)
-					}
-					if update.Type == agenttypes.EventTypeToolUpdate || toolCall.Status == "complete" {
-						watcher.RecordSessionFile(current.Key, path)
+			if update.Type == agenttypes.EventTypeToolCall || update.Type == agenttypes.EventTypeToolUpdate {
+				if toolCall, ok := update.Data.(agenttypes.ToolCall); ok && toolCall.IsWriteOperation() {
+					for _, path := range toolCall.GetAffectedPaths() {
+						if watcher == nil {
+							continue
+						}
+						if update.Type == agenttypes.EventTypeToolCall && toolCall.Status == "running" {
+							watcher.RecordPendingWrite(current.Key, path)
+						}
+						if update.Type == agenttypes.EventTypeToolUpdate || toolCall.Status == "complete" {
+							watcher.RecordSessionFile(current.Key, path)
+						}
 					}
 				}
+				if toolCall, ok := update.Data.(agenttypes.ToolCall); ok {
+					toolCallCopy := toolCall
+					auxBuffer = append(auxBuffer, session.ExchangeAux{
+						Seq:      plannedAssistantSeq,
+						Line:     currentAssistantLine(responseText),
+						ToolCall: &toolCallCopy,
+					})
+				}
 			}
-			if toolCall, ok := update.Data.(agenttypes.ToolCall); ok {
-				toolCallCopy := toolCall
-				auxBuffer = append(auxBuffer, session.ExchangeAux{
-					Seq:      plannedAssistantSeq,
-					Line:     currentAssistantLine(responseText),
-					ToolCall: &toolCallCopy,
-				})
-			}
-		}
-		if update.Type == agenttypes.EventTypeMessageChunk {
-			if chunk, ok := update.Data.(agenttypes.MessageChunk); ok {
-				responseText = appendResponseChunk(responseText, lastResponseUpdateType, chunk.Content)
+			if update.Type == agenttypes.EventTypeMessageChunk {
+				if chunk, ok := update.Data.(agenttypes.MessageChunk); ok {
+					sawAssistantChunk = true
+					responseText = appendResponseChunk(responseText, lastResponseUpdateType, chunk.Content)
+					lastResponseUpdateType = string(update.Type)
+				}
+			} else if update.Type == agenttypes.EventTypeThoughtChunk ||
+				update.Type == agenttypes.EventTypeToolCall ||
+				update.Type == agenttypes.EventTypeToolUpdate ||
+				update.Type == agenttypes.EventTypeTodoUpdate {
 				lastResponseUpdateType = string(update.Type)
 			}
-		} else if update.Type == agenttypes.EventTypeThoughtChunk ||
-			update.Type == agenttypes.EventTypeToolCall ||
-			update.Type == agenttypes.EventTypeToolUpdate ||
-			update.Type == agenttypes.EventTypeTodoUpdate {
-			lastResponseUpdateType = string(update.Type)
-		}
-		if watcher != nil {
-			watcher.MarkSessionActive(current.Key)
-		}
+			if watcher != nil {
+				watcher.MarkSessionActive(current.Key)
+			}
+			if in.OnUpdate != nil {
+				in.OnUpdate(update)
+			}
+		})
+	}
+	sendWithAttachedUpdates := func(runtime agenttypes.Session, content string) error {
+		attachSessionUpdates(runtime)
+		return runtime.SendMessage(turnCtx, content)
+	}
+	sendErr := sendWithAttachedUpdates(sess, prompt)
+	if sendErr != nil && !isCanceledTurnError(sendErr) {
+		log.Printf("[session] turn.send.error root=%s session=%s agent=%s err=%v", in.RootID, current.Key, in.Agent, sendErr)
 		if in.OnUpdate != nil {
-			in.OnUpdate(update)
+			in.OnUpdate(agenttypes.Event{
+				Type: agenttypes.EventTypeRecovery,
+				Data: agenttypes.RecoveryStatus{Message: "遇到错误，重试中..."},
+			})
 		}
-	})
-	sendErr := sess.SendMessage(turnCtx, prompt)
+		if !sawAssistantChunk {
+			responseText = ""
+			lastResponseUpdateType = ""
+			auxBuffer = auxBuffer[:0]
+			thoughtBuffer.Reset()
+		}
+		recoveredSess, recoveredErr := s.recoverAgentTurn(turnCtx, SendRecoveryInput{
+			RootID:             in.RootID,
+			SessionKey:         current.Key,
+			Manager:            manager,
+			Current:            current,
+			AgentName:          in.Agent,
+			Model:              in.Model,
+			Mode:               in.Mode,
+			Effort:             in.Effort,
+			RootAbs:            rootAbs,
+			Prompt:             prompt,
+			SawAssistantChunk:  sawAssistantChunk,
+			SendWithAttachment: sendWithAttachedUpdates,
+			OnRecoveredSession: func(runtime agenttypes.Session) {
+				setActiveTurnSession(in.RootID, current.Key, runtime)
+			},
+		})
+		if recoveredErr != nil {
+			sendErr = recoveredErr
+		} else {
+			sess = recoveredSess
+			sendErr = nil
+		}
+	}
 	flushThought()
 	if sendErr != nil {
 		log.Printf("[session] turn.send.error root=%s session=%s agent=%s err=%v", in.RootID, current.Key, in.Agent, sendErr)
@@ -1216,6 +1265,121 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		prober.ReportSuccess(in.Agent)
 	}
 	return nil
+}
+
+type SendRecoveryInput struct {
+	RootID             string
+	SessionKey         string
+	Manager            *session.Manager
+	Current            *session.Session
+	AgentName          string
+	Model              string
+	Mode               string
+	Effort             string
+	RootAbs            string
+	Prompt             string
+	SawAssistantChunk  bool
+	SendWithAttachment func(agenttypes.Session, string) error
+	OnRecoveredSession func(agenttypes.Session)
+}
+
+func (s *Service) recoverAgentTurn(ctx context.Context, in SendRecoveryInput) (agenttypes.Session, error) {
+	if s == nil || s.Registry == nil {
+		return nil, errors.New("services not configured")
+	}
+	pool := s.Registry.GetAgentPool()
+	if pool == nil {
+		return nil, errors.New("agent pool unavailable")
+	}
+	prober := s.Registry.GetProber()
+	if prober == nil {
+		return nil, errors.New("agent prober unavailable")
+	}
+	if in.Current == nil {
+		return nil, errors.New("session required")
+	}
+	if in.Manager == nil {
+		return nil, errors.New("session manager required")
+	}
+	if in.SendWithAttachment == nil {
+		return nil, errors.New("send function required")
+	}
+
+	poolSessionKey := agentPoolSessionKey(in.SessionKey, in.AgentName)
+	var lastErr error
+	for attempt := 1; attempt <= sessionRecoveryAttempts; attempt++ {
+		if attempt > 1 {
+			log.Printf("[session/recovery] wait root=%s session=%s agent=%s attempt=%d/%d delay=%s", in.RootID, in.SessionKey, in.AgentName, attempt, sessionRecoveryAttempts, sessionRecoveryDelay)
+			if err := waitForRecoveryDelay(ctx, sessionRecoveryDelay); err != nil {
+				return nil, err
+			}
+		}
+		log.Printf("[session/recovery] probe.start root=%s session=%s agent=%s attempt=%d/%d", in.RootID, in.SessionKey, in.AgentName, attempt, sessionRecoveryAttempts)
+		probeCtx, probeCancel := context.WithTimeout(ctx, sessionRecoveryProbeWait)
+		status := prober.ProbeOne(probeCtx, in.AgentName)
+		probeCancel()
+		if !status.Installed || !status.Available {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			lastErr = errors.New(strings.TrimSpace(status.Error))
+			if lastErr.Error() == "" {
+				lastErr = errors.New("agent recovery probe failed")
+			}
+			log.Printf("[session/recovery] probe.failed root=%s session=%s agent=%s attempt=%d/%d installed=%t available=%t err=%v", in.RootID, in.SessionKey, in.AgentName, attempt, sessionRecoveryAttempts, status.Installed, status.Available, lastErr)
+			continue
+		}
+
+		pool.Close(poolSessionKey)
+		sess, _, err := s.ensureAgentSession(ctx, pool, in.Manager, in.Current, in.AgentName, in.Model, in.Mode, in.Effort, in.RootAbs)
+		if err != nil {
+			if isCanceledTurnError(err) || ctx.Err() != nil {
+				return nil, err
+			}
+			lastErr = err
+			log.Printf("[session/recovery] reopen.failed root=%s session=%s agent=%s attempt=%d/%d err=%v", in.RootID, in.SessionKey, in.AgentName, attempt, sessionRecoveryAttempts, err)
+			continue
+		}
+		if in.OnRecoveredSession != nil {
+			in.OnRecoveredSession(sess)
+		}
+
+		recoveryMessage := in.Prompt
+		recoveryAction := "resend_prompt"
+		if in.SawAssistantChunk {
+			recoveryMessage = "continue"
+			recoveryAction = "continue"
+		}
+		log.Printf("[session/recovery] send.start root=%s session=%s agent=%s attempt=%d/%d action=%s", in.RootID, in.SessionKey, in.AgentName, attempt, sessionRecoveryAttempts, recoveryAction)
+		if err := in.SendWithAttachment(sess, recoveryMessage); err != nil {
+			if isCanceledTurnError(err) || ctx.Err() != nil {
+				return nil, err
+			}
+			lastErr = err
+			log.Printf("[session/recovery] send.failed root=%s session=%s agent=%s attempt=%d/%d action=%s err=%v", in.RootID, in.SessionKey, in.AgentName, attempt, sessionRecoveryAttempts, recoveryAction, err)
+			continue
+		}
+		log.Printf("[session/recovery] send.done root=%s session=%s agent=%s attempt=%d/%d action=%s", in.RootID, in.SessionKey, in.AgentName, attempt, sessionRecoveryAttempts, recoveryAction)
+		return sess, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("agent recovery failed")
+	}
+	return nil, lastErr
+}
+
+func waitForRecoveryDelay(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s *Service) AnswerQuestion(ctx context.Context, in AnswerQuestionInput) error {
