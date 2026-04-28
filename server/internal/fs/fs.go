@@ -455,7 +455,15 @@ func alignReadOffsetForDecoding(file *os.File, info os.FileInfo, ext string, off
 
 func isTextLikeExt(ext string) bool {
 	switch strings.ToLower(ext) {
-	case ".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".csv", ".log":
+	case ".txt", ".text", ".md", ".markdown", ".mdx", ".rst", ".adoc", ".log",
+		".json", ".jsonc", ".json5", ".yaml", ".yml", ".toml", ".ini", ".conf", ".config", ".env",
+		".csv", ".tsv", ".xml", ".html", ".htm", ".css", ".scss", ".sass", ".less",
+		".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+		".go", ".rs", ".java", ".kt", ".kts", ".scala", ".swift",
+		".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".m", ".mm",
+		".cs", ".php", ".rb", ".py", ".pyw", ".pl", ".pm", ".r", ".lua",
+		".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
+		".sql", ".graphql", ".gql", ".proto", ".dockerfile", ".gradle":
 		return true
 	default:
 		return false
