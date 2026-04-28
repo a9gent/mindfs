@@ -106,6 +106,22 @@ export type SessionItem = {
   pending?: boolean;
 };
 
+function latestExchangeText(
+  exchanges: unknown,
+  field: "agent" | "mode" | "effort",
+): string {
+  if (!Array.isArray(exchanges)) {
+    return "";
+  }
+  for (let i = exchanges.length - 1; i >= 0; i -= 1) {
+    const value = (exchanges[i] as Record<string, unknown> | null)?.[field];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return "";
+}
+
 function toSessionItem(
   rootID: string | null | undefined,
   session: any,
@@ -128,10 +144,19 @@ function toSessionItem(
       session?.type === "plugin" || session?.type === "chat"
         ? session.type
         : "chat",
-    agent: typeof session?.agent === "string" ? session.agent : "",
+    agent:
+      typeof session?.agent === "string" && session.agent.trim()
+        ? session.agent
+        : latestExchangeText(session?.exchanges, "agent"),
     model: typeof session?.model === "string" ? session.model : "",
-    mode: typeof session?.mode === "string" ? session.mode : "",
-    effort: typeof session?.effort === "string" ? session.effort : "",
+    mode:
+      typeof session?.mode === "string" && session.mode.trim()
+        ? session.mode
+        : latestExchangeText(session?.exchanges, "mode"),
+    effort:
+      typeof session?.effort === "string" && session.effort.trim()
+        ? session.effort
+        : latestExchangeText(session?.exchanges, "effort"),
     scope: typeof session?.scope === "string" ? session.scope : "",
     purpose: typeof session?.purpose === "string" ? session.purpose : "",
     created_at:
@@ -2233,23 +2258,33 @@ export function App({ onGoHome }: AppProps) {
 
   const refreshGitStatus = useCallback(async (rootID: string) => {
     if (!rootID) {
-      setGitStatus(null);
+      if (!currentRootIdRef.current) {
+        setGitStatus(null);
+        setGitStatusLoading(false);
+      }
       return null;
     }
+    const shouldApply = () => currentRootIdRef.current === rootID;
     if (managedRootByIdRef.current[rootID]?.is_git_repo !== true) {
       const fallback = {
         available: false,
         dirty_count: 0,
         items: [],
       } as GitStatusPayload;
-      setGitStatus(fallback);
-      setGitStatusLoading(false);
+      if (shouldApply()) {
+        setGitStatus(fallback);
+        setGitStatusLoading(false);
+      }
       return fallback;
     }
-    setGitStatusLoading(true);
+    if (shouldApply()) {
+      setGitStatusLoading(true);
+    }
     try {
       const next = await fetchGitStatus(rootID);
-      setGitStatus(next);
+      if (shouldApply()) {
+        setGitStatus(next);
+      }
       return next;
     } catch (err) {
       console.error("[git.status] failed", { rootID, err });
@@ -2258,10 +2293,14 @@ export function App({ onGoHome }: AppProps) {
         dirty_count: 0,
         items: [],
       } as GitStatusPayload;
-      setGitStatus(fallback);
+      if (shouldApply()) {
+        setGitStatus(fallback);
+      }
       return fallback;
     } finally {
-      setGitStatusLoading(false);
+      if (shouldApply()) {
+        setGitStatusLoading(false);
+      }
     }
   }, []);
 

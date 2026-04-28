@@ -1084,6 +1084,7 @@ function withSessionMeta(
     agent: preferIncomingText(incoming.agent, base.agent),
     model: preferIncomingText((incoming as any).model, (base as any).model),
     mode: preferIncomingText((incoming as any).mode, (base as any).mode),
+    effort: preferIncomingText((incoming as any).effort, (base as any).effort),
     name: preferIncomingText(incoming.name, base.name) || "",
     exchanges: Array.isArray(incoming.exchanges) ? [...incoming.exchanges] : [],
     exchange_aux: cloneExchangeAux(incoming.exchange_aux || base.exchange_aux),

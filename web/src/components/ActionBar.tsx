@@ -520,6 +520,21 @@ export function ActionBar({
     appendPendingAttachments(imageFiles);
   }, [appendPendingAttachments, currentRootId, sending]);
 
+  const resetForNewSession = useCallback(() => {
+    const nextAgent = agents.find((item) => item.name === agent)
+      || agents.find((item) => item.available)
+      || agents[0];
+    if (!nextAgent) {
+      return;
+    }
+    const defaults = getAgentDefaults(nextAgent);
+    setAgent(nextAgent.name);
+    setModel(defaults.model);
+    setAgentMode("");
+    setEffort(defaults.effort);
+    syncedSessionSignatureRef.current = "";
+  }, [agent, agents]);
+
   const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
     const clientX = "touches" in e ? e.touches[0].clientX : e.clientX;
     dragStartRef.current = clientX;
@@ -528,10 +543,13 @@ export function ActionBar({
 
   const handleDragEnd = useCallback(() => {
     if (!isDragging) return;
-    if (dragX <= DRAG_THRESHOLD) onNewSession?.();
+    if (dragX <= DRAG_THRESHOLD) {
+      resetForNewSession();
+      onNewSession?.();
+    }
     setDragX(0);
     setIsDragging(false);
-  }, [isDragging, dragX, onNewSession]);
+  }, [isDragging, dragX, onNewSession, resetForNewSession]);
 
   useEffect(() => {
     if (!isDragging) return;
