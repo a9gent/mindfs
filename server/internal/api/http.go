@@ -1387,10 +1387,11 @@ const indexHTML = `<!doctype html>
       </footer>
     </div>
     <script>
-      fetch("/api/tree?dir=.")
+      var root = new URLSearchParams(window.location.search).get("root") || "";
+      fetch("/api/tree?" + new URLSearchParams({ root: root, dir: "." }).toString())
         .then(function (res) { return res.json(); })
         .then(function (payload) {
-          var tree = Array.isArray(payload) ? payload : [];
+          var tree = Array.isArray(payload) ? payload : (Array.isArray(payload.entries) ? payload.entries : []);
           var treeEl = document.getElementById("tree");
           var listEl = document.getElementById("list");
           treeEl.innerHTML = "";

@@ -20,6 +20,8 @@ import (
 	"mindfs/server/internal/update"
 )
 
+const staticDirEnvKey = "MINDFS_STATIC_DIR"
+
 type StartOptions struct {
 	NoRelayer    bool
 	RelayBaseURL string
@@ -150,6 +152,12 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 }
 
 func resolveStaticDir() string {
+	if hinted := strings.TrimSpace(os.Getenv(staticDirEnvKey)); hinted != "" {
+		if info, err := os.Stat(hinted); err == nil && info.IsDir() {
+			return hinted
+		}
+	}
+
 	if shouldPreferWorkingDirStaticDir() {
 		if exe, err := os.Executable(); err == nil {
 			candidate := filepath.Join(filepath.Dir(exe), "web", "dist")
