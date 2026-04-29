@@ -10,7 +10,7 @@ type LoginProps = {
   onOpenNode: (nodeURL: string) => void;
 };
 
-const RELAY_URL = "http://192.168.3.209:8080/nodes";
+const RELAY_URL = "https://relay.a9gent.com/nodes";
 const LAUNCHER_BG =
   "radial-gradient(circle at top left, rgba(91, 125, 184, 0.07), transparent 22%), radial-gradient(circle at right 18%, rgba(148, 163, 184, 0.18), transparent 24%), linear-gradient(180deg, #f8fafc 0%, #edf2f7 100%)";
 const SURFACE = "var(--mindfs-launcher-surface)";

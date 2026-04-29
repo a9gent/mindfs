@@ -1,8 +1,9 @@
-.PHONY: help dev dev-backend dev-web build-web build install uninstall build-all start start-server test dist-clean release tag
+.PHONY: help dev dev-backend dev-web build-web build build-android install uninstall build-all start start-server test dist-clean release tag
 
 GO ?= go
 NPM ?= npm
 WEB_DIR ?= web
+ANDROID_DIR ?= android
 ADDR ?= :7331
 ROOT ?= .
 PREFIX ?= $(HOME)/.local
@@ -15,6 +16,7 @@ help:
 		"  make dev-web      # Vite dev server only" \
 		"  make build-web    # build web assets into web/dist" \
 		"  make build        # build web assets and CLI binary" \
+		"  make build-android # build Android release APK into dist/" \
 		"  make install      # install binary and built static assets into $(PREFIX)" \
 		"  make uninstall    # remove installed binary and static assets from $(PREFIX)" \
 		"  make build-all    # cross-compile for all platforms into dist/" \
@@ -65,6 +67,8 @@ test:
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 DIST_DIR ?= dist
 RELEASE_NOTES_DIR ?= release-notes
+ANDROID_RELEASE_APK ?= $(ANDROID_DIR)/app/build/outputs/apk/release/app-release.apk
+ANDROID_DIST_APK ?= $(DIST_DIR)/mindfs_$(VERSION)_android.apk
 
 # Targets: OS/ARCH pairs
 PLATFORMS := \
@@ -78,6 +82,12 @@ PLATFORMS := \
 
 build-all: build-web
 	@bash scripts/build-all.sh "$(VERSION)" "$(DIST_DIR)"
+
+build-android:
+	cd $(WEB_DIR) && $(NPM) run build:android
+	cd $(ANDROID_DIR) && ./gradlew assembleRelease
+	mkdir -p "$(DIST_DIR)"
+	cp "$(ANDROID_RELEASE_APK)" "$(ANDROID_DIST_APK)"
 
 dist-clean:
 	rm -rf $(DIST_DIR)
@@ -94,11 +104,14 @@ tag:
 # Usage: make release TAG=v1.2.3
 # Builds all platforms and creates a GitHub release with all artifacts.
 # Requires $(RELEASE_NOTES_DIR)/$(TAG).md to exist.
-release: dist-clean build-all
+release:
 	@command -v gh >/dev/null 2>&1 || (echo "Error: gh (GitHub CLI) is required. https://cli.github.com" >&2; exit 1)
 	@test -n "$(TAG)" || (echo "Usage: make release TAG=v1.2.3" >&2; exit 1)
 	@test -f "$(RELEASE_NOTES_DIR)/$(TAG).md" || (echo "Error: release notes file not found: $(RELEASE_NOTES_DIR)/$(TAG).md" >&2; exit 1)
+	$(MAKE) dist-clean
+	$(MAKE) build-all
+	$(MAKE) build-android
 	@echo "Creating GitHub release $(TAG)"
-	gh release create $(TAG) $(DIST_DIR)/*.tar.gz $(DIST_DIR)/*.zip \
+	gh release create $(TAG) $(DIST_DIR)/*.tar.gz $(DIST_DIR)/*.zip $(DIST_DIR)/*.apk \
 		--title "$(TAG)" \
 		--notes-file "$(RELEASE_NOTES_DIR)/$(TAG).md"

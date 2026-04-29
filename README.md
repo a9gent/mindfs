@@ -27,7 +27,7 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 - **Real-time streaming**: Token-by-token output pushed to the browser; tool calls, thought traces, permission prompts, and remaining context-window capacity are rendered live as structured, collapsible cards.
 - **Flexible switching**: Switch agents or models mid-session; all agents share the same context — no need to re-explain the background.
 - **Session search**: Search by session title or conversation content, then jump straight to the matched session and snippet.
-- **External session both-way import**: Browse existing sessions from supported agent CLIs, import one into MindFS, and continue it as a native MindFS session. MindFS session can resumed in agent cli too.
+- **External session both-way import&synchronization**: Browse existing sessions from supported agent CLIs, import one into MindFS, and continue it as a native MindFS session. MindFS session can resumed in agent cli too. Bidirectional synchronization is also possible.
 - **Binding persistence and recovery**: MindFS persists the mapping between its internal session and the underlying agent session, so the link can be restored after service restarts and follow-up messages continue on the same agent session when available.
 - **Rich media input**: Attach files and images directly in your messages.
 - **Multi-device sync**: Access the same instance from multiple devices simultaneously with live session sync.
@@ -44,7 +44,7 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 - **`@` file references**: Type `@` to trigger path completion and attach any file as context for the agent.
 - **`#` quick prompts**: Type `#` to trigger your saved prompt shortcuts inline.
 - **Bidirectional file–session linking**: Jump from a file to the session that created it, or from a session to all files it touched.
-- **Browser app (PWA)**: Install to desktop or mobile home screen for a native-like experience — no app store required.
+- **Android, Browser app (PWA)**: Install to desktop or mobile home screen for a native-like experience — no app store required.
 - **Mobile-optimized UI**: Bottom action bar within thumb reach, independent panel swipe navigation, input box adapts to the soft keyboard.
 
 ### Access Modes
