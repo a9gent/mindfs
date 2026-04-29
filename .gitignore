@@ -14,6 +14,7 @@ dist/
 build/
 *.log
 .env*
+!.env.example
 *.exe
 *.test
 vendor/

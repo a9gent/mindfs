@@ -1,0 +1,21 @@
+services:
+  mindfs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${MINDFS_PORT:-7331}:7331"
+    volumes:
+      - ./workspace:/workspace
+      - ./data/config:/root/.config
+      - ./data/local:/root/.local
+    command:
+      - --foreground
+      - -addr
+      - ${MINDFS_ADDR:-0.0.0.0:7331}
+      - ${MINDFS_ROOT:-/workspace}
+    restart: ${MINDFS_RESTART:-unless-stopped}
+
+volumes:
+  mindfs-config:
+  mindfs-state:
