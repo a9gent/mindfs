@@ -281,6 +281,14 @@ func (m *Manager) Search(_ context.Context, opts SearchOptions) ([]SearchHit, er
 }
 
 func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role, content, agent, mode, effort string) error {
+	return m.addExchangeForAgentAt(session, role, content, agent, mode, effort, time.Time{})
+}
+
+func (m *Manager) AddExchangeForAgentAt(_ context.Context, session *Session, role, content, agent, mode, effort string, timestamp time.Time) error {
+	return m.addExchangeForAgentAt(session, role, content, agent, mode, effort, timestamp)
+}
+
+func (m *Manager) addExchangeForAgentAt(session *Session, role, content, agent, mode, effort string, timestamp time.Time) error {
 	if session == nil || strings.TrimSpace(session.Key) == "" {
 		return errors.New("session required")
 	}
@@ -300,6 +308,10 @@ func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role,
 	}
 	resolvedAgent := strings.TrimSpace(agent)
 	nextSeq := len(session.Exchanges) + 1
+	ts := timestamp.UTC()
+	if ts.IsZero() {
+		ts = m.now().UTC()
+	}
 	record := Exchange{
 		Seq:       nextSeq,
 		Role:      role,
@@ -308,7 +320,7 @@ func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role,
 		Mode:      strings.TrimSpace(mode),
 		Effort:    strings.TrimSpace(effort),
 		Content:   content,
-		Timestamp: m.now().UTC(),
+		Timestamp: ts,
 	}
 	if err := m.appendExchange(session.Key, record); err != nil {
 		log.Printf("[session/store] append.error session=%s seq=%d role=%s agent=%s err=%v", session.Key, record.Seq, role, resolvedAgent, err)

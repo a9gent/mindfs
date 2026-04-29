@@ -116,16 +116,24 @@ func isUnsupportedACPListSessions(err error) bool {
 }
 
 func (i *Importer) ImportExternalSession(ctx context.Context, in agenttypes.ImportExternalSessionInput) (agenttypes.ImportedExternalSession, error) {
+	sessionID := strings.TrimSpace(in.AgentSessionID)
+	if sessionID == "" {
+		return agenttypes.ImportedExternalSession{}, errors.New("agent session id required")
+	}
+	if !in.AfterTimestamp.IsZero() {
+		return agenttypes.ImportedExternalSession{
+			Agent:          i.agentName,
+			AgentSessionID: sessionID,
+			Cwd:            in.RootPath,
+			Exchanges:      nil,
+		}, nil
+	}
+
 	proc, cwd, err := i.openProcess(ctx, in.RootPath)
 	if err != nil {
 		return agenttypes.ImportedExternalSession{}, err
 	}
 	defer proc.Close()
-
-	sessionID := strings.TrimSpace(in.AgentSessionID)
-	if sessionID == "" {
-		return agenttypes.ImportedExternalSession{}, errors.New("agent session id required")
-	}
 
 	collector := &importCollector{}
 	if err := proc.attachImportCollector(sessionID, collector); err != nil {

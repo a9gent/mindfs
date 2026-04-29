@@ -83,7 +83,7 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		return agenttypes.ImportedExternalSession{}, errors.New("agent session id required")
 	}
 	if file, ok := i.lookupSessionFile(targetID, rootPath); ok {
-		exchanges, err := readCodexImportedExchanges(file.Path)
+		exchanges, err := readCodexImportedExchanges(file.Path, in.AfterTimestamp)
 		if err != nil {
 			log.Printf("[agent/codex/importer] import session read failed session_id=%s path=%s err=%v", targetID, file.Path, err)
 			return agenttypes.ImportedExternalSession{}, err
@@ -103,7 +103,7 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		if file.AgentSessionID != targetID {
 			continue
 		}
-		exchanges, err := readCodexImportedExchanges(file.Path)
+		exchanges, err := readCodexImportedExchanges(file.Path, in.AfterTimestamp)
 		if err != nil {
 			log.Printf("[agent/codex/importer] import session read failed session_id=%s path=%s err=%v", targetID, file.Path, err)
 			return agenttypes.ImportedExternalSession{}, err
@@ -246,7 +246,7 @@ func inspectCodexSessionFile(path string) (codexSessionFile, bool, error) {
 	}, true, nil
 }
 
-func readCodexImportedExchanges(path string) ([]agenttypes.ImportedExchange, error) {
+func readCodexImportedExchanges(path string, after time.Time) ([]agenttypes.ImportedExchange, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -264,6 +264,9 @@ func readCodexImportedExchanges(path string) ([]agenttypes.ImportedExchange, err
 			return nil
 		}
 		timestamp := parseTimeRFC3339(asString(raw["timestamp"]))
+		if !after.IsZero() && (timestamp.IsZero() || !timestamp.After(after)) {
+			return nil
+		}
 		switch raw["type"] {
 		case "response_item":
 			payload, _ := raw["payload"].(map[string]any)

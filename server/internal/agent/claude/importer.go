@@ -87,7 +87,7 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		return agenttypes.ImportedExternalSession{}, errors.New("agent session id required")
 	}
 	if file, ok := i.lookupSessionFile(targetID, rootPath); ok {
-		exchanges, err := readClaudeImportedExchanges(file.Path)
+		exchanges, err := readClaudeImportedExchanges(file.Path, in.AfterTimestamp)
 		if err != nil {
 			log.Printf("[agent/claude/importer] import session read failed session_id=%s path=%s err=%v", targetID, file.Path, err)
 			return agenttypes.ImportedExternalSession{}, err
@@ -107,7 +107,7 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		if file.AgentSessionID != targetID {
 			continue
 		}
-		exchanges, err := readClaudeImportedExchanges(file.Path)
+		exchanges, err := readClaudeImportedExchanges(file.Path, in.AfterTimestamp)
 		if err != nil {
 			log.Printf("[agent/claude/importer] import session read failed session_id=%s path=%s err=%v", targetID, file.Path, err)
 			return agenttypes.ImportedExternalSession{}, err
@@ -271,7 +271,7 @@ func inspectClaudeSessionFile(path string) (claudeSessionFile, bool, error) {
 	}, true, nil
 }
 
-func readClaudeImportedExchanges(path string) ([]agenttypes.ImportedExchange, error) {
+func readClaudeImportedExchanges(path string, after time.Time) ([]agenttypes.ImportedExchange, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -301,6 +301,9 @@ func readClaudeImportedExchanges(path string) ([]agenttypes.ImportedExchange, er
 			return nil
 		}
 		ts := parseTimeRFC3339(asString(raw["timestamp"]))
+		if !after.IsZero() && (ts.IsZero() || !ts.After(after)) {
+			return nil
+		}
 		if role == "user" {
 			if !isMeaningfulClaudeUserText(text) {
 				return nil

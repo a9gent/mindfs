@@ -91,6 +91,7 @@ type ImportExternalSessionInput struct {
 	RootPath       string
 	Agent          string
 	AgentSessionID string
+	AfterTimestamp time.Time
 }
 
 type ImportedExchange struct {

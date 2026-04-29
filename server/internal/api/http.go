@@ -441,6 +441,18 @@ func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uc := h.service()
+	var pendingUser *session.Exchange
+	if h.AppContext != nil {
+		pendingUser = h.AppContext.GetSessionStreamHub().GetPendingUserExchange(key)
+	}
+	if pendingUser == nil {
+		if _, err := uc.SyncExternalSessionDelta(r.Context(), usecase.SyncExternalSessionDeltaInput{
+			RootID: rootID,
+			Key:    key,
+		}); err != nil {
+			log.Printf("[session/sync] external delta best-effort failed root=%s session=%s err=%v", strings.TrimSpace(rootID), strings.TrimSpace(key), err)
+		}
+	}
 	out, err := uc.GetSession(r.Context(), usecase.GetSessionInput{
 		RootID: rootID,
 		Key:    key,
@@ -449,10 +461,6 @@ func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		respondError(w, http.StatusNotFound, err)
 		return
-	}
-	var pendingUser *session.Exchange
-	if h.AppContext != nil {
-		pendingUser = h.AppContext.GetSessionStreamHub().GetPendingUserExchange(key)
 	}
 	contextWindow, _ := uc.GetSessionContextWindow(r.Context(), usecase.GetSessionContextWindowInput{
 		RootID: rootID,

@@ -9,6 +9,7 @@ export type ErrorCode =
   | "session.delete_failed"
   | "session.import_failed"
   | "session.rename_failed"
+  | "session.sync_failed"
   | "app.init_failed"
   // Root/project errors
   | "root.create_failed"
@@ -135,6 +136,11 @@ class ErrorService {
       },
       "session.rename_failed": {
         message: "重命名会话失败",
+        severity: "error",
+        recoverable: true,
+      },
+      "session.sync_failed": {
+        message: "同步会话失败",
         severity: "error",
         recoverable: true,
       },

@@ -1207,12 +1207,10 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 			Mode:               in.Mode,
 			Effort:             in.Effort,
 			RootAbs:            rootAbs,
+			CurrentSession:     sess,
 			Prompt:             prompt,
 			SawAssistantChunk:  sawAssistantChunk,
 			SendWithAttachment: sendWithAttachedUpdates,
-			OnRecoveredSession: func(runtime agenttypes.Session) {
-				setActiveTurnSession(in.RootID, current.Key, runtime)
-			},
 		})
 		if recoveredErr != nil {
 			sendErr = recoveredErr
@@ -1277,10 +1275,10 @@ type SendRecoveryInput struct {
 	Mode               string
 	Effort             string
 	RootAbs            string
+	CurrentSession     agenttypes.Session
 	Prompt             string
 	SawAssistantChunk  bool
 	SendWithAttachment func(agenttypes.Session, string) error
-	OnRecoveredSession func(agenttypes.Session)
 }
 
 func (s *Service) recoverAgentTurn(ctx context.Context, in SendRecoveryInput) (agenttypes.Session, error) {
@@ -1304,8 +1302,10 @@ func (s *Service) recoverAgentTurn(ctx context.Context, in SendRecoveryInput) (a
 	if in.SendWithAttachment == nil {
 		return nil, errors.New("send function required")
 	}
+	if in.CurrentSession == nil {
+		return nil, errors.New("current session required")
+	}
 
-	poolSessionKey := agentPoolSessionKey(in.SessionKey, in.AgentName)
 	var lastErr error
 	for attempt := 1; attempt <= sessionRecoveryAttempts; attempt++ {
 		if attempt > 1 {
@@ -1330,20 +1330,7 @@ func (s *Service) recoverAgentTurn(ctx context.Context, in SendRecoveryInput) (a
 			continue
 		}
 
-		pool.Close(poolSessionKey)
-		sess, _, err := s.ensureAgentSession(ctx, pool, in.Manager, in.Current, in.AgentName, in.Model, in.Mode, in.Effort, in.RootAbs)
-		if err != nil {
-			if isCanceledTurnError(err) || ctx.Err() != nil {
-				return nil, err
-			}
-			lastErr = err
-			log.Printf("[session/recovery] reopen.failed root=%s session=%s agent=%s attempt=%d/%d err=%v", in.RootID, in.SessionKey, in.AgentName, attempt, sessionRecoveryAttempts, err)
-			continue
-		}
-		if in.OnRecoveredSession != nil {
-			in.OnRecoveredSession(sess)
-		}
-
+		sess := in.CurrentSession
 		recoveryMessage := in.Prompt
 		recoveryAction := "resend_prompt"
 		if in.SawAssistantChunk {

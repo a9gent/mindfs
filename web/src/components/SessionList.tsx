@@ -5,12 +5,12 @@ export type SessionType = "chat" | "plugin";
 
 export type SessionItem = {
   key: string;
-  session_key?: string;
+  session_key: string;
   type?: SessionType;
   agent?: string;
-  name: string;
-  created_at: string;
-  updated_at: string;
+  name?: string;
+  created_at?: string;
+  updated_at?: string;
   closed_at?: string;
   related_files?: Array<{ path: string }>;
   search_seq?: number;
@@ -34,6 +34,7 @@ type SessionListProps = {
   onSearchBlur?: () => void;
   onSelect?: (session: SessionItem) => void;
   onRestore?: (session: SessionItem) => void;
+  onSync?: (session: SessionItem) => Promise<void> | void;
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onDelete?: (session: SessionItem) => void;
   onLoadOlder?: () => void;
@@ -61,6 +62,7 @@ export function SessionList({
   onSearchSubmit,
   onSearchBlur,
   onSelect,
+  onSync,
   onRename,
   onDelete,
   onLoadOlder,
@@ -293,6 +295,7 @@ export function SessionList({
                 selected={session.key === selectedKey}
                 highlightQuery={searchResultsMode ? searchQuery : ""}
                 onSelect={onSelect}
+                onSync={onSync}
                 onRename={onRename}
                 onDelete={onDelete}
               />
@@ -328,6 +331,7 @@ function SessionCard({
   selected,
   highlightQuery,
   onSelect,
+  onSync,
   onRename,
   onDelete,
 }: {
@@ -335,6 +339,7 @@ function SessionCard({
   selected: boolean;
   highlightQuery?: string;
   onSelect?: (session: SessionItem) => void;
+  onSync?: (session: SessionItem) => Promise<void> | void;
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onDelete?: (session: SessionItem) => void;
 }) {
@@ -668,7 +673,7 @@ function SessionCard({
             {formatTime(
               isClosed && session.closed_at
                 ? session.closed_at
-                : session.updated_at,
+                : session.updated_at || "",
             )}
           </span>
         </div>
@@ -726,6 +731,32 @@ function SessionCard({
               zIndex: 20,
             }}
           >
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen(false);
+                void onSync?.(session);
+              }}
+              style={{
+                ...menuItemStyle,
+                color: "var(--text-primary)",
+              }}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path
+                  fill="currentColor"
+                  d="M19.91 15.51h-4.53a1 1 0 0 0 0 2h2.4A8 8 0 0 1 4 12a1 1 0 0 0-2 0a10 10 0 0 0 16.88 7.23V21a1 1 0 0 0 2 0v-4.5a1 1 0 0 0-.97-.99M12 2a10 10 0 0 0-6.88 2.77V3a1 1 0 0 0-2 0v4.5a1 1 0 0 0 1 1h4.5a1 1 0 0 0 0-2h-2.4A8 8 0 0 1 20 12a1 1 0 0 0 2 0A10 10 0 0 0 12 2"
+                />
+              </svg>
+              同步
+            </button>
             <button
               type="button"
               onClick={(e) => {

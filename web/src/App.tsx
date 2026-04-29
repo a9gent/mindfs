@@ -2817,6 +2817,68 @@ export function App({ onGoHome }: AppProps) {
     [bumpCacheVersion, rootSessionKey, setDrawerSessionForRoot],
   );
 
+  const handleSyncSession = useCallback(
+    async (session: SessionItem) => {
+      const sessionKey = session?.key || session?.session_key;
+      const rootID =
+        (session?.root_id as string | undefined) || currentRootIdRef.current;
+      if (!rootID || !sessionKey || sessionKey.startsWith("pending-")) return;
+
+      const cacheKey = rootSessionKey(rootID, sessionKey);
+      try {
+        const result = await syncSession(rootID, sessionKey);
+        const synced = result.session;
+        if (!synced) {
+          reportError("session.sync_failed", "同步会话失败");
+          return;
+        }
+        const normalized = {
+          ...(synced as any),
+          key: sessionKey,
+        } as Session;
+        sessionCacheRef.current[cacheKey] = normalized;
+        loadedSessionRef.current[cacheKey] = true;
+        clearSessionStale(rootID, sessionKey);
+
+        const nextItem = toSessionItem(rootID, normalized);
+        if (nextItem) {
+          setSessions((prev) => mergeSessionItems(prev, [nextItem]));
+        }
+
+        setSelectedSession((prev) => {
+          const prevKey = prev?.key || prev?.session_key;
+          const prevRoot =
+            (prev?.root_id as string | undefined) || currentRootIdRef.current;
+          if (!prev || prevKey !== sessionKey || prevRoot !== rootID) {
+            return prev;
+          }
+          return toSessionItem(rootID, {
+            ...(prev as any),
+            ...(normalized as any),
+            key: sessionKey,
+            session_key: sessionKey,
+            root_id: rootID,
+          });
+        });
+
+        if (drawerSessionByRootRef.current[rootID]?.key === sessionKey) {
+          setDrawerSessionForRoot(rootID, normalized);
+        }
+
+        bumpCacheVersion();
+      } catch {
+        reportError("session.sync_failed", "同步会话失败");
+      }
+    },
+    [
+      bumpCacheVersion,
+      clearSessionStale,
+      mergeSessionItems,
+      rootSessionKey,
+      setDrawerSessionForRoot,
+    ],
+  );
+
   useEffect(() => {
     handleSelectSessionRef.current = handleSelectSession;
   }, [handleSelectSession]);
@@ -6666,6 +6728,7 @@ export function App({ onGoHome }: AppProps) {
           handleSelectSession(s);
           if (isMobile) setIsRightOpen(false);
         }}
+        onSync={handleSyncSession}
         onRename={handleRenameSession}
         onDelete={handleDeleteSession}
         onLoadOlder={
