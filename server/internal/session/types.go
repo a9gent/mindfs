@@ -43,6 +43,38 @@ type ExchangeAux struct {
 	Thought  string               `json:"thought,omitempty"`
 }
 
+func CompactExchangeAux(aux ExchangeAux) (ExchangeAux, bool) {
+	if aux.ToolCall == nil {
+		return ExchangeAux{}, false
+	}
+
+	toolCall := CompactToolCall(*aux.ToolCall)
+	aux.ToolCall = &toolCall
+	aux.Thought = ""
+	return aux, true
+}
+
+func CompactToolCall(toolCall agenttypes.ToolCall) agenttypes.ToolCall {
+	if !PreserveToolCallContent(toolCall.Kind) {
+		toolCall.Content = nil
+	}
+	return toolCall
+}
+
+func PreserveToolCallContent(kind agenttypes.ToolKind) bool {
+	switch kind {
+	case agenttypes.ToolKindEdit,
+		agenttypes.ToolKindDelete,
+		agenttypes.ToolKindMove,
+		agenttypes.ToolKindAskUser,
+		agenttypes.ToolKindTodo,
+		agenttypes.ToolKindTask:
+		return true
+	default:
+		return false
+	}
+}
+
 type RelatedFile struct {
 	Path             string `json:"path"`
 	Relation         string `json:"relation"`

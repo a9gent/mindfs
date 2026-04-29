@@ -1127,6 +1127,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	attachSessionUpdates := func(runtime agenttypes.Session) {
 		runtime.OnUpdate(func(update agenttypes.Event) {
 			update = normalizeAgentUpdatePaths(root, update)
+			update = compactAgentUpdate(update)
 			switch update.Type {
 			case agenttypes.EventTypeThoughtChunk:
 				if chunk, ok := update.Data.(agenttypes.ThoughtChunk); ok && chunk.Content != "" {
@@ -1468,11 +1469,15 @@ func normalizeAgentUpdatePaths(root pathNormalizer, update agenttypes.Event) age
 	for i := range toolCall.Locations {
 		toolCall.Locations[i].Path = normalizeToolPath(root, toolCall.Locations[i].Path)
 	}
-	for i := range toolCall.Content {
-		toolCall.Content[i].Path = normalizeToolPath(root, toolCall.Content[i].Path)
-		if toolCall.Content[i].Type == "text" {
-			toolCall.Content[i].Text = normalizeDiffTextPaths(root, toolCall.Content[i].Text)
+	if session.PreserveToolCallContent(toolCall.Kind) {
+		for i := range toolCall.Content {
+			toolCall.Content[i].Path = normalizeToolPath(root, toolCall.Content[i].Path)
+			if toolCall.Content[i].Type == "text" {
+				toolCall.Content[i].Text = normalizeDiffTextPaths(root, toolCall.Content[i].Text)
+			}
 		}
+	} else {
+		toolCall.Content = nil
 	}
 	if toolCall.Meta != nil {
 		if filePath, ok := toolCall.Meta["filePath"].(string); ok {
@@ -1483,6 +1488,16 @@ func normalizeAgentUpdatePaths(root pathNormalizer, update agenttypes.Event) age
 		}
 	}
 	update.Data = toolCall
+	return update
+}
+
+func compactAgentUpdate(update agenttypes.Event) agenttypes.Event {
+	switch update.Type {
+	case agenttypes.EventTypeToolCall, agenttypes.EventTypeToolUpdate:
+		if toolCall, ok := update.Data.(agenttypes.ToolCall); ok {
+			update.Data = session.CompactToolCall(toolCall)
+		}
+	}
 	return update
 }
 

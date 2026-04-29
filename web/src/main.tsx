@@ -108,6 +108,17 @@ function isTextEditableTarget(target: EventTarget | null): target is HTMLElement
   );
 }
 
+function syncViewportHeight(): void {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
+
+  const viewportHeight = isCapacitorRuntime()
+    ? window.innerHeight
+    : window.visualViewport?.height || window.innerHeight;
+  document.documentElement.style.setProperty("--mindfs-viewport-height", `${viewportHeight}px`);
+}
+
 function AppRoot() {
   const [ready] = useState(() => !isLocalCapacitorShell());
 
@@ -119,8 +130,23 @@ function AppRoot() {
   };
 
   useEffect(() => {
-    if (!isCapacitorRuntime() || typeof window === "undefined") {
+    if (typeof window === "undefined") {
       return;
+    }
+
+    syncViewportHeight();
+    window.addEventListener("resize", syncViewportHeight);
+    window.addEventListener("orientationchange", syncViewportHeight);
+    window.visualViewport?.addEventListener("resize", syncViewportHeight);
+    window.visualViewport?.addEventListener("scroll", syncViewportHeight);
+
+    if (!isCapacitorRuntime()) {
+      return () => {
+        window.removeEventListener("resize", syncViewportHeight);
+        window.removeEventListener("orientationchange", syncViewportHeight);
+        window.visualViewport?.removeEventListener("resize", syncViewportHeight);
+        window.visualViewport?.removeEventListener("scroll", syncViewportHeight);
+      };
     }
 
     const nativeCapacitor = (window as Window & {
@@ -282,6 +308,10 @@ function AppRoot() {
     }
 
     return () => {
+      window.removeEventListener("resize", syncViewportHeight);
+      window.removeEventListener("orientationchange", syncViewportHeight);
+      window.visualViewport?.removeEventListener("resize", syncViewportHeight);
+      window.visualViewport?.removeEventListener("scroll", syncViewportHeight);
       cleanupThemeSync?.();
       document.removeEventListener("focusin", onFocusIn);
       window.visualViewport?.removeEventListener("resize", onViewportResize);

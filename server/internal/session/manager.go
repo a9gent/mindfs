@@ -352,9 +352,13 @@ func (m *Manager) AddExchangeAux(_ context.Context, sessionKey string, aux Excha
 	if aux.ToolCall == nil && strings.TrimSpace(aux.Thought) == "" {
 		return errors.New("aux content required")
 	}
+	compacted, ok := CompactExchangeAux(aux)
+	if !ok {
+		return nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.appendExchangeAux(sessionKey, aux)
+	return m.appendExchangeAux(sessionKey, compacted)
 }
 
 func (m *Manager) AddRelatedFile(_ context.Context, key string, file RelatedFile) error {
@@ -1034,7 +1038,11 @@ func (m *Manager) loadExchangeAux(key string, afterSeq int) (map[int][]ExchangeA
 		if afterSeq > 0 && entry.Seq <= afterSeq {
 			continue
 		}
-		items[entry.Seq] = append(items[entry.Seq], entry)
+		compacted, ok := CompactExchangeAux(entry)
+		if !ok {
+			continue
+		}
+		items[compacted.Seq] = append(items[compacted.Seq], compacted)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
