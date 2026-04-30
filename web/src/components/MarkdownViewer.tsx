@@ -5,6 +5,7 @@ import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import Prism from "prismjs";
 import { fetchProofProtectedBlob } from "../services/file";
+import { openExternalURL } from "../services/platformNavigation";
 import "prismjs/themes/prism.css";
 // Reuse the language imports from global Prism context (since they are imported in CodeViewer, they might be available if loaded, 
 // but strictly speaking we should import them here or centralize. For simplicity, we rely on the side-effects of CodeViewer imports 
@@ -416,11 +417,21 @@ function MarkdownViewerInner({
           ),
           a: ({ href = "", children, ...props }) => {
             if (!href || href.startsWith("#") || isExternalHref(href) || !onFileClick) {
+              const shouldOpenExternally = isExternalHref(href);
               return (
                 <a
-                  href={href}
-                  style={{ color: "var(--accent-color)" }}
                   {...props}
+                  href={href}
+                  style={{ color: "var(--accent-color)", cursor: shouldOpenExternally ? "pointer" : undefined }}
+                  onClick={
+                    shouldOpenExternally
+                      ? (event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          openExternalURL(href);
+                        }
+                      : undefined
+                  }
                 >
                   {children}
                 </a>

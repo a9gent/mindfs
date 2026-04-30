@@ -1,10 +1,14 @@
 package com.mindfs.app;
 
 import android.app.DownloadManager;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
@@ -19,6 +23,8 @@ import androidx.core.graphics.Insets;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+    private static final String TAG = "MindFS";
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(NativeDownloadPlugin.class);
@@ -37,6 +43,10 @@ public class MainActivity extends BridgeActivity {
         getBridge().getWebView().addJavascriptInterface(
             new NativeDownloadBridge(),
             "MindFSNativeDownload"
+        );
+        getBridge().getWebView().addJavascriptInterface(
+            new ExternalBrowserBridge(),
+            "MindFSExternalBrowser"
         );
         clearPendingWebViewCacheIfNeeded();
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
@@ -186,6 +196,29 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public void storeRelayNodes(String rawJSON) {
             LauncherNodeSyncPlugin.storeRelayNodesJSON(MainActivity.this, rawJSON);
+        }
+    }
+
+    private class ExternalBrowserBridge {
+        @JavascriptInterface
+        public String open(String rawURL) {
+            try {
+                Uri uri = Uri.parse(rawURL == null ? "" : rawURL.trim());
+                String scheme = uri.getScheme();
+                if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+                    return "Only http:// and https:// URLs can be opened externally";
+                }
+                Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+                intent.addCategory(Intent.CATEGORY_BROWSABLE);
+                startActivity(intent);
+                return "";
+            } catch (ActivityNotFoundException ex) {
+                Log.w(TAG, "No activity found to open external URL: " + rawURL, ex);
+                return "No browser found to open this URL";
+            } catch (Exception ex) {
+                Log.w(TAG, "Failed to open external URL: " + rawURL, ex);
+                return "Failed to open external URL: " + ex.getMessage();
+            }
         }
     }
 

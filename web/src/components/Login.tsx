@@ -4,7 +4,11 @@ import {
   setStoredLauncherNodes,
   type LauncherNode,
 } from "../services/storage";
-import { consumePendingRelayNodes } from "../services/launcherNodeSync";
+import {
+  consumePendingRelayNodes,
+  getNativeLauncherNodes,
+  setNativeLauncherNodes,
+} from "../services/launcherNodeSync";
 
 type LoginProps = {
   onOpenNode: (nodeURL: string) => void;
@@ -50,6 +54,43 @@ function buildNodeID(): string {
   return `node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function normalizeLauncherNodes(nodes: LauncherNode[]): LauncherNode[] {
+  return nodes
+    .map((item) => {
+      const id = String(item?.id || "").trim();
+      const name = String(item?.name || "").trim();
+      const url = normalizeNodeURL(String(item?.url || ""));
+      const createdAt = String(item?.createdAt || "").trim();
+      const lastOpenedAt = String(item?.lastOpenedAt || "").trim();
+      if (!id || !name || !url || !createdAt) {
+        return null;
+      }
+      return {
+        id,
+        name,
+        url,
+        createdAt,
+        ...(lastOpenedAt ? { lastOpenedAt } : {}),
+      };
+    })
+    .filter((item): item is LauncherNode => item !== null);
+}
+
+function mergeLauncherNodes(...groups: LauncherNode[][]): LauncherNode[] {
+  const seenURLs = new Set<string>();
+  const merged: LauncherNode[] = [];
+  for (const group of groups) {
+    for (const node of normalizeLauncherNodes(group)) {
+      if (seenURLs.has(node.url)) {
+        continue;
+      }
+      seenURLs.add(node.url);
+      merged.push(node);
+    }
+  }
+  return sortNodes(merged);
+}
+
 export function Login({ onOpenNode }: LoginProps): ReactElement {
   const [nodes, setNodes] = useState<LauncherNode[]>(() => sortNodes(getStoredLauncherNodes()));
   const [composerOpen, setComposerOpen] = useState(false);
@@ -63,6 +104,7 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
     const sorted = sortNodes(nextNodes);
     setNodes(sorted);
     setStoredLauncherNodes(sorted);
+    void setNativeLauncherNodes(sorted);
   }
 
   function openNode(node: LauncherNode): void {
@@ -142,14 +184,18 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const pendingNodes = await consumePendingRelayNodes();
-      if (cancelled || pendingNodes.length === 0) {
+      const [nativeNodes, pendingNodes] = await Promise.all([
+        getNativeLauncherNodes(),
+        consumePendingRelayNodes(),
+      ]);
+      if (cancelled) {
         return;
       }
 
       const existingNodes = getStoredLauncherNodes();
+      const restoredNodes = mergeLauncherNodes(existingNodes, nativeNodes);
       const existingURLSet = new Set(
-        existingNodes.map((item) => normalizeNodeURL(item.url)).filter(Boolean),
+        restoredNodes.map((item) => normalizeNodeURL(item.url)).filter(Boolean),
       );
       const createdAt = new Date().toISOString();
       const importedNodes: LauncherNode[] = [];
@@ -169,12 +215,17 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
         });
       }
 
-      if (importedNodes.length === 0) {
+      const nextNodes = mergeLauncherNodes(importedNodes, restoredNodes);
+      if (
+        nextNodes.length === existingNodes.length &&
+        nextNodes.length === nativeNodes.length &&
+        importedNodes.length === 0
+      ) {
         return;
       }
 
-      const nextNodes = sortNodes([...importedNodes, ...existingNodes]);
       setStoredLauncherNodes(nextNodes);
+      void setNativeLauncherNodes(nextNodes);
       if (!cancelled) {
         setNodes(nextNodes);
       }
