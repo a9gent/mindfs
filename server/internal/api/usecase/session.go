@@ -354,7 +354,6 @@ const (
 	sessionNameMinMessageLen = 12
 	sessionRecoveryAttempts  = 3
 	sessionRecoveryDelay     = 30 * time.Second
-	sessionRecoveryProbeWait = 30 * time.Second
 )
 
 type SuggestSessionNameInput struct {
@@ -1283,16 +1282,8 @@ type SendRecoveryInput struct {
 }
 
 func (s *Service) recoverAgentTurn(ctx context.Context, in SendRecoveryInput) (agenttypes.Session, error) {
-	if s == nil || s.Registry == nil {
+	if s == nil {
 		return nil, errors.New("services not configured")
-	}
-	pool := s.Registry.GetAgentPool()
-	if pool == nil {
-		return nil, errors.New("agent pool unavailable")
-	}
-	prober := s.Registry.GetProber()
-	if prober == nil {
-		return nil, errors.New("agent prober unavailable")
 	}
 	if in.Current == nil {
 		return nil, errors.New("session required")
@@ -1314,21 +1305,6 @@ func (s *Service) recoverAgentTurn(ctx context.Context, in SendRecoveryInput) (a
 			if err := waitForRecoveryDelay(ctx, sessionRecoveryDelay); err != nil {
 				return nil, err
 			}
-		}
-		log.Printf("[session/recovery] probe.start root=%s session=%s agent=%s attempt=%d/%d", in.RootID, in.SessionKey, in.AgentName, attempt, sessionRecoveryAttempts)
-		probeCtx, probeCancel := context.WithTimeout(ctx, sessionRecoveryProbeWait)
-		status := prober.ProbeOne(probeCtx, in.AgentName)
-		probeCancel()
-		if !status.Installed || !status.Available {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			lastErr = errors.New(strings.TrimSpace(status.Error))
-			if lastErr.Error() == "" {
-				lastErr = errors.New("agent recovery probe failed")
-			}
-			log.Printf("[session/recovery] probe.failed root=%s session=%s agent=%s attempt=%d/%d installed=%t available=%t err=%v", in.RootID, in.SessionKey, in.AgentName, attempt, sessionRecoveryAttempts, status.Installed, status.Available, lastErr)
-			continue
 		}
 
 		sess := in.CurrentSession
