@@ -179,3 +179,6 @@ Flags:
 ## 许可证
 
 [AGPL v3](LICENSE)
+
+## 友情链接
+<a href="https://linux.do">Linux.do</a>

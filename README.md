@@ -180,3 +180,6 @@ Pull requests are welcome. For larger changes, please open an issue first to dis
 ## License
 
 [AGPL v3](LICENSE)
+
+## Friend Links
+<a href="https://linux.do">Linux.do</a>
