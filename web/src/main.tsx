@@ -108,15 +108,101 @@ function isTextEditableTarget(target: EventTarget | null): target is HTMLElement
   );
 }
 
+function isIOSWebKit(): boolean {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+  const userAgent = navigator.userAgent || "";
+  return /iP(hone|ad|od)/.test(userAgent) || (
+    navigator.platform === "MacIntel" &&
+    Number((navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints || 0) > 1
+  );
+}
+
 function syncViewportHeight(): void {
   if (typeof window === "undefined" || typeof document === "undefined") {
     return;
   }
 
-  const viewportHeight = isCapacitorRuntime()
+  const visualViewport = window.visualViewport;
+  const viewportHeight = isCapacitorRuntime() || !visualViewport
     ? window.innerHeight
-    : window.visualViewport?.height || window.innerHeight;
+    : visualViewport.height;
+  const viewportOffsetTop = isCapacitorRuntime() || !visualViewport
+    ? 0
+    : Math.max(0, visualViewport.offsetTop || 0);
   document.documentElement.style.setProperty("--mindfs-viewport-height", `${viewportHeight}px`);
+  document.documentElement.style.setProperty("--mindfs-viewport-offset-top", `${viewportOffsetTop}px`);
+}
+
+function syncViewportHeightAfterKeyboardChange(): void {
+  syncViewportHeight();
+  window.scrollTo(0, 0);
+  window.requestAnimationFrame(syncViewportHeight);
+  window.requestAnimationFrame(() => window.scrollTo(0, 0));
+  window.setTimeout(syncViewportHeight, 120);
+  window.setTimeout(() => window.scrollTo(0, 0), 120);
+  window.setTimeout(syncViewportHeight, 320);
+  window.setTimeout(() => window.scrollTo(0, 0), 320);
+}
+
+function canScrollTouchTarget(target: EventTarget | null, deltaY: number): boolean {
+  if (!(target instanceof Element) || deltaY === 0) {
+    return false;
+  }
+
+  let element: Element | null = target;
+  while (element && element !== document.documentElement && element !== document.body) {
+    const styles = window.getComputedStyle(element);
+    const overflowY = styles.overflowY;
+    const canScroll = (overflowY === "auto" || overflowY === "scroll") &&
+      element.scrollHeight > element.clientHeight + 1;
+    if (canScroll) {
+      const scrollTop = element.scrollTop;
+      const maxScrollTop = element.scrollHeight - element.clientHeight;
+      if (deltaY > 0 && scrollTop > 0) {
+        return true;
+      }
+      if (deltaY < 0 && scrollTop < maxScrollTop - 1) {
+        return true;
+      }
+    }
+    element = element.parentElement;
+  }
+  return false;
+}
+
+function installIOSKeyboardPanLock(): () => void {
+  if (!isIOSWebKit()) {
+    return () => {};
+  }
+
+  let lastTouchY = 0;
+  const onTouchStart = (event: TouchEvent) => {
+    lastTouchY = event.touches[0]?.clientY || 0;
+  };
+  const onTouchMove = (event: TouchEvent) => {
+    const activeElement = document.activeElement;
+    if (!isTextEditableTarget(activeElement) || event.touches.length !== 1) {
+      return;
+    }
+
+    const nextTouchY = event.touches[0]?.clientY || lastTouchY;
+    const deltaY = nextTouchY - lastTouchY;
+    lastTouchY = nextTouchY;
+    if (canScrollTouchTarget(event.target, deltaY)) {
+      return;
+    }
+    event.preventDefault();
+    window.scrollTo(0, 0);
+  };
+
+  document.addEventListener("touchstart", onTouchStart, { passive: true });
+  document.addEventListener("touchmove", onTouchMove, { passive: false });
+  return () => {
+    document.removeEventListener("touchstart", onTouchStart);
+    document.removeEventListener("touchmove", onTouchMove);
+  };
 }
 
 function AppRoot() {
@@ -137,15 +223,21 @@ function AppRoot() {
     syncViewportHeight();
     window.addEventListener("resize", syncViewportHeight);
     window.addEventListener("orientationchange", syncViewportHeight);
+    window.addEventListener("focusin", syncViewportHeightAfterKeyboardChange);
+    window.addEventListener("focusout", syncViewportHeightAfterKeyboardChange);
     window.visualViewport?.addEventListener("resize", syncViewportHeight);
     window.visualViewport?.addEventListener("scroll", syncViewportHeight);
+    const uninstallIOSKeyboardPanLock = installIOSKeyboardPanLock();
 
     if (!isCapacitorRuntime()) {
       return () => {
         window.removeEventListener("resize", syncViewportHeight);
         window.removeEventListener("orientationchange", syncViewportHeight);
+        window.removeEventListener("focusin", syncViewportHeightAfterKeyboardChange);
+        window.removeEventListener("focusout", syncViewportHeightAfterKeyboardChange);
         window.visualViewport?.removeEventListener("resize", syncViewportHeight);
         window.visualViewport?.removeEventListener("scroll", syncViewportHeight);
+        uninstallIOSKeyboardPanLock();
       };
     }
 
@@ -258,6 +350,10 @@ function AppRoot() {
     }
 
     const scrollFocusedIntoView = () => {
+      if (isIOSWebKit()) {
+        syncViewportHeightAfterKeyboardChange();
+        return;
+      }
       const target = document.activeElement;
       if (!isTextEditableTarget(target)) {
         return;
@@ -310,11 +406,14 @@ function AppRoot() {
     return () => {
       window.removeEventListener("resize", syncViewportHeight);
       window.removeEventListener("orientationchange", syncViewportHeight);
+      window.removeEventListener("focusin", syncViewportHeightAfterKeyboardChange);
+      window.removeEventListener("focusout", syncViewportHeightAfterKeyboardChange);
       window.visualViewport?.removeEventListener("resize", syncViewportHeight);
       window.visualViewport?.removeEventListener("scroll", syncViewportHeight);
       cleanupThemeSync?.();
       document.removeEventListener("focusin", onFocusIn);
       window.visualViewport?.removeEventListener("resize", onViewportResize);
+      uninstallIOSKeyboardPanLock();
       removeListener?.();
     };
   }, []);

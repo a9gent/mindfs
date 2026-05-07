@@ -8,6 +8,7 @@
   --mindfs-safe-area-bottom: 0px;
   --mindfs-ime-bottom: 0px;
   --mindfs-viewport-height: 100dvh;
+  --mindfs-viewport-offset-top: 0px;
   --mindfs-system-bar-bg: #ffffff;
   --mindfs-topbar-bg: #ffffff;
   --mindfs-launcher-bg: radial-gradient(circle at top left, rgba(91, 125, 184, 0.07), transparent 22%), radial-gradient(circle at right 18%, rgba(148, 163, 184, 0.18), transparent 24%), linear-gradient(180deg, #f8fafc 0%, #edf2f7 100%);
@@ -159,6 +160,27 @@ body {
   overflow-x: hidden;
   background: linear-gradient(135deg, var(--bg-gradient-start), var(--bg-gradient-end));
   background-color: var(--bg-gradient-start);
+}
+
+@media (max-width: 767px) {
+  html,
+  body {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #root {
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: var(--mindfs-viewport-offset-top, 0px);
+    height: var(--mindfs-viewport-height, 100dvh);
+    min-height: 0;
+    overflow: hidden;
+  }
 }
 
 .plugin-shadcn-sandbox {
