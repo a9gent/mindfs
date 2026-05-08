@@ -15,7 +15,3 @@ services:
       - ${MINDFS_ADDR:-0.0.0.0:7331}
       - ${MINDFS_ROOT:-/workspace}
     restart: ${MINDFS_RESTART:-unless-stopped}
-
-volumes:
-  mindfs-config:
-  mindfs-state:
