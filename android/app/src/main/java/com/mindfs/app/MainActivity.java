@@ -307,7 +307,7 @@ public class MainActivity extends BridgeActivity {
         if ("localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host)) {
             return "";
         }
-        return scheme.toLowerCase(java.util.Locale.US) + "://" + authority;
+        return scheme.toLowerCase(java.util.Locale.US) + "://" + authority + relayPrefix(uri);
     }
 
     private String launcherNodeOrigin() {
@@ -324,7 +324,7 @@ public class MainActivity extends BridgeActivity {
                 if (node == null) {
                     continue;
                 }
-                String origin = originFromURL(node.optString("url", ""));
+                String origin = apiBaseFromURL(node.optString("url", ""));
                 if (origin.isEmpty()) {
                     continue;
                 }
@@ -342,7 +342,7 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
-    private String originFromURL(String rawURL) {
+    private String apiBaseFromURL(String rawURL) {
         if (rawURL == null || rawURL.trim().isEmpty()) {
             return "";
         }
@@ -356,7 +356,19 @@ public class MainActivity extends BridgeActivity {
         ) {
             return "";
         }
-        return scheme.toLowerCase(java.util.Locale.US) + "://" + authority;
+        return scheme.toLowerCase(java.util.Locale.US) + "://" + authority + relayPrefix(uri);
+    }
+
+    private String relayPrefix(Uri uri) {
+        String path = uri.getEncodedPath();
+        if (path == null || path.isEmpty()) {
+            return "";
+        }
+        String[] parts = path.split("/");
+        if (parts.length >= 3 && "n".equals(parts[1]) && !parts[2].isEmpty()) {
+            return "/n/" + parts[2];
+        }
+        return "";
     }
 
     static boolean isLocalNetworkHost(String host) {

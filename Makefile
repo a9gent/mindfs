@@ -73,9 +73,10 @@ RELEASE_NOTES_LATEST_FILE ?= $(DIST_DIR)/release-notes-$(TAG).md
 ANDROID_RELEASE_APK ?= $(ANDROID_DIR)/app/build/outputs/apk/release/app-release.apk
 ANDROID_DIST_APK ?= $(DIST_DIR)/mindfs_$(VERSION)_android.apk
 RELEASE_ANDROID ?= 0
-RELEASE_ARTIFACTS := $(DIST_DIR)/*.tar.gz $(DIST_DIR)/*.zip
+RELEASE_UPLOAD_JOBS ?= 4
+RELEASE_ARTIFACTS := $(DIST_DIR)/mindfs_$(TAG)_*.tar.gz $(DIST_DIR)/mindfs_$(TAG)_*.zip
 ifeq ($(RELEASE_ANDROID),1)
-RELEASE_ARTIFACTS += $(DIST_DIR)/*.apk
+RELEASE_ARTIFACTS += $(DIST_DIR)/mindfs_$(TAG)_android.apk
 endif
 
 # Targets: OS/ARCH pairs
@@ -93,7 +94,7 @@ build-all: build-web
 
 build-android:
 	cd $(WEB_DIR) && $(NPM) run build:android
-	cd $(ANDROID_DIR) && ./gradlew assembleRelease
+	cd $(ANDROID_DIR) && ./gradlew assembleRelease -PmindfsVersion="$(VERSION)"
 	mkdir -p "$(DIST_DIR)"
 	cp "$(ANDROID_RELEASE_APK)" "$(ANDROID_DIST_APK)"
 
@@ -128,7 +129,9 @@ publish-release-notes:
 release:
 	@command -v gh >/dev/null 2>&1 || (echo "Error: gh (GitHub CLI) is required. https://cli.github.com" >&2; exit 1)
 	@test -n "$(TAG)" || (echo "Usage: make release TAG=v1.2.3 [RELEASE_ANDROID=1]" >&2; exit 1)
-	$(MAKE) publish-release-notes TAG="$(TAG)"
+	@test -f "$(RELEASE_NOTES_FILE)" || (echo "Error: release notes file not found: $(RELEASE_NOTES_FILE)" >&2; exit 1)
+	@version="$$(sed -nE '1s/^#[[:space:]]+MindFS[[:space:]]+(v?[0-9]+(\.[0-9]+){1,3}[^[:space:]]*).*$$/\1/p' "$(RELEASE_NOTES_FILE)")"; \
+		test "$$version" = "$(TAG)" || (echo "Error: $(RELEASE_NOTES_FILE) first line version '$$version' does not match TAG '$(TAG)'." >&2; exit 1)
 	$(MAKE) dist-clean
 	mkdir -p "$(DIST_DIR)"
 	@awk 'NR > 1 && /^# MindFS[[:space:]]+/ { exit } { print }' "$(RELEASE_NOTES_FILE)" > "$(RELEASE_NOTES_LATEST_FILE)"
@@ -138,7 +141,17 @@ release:
 	else \
 		echo "Skipping Android release. Use RELEASE_ANDROID=1 to include the APK."; \
 	fi
-	@echo "Creating GitHub release $(TAG)"
-	gh release create $(TAG) $(RELEASE_ARTIFACTS) \
+	@echo "Creating draft GitHub release $(TAG)"
+	gh release create $(TAG) \
+		--draft \
 		--title "$(TAG)" \
 		--notes-file "$(RELEASE_NOTES_LATEST_FILE)"
+	@echo "Uploading release artifacts with $(RELEASE_UPLOAD_JOBS) parallel jobs"
+	@set -- $(RELEASE_ARTIFACTS); \
+		for artifact do \
+			test -f "$$artifact" || { echo "Error: release artifact not found: $$artifact" >&2; exit 1; }; \
+		done; \
+		printf '%s\n' "$$@" | xargs -n 1 -P "$(RELEASE_UPLOAD_JOBS)" gh release upload "$(TAG)"
+	@echo "Publishing GitHub release $(TAG)"
+	gh release edit "$(TAG)" --draft=false
+	$(MAKE) publish-release-notes TAG="$(TAG)"
