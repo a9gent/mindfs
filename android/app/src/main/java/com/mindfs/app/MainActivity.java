@@ -371,6 +371,57 @@ public class MainActivity extends BridgeActivity {
         return "";
     }
 
+    private String normalizeReplyPollerBaseURL(String rawURL) {
+        String value = rawURL == null ? "" : rawURL.trim();
+        if (value.isEmpty()) {
+            return "";
+        }
+        String prefix = relayPrefixFromCurrentPage();
+        if (prefix.isEmpty()) {
+            return value;
+        }
+        try {
+            Uri configured = Uri.parse(value);
+            Uri current = currentWebViewUri();
+            if (
+                configured == null ||
+                current == null ||
+                configured.getScheme() == null ||
+                current.getScheme() == null ||
+                configured.getEncodedAuthority() == null ||
+                current.getEncodedAuthority() == null ||
+                !configured.getScheme().equalsIgnoreCase(current.getScheme()) ||
+                !configured.getEncodedAuthority().equals(current.getEncodedAuthority())
+            ) {
+                return value;
+            }
+            if (!relayPrefix(configured).isEmpty()) {
+                return value;
+            }
+            return configured.getScheme().toLowerCase(java.util.Locale.US) + "://"
+                + configured.getEncodedAuthority() + prefix;
+        } catch (Exception ignored) {
+            return value;
+        }
+    }
+
+    private String relayPrefixFromCurrentPage() {
+        Uri uri = currentWebViewUri();
+        return uri == null ? "" : relayPrefix(uri);
+    }
+
+    private Uri currentWebViewUri() {
+        View view = getBridge() == null ? null : getBridge().getWebView();
+        if (!(view instanceof WebView)) {
+            return null;
+        }
+        String rawURL = ((WebView) view).getUrl();
+        if (rawURL == null || rawURL.trim().isEmpty()) {
+            return null;
+        }
+        return Uri.parse(rawURL.trim());
+    }
+
     static boolean isLocalNetworkHost(String host) {
         if (host == null) {
             return false;
@@ -484,7 +535,7 @@ public class MainActivity extends BridgeActivity {
         public void configure(String rawJSON) {
             try {
                 JSONObject payload = new JSONObject(rawJSON == null ? "{}" : rawJSON);
-                String apiBaseUrl = payload.optString("apiBaseUrl", "").trim();
+                String apiBaseUrl = normalizeReplyPollerBaseURL(payload.optString("apiBaseUrl", ""));
                 if (apiBaseUrl.isEmpty()) {
                     return;
                 }

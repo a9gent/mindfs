@@ -410,6 +410,10 @@ public class ReplyPollerService extends Service {
         if (path.isEmpty()) {
             path = "/";
         }
+        path = path.replaceFirst("^/n/[^/]+", "");
+        if (path.isEmpty()) {
+            path = "/";
+        }
         String query = url == null ? "" : safe(url.getQuery());
         return query.isEmpty() ? path : path + "?" + query;
     }

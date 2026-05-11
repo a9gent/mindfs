@@ -52,6 +52,14 @@ function nativeReplyPollerBaseURL(): string {
   if (typeof window === "undefined") {
     return "";
   }
+  try {
+    const resolved = new URL(direct, window.location.href);
+    if (/^https?:$/i.test(resolved.protocol)) {
+      return resolved.href.replace(/\/+$/, "");
+    }
+  } catch {
+    // Fall through to origin-only fallback.
+  }
   const origin = window.location.origin || "";
   if (/^https?:\/\//i.test(origin)) {
     return origin.replace(/\/+$/, "");

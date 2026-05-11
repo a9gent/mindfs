@@ -1,4 +1,4 @@
-import { getApiBaseURL, getWsBaseURL, isCapacitorRuntime } from "./runtime";
+import { getApiBaseURL, getWsBaseURL, isBrowserRuntime } from "./runtime";
 
 function relayPrefix(): string {
   if (typeof window === "undefined") {
@@ -47,7 +47,15 @@ export function wsURL(path: string, params?: URLSearchParams): string {
   // Use the raw pathname (with relay prefix) rather than appPath which may now
   // return a full HTTP URL when apiBaseURL is set.
   const pathname = `${relayPrefix()}${ensureLeadingSlash(path)}`;
-  const target = wsBaseURL ? joinURL(wsBaseURL, pathname) : pathname;
+  let target = wsBaseURL ? joinURL(wsBaseURL, pathname) : pathname;
+  if (!wsBaseURL && isBrowserRuntime()) {
+    const { protocol, origin } = window.location;
+    if (protocol === "https:") {
+      target = joinURL(`wss://${origin.slice("https://".length)}`, pathname);
+    } else if (protocol === "http:") {
+      target = joinURL(`ws://${origin.slice("http://".length)}`, pathname);
+    }
+  }
   if (!params || !params.toString()) {
     return target;
   }
