@@ -72,7 +72,7 @@ export function ToastContainer(): JSX.Element {
         flexDirection: "column",
         gap: "8px",
         zIndex: 1000,
-        maxWidth: "400px",
+        maxWidth: "640px",
         width: "100%",
         padding: "0 16px",
       }}
@@ -143,10 +143,11 @@ function Toast({ error, onClose, onRetry }: ToastProps): JSX.Element {
           style={{
             fontSize: "13px",
             fontWeight: 500,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+            lineHeight: 1.45,
           }}
+          title={error.message}
         >
           {error.message}
         </div>

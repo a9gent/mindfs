@@ -236,7 +236,11 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/file", h.handleFile)
 	r.Get("/api/git/status", h.protectedEndpoint(h.handleGitStatus))
 	r.Get("/api/git/diff", h.protectedEndpoint(h.handleGitDiff))
+	r.Get("/api/git/history", h.protectedEndpoint(h.handleGitHistory))
+	r.Get("/api/git/commit/files", h.protectedEndpoint(h.handleGitCommitFiles))
+	r.Get("/api/git/commit/diff", h.protectedEndpoint(h.handleGitCommitDiff))
 	r.Get("/api/git/branches", h.protectedEndpoint(h.handleGitBranches))
+	r.Post("/api/git/checkout", h.protectedEndpoint(h.handleGitCheckout))
 	r.Post("/api/git/worktrees", h.protectedEndpoint(h.handleGitWorktreeCreate))
 	r.Delete("/api/git/worktrees", h.protectedEndpoint(h.handleGitWorktreeRemove))
 	r.Post("/api/upload", h.handleUpload)
@@ -1159,6 +1163,87 @@ func (h *HTTPHandler) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, out.Diff)
 }
 
+func (h *HTTPHandler) handleGitHistory(w http.ResponseWriter, r *http.Request) {
+	rootID := strings.TrimSpace(r.URL.Query().Get("root"))
+	if rootID == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("root required"))
+		return
+	}
+	limit := 10
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, errInvalidRequest("invalid limit"))
+			return
+		}
+		limit = parsed
+	}
+	uc := h.service()
+	out, err := uc.GetGitHistory(r.Context(), usecase.GitHistoryInput{
+		RootID:       rootID,
+		Limit:        limit,
+		BeforeCommit: strings.TrimSpace(r.URL.Query().Get("before_commit")),
+		AfterCommit:  strings.TrimSpace(r.URL.Query().Get("after_commit")),
+	})
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, out.History)
+}
+
+func (h *HTTPHandler) handleGitCommitFiles(w http.ResponseWriter, r *http.Request) {
+	rootID := strings.TrimSpace(r.URL.Query().Get("root"))
+	commit := strings.TrimSpace(r.URL.Query().Get("commit"))
+	if rootID == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("root required"))
+		return
+	}
+	if commit == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("commit required"))
+		return
+	}
+	uc := h.service()
+	out, err := uc.GetGitCommitFiles(r.Context(), usecase.GitCommitFilesInput{
+		RootID: rootID,
+		Commit: commit,
+	})
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, out.Files)
+}
+
+func (h *HTTPHandler) handleGitCommitDiff(w http.ResponseWriter, r *http.Request) {
+	rootID := strings.TrimSpace(r.URL.Query().Get("root"))
+	commit := strings.TrimSpace(r.URL.Query().Get("commit"))
+	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	if rootID == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("root required"))
+		return
+	}
+	if commit == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("commit required"))
+		return
+	}
+	if path == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("path required"))
+		return
+	}
+	uc := h.service()
+	out, err := uc.GetGitCommitDiff(r.Context(), usecase.GitCommitDiffInput{
+		RootID: rootID,
+		Commit: commit,
+		Path:   path,
+	})
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, out.Diff)
+}
+
 func (h *HTTPHandler) handleGitBranches(w http.ResponseWriter, r *http.Request) {
 	rootID := strings.TrimSpace(r.URL.Query().Get("root"))
 	if rootID == "" {
@@ -1169,6 +1254,40 @@ func (h *HTTPHandler) handleGitBranches(w http.ResponseWriter, r *http.Request) 
 	out, err := uc.ListGitBranches(r.Context(), usecase.ListGitBranchesInput{RootID: rootID})
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, out)
+}
+
+func (h *HTTPHandler) handleGitCheckout(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RootID string `json:"root"`
+		Branch string `json:"branch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json body"))
+		return
+	}
+	req.RootID = strings.TrimSpace(req.RootID)
+	req.Branch = strings.TrimSpace(req.Branch)
+	if req.RootID == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("root required"))
+		return
+	}
+	if req.Branch == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("branch required"))
+		return
+	}
+	uc := h.service()
+	out, err := uc.CheckoutGitBranch(r.Context(), usecase.CheckoutGitBranchInput{
+		RootID: req.RootID,
+		Branch: req.Branch,
+	})
+	if err != nil {
+		respondJSON(w, http.StatusConflict, map[string]any{
+			"error":   "git_checkout_failed",
+			"message": err.Error(),
+		})
 		return
 	}
 	respondJSON(w, http.StatusOK, out)

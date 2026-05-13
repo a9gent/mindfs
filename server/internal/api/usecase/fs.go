@@ -208,6 +208,36 @@ type GitDiffOutput struct {
 	Diff gitview.DiffResult
 }
 
+type GitHistoryInput struct {
+	RootID       string
+	Limit        int
+	BeforeCommit string
+	AfterCommit  string
+}
+
+type GitHistoryOutput struct {
+	History gitview.HistoryResult
+}
+
+type GitCommitFilesInput struct {
+	RootID string
+	Commit string
+}
+
+type GitCommitFilesOutput struct {
+	Files gitview.CommitFilesResult
+}
+
+type GitCommitDiffInput struct {
+	RootID string
+	Commit string
+	Path   string
+}
+
+type GitCommitDiffOutput struct {
+	Diff gitview.DiffResult
+}
+
 func (s *Service) ReadFile(ctx context.Context, in ReadFileInput) (ReadFileOutput, error) {
 	if err := s.ensureRegistry(); err != nil {
 		return ReadFileOutput{}, err
@@ -278,6 +308,69 @@ func (s *Service) GetGitDiff(ctx context.Context, in GitDiffInput) (GitDiffOutpu
 	}
 	diff.FileMeta = fillFileMetaSessionInfo(ctx, s, in.RootID, meta)
 	return GitDiffOutput{Diff: diff}, nil
+}
+
+func (s *Service) GetGitHistory(ctx context.Context, in GitHistoryInput) (GitHistoryOutput, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return GitHistoryOutput{}, err
+	}
+	root, err := s.Registry.GetRoot(in.RootID)
+	if err != nil {
+		return GitHistoryOutput{}, err
+	}
+	history, err := gitview.ListHistory(ctx, root.RootPath, in.Limit, in.BeforeCommit, in.AfterCommit)
+	if err != nil {
+		return GitHistoryOutput{}, err
+	}
+	return GitHistoryOutput{History: history}, nil
+}
+
+func (s *Service) GetGitCommitFiles(ctx context.Context, in GitCommitFilesInput) (GitCommitFilesOutput, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return GitCommitFilesOutput{}, err
+	}
+	root, err := s.Registry.GetRoot(in.RootID)
+	if err != nil {
+		return GitCommitFilesOutput{}, err
+	}
+	if strings.TrimSpace(in.Commit) == "" {
+		return GitCommitFilesOutput{}, errors.New("commit required")
+	}
+	files, err := gitview.ListCommitFiles(ctx, root.RootPath, in.Commit)
+	if err != nil {
+		return GitCommitFilesOutput{}, err
+	}
+	return GitCommitFilesOutput{Files: files}, nil
+}
+
+func (s *Service) GetGitCommitDiff(ctx context.Context, in GitCommitDiffInput) (GitCommitDiffOutput, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return GitCommitDiffOutput{}, err
+	}
+	root, err := s.Registry.GetRoot(in.RootID)
+	if err != nil {
+		return GitCommitDiffOutput{}, err
+	}
+	if strings.TrimSpace(in.Commit) == "" {
+		return GitCommitDiffOutput{}, errors.New("commit required")
+	}
+	if strings.TrimSpace(in.Path) == "" {
+		return GitCommitDiffOutput{}, errors.New("path required")
+	}
+	path, err := root.NormalizePath(in.Path)
+	if err != nil {
+		return GitCommitDiffOutput{}, err
+	}
+	diff, err := gitview.ReadCommitDiff(ctx, root.RootPath, in.Commit, path)
+	if err != nil {
+		return GitCommitDiffOutput{}, err
+	}
+	meta, err := root.GetFileMeta(path)
+	if err != nil {
+		meta = nil
+	}
+	diff.FileMeta = fillFileMetaSessionInfo(ctx, s, in.RootID, meta)
+	return GitCommitDiffOutput{Diff: diff}, nil
 }
 
 func resolveUploadDir(root fs.RootInfo, dir string) (string, string, error) {

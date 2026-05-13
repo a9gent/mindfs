@@ -25,6 +25,8 @@ type DefaultListViewProps = {
   onRemoveRoot?: () => void;
   isGitRepo?: boolean;
   isGitWorktree?: boolean;
+  showGitHistory?: boolean;
+  onToggleGitHistory?: () => void;
   onCreateWorktree?: () => void;
   onRemoveWorktree?: () => void;
   menuOverlay?: React.ReactNode;
@@ -158,6 +160,8 @@ export function DefaultListView({
   onRemoveRoot,
   isGitRepo = false,
   isGitWorktree = false,
+  showGitHistory = true,
+  onToggleGitHistory,
   onCreateWorktree,
   onRemoveWorktree,
   menuOverlay = null,
@@ -305,6 +309,37 @@ export function DefaultListView({
                 <div style={{ height: "1px", background: "var(--border-color)", margin: "6px 4px" }} />
                 {isRootView ? (
                   <>
+                    {isGitRepo ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onToggleGitHistory?.();
+                        }}
+                        style={{
+                          width: "100%",
+                          border: "none",
+                          background: showGitHistory ? "var(--selection-bg)" : "transparent",
+                          color: showGitHistory ? "var(--accent-color)" : "var(--text-primary)",
+                          borderRadius: "8px",
+                          padding: "8px 10px",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: "12px",
+                          textAlign: "left",
+                          cursor: "pointer",
+                          fontSize: "12px",
+                      }}
+                    >
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" style={{ flexShrink: 0 }}>
+                            <path fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4.266 16.06a8.92 8.92 0 0 0 3.915 3.978a8.7 8.7 0 0 0 5.471.832a8.8 8.8 0 0 0 4.887-2.64a9.07 9.07 0 0 0 2.388-5.079a9.14 9.14 0 0 0-1.044-5.53a8.9 8.9 0 0 0-4.069-3.815a8.7 8.7 0 0 0-5.5-.608c-1.85.401-3.366 1.313-4.62 2.755c-.151.16-.735.806-1.22 1.781M7.5 8l-3.609.72L3 5m9 4v4l3 2" />
+                          </svg>
+                          <span>Git 历史</span>
+                        </span>
+                        <span style={{ fontSize: "11px", opacity: showGitHistory ? 1 : 0 }}>✓</span>
+                      </button>
+                    ) : null}
                     {isGitRepo ? (
                       <button
                         type="button"

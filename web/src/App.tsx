@@ -38,13 +38,21 @@ import {
 } from "./services/file";
 import {
   buildGitDiffCacheSignature,
+  checkoutGitBranch,
+  clearGitHistoryCache,
   createGitWorktree,
+  fetchGitCommitDiff,
   fetchGitDiff,
   fetchGitBranches,
+  fetchGitHistory,
   fetchGitStatus,
+  getCachedGitHistory,
+  getCachedGitHistoryHead,
   removeGitWorktree,
   type GitBranchesPayload,
   type GitDiffPayload,
+  type GitHistoryItem,
+  type GitHistoryPayload,
   type GitStatusItem,
   type GitStatusPayload,
 } from "./services/git";
@@ -70,6 +78,7 @@ import { AppShell } from "./layout/AppShell";
 import { FileTree } from "./components/FileTree";
 import { FileViewer } from "./components/FileViewer";
 import { GitDiffViewer } from "./components/GitDiffViewer";
+import { GitHistoryPanel } from "./components/GitHistoryPanel";
 import { GitStatusPanel } from "./components/GitStatusPanel";
 import { SessionViewer } from "./components/SessionViewer";
 import { DefaultListView } from "./components/DefaultListView";
@@ -308,6 +317,9 @@ const TREE_SORT_STORAGE_KEY = "mindfs-tree-sort-mode";
 const DIRECTORY_SORT_OVERRIDES_STORAGE_KEY = "mindfs-directory-sort-overrides";
 const FILE_SCROLL_STORAGE_KEY = "mindfs-file-scroll-positions";
 const LAST_ROOT_STORAGE_KEY = "mindfs-last-root-id";
+const SHOW_GIT_HISTORY_STORAGE_KEY = "mindfs-show-git-history";
+const GIT_STATUS_EXPANDED_STORAGE_KEY = "mindfs-git-status-expanded";
+const GIT_HISTORY_EXPANDED_STORAGE_KEY = "mindfs-git-history-expanded";
 const READ_FILE_TOKEN_PATTERN = /\[read file:\s*[^\]]+\]/i;
 
 function normalizeUpdateState(
@@ -822,6 +834,41 @@ function loadLastRootId(): string {
   return window.localStorage.getItem(LAST_ROOT_STORAGE_KEY) || "";
 }
 
+function loadBooleanRecord(key: string): Record<string, boolean> {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(key) || "{}") as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => typeof value === "boolean"),
+    ) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+function loadStringBooleanRecord(key: string): Record<string, Record<string, boolean>> {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(key) || "{}") as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).map(([root, value]) => [
+        root,
+        value && typeof value === "object"
+          ? Object.fromEntries(
+              Object.entries(value as Record<string, unknown>).filter(([, expanded]) => typeof expanded === "boolean"),
+            )
+          : {},
+      ]),
+    ) as Record<string, Record<string, boolean>>;
+  } catch {
+    return {};
+  }
+}
+
 function hasExplicitFileContext(message: string): boolean {
   return READ_FILE_TOKEN_PATTERN.test(message);
 }
@@ -1004,6 +1051,21 @@ export function App({ onGoHome }: AppProps) {
   const [mainDirectoryError, setMainDirectoryError] = useState("");
   const [gitStatus, setGitStatus] = useState<GitStatusPayload | null>(null);
   const [gitStatusLoading, setGitStatusLoading] = useState(false);
+  const [gitHistory, setGitHistory] = useState<GitHistoryPayload | null>(null);
+  const [gitHistoryLoading, setGitHistoryLoading] = useState(false);
+  const [gitHistoryLoadingMore, setGitHistoryLoadingMore] = useState(false);
+  const [showGitHistory, setShowGitHistory] = useState(() => {
+    if (typeof window === "undefined") {
+      return true;
+    }
+    return window.localStorage.getItem(SHOW_GIT_HISTORY_STORAGE_KEY) !== "0";
+  });
+  const [gitStatusExpandedByRoot, setGitStatusExpandedByRoot] = useState<Record<string, boolean>>(() =>
+    loadBooleanRecord(GIT_STATUS_EXPANDED_STORAGE_KEY),
+  );
+  const [gitHistoryExpandedByRoot, setGitHistoryExpandedByRoot] = useState<Record<string, Record<string, boolean>>>(() =>
+    loadStringBooleanRecord(GIT_HISTORY_EXPANDED_STORAGE_KEY),
+  );
   const [gitDiff, setGitDiff] = useState<GitDiffPayload | null>(null);
   const [treeSortMode, setTreeSortMode] = useState<DirectorySortMode>(() => {
     if (typeof window === "undefined") {
@@ -1295,6 +1357,24 @@ export function App({ onGoHome }: AppProps) {
     }
     window.localStorage.setItem(TREE_SORT_STORAGE_KEY, treeSortMode);
   }, [treeSortMode]);
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(SHOW_GIT_HISTORY_STORAGE_KEY, showGitHistory ? "1" : "0");
+  }, [showGitHistory]);
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(GIT_STATUS_EXPANDED_STORAGE_KEY, JSON.stringify(gitStatusExpandedByRoot));
+  }, [gitStatusExpandedByRoot]);
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(GIT_HISTORY_EXPANDED_STORAGE_KEY, JSON.stringify(gitHistoryExpandedByRoot));
+  }, [gitHistoryExpandedByRoot]);
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -2393,6 +2473,110 @@ export function App({ onGoHome }: AppProps) {
     }
   }, []);
 
+  const refreshGitHistory = useCallback(async (rootID: string, options?: { force?: boolean }) => {
+    if (!rootID) {
+      setGitHistory(null);
+      setGitHistoryLoading(false);
+      return null;
+    }
+    if (!options?.force) {
+      const cachedHead = getCachedGitHistoryHead(rootID);
+      if (cachedHead) {
+        setGitHistory(cachedHead);
+        const newest = cachedHead.items[0]?.hash || "";
+        if (newest) {
+          void fetchGitHistory(rootID, { afterCommit: newest })
+            .then((next) => {
+              if (next.commit_missing) {
+                clearGitHistoryCache(rootID);
+                return fetchGitHistory(rootID, { force: true });
+              }
+              return getCachedGitHistoryHead(rootID) || next;
+            })
+            .then((fresh) => {
+              if (currentRootIdRef.current === rootID) {
+                setGitHistory(fresh);
+              }
+            })
+            .catch((err) => {
+              console.error("[git.history.after] failed", { rootID, afterCommit: newest, err });
+            });
+        }
+        return cachedHead;
+      }
+    }
+    setGitHistoryLoading(true);
+    try {
+      const next = await fetchGitHistory(rootID, { force: options?.force });
+      if (next.commit_missing) {
+        clearGitHistoryCache(rootID);
+        const fresh = await fetchGitHistory(rootID, { force: true });
+        if (currentRootIdRef.current === rootID) {
+          setGitHistory(fresh);
+        }
+        return fresh;
+      }
+      if (currentRootIdRef.current === rootID) {
+        setGitHistory(next);
+      }
+      return next;
+    } catch (err) {
+      console.error("[git.history] failed", { rootID, err });
+      const fallback = { available: false, items: [], has_more: false } as GitHistoryPayload;
+      if (currentRootIdRef.current === rootID) {
+        setGitHistory(fallback);
+      }
+      return fallback;
+    } finally {
+      if (currentRootIdRef.current === rootID) {
+        setGitHistoryLoading(false);
+      }
+    }
+  }, []);
+
+  const loadMoreGitHistory = useCallback(async () => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID || gitHistoryLoadingMore) {
+      return;
+    }
+    const currentItems = gitHistory?.items || [];
+    const beforeCommit = currentItems[currentItems.length - 1]?.hash || "";
+    if (!beforeCommit) {
+      return;
+    }
+    setGitHistoryLoadingMore(true);
+    try {
+      const next = await fetchGitHistory(rootID, { beforeCommit });
+      if (next.commit_missing) {
+        clearGitHistoryCache(rootID);
+        const fresh = await fetchGitHistory(rootID, { force: true });
+        if (currentRootIdRef.current === rootID) {
+          setGitHistory(fresh);
+        }
+        return;
+      }
+      const cached = getCachedGitHistory(rootID);
+      if (currentRootIdRef.current === rootID) {
+        const loadedCount = currentItems.length + next.items.length;
+        if (cached) {
+          setGitHistory({
+            ...cached,
+            items: cached.items.slice(0, loadedCount),
+            has_more: cached.items.length > loadedCount || cached.has_more,
+          });
+        } else {
+          setGitHistory(next);
+        }
+      }
+    } catch (err) {
+      console.error("[git.history.more] failed", { rootID, beforeCommit, err });
+    } finally {
+      if (currentRootIdRef.current === rootID) {
+        setGitHistoryLoadingMore(false);
+      }
+    }
+  }, [gitHistory, gitHistoryLoadingMore]);
+
   const loadSessionsForRoot = useCallback(
     async (
       rootID: string,
@@ -2514,6 +2698,84 @@ export function App({ onGoHome }: AppProps) {
       }
     },
     [isMobile, replaceURLState, setMainViewPreferenceForRoot],
+  );
+
+  const openGitCommitDiff = useCallback(
+    async (rootID: string, commit: GitHistoryItem, item: GitStatusItem) => {
+      if (!rootID || !commit?.hash || !item?.path) {
+        return;
+      }
+      fileOpenRequestRef.current += 1;
+      setMainViewPreferenceForRoot(rootID, "git-diff");
+      setSelectedSession(null);
+      setSelectedSessionLoading(false);
+      setFile(null);
+      setGitDiff(null);
+      replaceURLState({
+        root: rootID,
+        file: "",
+        session: "",
+        cursor: 0,
+        pluginQuery: {},
+      });
+      try {
+        const next = await fetchGitCommitDiff(rootID, commit.hash, item);
+        setGitDiff(next);
+        if (currentRootIdRef.current !== rootID) {
+          setCurrentRootId(rootID);
+        }
+        if (isMobile) {
+          setIsLeftOpen(false);
+        }
+      } catch (err) {
+        console.error("[git.commit.diff] failed", {
+          rootID,
+          commit: commit.hash,
+          path: item.path,
+          err,
+        });
+      }
+    },
+    [isMobile, replaceURLState, setMainViewPreferenceForRoot],
+  );
+
+  const switchGitBranch = useCallback(
+    async (rootID: string, branch: string) => {
+      if (!rootID || !branch) {
+        return;
+      }
+      try {
+        const nextStatus = await checkoutGitBranch(rootID, branch);
+        clearGitHistoryCache(rootID);
+        if (currentRootIdRef.current === rootID) {
+          setGitStatus(nextStatus);
+          setGitDiff(null);
+          setFile(null);
+          await refreshGitHistory(rootID, { force: true });
+          await refreshTreeDir(rootID, selectedDirRef.current || ".", true);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "切换分支失败";
+        console.error("[git.checkout] failed", {
+          rootID,
+          branch,
+          message,
+          payload: err instanceof ProtectedAPIError ? err.payload : undefined,
+          err,
+        });
+        reportError("git.checkout_failed", message, {
+          severity: "error",
+          recoverable: true,
+          details: {
+            root: rootID,
+            branch,
+            payload: err instanceof ProtectedAPIError ? err.payload : undefined,
+          },
+        });
+        throw err;
+      }
+    },
+    [refreshGitHistory, refreshTreeDir],
   );
 
   const handleTreeUpload = useCallback(
@@ -4846,6 +5108,7 @@ export function App({ onGoHome }: AppProps) {
   useEffect(() => {
     if (!currentRootId) {
       setGitStatus(null);
+      setGitHistory(null);
       setGitDiff(null);
       setSessionListMode("local");
       setExternalSessions([]);
@@ -4853,8 +5116,9 @@ export function App({ onGoHome }: AppProps) {
       return;
     }
     void refreshGitStatus(currentRootId);
+    void refreshGitHistory(currentRootId);
     setGitDiff(null);
-  }, [currentRootId, refreshGitStatus]);
+  }, [currentRootId, refreshGitHistory, refreshGitStatus]);
 
   useEffect(() => {
     if (!currentRootId) return;
@@ -5732,7 +5996,6 @@ export function App({ onGoHome }: AppProps) {
     };
   }, [
     currentRootId,
-    gitDiff?.path,
     loadSessionsForRoot,
     rootSessionKey,
     resolveRootForSessionKey,
@@ -6557,11 +6820,91 @@ export function App({ onGoHome }: AppProps) {
 
   let workspaceView: React.ReactNode;
   const showGitStatusPanel = !gitDiff && !file && !!currentRootId;
+  const isRootDirectoryView = !selectedDir || selectedDir === currentRootId || selectedDir === ".";
   const gitStatusAvailable = filteredGitStatus?.available === true;
+  const gitHistoryAvailable = gitHistory?.available === true;
+  const gitStatusExpanded = currentRootId ? gitStatusExpandedByRoot[currentRootId] !== false : true;
+  const gitHistoryExpandedCommits = currentRootId ? gitHistoryExpandedByRoot[currentRootId] || {} : {};
   const shouldRenderGitPanel =
     showGitStatusPanel &&
     gitStatusAvailable &&
     (gitStatusLoading || (filteredGitStatus?.items.length || 0) > 0);
+  const shouldRenderGitHistoryPanel =
+    showGitStatusPanel &&
+    isRootDirectoryView &&
+    showGitHistory &&
+    (gitHistoryLoading || (gitHistoryAvailable && (gitHistory?.items.length || 0) > 0));
+  const gitRootTopContent =
+    shouldRenderGitPanel || shouldRenderGitHistoryPanel ? (
+      <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+        {shouldRenderGitPanel ? (
+          <GitStatusPanel
+            rootId={currentRootId || undefined}
+            status={filteredGitStatus}
+            loading={gitStatusLoading}
+            isFiltered={!!selectedDir && selectedDir !== currentRootId}
+            expanded={gitStatusExpanded}
+            onExpandedChange={(expanded) => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              setGitStatusExpandedByRoot((prev) => ({ ...prev, [root]: expanded }));
+            }}
+            onSelectItem={(item) => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              void openGitDiff(root, item);
+            }}
+            onSwitchBranch={(branch) => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              return switchGitBranch(root, branch);
+            }}
+          />
+        ) : null}
+        {shouldRenderGitHistoryPanel && currentRootId ? (
+          <GitHistoryPanel
+            rootId={currentRootId}
+            items={gitHistory?.items || []}
+            loading={gitHistoryLoading}
+            loadingMore={gitHistoryLoadingMore}
+            hasMore={gitHistory?.has_more === true}
+            expandedCommits={gitHistoryExpandedCommits}
+            onToggleCommit={(hash) => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              setGitHistoryExpandedByRoot((prev) => {
+                const current = prev[root] || {};
+                return {
+                  ...prev,
+                  [root]: {
+                    ...current,
+                    [hash]: current[hash] !== true,
+                  },
+                };
+              });
+            }}
+            onLoadMore={() => {
+              void loadMoreGitHistory();
+            }}
+            onSelectFile={(commit, item) => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              void openGitCommitDiff(root, commit, item);
+            }}
+          />
+        ) : null}
+      </div>
+    ) : null;
   if (gitDiff) {
     workspaceView = (
       <GitDiffViewer
@@ -6750,22 +7093,7 @@ export function App({ onGoHome }: AppProps) {
         path={selectedDir || ""}
         entries={visibleMainEntries}
         errorMessage={mainDirectoryError}
-        topContent={
-          shouldRenderGitPanel ? (
-            <GitStatusPanel
-              status={filteredGitStatus}
-              loading={gitStatusLoading}
-              isFiltered={!!selectedDir && selectedDir !== currentRootId}
-              onSelectItem={(item) => {
-                const root = currentRootIdRef.current;
-                if (!root) {
-                  return;
-                }
-                void openGitDiff(root, item);
-              }}
-            />
-          ) : null
-        }
+        topContent={gitRootTopContent}
         showHiddenFiles={showHiddenFiles}
         sortMode={currentDirectorySortMode}
         sortControlValue={currentDirectorySortOverride || "inherit"}
@@ -6791,6 +7119,8 @@ export function App({ onGoHome }: AppProps) {
         onRemoveRoot={handleRemoveCurrentRoot}
         isGitRepo={managedRootByIdRef.current[currentRootId || ""]?.is_git_repo === true}
         isGitWorktree={managedRootByIdRef.current[currentRootId || ""]?.is_git_worktree === true}
+        showGitHistory={showGitHistory}
+        onToggleGitHistory={() => setShowGitHistory((value) => !value)}
         onCreateWorktree={handleOpenWorktreeLocation}
         onRemoveWorktree={handleRemoveCurrentWorktree}
         menuOverlay={

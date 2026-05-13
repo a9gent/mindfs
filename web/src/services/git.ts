@@ -23,10 +23,32 @@ export type GitStatusPayload = {
 
 export type GitDiffPayload = CachedGitDiffPayload & {
   path: string;
+  old_path?: string;
   status: GitStatusCode | string;
   additions: number;
   deletions: number;
   content: string;
+  commit?: string;
+  source?: "worktree" | "commit";
+};
+
+export type GitHistoryItem = {
+  hash: string;
+  message: string;
+  commit_time: string;
+  remote?: boolean;
+};
+
+export type GitHistoryPayload = {
+  available: boolean;
+  items: GitHistoryItem[];
+  has_more: boolean;
+  commit_missing?: boolean;
+};
+
+export type GitCommitFilesPayload = {
+  commit: string;
+  items: GitStatusItem[];
 };
 
 export type GitBranchItem = {
@@ -49,6 +71,272 @@ export async function fetchGitStatus(rootId: string): Promise<GitStatusPayload> 
   };
 }
 
+const DEFAULT_HISTORY_LIMIT = 10;
+const HISTORY_LIST_STORAGE_PREFIX = "mindfs.git.history.list:";
+const COMMIT_FILES_STORAGE_PREFIX = "mindfs.git.history.files:";
+const COMMIT_DIFF_STORAGE_PREFIX = "mindfs.git.history.diff:";
+
+type GitHistoryCacheEntry = {
+  items: GitHistoryItem[];
+  hasMore: boolean;
+};
+
+const gitHistoryListCache = new Map<string, GitHistoryCacheEntry>();
+const gitHistoryInflight = new Map<string, Promise<GitHistoryPayload>>();
+const gitCommitFilesCache = new Map<string, GitCommitFilesPayload>();
+const gitCommitFilesInflight = new Map<string, Promise<GitCommitFilesPayload>>();
+const gitCommitDiffCache = new Map<string, GitDiffPayload>();
+const gitCommitDiffInflight = new Map<string, Promise<GitDiffPayload>>();
+
+function canUseStorage(): boolean {
+  return typeof window !== "undefined" && !!window.localStorage;
+}
+
+function readStorageJSON<T>(key: string): T | null {
+  if (!canUseStorage()) return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? JSON.parse(raw) as T : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStorageJSON(key: string, value: unknown): void {
+  if (!canUseStorage()) return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {}
+}
+
+function removeStorageByPrefix(prefix: string): void {
+  if (!canUseStorage()) return;
+  for (const key of Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index)).filter(Boolean) as string[]) {
+    if (key.startsWith(prefix)) {
+      window.localStorage.removeItem(key);
+    }
+  }
+}
+
+function historyListStorageKey(rootId: string): string {
+  return `${HISTORY_LIST_STORAGE_PREFIX}${encodeURIComponent(rootId)}`;
+}
+
+function commitFilesStorageKey(rootId: string, commit: string): string {
+  return `${COMMIT_FILES_STORAGE_PREFIX}${encodeURIComponent(rootId)}:${encodeURIComponent(commit)}`;
+}
+
+function commitDiffStorageKey(rootId: string, commit: string, oldPath: string, path: string): string {
+  return `${COMMIT_DIFF_STORAGE_PREFIX}${encodeURIComponent(rootId)}:${encodeURIComponent(commit)}:${encodeURIComponent(oldPath)}:${encodeURIComponent(path)}`;
+}
+
+function getHistoryCacheEntry(rootId: string): GitHistoryCacheEntry | null {
+  const cached = gitHistoryListCache.get(rootId);
+  if (cached) {
+    return cached;
+  }
+  const persisted = readStorageJSON<GitHistoryCacheEntry>(historyListStorageKey(rootId));
+  if (persisted && Array.isArray(persisted.items)) {
+    const normalized = {
+      items: persisted.items.filter((item) => !!item?.hash),
+      hasMore: persisted.hasMore === true,
+    };
+    gitHistoryListCache.set(rootId, normalized);
+    return normalized;
+  }
+  return null;
+}
+
+function setHistoryCacheEntry(rootId: string, entry: GitHistoryCacheEntry): void {
+  gitHistoryListCache.set(rootId, entry);
+  writeStorageJSON(historyListStorageKey(rootId), entry);
+}
+
+function normalizeGitHistoryPayload(payload: any): GitHistoryPayload {
+  return {
+    available: payload?.available === true,
+    items: Array.isArray(payload?.items)
+      ? payload.items
+          .map((item: any) => ({
+            hash: typeof item?.hash === "string" ? item.hash : "",
+            message: typeof item?.message === "string" ? item.message : "",
+            commit_time: typeof item?.commit_time === "string" ? item.commit_time : "",
+            remote: item?.remote === true,
+          }))
+          .filter((item: GitHistoryItem) => !!item.hash)
+      : [],
+    has_more: payload?.has_more === true,
+    commit_missing: payload?.commit_missing === true,
+  };
+}
+
+function mergeHistoryItems(existing: GitHistoryItem[], next: GitHistoryItem[]): GitHistoryItem[] {
+  const seen = new Set(existing.map((item) => item.hash));
+  const merged = existing.slice();
+  next.forEach((item) => {
+    if (!seen.has(item.hash)) {
+      seen.add(item.hash);
+      merged.push(item);
+    }
+  });
+  return merged;
+}
+
+export function getCachedGitHistory(rootId: string): GitHistoryPayload | null {
+  const cached = getHistoryCacheEntry(rootId);
+  if (!cached) {
+    return null;
+  }
+  return {
+    available: true,
+    items: cached.items.slice(),
+    has_more: cached.hasMore,
+  };
+}
+
+export function getCachedGitHistoryHead(rootId: string, limit = DEFAULT_HISTORY_LIMIT): GitHistoryPayload | null {
+  const cached = getHistoryCacheEntry(rootId);
+  if (!cached) {
+    return null;
+  }
+  return {
+    available: true,
+    items: cached.items.slice(0, limit),
+    has_more: cached.items.length > limit || cached.hasMore,
+  };
+}
+
+export function clearGitHistoryCache(rootId?: string): void {
+  if (rootId) {
+    gitHistoryListCache.delete(rootId);
+    if (canUseStorage()) {
+      window.localStorage.removeItem(historyListStorageKey(rootId));
+    }
+    removeStorageByPrefix(`${COMMIT_FILES_STORAGE_PREFIX}${encodeURIComponent(rootId)}:`);
+    removeStorageByPrefix(`${COMMIT_DIFF_STORAGE_PREFIX}${encodeURIComponent(rootId)}:`);
+  } else {
+    gitHistoryListCache.clear();
+    removeStorageByPrefix(HISTORY_LIST_STORAGE_PREFIX);
+    removeStorageByPrefix(COMMIT_FILES_STORAGE_PREFIX);
+    removeStorageByPrefix(COMMIT_DIFF_STORAGE_PREFIX);
+  }
+  const clearMap = (cache: Map<string, unknown>) => {
+    for (const key of Array.from(cache.keys())) {
+      if (!rootId || key.startsWith(`${rootId}:`)) {
+        cache.delete(key);
+      }
+    }
+  };
+  clearMap(gitHistoryInflight as Map<string, unknown>);
+  clearMap(gitCommitFilesCache as Map<string, unknown>);
+  clearMap(gitCommitFilesInflight as Map<string, unknown>);
+  clearMap(gitCommitDiffCache as Map<string, unknown>);
+  clearMap(gitCommitDiffInflight as Map<string, unknown>);
+}
+
+export async function fetchGitHistory(
+  rootId: string,
+  options?: { beforeCommit?: string; afterCommit?: string; limit?: number; force?: boolean },
+): Promise<GitHistoryPayload> {
+  const limit = options?.limit || DEFAULT_HISTORY_LIMIT;
+  const beforeCommit = options?.beforeCommit || "";
+  const afterCommit = options?.afterCommit || "";
+  const cached = getHistoryCacheEntry(rootId);
+  if (!options?.force && !beforeCommit && !afterCommit && cached) {
+    return {
+      available: true,
+      items: cached.items.slice(0, limit),
+      has_more: cached.items.length > limit || cached.hasMore,
+    };
+  }
+  if (!options?.force && beforeCommit && cached) {
+    const index = cached.items.findIndex((item) => item.hash === beforeCommit);
+    if (index >= 0) {
+      const cachedPage = cached.items.slice(index + 1, index + 1 + limit);
+      if (cachedPage.length > 0 || !cached.hasMore) {
+        return { available: true, items: cachedPage, has_more: cached.hasMore };
+      }
+    }
+  }
+
+  const key = `${rootId}:${beforeCommit}:${afterCommit}:${limit}`;
+  const inflight = gitHistoryInflight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+  const promise = protectedJSON<any>(
+    appURL(
+      "/api/git/history",
+      new URLSearchParams({
+        root: rootId,
+        limit: String(limit),
+        ...(beforeCommit ? { before_commit: beforeCommit } : {}),
+        ...(afterCommit ? { after_commit: afterCommit } : {}),
+      }),
+    ),
+  ).then((payload) => {
+    const normalized = normalizeGitHistoryPayload(payload);
+    if (normalized.commit_missing) {
+      clearGitHistoryCache(rootId);
+      return normalized;
+    }
+    const existing = getHistoryCacheEntry(rootId);
+    if (!beforeCommit && !afterCommit) {
+      setHistoryCacheEntry(rootId, {
+        items: normalized.items.slice(),
+        hasMore: normalized.has_more,
+      });
+    } else if (beforeCommit) {
+      setHistoryCacheEntry(rootId, {
+        items: mergeHistoryItems(existing?.items || [], normalized.items),
+        hasMore: normalized.has_more,
+      });
+    } else if (afterCommit) {
+      setHistoryCacheEntry(rootId, {
+        items: mergeHistoryItems(normalized.items, existing?.items || []),
+        hasMore: existing?.hasMore ?? normalized.has_more,
+      });
+    }
+    return normalized;
+  }).finally(() => {
+    gitHistoryInflight.delete(key);
+  });
+  gitHistoryInflight.set(key, promise);
+  return promise;
+}
+
+export async function fetchGitCommitFiles(rootId: string, commit: string): Promise<GitCommitFilesPayload> {
+  const key = `${rootId}:${commit}`;
+  const cached = gitCommitFilesCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const persisted = readStorageJSON<GitCommitFilesPayload>(commitFilesStorageKey(rootId, commit));
+  if (persisted && Array.isArray(persisted.items)) {
+    gitCommitFilesCache.set(key, persisted);
+    return persisted;
+  }
+  const inflight = gitCommitFilesInflight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+  const promise = protectedJSON<any>(
+    appURL("/api/git/commit/files", new URLSearchParams({ root: rootId, commit })),
+  ).then((payload) => {
+    const normalized = {
+      commit: typeof payload?.commit === "string" ? payload.commit : commit,
+      items: Array.isArray(payload?.items) ? payload.items as GitStatusItem[] : [],
+    };
+    gitCommitFilesCache.set(key, normalized);
+    writeStorageJSON(commitFilesStorageKey(rootId, commit), normalized);
+    return normalized;
+  }).finally(() => {
+    gitCommitFilesInflight.delete(key);
+  });
+  gitCommitFilesInflight.set(key, promise);
+  return promise;
+}
+
 export async function fetchGitBranches(rootId: string): Promise<GitBranchesPayload> {
   const payload = await protectedJSON<any>(appURL("/api/git/branches", new URLSearchParams({ root: rootId })));
   return {
@@ -61,6 +349,21 @@ export async function fetchGitBranches(rootId: string): Promise<GitBranchesPaylo
           }))
           .filter((item: GitBranchItem) => !!item.name)
       : [],
+  };
+}
+
+export async function checkoutGitBranch(rootId: string, branch: string): Promise<GitStatusPayload> {
+  const payload = await protectedJSON<any>(appURL("/api/git/checkout"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ root: rootId, branch }),
+  });
+  const status = payload?.status || {};
+  return {
+    available: status?.available === true,
+    branch: typeof status?.branch === "string" ? status.branch : undefined,
+    dirty_count: Number(status?.dirty_count) || 0,
+    items: Array.isArray(status?.items) ? status.items as GitStatusItem[] : [],
   };
 }
 
@@ -118,12 +421,58 @@ export async function fetchGitDiff(
   const payload = await protectedJSON<any>(appURL("/api/git/diff", new URLSearchParams({ root: rootId, path })));
   const diff = {
     path: typeof payload?.path === "string" ? payload.path : path,
+    old_path: typeof payload?.old_path === "string" ? payload.old_path : undefined,
     status: typeof payload?.status === "string" ? payload.status : "M",
     additions: Number(payload?.additions) || 0,
     deletions: Number(payload?.deletions) || 0,
     content: typeof payload?.content === "string" ? payload.content : "",
     file_meta: Array.isArray(payload?.file_meta) ? payload.file_meta : [],
+    source: "worktree" as const,
   };
   await setCachedGitDiff(rootId, path, diff, cacheSignature);
   return diff;
+}
+
+export async function fetchGitCommitDiff(
+  rootId: string,
+  commit: string,
+  item: Pick<GitStatusItem, "path" | "old_path" | "status" | "additions" | "deletions">,
+): Promise<GitDiffPayload> {
+  const path = item.path;
+  const key = `${rootId}:${commit}:${item.old_path || ""}:${path}`;
+  const cached = gitCommitDiffCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const persisted = readStorageJSON<GitDiffPayload>(commitDiffStorageKey(rootId, commit, item.old_path || "", path));
+  if (persisted && typeof persisted.content === "string") {
+    gitCommitDiffCache.set(key, persisted);
+    return persisted;
+  }
+  const inflight = gitCommitDiffInflight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+  const promise = protectedJSON<any>(
+    appURL("/api/git/commit/diff", new URLSearchParams({ root: rootId, commit, path })),
+  ).then((payload) => {
+    const diff = {
+      path: typeof payload?.path === "string" ? payload.path : path,
+      old_path: typeof payload?.old_path === "string" ? payload.old_path : item.old_path,
+      status: typeof payload?.status === "string" ? payload.status : item.status,
+      additions: Number(payload?.additions) || Number(item.additions) || 0,
+      deletions: Number(payload?.deletions) || Number(item.deletions) || 0,
+      content: typeof payload?.content === "string" ? payload.content : "",
+      file_meta: Array.isArray(payload?.file_meta) ? payload.file_meta : [],
+      commit,
+      source: "commit" as const,
+    };
+    gitCommitDiffCache.set(key, diff);
+    writeStorageJSON(commitDiffStorageKey(rootId, commit, item.old_path || "", path), diff);
+    return diff;
+  }).finally(() => {
+    gitCommitDiffInflight.delete(key);
+  });
+  gitCommitDiffInflight.set(key, promise);
+  return promise;
 }

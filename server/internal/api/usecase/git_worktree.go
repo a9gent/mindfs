@@ -35,6 +35,37 @@ func (s *Service) ListGitBranches(ctx context.Context, in ListGitBranchesInput) 
 	return ListGitBranchesOutput{Current: result.Current, Branches: result.Branches}, nil
 }
 
+type CheckoutGitBranchInput struct {
+	RootID string
+	Branch string
+}
+
+type CheckoutGitBranchOutput struct {
+	Status gitview.StatusResult `json:"status"`
+}
+
+func (s *Service) CheckoutGitBranch(ctx context.Context, in CheckoutGitBranchInput) (CheckoutGitBranchOutput, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return CheckoutGitBranchOutput{}, err
+	}
+	root, err := s.Registry.GetRoot(in.RootID)
+	if err != nil {
+		return CheckoutGitBranchOutput{}, err
+	}
+	branch := strings.TrimSpace(in.Branch)
+	if branch == "" {
+		return CheckoutGitBranchOutput{}, errors.New("branch required")
+	}
+	if err := gitview.CheckoutBranch(ctx, root.RootPath, branch); err != nil {
+		return CheckoutGitBranchOutput{}, err
+	}
+	status, err := gitview.InspectStatus(ctx, root.RootPath)
+	if err != nil {
+		return CheckoutGitBranchOutput{}, err
+	}
+	return CheckoutGitBranchOutput{Status: status}, nil
+}
+
 type CreateGitWorktreeInput struct {
 	RootID     string
 	ParentPath string
