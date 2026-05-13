@@ -74,6 +74,11 @@ ANDROID_RELEASE_APK ?= $(ANDROID_DIR)/app/build/outputs/apk/release/app-release.
 ANDROID_DIST_APK ?= $(DIST_DIR)/mindfs_$(VERSION)_android.apk
 RELEASE_ANDROID ?= 0
 RELEASE_UPLOAD_JOBS ?= 4
+ANDROID_JAVA_HOME ?= $(shell if command -v /usr/libexec/java_home >/dev/null 2>&1; then /usr/libexec/java_home -v 21 2>/dev/null; fi)
+ANDROID_GRADLE_ENV :=
+ifneq ($(strip $(ANDROID_JAVA_HOME)),)
+ANDROID_GRADLE_ENV := JAVA_HOME="$(ANDROID_JAVA_HOME)"
+endif
 RELEASE_ARTIFACTS := $(DIST_DIR)/mindfs_$(TAG)_*.tar.gz $(DIST_DIR)/mindfs_$(TAG)_*.zip
 ifeq ($(RELEASE_ANDROID),1)
 RELEASE_ARTIFACTS += $(DIST_DIR)/mindfs_$(TAG)_android.apk
@@ -94,7 +99,7 @@ build-all: build-web
 
 build-android:
 	cd $(WEB_DIR) && $(NPM) run build:android
-	cd $(ANDROID_DIR) && ./gradlew assembleRelease -PmindfsVersion="$(VERSION)"
+	cd $(ANDROID_DIR) && $(ANDROID_GRADLE_ENV) ./gradlew assembleRelease -PmindfsVersion="$(VERSION)"
 	mkdir -p "$(DIST_DIR)"
 	cp "$(ANDROID_RELEASE_APK)" "$(ANDROID_DIST_APK)"
 

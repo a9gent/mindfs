@@ -19,6 +19,34 @@ function readableAssetPath(raw: string): string {
   }
 }
 
+function mindFSAssetPath(raw: string): string {
+  const value = String(raw || "").trim();
+  if (!value) {
+    return "";
+  }
+  try {
+    const url = new URL(value, window.location.href);
+    if (url.origin !== window.location.origin) {
+      return "";
+    }
+    const pathname = url.pathname;
+    const knownAsset =
+      pathname.startsWith("/assets/") ||
+      pathname.startsWith("/mindfs-assets/") ||
+      pathname === "/favicon.svg" ||
+      pathname === "/manifest.webmanifest" ||
+      pathname === "/apple-touch-icon.png" ||
+      pathname === "/service-worker.js" ||
+      /^\/pwa(?:-|_).*\.(?:png|svg)$/i.test(pathname);
+    if (!knownAsset) {
+      return "";
+    }
+    return `${pathname}${url.search}`;
+  } catch {
+    return "";
+  }
+}
+
 function showFrontendAssetMissingNotice(rawPath: string): void {
   if (typeof document === "undefined") {
     return;
@@ -87,7 +115,7 @@ function resourceURLFromEventTarget(target: EventTarget | null): string {
     target.getAttribute("href") ||
     target.getAttribute("poster") ||
     "";
-  return value;
+  return mindFSAssetPath(value);
 }
 
 function dynamicImportFailureURL(reason: unknown): string {
@@ -96,7 +124,10 @@ function dynamicImportFailureURL(reason: unknown): string {
     return "";
   }
   const match = message.match(/https?:\/\/[^\s"'<>]+|\/[^\s"'<>]+\.js(?:\?[^\s"'<>]+)?/);
-  return match?.[0] || "dynamic module";
+  if (!match?.[0]) {
+    return "dynamic module";
+  }
+  return mindFSAssetPath(match[0]);
 }
 
 function isLocalCapacitorShell(): boolean {
