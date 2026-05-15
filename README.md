@@ -156,17 +156,42 @@ MindFS automatically detects the availability of installed agents. This usually 
 
 ### CLI Reference
 
-```
+```bash
 mindfs [flags] [root]
-
-Flags:
-  -addr string   Listen address (default "127.0.0.1:7331")
-  -no-relayer    Disable relay integration
-  -remove        Unregister a managed directory from a running server
-  -tls           Enable HTTPS (auto-generates self-signed cert if -cert/-key not provided)
-  -cert string   TLS certificate file (PEM); requires -tls
-  -key string    TLS private key file (PEM); requires -tls
 ```
+
+`root` is the directory to manage. If omitted, MindFS manages the current directory.
+
+By default, `mindfs` starts a background service, registers `root`, and opens the browser. If a service is already running on the selected address, the command reuses it and only adds the directory.
+
+#### Common Commands
+
+```bash
+mindfs
+mindfs /path/to/project
+mindfs -addr :9000 /path/to/project
+mindfs -foreground /path/to/project
+mindfs -status
+mindfs -stop
+mindfs -restart
+mindfs -remove /path/to/project
+```
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-addr string` | `127.0.0.1:7331` | Listen address. Use `:7331` or `0.0.0.0:7331` to allow LAN access. |
+| `-foreground` | `false` | Run the server in the foreground instead of starting a background service. |
+| `-status` | `false` | Show background service status, PID, URL, and log file path. |
+| `-stop` | `false` | Stop the background service for the selected address. |
+| `-restart` | `false` | Stop the background service if present, then start it again. |
+| `-remove` | `false` | Remove `root` from the managed directory list. If the server is running, it is removed through the local API; otherwise it is removed from the local registry. |
+| `-no-relayer` | `false` | Disable relay integration. Local and private-network access still work. |
+| `-e2ee` | `false` | Enable end-to-end encryption for sensitive data. The pairing code can also be used as an authentication mechanism: unpaired frontends cannot access node content. LAN access requires `-tls` to work correctly. On first enablement, the CLI prints the pairing secret. |
+| `-tls` | `false` | Enable HTTPS. If `-cert` and `-key` are not provided, MindFS generates and reuses a local self-signed certificate. |
+| `-cert string` | empty | TLS certificate file in PEM format. Used with `-tls`; auto-generated when empty. |
+| `-key string` | empty | TLS private key file in PEM format. Used with `-tls`; auto-generated when empty. |
 
 ---
 

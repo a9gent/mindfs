@@ -154,19 +154,44 @@ MindFS 会自动探测已安装 Agent 的可用性，通常需要大约一分钟
 2. 登录 relayer，确认绑定。
 3. 打开节点。
 
-### 常用命令
+### MindFS CLI 命令说明
 
-```
+```bash
 mindfs [flags] [root]
-
-Flags:
-  -addr string   监听地址（默认 ":7331"）
-  -no-relayer    禁用 Relay 集成
-  -remove        从运行中的服务器移除托管目录
-  -tls           启用 HTTPS（如未指定 -cert/-key，则自动生成自签名证书）
-  -cert string   TLS 证书文件（PEM）；需配合 -tls 使用
-  -key string    TLS 私钥文件（PEM）；需配合 -tls 使用
 ```
+
+`root` 是要托管的目录。未指定时，默认托管当前目录。
+
+默认情况下，`mindfs` 会启动后台服务、注册 `root` 目录并自动打开浏览器。如果所选监听地址上已经有 MindFS 服务在运行，命令会复用该服务，只新增托管目录。
+
+#### 常用命令
+
+```bash
+mindfs
+mindfs /path/to/project
+mindfs -addr :9000 /path/to/project
+mindfs -foreground /path/to/project
+mindfs -status
+mindfs -stop
+mindfs -restart
+mindfs -remove /path/to/project
+```
+
+#### 参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `-addr string` | `127.0.0.1:7331` | 监听地址。使用 `:7331` 或 `0.0.0.0:7331` 可允许局域网访问。 |
+| `-foreground` | `false` | 前台运行服务，不启动后台进程。适合开发、调试或配合进程管理器使用。 |
+| `-status` | `false` | 查看后台服务状态、PID、访问地址和日志文件路径。 |
+| `-stop` | `false` | 停止所选监听地址对应的后台服务。 |
+| `-restart` | `false` | 如后台服务已存在则先停止，再重新启动。 |
+| `-remove` | `false` | 从托管目录列表中移除 `root`。服务运行中时通过本地 API 移除；服务未运行时从本地注册表移除。 |
+| `-no-relayer` | `false` | 禁用 Relay 集成。本地访问和私有网络访问仍可使用。 |
+| `-e2ee` | `false` | 启用敏感数据端到端加密。<br>启用时，CLI 会输出配对密钥。<br>配对码也可以作为一种认证手段，未配对前端无法访问节点内容。<br>局域网访问需要开启 `-tls` 才能正常使用。 |
+| `-tls` | `false` | 启用 HTTPS。如未指定 `-cert` 和 `-key`，MindFS 会生成并复用本地自签名证书。 |
+| `-cert string` | 空 | TLS 证书文件，PEM 格式。需配合 `-tls` 使用；为空时自动生成。 |
+| `-key string` | 空 | TLS 私钥文件，PEM 格式。需配合 `-tls` 使用；为空时自动生成。 |
 
 ---
 
