@@ -12,6 +12,7 @@ import { appPath } from "../services/base";
 import { protectedJSON } from "../services/api";
 import { bootstrapService } from "../services/bootstrap";
 import { AgentMenuList } from "./AgentMenuList";
+import { SymlinkBadge } from "./SymlinkBadge";
 import { fetchAgents, type AgentStatus } from "../services/agents";
 import {
   createAgentConfigBackup,
@@ -128,6 +129,19 @@ const ChevronRight = ({ isOpen }: { isOpen: boolean }) => (
     <polyline points="9 18 15 12 9 6" />
   </svg>
 );
+
+function DirectoryIconSlot({ entry, isOpen }: { entry: FileEntry; isOpen: boolean }) {
+  const showSymlinkBadge = entry.is_dir && entry.is_symlink;
+
+  return (
+    <div style={{ position: "relative", width: 20, height: 18, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+      {entry.is_dir ? <ChevronRight isOpen={isOpen} /> : getFileIcon(entry.name)}
+      {showSymlinkBadge ? (
+        <SymlinkBadge offset="-1px" />
+      ) : null}
+    </div>
+  );
+}
 
 const getFileIcon = (filename: string) => {
   const ext = filename.split('.').pop()?.toLowerCase();
@@ -1340,9 +1354,7 @@ export function FileTree({
               onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = "rgba(0,0,0,0.04)"; }}
               onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
             >
-              <div style={{ width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                 {entry.is_dir ? <ChevronRight isOpen={isOpen} /> : getFileIcon(entry.name)}
-              </div>
+              <DirectoryIconSlot entry={entry} isOpen={isOpen} />
               <span
                 style={{
                   whiteSpace: "nowrap",

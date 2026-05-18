@@ -96,6 +96,50 @@ func TestRootInfoListEntriesIncludesSizeAndMTime(t *testing.T) {
 	}
 }
 
+func TestRootInfoListEntriesTreatsDirectorySymlinkAsDirectory(t *testing.T) {
+	rootDir := t.TempDir()
+	targetDir := filepath.Join(rootDir, "target")
+	if err := os.Mkdir(targetDir, 0o755); err != nil {
+		t.Fatalf("Mkdir returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "child.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.Symlink("target", filepath.Join(rootDir, "linked")); err != nil {
+		t.Skipf("Symlink unavailable: %v", err)
+	}
+
+	root := NewRootInfo("mindfs", "mindfs", rootDir)
+	entries, err := root.ListEntries(".")
+	if err != nil {
+		t.Fatalf("ListEntries returned error: %v", err)
+	}
+	var linked Entry
+	for _, entry := range entries {
+		if entry.Name == "linked" {
+			linked = entry
+			break
+		}
+	}
+	if linked.Name == "" {
+		t.Fatalf("linked entry not found: %#v", entries)
+	}
+	if !linked.IsDir {
+		t.Fatalf("linked entry IsDir = false, want true")
+	}
+	if !linked.IsSymlink {
+		t.Fatalf("linked entry IsSymlink = false, want true")
+	}
+
+	children, err := root.ListEntries("linked")
+	if err != nil {
+		t.Fatalf("ListEntries linked returned error: %v", err)
+	}
+	if len(children) != 1 || children[0].Name != "child.txt" {
+		t.Fatalf("linked children = %#v, want child.txt", children)
+	}
+}
+
 func TestSharedFileWatcherShouldIgnoreLargeGeneratedDirectories(t *testing.T) {
 	rootDir := t.TempDir()
 	root := NewRootInfo("mindfs", "mindfs", rootDir)

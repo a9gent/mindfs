@@ -256,11 +256,12 @@ func (r RootInfo) WriteMetaFile(path string, data []byte) error {
 
 // Entry represents a filesystem entry for UI listings.
 type Entry struct {
-	Name  string `json:"name"`
-	Path  string `json:"path"`
-	IsDir bool   `json:"is_dir"`
-	Size  int64  `json:"size"`
-	MTime string `json:"mtime"`
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	IsDir     bool   `json:"is_dir"`
+	IsSymlink bool   `json:"is_symlink,omitempty"`
+	Size      int64  `json:"size"`
+	MTime     string `json:"mtime"`
 }
 
 func (r RootInfo) ListEntries(dirRelPath string) ([]Entry, error) {
@@ -286,12 +287,21 @@ func (r RootInfo) ListEntries(dirRelPath string) ([]Entry, error) {
 			// Skip those children so one unreadable item doesn't blank the whole view.
 			continue
 		}
+		isDir := entry.IsDir()
+		isSymlink := info.Mode()&os.ModeSymlink != 0
+		if isSymlink {
+			if targetInfo, err := os.Stat(absPath); err == nil {
+				info = targetInfo
+				isDir = targetInfo.IsDir()
+			}
+		}
 		result = append(result, Entry{
-			Name:  name,
-			Path:  relPath,
-			IsDir: entry.IsDir(),
-			Size:  info.Size(),
-			MTime: info.ModTime().UTC().Format(time.RFC3339Nano),
+			Name:      name,
+			Path:      relPath,
+			IsDir:     isDir,
+			IsSymlink: isSymlink,
+			Size:      info.Size(),
+			MTime:     info.ModTime().UTC().Format(time.RFC3339Nano),
 		})
 	}
 	sort.Slice(result, func(i, j int) bool {

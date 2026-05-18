@@ -1,5 +1,6 @@
 import React from "react";
 import { rootBadgeStyle } from "./rootBadgeStyle";
+import { SymlinkBadge } from "./SymlinkBadge";
 import {
   DIRECTORY_SORT_OPTIONS,
   type DirectorySortMode,
@@ -61,6 +62,33 @@ function formatCompactSize(size?: number): string {
   }
   const fractionDigits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
   return `${value.toFixed(fractionDigits).replace(/\.0+$|(\.\d*[1-9])0+$/, "$1")} ${units[unitIndex]}`;
+}
+
+function FileEntryIcon({ entry }: { entry: FileEntry }) {
+  const showSymlinkBadge = entry.is_dir && entry.is_symlink;
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        width: "18px",
+        height: "18px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+      }}
+    >
+      {entry.is_dir ? (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2z" /></svg>
+      ) : (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" /><polyline points="13 2 13 9 20 9" /></svg>
+      )}
+      {showSymlinkBadge ? (
+        <SymlinkBadge />
+      ) : null}
+    </div>
+  );
 }
 
 function GitBranchMenuIcon({ marker }: { marker?: "plus" | "minus" | "switch" }) {
@@ -569,22 +597,7 @@ export function DefaultListView({
                 e.currentTarget.style.background = "transparent";
               }}
             >
-              <div
-                style={{
-                  width: "18px",
-                  height: "18px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  flexShrink: 0,
-                }}
-              >
-                {entry.is_dir ? (
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2z"/></svg>
-                ) : (
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-                )}
-              </div>
+              <FileEntryIcon entry={entry} />
               <div style={{ minWidth: 0, flex: 1, fontWeight: 500, fontSize: "13px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "var(--text-primary)" }}>
                 {entry.name}
               </div>
