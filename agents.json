@@ -1,6 +1,23 @@
 {
   "agents": [
     {
+      "name": "claude",
+      "command": "claude",
+      "protocol": "claude-sdk",
+      "configBackup": {
+        "envKeys": [
+          "ANTHROPIC_AUTH_TOKEN",
+          "ANTHROPIC_BASE_URL",
+          "ANTHROPIC_API_KEY",
+          "ANTHROPIC_MODEL",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL",
+          "ANTHROPIC_DEFAULT_OPUS_MODEL",
+          "AUTH_MODE"
+        ]
+      }
+    },
+    {
       "name": "gemini",
       "command": "gemini",
       "protocol": "acp",
@@ -25,25 +42,8 @@
       "protocol": "codex-sdk",
       "configBackup": {
         "fileSources": [
-          "~/.codex/auth.json",
-          "~/.codex/config.toml"
-        ]
-      }
-    },
-    {
-      "name": "claude",
-      "command": "claude",
-      "protocol": "claude-sdk",
-      "configBackup": {
-        "envKeys": [
-          "ANTHROPIC_AUTH_TOKEN",
-          "ANTHROPIC_BASE_URL",
-          "ANTHROPIC_API_KEY",
-          "ANTHROPIC_MODEL",
-          "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-          "ANTHROPIC_DEFAULT_SONNET_MODEL",
-          "ANTHROPIC_DEFAULT_OPUS_MODEL",
-          "AUTH_MODE"
+          "/Volumes/Extention/Users/csdc/.codex/auth.json",
+          "/Volumes/Extention/Users/csdc/.codex/config.toml"
         ]
       }
     },

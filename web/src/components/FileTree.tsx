@@ -95,6 +95,16 @@ type FileTreeProps = {
 type AgentConfigFlow = "backup" | "switch";
 type AgentConfigStep = "agent" | "details" | "confirm";
 
+function isAgentConfigBackupConflict(error: unknown): boolean {
+  const maybeError = error as { status?: unknown; message?: unknown; payload?: { error?: unknown; message?: unknown } } | null;
+  if (!maybeError) {
+    return false;
+  }
+  const status = typeof maybeError.status === "number" ? maybeError.status : 0;
+  const message = String(maybeError.payload?.error || maybeError.payload?.message || maybeError.message || "");
+  return status === 409 || message === "backup already exists";
+}
+
 const fileTreeMenuButtonStyle: React.CSSProperties = {
   width: "100%",
   border: "none",
@@ -321,7 +331,7 @@ function AgentConfigPopover({
   onDeleteBackup,
   onSave,
   onSwitch,
-  onConfirmSwitch,
+  onConfirm,
   onCancel,
 }: {
   flow: AgentConfigFlow;
@@ -344,12 +354,13 @@ function AgentConfigPopover({
   onDeleteBackup: (id: string) => void;
   onSave: () => void;
   onSwitch: () => void;
-  onConfirmSwitch: () => void;
+  onConfirm: () => void;
   onCancel: () => void;
 }) {
   const agentTitle = flow === "backup"
     ? "选择要备份配置的 agent"
     : "选择要切换配置的 agent";
+  const confirmButtonLabel = flow === "backup" ? "继续备份" : "继续切换";
   return (
     <div
       style={{
@@ -386,15 +397,15 @@ function AgentConfigPopover({
         </>
       ) : step === "confirm" ? (
         <>
-          <div style={{ ...agentConfigHintStyle, color: "var(--text-primary)" }}>
+          <div style={{ ...agentConfigHintStyle, color: "#dc2626" }}>
             {confirmMessage || "目标配置文件已存在，请确保已备份"}
           </div>
           <div style={agentConfigActionRowStyle}>
             <button type="button" disabled={busy} onClick={onCancel} style={agentConfigSecondaryButtonStyle(busy)}>
               取消
             </button>
-            <button type="button" disabled={busy} onClick={onConfirmSwitch} style={agentConfigPrimaryButtonStyle(busy)}>
-              继续切换
+            <button type="button" disabled={busy} onClick={onConfirm} style={agentConfigPrimaryButtonStyle(busy)}>
+              {confirmButtonLabel}
             </button>
           </div>
         </>
@@ -1109,7 +1120,7 @@ export function FileTree({
     }
   }, [agentConfigFlow]);
 
-  const saveAgentConfigBackup = React.useCallback(async () => {
+  const saveAgentConfigBackup = React.useCallback(async (overwrite = false) => {
     if (!agentConfigName.trim()) {
       setAgentConfigError("请填写备份名称");
       return;
@@ -1124,9 +1135,15 @@ export function FileTree({
         name: agentConfigName.trim(),
         fileSources,
         envLines,
+        overwrite,
       });
       closeAgentConfigFlow();
     } catch (error) {
+      if (isAgentConfigBackupConflict(error) && !overwrite) {
+        setAgentConfigConfirmMessage("同名配置已存在，继续将覆盖该备份");
+        setAgentConfigStep("confirm");
+        return;
+      }
       setAgentConfigError(error instanceof Error ? error.message : "保存备份失败");
     } finally {
       setAgentConfigBusy(false);
@@ -1607,7 +1624,11 @@ export function FileTree({
               onSwitch={() => {
                 void runAgentConfigSwitch(false);
               }}
-              onConfirmSwitch={() => {
+              onConfirm={() => {
+                if (agentConfigFlow === "backup") {
+                  void saveAgentConfigBackup(true);
+                  return;
+                }
                 void runAgentConfigSwitch(true);
               }}
               onCancel={closeAgentConfigFlow}
