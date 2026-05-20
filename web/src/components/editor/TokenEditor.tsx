@@ -53,6 +53,7 @@ type TokenEditorProps = {
   onKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: React.ClipboardEvent<HTMLDivElement>) => void;
   onEnter?: (event: KeyboardEvent | null) => boolean;
+  enterKeyHint?: React.HTMLAttributes<HTMLElement>["enterKeyHint"];
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
 };
@@ -535,6 +536,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
     onKeyDown,
     onPaste,
     onEnter,
+    enterKeyHint,
     onCompositionStart,
     onCompositionEnd,
   },
@@ -632,6 +634,18 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
       rootRef.current?.focus({ preventScroll: true });
     },
   }));
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) {
+      return;
+    }
+    if (enterKeyHint) {
+      root.setAttribute("enterkeyhint", enterKeyHint);
+      return;
+    }
+    root.removeAttribute("enterkeyhint");
+  }, [enterKeyHint]);
 
   const handleChange = (payload: { serializedText: string; displayText: string; activeToken: ActiveToken | null }) => {
     setIsEmpty(payload.displayText.length === 0);
@@ -734,6 +748,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
               }}
               onKeyDown={onKeyDown}
               onPaste={onPaste}
+              enterKeyHint={enterKeyHint}
               onCompositionStart={onCompositionStart}
               onCompositionEnd={onCompositionEnd}
               style={{
@@ -788,6 +803,9 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
           onReady={({ editor, root }) => {
             editorRef.current = editor;
             rootRef.current = root;
+            if (root && enterKeyHint) {
+              root.setAttribute("enterkeyhint", enterKeyHint);
+            }
           }}
           onEnter={onEnter}
           onDeleteToken={handleDeleteToken}

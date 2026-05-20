@@ -904,6 +904,19 @@ type AppProps = {
   onGoHome?: () => void;
 };
 
+const MOBILE_ENTER_KEY_SEND_STORAGE_KEY = "mindfs-mobile-enter-key-sends";
+
+function loadMobileEnterKeySends(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    return window.localStorage.getItem(MOBILE_ENTER_KEY_SEND_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export function App({ onGoHome }: AppProps) {
   const pluginManagerRef = useRef<PluginManager>(new PluginManager());
   const completionAudioContextRef = useRef<AudioContext | null>(null);
@@ -998,12 +1011,25 @@ export function App({ onGoHome }: AppProps) {
   const [agentsVersion, setAgentsVersion] = useState(0);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const { isMobile } = useResponsive();
+  const [mobileEnterKeySends, setMobileEnterKeySends] = useState(loadMobileEnterKeySends);
   const [isLeftOpen, setIsLeftOpen] = useState(() => window.innerWidth >= 768);
   const [isRightOpen, setIsRightOpen] = useState(
     () => window.innerWidth >= 768,
   );
   const [currentRootId, setCurrentRootId] = useState<string | null>(null);
   const currentRootIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        MOBILE_ENTER_KEY_SEND_STORAGE_KEY,
+        mobileEnterKeySends ? "1" : "0",
+      );
+    } catch {
+      // Ignore storage failures; the setting can still apply for this session.
+    }
+  }, [mobileEnterKeySends]);
+
   const [managedRootIds, setManagedRootIds] = useState<string[]>([]);
   const managedRootByIdRef = useRef<Record<string, ManagedRootPayload>>({});
   const [rootEntries, setRootEntries] = useState<FileEntry[]>([]);
@@ -7803,6 +7829,9 @@ export function App({ onGoHome }: AppProps) {
             onUpdateAction={() => {
               void handleStartUpdate();
             }}
+            showEnterKeySendOption={isMobile}
+            enterKeySends={mobileEnterKeySends}
+            onEnterKeySendsChange={setMobileEnterKeySends}
             onGoHome={onGoHome}
           />
         }
@@ -7915,6 +7944,7 @@ export function App({ onGoHome }: AppProps) {
             detachedBoundSession={detachedBoundSession}
             onSendMessage={handleSendMessage}
             onCancelCurrentTurn={handleCancelCurrentTurn}
+            mobileEnterKeySends={mobileEnterKeySends}
             onNewSession={handleNewSession}
             onRequestFileContext={handleRequestFileContext}
             onClearFileContext={handleClearFileContext}

@@ -89,6 +89,9 @@ type FileTreeProps = {
   updateActionBusy?: boolean;
   updateActionSummary?: string | null;
   onUpdateAction?: () => void;
+  showEnterKeySendOption?: boolean;
+  enterKeySends?: boolean;
+  onEnterKeySendsChange?: (enabled: boolean) => void;
   onGoHome?: () => void;
 };
 
@@ -652,6 +655,9 @@ export function FileTree({
   updateActionBusy = false,
   updateActionSummary = null,
   onUpdateAction,
+  showEnterKeySendOption = false,
+  enterKeySends = false,
+  onEnterKeySendsChange,
   onGoHome,
 }: FileTreeProps) {
   const expandedSet = new Set(expanded);
@@ -1569,6 +1575,29 @@ export function FileTree({
                 <span>显示隐藏文件</span>
                 <span style={{ fontSize: "11px", opacity: showHiddenFiles ? 1 : 0 }}>✓</span>
               </button>
+              {showEnterKeySendOption ? (
+                <button
+                  type="button"
+                  onClick={() => onEnterKeySendsChange?.(!enterKeySends)}
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    background: enterKeySends ? "var(--selection-bg)" : "transparent",
+                    color: enterKeySends ? "var(--accent-color)" : "var(--text-primary)",
+                    borderRadius: "8px",
+                    padding: "8px 10px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    textAlign: "left",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                  }}
+                >
+                  <span>回车键发送</span>
+                  <span style={{ fontSize: "11px", opacity: enterKeySends ? 1 : 0 }}>✓</span>
+                </button>
+              ) : null}
             </div>
           ) : null}
           {projectAddOverlay ? (
