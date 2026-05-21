@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -200,6 +201,45 @@ func TestSharedFileWatcherWatchesOnlyRequestedDirectory(t *testing.T) {
 	assertWatched(filepath.Join(rootDir, "a"), true)
 	assertWatched(filepath.Join(rootDir, "a", "b"), false)
 	assertWatched(filepath.Join(rootDir, "a", "b", "c"), false)
+}
+
+func TestSharedFileWatcherConcurrentWatchDirAndEvents(t *testing.T) {
+	rootDir := t.TempDir()
+	root := NewRootInfo("mindfs", "mindfs", rootDir)
+	watcher, err := NewSharedFileWatcher(root, nil)
+	if err != nil {
+		t.Fatalf("NewSharedFileWatcher returned error: %v", err)
+	}
+	defer watcher.Close()
+
+	const dirCount = 16
+	var wg sync.WaitGroup
+	for i := 0; i < dirCount; i++ {
+		dirName := filepath.Join("dir", string(rune('a'+i)))
+		dirPath := filepath.Join(rootDir, dirName)
+		if err := os.MkdirAll(dirPath, 0o755); err != nil {
+			t.Fatalf("MkdirAll returned error: %v", err)
+		}
+
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := watcher.WatchDir(dirName); err != nil {
+				t.Errorf("WatchDir returned error: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 8; j++ {
+				path := filepath.Join(dirPath, "file.txt")
+				if err := os.WriteFile(path, []byte("changed"), 0o644); err != nil {
+					t.Errorf("WriteFile returned error: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestRootInfoReadFileDecodesGB18030CodeFile(t *testing.T) {

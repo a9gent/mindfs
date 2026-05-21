@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/coder/acp-go-sdk v0.6.4-0.20260227160919-584abe6abe22
 	github.com/fanwenlin/codex-go-sdk v0.0.0
-	github.com/fsnotify/fsnotify v1.7.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-chi/chi/v5 v5.0.10
 	github.com/gorilla/websocket v1.5.1
 	github.com/hashicorp/yamux v0.1.2
