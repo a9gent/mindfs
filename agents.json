@@ -1,23 +1,6 @@
 {
   "agents": [
     {
-      "name": "claude",
-      "command": "claude",
-      "protocol": "claude-sdk",
-      "configBackup": {
-        "envKeys": [
-          "ANTHROPIC_AUTH_TOKEN",
-          "ANTHROPIC_BASE_URL",
-          "ANTHROPIC_API_KEY",
-          "ANTHROPIC_MODEL",
-          "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-          "ANTHROPIC_DEFAULT_SONNET_MODEL",
-          "ANTHROPIC_DEFAULT_OPUS_MODEL",
-          "AUTH_MODE"
-        ]
-      }
-    },
-    {
       "name": "gemini",
       "command": "gemini",
       "protocol": "acp",
@@ -42,8 +25,25 @@
       "protocol": "codex-sdk",
       "configBackup": {
         "fileSources": [
-          "/Volumes/Extention/Users/csdc/.codex/auth.json",
-          "/Volumes/Extention/Users/csdc/.codex/config.toml"
+          "~/.codex/auth.json",
+          "~/.codex/config.toml"
+        ]
+      }
+    },
+    {
+      "name": "claude",
+      "command": "claude",
+      "protocol": "claude-sdk",
+      "configBackup": {
+        "envKeys": [
+          "ANTHROPIC_AUTH_TOKEN",
+          "ANTHROPIC_BASE_URL",
+          "ANTHROPIC_API_KEY",
+          "ANTHROPIC_MODEL",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL",
+          "ANTHROPIC_DEFAULT_OPUS_MODEL",
+          "AUTH_MODE"
         ]
       }
     },
@@ -175,6 +175,20 @@
       "command": "pi-acp",
       "protocol": "acp",
       "configBackup": {}
+    },
+    {
+      "name": "hermes",
+      "command": "hermes",
+      "protocol": "acp",
+      "args": [
+        "acp"
+      ],
+      "configBackup": {
+        "fileSources": [
+          "~/.hermes/auth.json",
+          "~/.hermes/config.yaml"
+        ]
+      }
     }
   ],
   "relayBaseURL": "https://relay.a9gent.com"

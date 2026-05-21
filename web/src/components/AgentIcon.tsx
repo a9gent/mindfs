@@ -14,6 +14,7 @@ const ICON_URLS: Record<string, { src: string; alt: string }> = {
   copilot: { src: appPath('/assets/agents/copilot.svg'), alt: 'Copilot' },
   cursor: { src: appPath('/assets/agents/cursor.svg'), alt: 'Cursor' },
   gemini: { src: appPath('/assets/agents/gemini.svg'), alt: 'Gemini' },
+  hermes: { src: appPath('/assets/agents/hermes.webp'), alt: 'Hermes' },
   kiro: { src: appPath('/assets/agents/kiro.svg'), alt: 'Kiro' },
   kimi: { src: appPath('/assets/agents/kimi.svg'), alt: 'Kimi' },
   openclaw: { src: appPath('/assets/agents/openclaw.svg'), alt: 'OpenClaw' },
@@ -59,6 +60,7 @@ async function loadIconOnce(url: string): Promise<string> {
 function useCachedIcon(url?: string): string | undefined {
   const [src, setSrc] = useState<string | undefined>(() => {
     if (!url) return undefined;
+    if (!url.endsWith('.svg')) return url;
     return iconCache.get(url) ?? undefined;
   });
 
@@ -66,6 +68,10 @@ function useCachedIcon(url?: string): string | undefined {
     let cancelled = false;
     if (!url) {
       setSrc(undefined);
+      return;
+    }
+    if (!url.endsWith('.svg')) {
+      setSrc(url);
       return;
     }
     const cached = iconCache.get(url);
@@ -125,6 +131,8 @@ export function AgentIcon({ agentName, ...props }: AgentIconProps) {
     icon = ICON_URLS.claude;
   } else if (lowerAgentName.includes('gemini')) {
     icon = ICON_URLS.gemini;
+  } else if (lowerAgentName.includes('hermes')) {
+    icon = ICON_URLS.hermes;
   }
   const iconSrc = useCachedIcon(icon?.src);
 
