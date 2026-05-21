@@ -54,6 +54,7 @@ type ActionBarProps = {
   attachedFileContext?: AttachedFileContext | null;
   canOpenSessionDrawer?: boolean;
   detachedBoundSession?: boolean;
+  mobileEnterKeySends?: boolean;
   onSendMessage?: (
     message: string,
     mode: SessionMode,
@@ -153,6 +154,7 @@ export function ActionBar({
   onSessionClick,
   onToggleLeftSidebar,
   onToggleRightSidebar,
+  mobileEnterKeySends = false,
 }: ActionBarProps) {
   const [mode, setMode] = useState<SessionMode>("chat");
   const [agent, setAgent] = useState("");
@@ -488,6 +490,7 @@ export function ActionBar({
       }
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopPropagation();
         setCandidates([]);
         setActiveCandidateIndex(0);
         return;
@@ -508,14 +511,14 @@ export function ActionBar({
       applyCandidate(candidates[activeCandidateIndex] || candidates[0]);
       return true;
     }
-    if (!isMobile) {
+    if (!isMobile || (mobileEnterKeySends && mode === "chat")) {
       event?.preventDefault();
       event?.stopPropagation();
       void handleSend();
       return true;
     }
     return false;
-  }, [candidates, activeCandidateIndex, applyCandidate, handleSend, isCompositionActive, isMobile]);
+  }, [candidates, activeCandidateIndex, applyCandidate, handleSend, isCompositionActive, isMobile, mobileEnterKeySends, mode]);
 
   const handleEditorPaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
     if (sending || !currentRootId) {
@@ -588,6 +591,22 @@ export function ActionBar({
   const hasBoundSession = !!currentSession;
   const showCancel = !!currentSession?.pending && !!currentSession?.key;
   const isModeLocked = !!currentSession;
+
+  useEffect(() => {
+    if (isMobile || !showCancel) {
+      return;
+    }
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.key !== "Escape" || isCompositionActive(event) || event.repeat) {
+        return;
+      }
+      event.preventDefault();
+      void handleCancel();
+    };
+    window.addEventListener("keydown", cancelOnEscape);
+    return () => window.removeEventListener("keydown", cancelOnEscape);
+  }, [handleCancel, isCompositionActive, isMobile, showCancel]);
+
   const inputPlaceholder = currentSession && !currentSession.pending
     ? "左滑蓝环开始新会话..."
     : mode === "chat" && !isFocused
@@ -657,6 +676,7 @@ export function ActionBar({
               onKeyDown={handleKeyDown}
               onPaste={handleEditorPaste}
               onEnter={handleEditorEnter}
+              enterKeyHint={isMobile && mobileEnterKeySends && mode === "chat" ? "send" : undefined}
               onCompositionStart={() => {
                 isComposingRef.current = true;
                 compositionGuardUntilRef.current = 0;

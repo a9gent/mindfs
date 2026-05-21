@@ -232,7 +232,12 @@ export function AgentSelector({
 
   const handleSubmenuToggle = useCallback(
     (entry: AgentStatus) => {
-      if ((entry.models?.length ?? 0) === 0 && (entry.modes?.length ?? 0) === 0) {
+      if (
+        (entry.models?.length ?? 0) === 0 &&
+        (entry.modes?.length ?? 0) === 0 &&
+        (entry.efforts?.length ?? 0) === 0 &&
+        !entry.supports_fast_service
+      ) {
         return;
       }
       setErrorAgent(null);
@@ -409,7 +414,11 @@ export function AgentSelector({
               Agent
             </div>
             {agents.map((a) => {
-              const hasModels = (a.models?.length ?? 0) > 0 || (a.modes?.length ?? 0) > 0;
+              const hasModelOptions =
+                (a.models?.length ?? 0) > 0 ||
+                (a.modes?.length ?? 0) > 0 ||
+                (a.efforts?.length ?? 0) > 0 ||
+                !!a.supports_fast_service;
               const hasError = !a.available && !!a.error;
               const isSelected = a.name === agent;
               const isExpanded = submenuAgent === a.name;
@@ -424,7 +433,7 @@ export function AgentSelector({
                   <div
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "20px minmax(0, 1fr) auto",
+                      gridTemplateColumns: "20px minmax(0, 1fr) 18px 18px",
                       alignItems: "center",
                       columnGap: "4px",
                       width: "100%",
@@ -463,81 +472,83 @@ export function AgentSelector({
                         {a.name}
                       </span>
                     </button>
-                    <div style={{ display: "inline-flex", alignItems: "center", gap: "4px", justifySelf: "end" }}>
-                      {hasError ? (
-                        <button
-                          type="button"
-                          aria-label={`查看 ${a.name} 错误信息`}
-                          onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            setSubmenuAgent(null);
-                            setModelSectionExpanded(true);
-                            setModeSectionExpanded(false);
-                            setEffortSectionExpanded(false);
-                            setServiceTierSectionExpanded(false);
-                            setErrorAgent((prev) => (prev === a.name ? null : a.name));
-                          }}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: "18px",
-                            height: "18px",
-                            borderRadius: "999px",
-                            border: "1px solid var(--menu-border)",
-                            background: isShowingError ? "rgba(217, 119, 6, 0.12)" : "transparent",
-                            color: "#d97706",
-                            fontSize: "11px",
-                            fontWeight: 700,
-                            cursor: "pointer",
-                            flexShrink: 0,
-                          }}
+                    {hasError ? (
+                      <button
+                        type="button"
+                        aria-label={`查看 ${a.name} 错误信息`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setSubmenuAgent(null);
+                          setModelSectionExpanded(true);
+                          setModeSectionExpanded(false);
+                          setEffortSectionExpanded(false);
+                          setServiceTierSectionExpanded(false);
+                          setErrorAgent((prev) => (prev === a.name ? null : a.name));
+                        }}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: "18px",
+                          height: "18px",
+                          borderRadius: "999px",
+                          border: "1px solid var(--menu-border)",
+                          background: isShowingError ? "rgba(217, 119, 6, 0.12)" : "transparent",
+                          color: "#d97706",
+                          fontSize: "11px",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          justifySelf: "center",
+                        }}
+                      >
+                        ?
+                      </button>
+                    ) : (
+                      <span aria-hidden="true" style={{ width: "18px", height: "18px" }} />
+                    )}
+                    {hasModelOptions ? (
+                      <button
+                        type="button"
+                        aria-label={isExpanded ? `收起 ${a.name} 模型列表` : `展开 ${a.name} 模型列表`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          handleSubmenuToggle(a);
+                        }}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: "18px",
+                          height: "18px",
+                          borderRadius: "6px",
+                          border: "none",
+                          background: "transparent",
+                          color: isExpanded ? "#3b82f6" : "var(--text-secondary)",
+                          cursor: "pointer",
+                          justifySelf: "center",
+                        }}
+                      >
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          aria-hidden="true"
                         >
-                          ?
-                        </button>
-                      ) : null}
-                      {hasModels ? (
-                        <button
-                          type="button"
-                          aria-label={isExpanded ? `收起 ${a.name} 模型列表` : `展开 ${a.name} 模型列表`}
-                          onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            handleSubmenuToggle(a);
-                          }}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: "18px",
-                            height: "18px",
-                            borderRadius: "6px",
-                            border: "none",
-                            background: "transparent",
-                            color: isExpanded ? "#3b82f6" : "var(--text-secondary)",
-                            cursor: "pointer",
-                            flexShrink: 0,
-                          }}
-                        >
-                          <svg
-                            width="12"
-                            height="12"
-                            viewBox="0 0 12 12"
-                            fill="none"
-                            aria-hidden="true"
-                          >
-                            <path
-                              d="M4 2.5 8 6 4 9.5"
-                              stroke="currentColor"
-                              strokeWidth="1.5"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                          </svg>
-                        </button>
-                      ) : null}
-                    </div>
+                          <path
+                            d="M4 2.5 8 6 4 9.5"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </button>
+                    ) : (
+                      <span aria-hidden="true" style={{ width: "18px", height: "18px" }} />
+                    )}
                   </div>
                 </div>
               );

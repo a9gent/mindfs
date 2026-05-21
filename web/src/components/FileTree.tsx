@@ -12,6 +12,7 @@ import { appPath } from "../services/base";
 import { protectedJSON } from "../services/api";
 import { bootstrapService } from "../services/bootstrap";
 import { AgentMenuList } from "./AgentMenuList";
+import { SymlinkBadge } from "./SymlinkBadge";
 import { fetchAgents, type AgentStatus } from "../services/agents";
 import {
   createAgentConfigBackup,
@@ -88,11 +89,24 @@ type FileTreeProps = {
   updateActionBusy?: boolean;
   updateActionSummary?: string | null;
   onUpdateAction?: () => void;
+  showEnterKeySendOption?: boolean;
+  enterKeySends?: boolean;
+  onEnterKeySendsChange?: (enabled: boolean) => void;
   onGoHome?: () => void;
 };
 
 type AgentConfigFlow = "backup" | "switch";
 type AgentConfigStep = "agent" | "details" | "confirm";
+
+function isAgentConfigBackupConflict(error: unknown): boolean {
+  const maybeError = error as { status?: unknown; message?: unknown; payload?: { error?: unknown; message?: unknown } } | null;
+  if (!maybeError) {
+    return false;
+  }
+  const status = typeof maybeError.status === "number" ? maybeError.status : 0;
+  const message = String(maybeError.payload?.error || maybeError.payload?.message || maybeError.message || "");
+  return status === 409 || message === "backup already exists";
+}
 
 const fileTreeMenuButtonStyle: React.CSSProperties = {
   width: "100%",
@@ -128,6 +142,19 @@ const ChevronRight = ({ isOpen }: { isOpen: boolean }) => (
     <polyline points="9 18 15 12 9 6" />
   </svg>
 );
+
+function DirectoryIconSlot({ entry, isOpen }: { entry: FileEntry; isOpen: boolean }) {
+  const showSymlinkBadge = entry.is_dir && entry.is_symlink;
+
+  return (
+    <div style={{ position: "relative", width: 20, height: 18, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+      {entry.is_dir ? <ChevronRight isOpen={isOpen} /> : getFileIcon(entry.name)}
+      {showSymlinkBadge ? (
+        <SymlinkBadge offset="-1px" />
+      ) : null}
+    </div>
+  );
+}
 
 const getFileIcon = (filename: string) => {
   const ext = filename.split('.').pop()?.toLowerCase();
@@ -307,7 +334,7 @@ function AgentConfigPopover({
   onDeleteBackup,
   onSave,
   onSwitch,
-  onConfirmSwitch,
+  onConfirm,
   onCancel,
 }: {
   flow: AgentConfigFlow;
@@ -330,12 +357,13 @@ function AgentConfigPopover({
   onDeleteBackup: (id: string) => void;
   onSave: () => void;
   onSwitch: () => void;
-  onConfirmSwitch: () => void;
+  onConfirm: () => void;
   onCancel: () => void;
 }) {
   const agentTitle = flow === "backup"
     ? "选择要备份配置的 agent"
     : "选择要切换配置的 agent";
+  const confirmButtonLabel = flow === "backup" ? "继续备份" : "继续切换";
   return (
     <div
       style={{
@@ -372,15 +400,15 @@ function AgentConfigPopover({
         </>
       ) : step === "confirm" ? (
         <>
-          <div style={{ ...agentConfigHintStyle, color: "var(--text-primary)" }}>
+          <div style={{ ...agentConfigHintStyle, color: "#dc2626" }}>
             {confirmMessage || "目标配置文件已存在，请确保已备份"}
           </div>
           <div style={agentConfigActionRowStyle}>
             <button type="button" disabled={busy} onClick={onCancel} style={agentConfigSecondaryButtonStyle(busy)}>
               取消
             </button>
-            <button type="button" disabled={busy} onClick={onConfirmSwitch} style={agentConfigPrimaryButtonStyle(busy)}>
-              继续切换
+            <button type="button" disabled={busy} onClick={onConfirm} style={agentConfigPrimaryButtonStyle(busy)}>
+              {confirmButtonLabel}
             </button>
           </div>
         </>
@@ -627,6 +655,9 @@ export function FileTree({
   updateActionBusy = false,
   updateActionSummary = null,
   onUpdateAction,
+  showEnterKeySendOption = false,
+  enterKeySends = false,
+  onEnterKeySendsChange,
   onGoHome,
 }: FileTreeProps) {
   const expandedSet = new Set(expanded);
@@ -1095,7 +1126,7 @@ export function FileTree({
     }
   }, [agentConfigFlow]);
 
-  const saveAgentConfigBackup = React.useCallback(async () => {
+  const saveAgentConfigBackup = React.useCallback(async (overwrite = false) => {
     if (!agentConfigName.trim()) {
       setAgentConfigError("请填写备份名称");
       return;
@@ -1110,9 +1141,15 @@ export function FileTree({
         name: agentConfigName.trim(),
         fileSources,
         envLines,
+        overwrite,
       });
       closeAgentConfigFlow();
     } catch (error) {
+      if (isAgentConfigBackupConflict(error) && !overwrite) {
+        setAgentConfigConfirmMessage("同名配置已存在，继续将覆盖该备份");
+        setAgentConfigStep("confirm");
+        return;
+      }
       setAgentConfigError(error instanceof Error ? error.message : "保存备份失败");
     } finally {
       setAgentConfigBusy(false);
@@ -1340,9 +1377,7 @@ export function FileTree({
               onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = "rgba(0,0,0,0.04)"; }}
               onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
             >
-              <div style={{ width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                 {entry.is_dir ? <ChevronRight isOpen={isOpen} /> : getFileIcon(entry.name)}
-              </div>
+              <DirectoryIconSlot entry={entry} isOpen={isOpen} />
               <span
                 style={{
                   whiteSpace: "nowrap",
@@ -1540,6 +1575,29 @@ export function FileTree({
                 <span>显示隐藏文件</span>
                 <span style={{ fontSize: "11px", opacity: showHiddenFiles ? 1 : 0 }}>✓</span>
               </button>
+              {showEnterKeySendOption ? (
+                <button
+                  type="button"
+                  onClick={() => onEnterKeySendsChange?.(!enterKeySends)}
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    background: enterKeySends ? "var(--selection-bg)" : "transparent",
+                    color: enterKeySends ? "var(--accent-color)" : "var(--text-primary)",
+                    borderRadius: "8px",
+                    padding: "8px 10px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    textAlign: "left",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                  }}
+                >
+                  <span>回车键发送</span>
+                  <span style={{ fontSize: "11px", opacity: enterKeySends ? 1 : 0 }}>✓</span>
+                </button>
+              ) : null}
             </div>
           ) : null}
           {projectAddOverlay ? (
@@ -1595,7 +1653,11 @@ export function FileTree({
               onSwitch={() => {
                 void runAgentConfigSwitch(false);
               }}
-              onConfirmSwitch={() => {
+              onConfirm={() => {
+                if (agentConfigFlow === "backup") {
+                  void saveAgentConfigBackup(true);
+                  return;
+                }
                 void runAgentConfigSwitch(true);
               }}
               onCancel={closeAgentConfigFlow}

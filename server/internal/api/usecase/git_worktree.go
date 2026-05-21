@@ -66,6 +66,29 @@ func (s *Service) CheckoutGitBranch(ctx context.Context, in CheckoutGitBranchInp
 	return CheckoutGitBranchOutput{Status: status}, nil
 }
 
+type ListGitWorktreesInput struct {
+	RootID string
+}
+
+type ListGitWorktreesOutput struct {
+	Items []gitview.WorktreeItem `json:"items"`
+}
+
+func (s *Service) ListGitWorktrees(ctx context.Context, in ListGitWorktreesInput) (ListGitWorktreesOutput, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return ListGitWorktreesOutput{}, err
+	}
+	root, err := s.Registry.GetRoot(in.RootID)
+	if err != nil {
+		return ListGitWorktreesOutput{}, err
+	}
+	result, err := gitview.ListWorktrees(ctx, root.RootPath)
+	if err != nil {
+		return ListGitWorktreesOutput{}, err
+	}
+	return ListGitWorktreesOutput{Items: result.Items}, nil
+}
+
 type CreateGitWorktreeInput struct {
 	RootID     string
 	ParentPath string

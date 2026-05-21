@@ -62,6 +62,17 @@ export type GitBranchesPayload = {
   branches: GitBranchItem[];
 };
 
+export type GitWorktreeItem = {
+  path: string;
+  branch?: string;
+  head?: string;
+  current: boolean;
+};
+
+export type GitWorktreesPayload = {
+  items: GitWorktreeItem[];
+};
+
 export async function fetchGitStatus(rootId: string): Promise<GitStatusPayload> {
   const payload = await protectedJSON<any>(appURL("/api/git/status", new URLSearchParams({ root: rootId })));
   return {
@@ -394,6 +405,22 @@ export async function checkoutGitBranch(rootId: string, branch: string): Promise
     branch: typeof status?.branch === "string" ? status.branch : undefined,
     dirty_count: Number(status?.dirty_count) || 0,
     items: Array.isArray(status?.items) ? status.items as GitStatusItem[] : [],
+  };
+}
+
+export async function fetchGitWorktrees(rootId: string): Promise<GitWorktreesPayload> {
+  const payload = await protectedJSON<any>(appURL("/api/git/worktrees", new URLSearchParams({ root: rootId })));
+  return {
+    items: Array.isArray(payload?.items)
+      ? payload.items
+          .map((item: any) => ({
+            path: typeof item?.path === "string" ? item.path : "",
+            branch: typeof item?.branch === "string" ? item.branch : undefined,
+            head: typeof item?.head === "string" ? item.head : undefined,
+            current: item?.current === true,
+          }))
+          .filter((item: GitWorktreeItem) => !!item.path)
+      : [],
   };
 }
 

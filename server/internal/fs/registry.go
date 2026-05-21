@@ -3,13 +3,18 @@ package fs
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	configpkg "mindfs/server/internal/config"
 )
+
+var ErrRootNameConflict = errors.New("root name already exists")
 
 type Registry struct {
 	mu    sync.Mutex
@@ -132,10 +137,30 @@ func (r *Registry) Upsert(root string) (RootInfo, error) {
 		dir = NewRootInfo(name, name, root)
 		dir.CreatedAt = now
 		r.order = append(r.order, name)
+	} else if !sameRegistryPath(dir.RootPath, root) {
+		return RootInfo{}, fmt.Errorf("%w: %q is already managed at %s; rename the directory before adding %s", ErrRootNameConflict, name, dir.RootPath, root)
 	}
 	dir.UpdatedAt = now
 	r.dirs[name] = dir
 	return dir, r.saveLocked()
+}
+
+func sameRegistryPath(a, b string) bool {
+	left := cleanRegistryPath(a)
+	right := cleanRegistryPath(b)
+	if runtime.GOOS == "windows" {
+		left = strings.ToLower(left)
+		right = strings.ToLower(right)
+	}
+	return left == right
+}
+
+func cleanRegistryPath(path string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(path))
+	if abs, err := filepath.Abs(cleaned); err == nil {
+		return abs
+	}
+	return cleaned
 }
 
 func (r *Registry) Remove(root string) (RootInfo, error) {

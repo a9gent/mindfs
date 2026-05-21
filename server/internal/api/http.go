@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	htmpl "html/template"
 	"io"
@@ -240,6 +241,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/git/commit/files", h.protectedEndpoint(h.handleGitCommitFiles))
 	r.Get("/api/git/commit/diff", h.protectedEndpoint(h.handleGitCommitDiff))
 	r.Get("/api/git/branches", h.protectedEndpoint(h.handleGitBranches))
+	r.Get("/api/git/worktrees", h.protectedEndpoint(h.handleGitWorktreeList))
 	r.Post("/api/git/checkout", h.protectedEndpoint(h.handleGitCheckout))
 	r.Post("/api/git/worktrees", h.protectedEndpoint(h.handleGitWorktreeCreate))
 	r.Delete("/api/git/worktrees", h.protectedEndpoint(h.handleGitWorktreeRemove))
@@ -1298,6 +1300,21 @@ func (h *HTTPHandler) handleGitCheckout(w http.ResponseWriter, r *http.Request) 
 	respondJSON(w, http.StatusOK, out)
 }
 
+func (h *HTTPHandler) handleGitWorktreeList(w http.ResponseWriter, r *http.Request) {
+	rootID := strings.TrimSpace(r.URL.Query().Get("root"))
+	if rootID == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("root required"))
+		return
+	}
+	uc := h.service()
+	out, err := uc.ListGitWorktrees(r.Context(), usecase.ListGitWorktreesInput{RootID: rootID})
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, out)
+}
+
 func (h *HTTPHandler) handleGitWorktreeCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RootID     string `json:"root"`
@@ -1502,7 +1519,11 @@ func (h *HTTPHandler) handleAddDir(w http.ResponseWriter, r *http.Request) {
 	uc := h.service()
 	out, err := uc.AddManagedDir(r.Context(), usecase.AddManagedDirInput{Path: req.Path, Create: req.Create})
 	if err != nil {
-		respondError(w, http.StatusBadRequest, err)
+		status := http.StatusBadRequest
+		if errors.Is(err, fs.ErrRootNameConflict) {
+			status = http.StatusConflict
+		}
+		respondError(w, status, err)
 		return
 	}
 	if h.AppContext != nil {

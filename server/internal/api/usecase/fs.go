@@ -8,6 +8,7 @@ import (
 	stdmime "mime"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -584,6 +585,9 @@ func (s *Service) AddManagedDir(_ context.Context, in AddManagedDirInput) (AddMa
 	if err != nil {
 		return AddManagedDirOutput{}, err
 	}
+	if err := ensureManagedDirNameAvailable(s.Registry, abs); err != nil {
+		return AddManagedDirOutput{}, err
+	}
 	name := filepath.Base(abs)
 	if _, err := fs.NewRootInfo(name, name, abs).EnsureMetaDir(); err != nil {
 		return AddManagedDirOutput{}, err
@@ -593,6 +597,38 @@ func (s *Service) AddManagedDir(_ context.Context, in AddManagedDirInput) (AddMa
 		return AddManagedDirOutput{}, err
 	}
 	return AddManagedDirOutput{Dir: dir}, nil
+}
+
+func ensureManagedDirNameAvailable(registry Registry, path string) error {
+	name := filepath.Base(filepath.Clean(path))
+	for _, existing := range registry.ListRoots() {
+		if existing.ID != name {
+			continue
+		}
+		if sameManagedDirPath(existing.RootPath, path) {
+			return nil
+		}
+		return fmt.Errorf("%w:\n\t%q is already managed at %s;\n\trename the directory before adding %s", fs.ErrRootNameConflict, name, existing.RootPath, path)
+	}
+	return nil
+}
+
+func sameManagedDirPath(a, b string) bool {
+	left := cleanManagedDirPath(a)
+	right := cleanManagedDirPath(b)
+	if runtime.GOOS == "windows" {
+		left = strings.ToLower(left)
+		right = strings.ToLower(right)
+	}
+	return left == right
+}
+
+func cleanManagedDirPath(path string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(path))
+	if abs, err := filepath.Abs(cleaned); err == nil {
+		return abs
+	}
+	return cleaned
 }
 
 func resolveManagedDirPath(registry Registry, raw string, create bool) (string, error) {

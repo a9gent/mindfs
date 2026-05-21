@@ -1,5 +1,6 @@
 import React from "react";
 import { rootBadgeStyle } from "./rootBadgeStyle";
+import { SymlinkBadge } from "./SymlinkBadge";
 import {
   DIRECTORY_SORT_OPTIONS,
   type DirectorySortMode,
@@ -28,6 +29,7 @@ type DefaultListViewProps = {
   showGitHistory?: boolean;
   onToggleGitHistory?: () => void;
   onCreateWorktree?: () => void;
+  onSwitchWorktree?: () => void;
   onRemoveWorktree?: () => void;
   menuOverlay?: React.ReactNode;
 };
@@ -62,7 +64,39 @@ function formatCompactSize(size?: number): string {
   return `${value.toFixed(fractionDigits).replace(/\.0+$|(\.\d*[1-9])0+$/, "$1")} ${units[unitIndex]}`;
 }
 
-function GitBranchMenuIcon({ marker }: { marker?: "plus" | "minus" }) {
+function FileEntryIcon({ entry }: { entry: FileEntry }) {
+  const showSymlinkBadge = entry.is_dir && entry.is_symlink;
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        width: "18px",
+        height: "18px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+      }}
+    >
+      {entry.is_dir ? (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2z" /></svg>
+      ) : (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" /><polyline points="13 2 13 9 20 9" /></svg>
+      )}
+      {showSymlinkBadge ? (
+        <SymlinkBadge />
+      ) : null}
+    </div>
+  );
+}
+
+function GitBranchMenuIcon({ marker }: { marker?: "plus" | "minus" | "switch" }) {
+  const markerPath = marker === "plus"
+      ? "M19 16v6M16 19h6"
+    : marker === "minus"
+      ? "M16 19h6"
+      : "M21 17.5h-7M18 14.5l3 3M13.8 21h7M13.8 21l3 3";
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
       <path
@@ -71,10 +105,11 @@ function GitBranchMenuIcon({ marker }: { marker?: "plus" | "minus" }) {
       />
       {marker ? (
         <path
-          d={marker === "plus" ? "M19 16v6M16 19h6" : "M16 19h6"}
+          d={markerPath}
           stroke="currentColor"
-          strokeWidth="2.6"
+          strokeWidth={marker === "switch" ? "1.7" : "2.6"}
           strokeLinecap="round"
+          strokeLinejoin="round"
         />
       ) : null}
     </svg>
@@ -163,6 +198,7 @@ export function DefaultListView({
   showGitHistory = true,
   onToggleGitHistory,
   onCreateWorktree,
+  onSwitchWorktree,
   onRemoveWorktree,
   menuOverlay = null,
 }: DefaultListViewProps) {
@@ -366,6 +402,32 @@ export function DefaultListView({
                         <span>创建 worktree</span>
                       </button>
                     ) : null}
+                    {isGitRepo ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSwitchWorktree?.();
+                          setIsMenuOpen(false);
+                        }}
+                        style={{
+                          width: "100%",
+                          border: "none",
+                          background: "transparent",
+                          color: "var(--text-primary)",
+                          borderRadius: "8px",
+                          padding: "8px 10px",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px",
+                          textAlign: "left",
+                          cursor: "pointer",
+                          fontSize: "12px",
+                        }}
+                      >
+                        <GitBranchMenuIcon marker="switch" />
+                        <span>切换 worktree</span>
+                      </button>
+                    ) : null}
                     {isGitWorktree ? (
                       <button
                         type="button"
@@ -535,22 +597,7 @@ export function DefaultListView({
                 e.currentTarget.style.background = "transparent";
               }}
             >
-              <div
-                style={{
-                  width: "18px",
-                  height: "18px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  flexShrink: 0,
-                }}
-              >
-                {entry.is_dir ? (
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2z"/></svg>
-                ) : (
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-                )}
-              </div>
+              <FileEntryIcon entry={entry} />
               <div style={{ minWidth: 0, flex: 1, fontWeight: 500, fontSize: "13px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "var(--text-primary)" }}>
                 {entry.name}
               </div>

@@ -1481,6 +1481,8 @@ func normalizeAgentUpdatePaths(root pathNormalizer, update agenttypes.Event) age
 				toolCall.Content[i].Text = normalizeDiffTextPaths(root, toolCall.Content[i].Text)
 			}
 		}
+	} else if session.PreserveCommandExecutionContent(toolCall) {
+		toolCall = session.CompactToolCall(toolCall)
 	} else {
 		toolCall.Content = nil
 	}

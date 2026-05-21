@@ -123,10 +123,12 @@ class E2EEService {
     this.emit();
   }
 
-  clearSession() {
+  clearSession(options: { silent?: boolean } = {}) {
     this.session = null;
     this.openingPromise = null;
-    this.emit();
+    if (!options.silent) {
+      this.emit();
+    }
   }
 
   clearSecret() {
@@ -306,7 +308,7 @@ class E2EEService {
       normalized === "e2ee_session_missing" ||
       normalized === "e2ee_session_expired"
     ) {
-      this.clearSession();
+      this.clearSession({ silent: this.hasSecret() });
       return true;
     }
     if (normalized === "e2ee_proof_invalid") {

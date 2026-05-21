@@ -1,12 +1,42 @@
 package fs
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
+
+func TestRegistryUpsertRejectsSameNameDifferentPath(t *testing.T) {
+	registry := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
+	first := filepath.Join(t.TempDir(), "project")
+	second := filepath.Join(t.TempDir(), "project")
+	if err := os.Mkdir(first, 0o755); err != nil {
+		t.Fatalf("Mkdir first returned error: %v", err)
+	}
+	if err := os.Mkdir(second, 0o755); err != nil {
+		t.Fatalf("Mkdir second returned error: %v", err)
+	}
+
+	created, err := registry.Upsert(first)
+	if err != nil {
+		t.Fatalf("first Upsert returned error: %v", err)
+	}
+	again, err := registry.Upsert(first)
+	if err != nil {
+		t.Fatalf("same-path Upsert returned error: %v", err)
+	}
+	if again.RootPath != created.RootPath {
+		t.Fatalf("same-path Upsert RootPath = %q, want %q", again.RootPath, created.RootPath)
+	}
+
+	_, err = registry.Upsert(second)
+	if !errors.Is(err, ErrRootNameConflict) {
+		t.Fatalf("different-path Upsert error = %v, want ErrRootNameConflict", err)
+	}
+}
 
 func TestRootInfoNormalizePathAcceptsAbsolutePathWithoutLeadingSlash(t *testing.T) {
 	root := NewRootInfo("mindfs", "mindfs", "/Users/bixin/project/mindfs")
@@ -63,6 +93,50 @@ func TestRootInfoListEntriesIncludesSizeAndMTime(t *testing.T) {
 	}
 	if entries[1].MTime == "" {
 		t.Fatalf("file mtime is empty")
+	}
+}
+
+func TestRootInfoListEntriesTreatsDirectorySymlinkAsDirectory(t *testing.T) {
+	rootDir := t.TempDir()
+	targetDir := filepath.Join(rootDir, "target")
+	if err := os.Mkdir(targetDir, 0o755); err != nil {
+		t.Fatalf("Mkdir returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "child.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.Symlink("target", filepath.Join(rootDir, "linked")); err != nil {
+		t.Skipf("Symlink unavailable: %v", err)
+	}
+
+	root := NewRootInfo("mindfs", "mindfs", rootDir)
+	entries, err := root.ListEntries(".")
+	if err != nil {
+		t.Fatalf("ListEntries returned error: %v", err)
+	}
+	var linked Entry
+	for _, entry := range entries {
+		if entry.Name == "linked" {
+			linked = entry
+			break
+		}
+	}
+	if linked.Name == "" {
+		t.Fatalf("linked entry not found: %#v", entries)
+	}
+	if !linked.IsDir {
+		t.Fatalf("linked entry IsDir = false, want true")
+	}
+	if !linked.IsSymlink {
+		t.Fatalf("linked entry IsSymlink = false, want true")
+	}
+
+	children, err := root.ListEntries("linked")
+	if err != nil {
+		t.Fatalf("ListEntries linked returned error: %v", err)
+	}
+	if len(children) != 1 || children[0].Name != "child.txt" {
+		t.Fatalf("linked children = %#v, want child.txt", children)
 	}
 }
 

@@ -42,6 +42,17 @@ type BranchListResult struct {
 	Branches []BranchItem `json:"branches"`
 }
 
+type WorktreeItem struct {
+	Path    string `json:"path"`
+	Branch  string `json:"branch,omitempty"`
+	Head    string `json:"head,omitempty"`
+	Current bool   `json:"current"`
+}
+
+type WorktreeListResult struct {
+	Items []WorktreeItem `json:"items"`
+}
+
 type DiffResult struct {
 	Path      string             `json:"path"`
 	OldPath   string             `json:"old_path,omitempty"`
@@ -185,6 +196,63 @@ func CheckoutBranch(ctx context.Context, rootPath, branch string) error {
 	}
 	_, err = runGit(ctx, repo.repoRoot, "checkout", branch)
 	return err
+}
+
+func ListWorktrees(ctx context.Context, rootPath string) (WorktreeListResult, error) {
+	if _, err := loadRepoContext(ctx, rootPath); err != nil {
+		return WorktreeListResult{}, err
+	}
+	output, err := runGit(ctx, rootPath, "worktree", "list", "--porcelain")
+	if err != nil {
+		return WorktreeListResult{}, err
+	}
+	currentRoot, err := filepath.Abs(rootPath)
+	if err != nil {
+		currentRoot = rootPath
+	}
+	currentRoot = filepath.Clean(currentRoot)
+
+	var items []WorktreeItem
+	var item WorktreeItem
+	flush := func() {
+		if strings.TrimSpace(item.Path) == "" {
+			item = WorktreeItem{}
+			return
+		}
+		cleanPath := filepath.Clean(item.Path)
+		item.Path = cleanPath
+		item.Current = cleanPath == currentRoot
+		items = append(items, item)
+		item = WorktreeItem{}
+	}
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			flush()
+			continue
+		}
+		key, value, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "worktree":
+			if strings.TrimSpace(item.Path) != "" {
+				flush()
+			}
+			item.Path = value
+		case "HEAD":
+			item.Head = value
+		case "branch":
+			item.Branch = strings.TrimPrefix(value, "refs/heads/")
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return WorktreeListResult{}, err
+	}
+	flush()
+	return WorktreeListResult{Items: items}, nil
 }
 
 func AddWorktree(ctx context.Context, rootPath, targetPath, branchMode, branch string) error {

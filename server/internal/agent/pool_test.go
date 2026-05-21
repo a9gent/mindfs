@@ -151,10 +151,46 @@ func TestDefaultConfigIncludesOMPAgent(t *testing.T) {
 	}
 	if len(def.Args) != 1 || def.Args[0] != "acp" {
 		t.Fatalf("omp default args = %#v", def.Args)
+func TestMergeConfigsKeepsBundledAgentsAndAppliesUserOverrides(t *testing.T) {
+	base := Config{
+		RelayBaseURL: "https://relay.default.example.com",
+		Agents: []Definition{
+			{Name: "codex", Command: "codex", Protocol: ProtocolCodexSDK},
+			{Name: "new-agent", Command: "new-agent", Protocol: ProtocolACP},
+		},
+	}
+	override := Config{
+		RelayBaseURL: "https://relay.user.example.com",
+		Agents: []Definition{
+			{Name: "codex", Command: "custom-codex", Protocol: ProtocolCodexSDK, Args: []string{"--profile", "work"}},
+			{Name: "local-agent", Command: "local-agent", Protocol: ProtocolACP},
+		},
+	}
+
+	cfg := mergeConfigs(base, override)
+	if cfg.RelayBaseURL != override.RelayBaseURL {
+		t.Fatalf("relay base url = %q", cfg.RelayBaseURL)
+	}
+	if len(cfg.Agents) != 3 {
+		t.Fatalf("agents length = %d, want 3", len(cfg.Agents))
+	}
+	codex, ok := cfg.GetAgent("codex")
+	if !ok {
+		t.Fatalf("expected codex")
+	}
+	if codex.Command != "custom-codex" || len(codex.Args) != 2 {
+		t.Fatalf("codex override not applied: %+v", codex)
+	}
+	if _, ok := cfg.GetAgent("new-agent"); !ok {
+		t.Fatalf("expected bundled new-agent to be preserved")
+	}
+	if _, ok := cfg.GetAgent("local-agent"); !ok {
+		t.Fatalf("expected user local-agent to be appended")
 	}
 }
 
 func TestLoadConfigPrefersWorkingDirAgentsJSONForRelativeLaunch(t *testing.T) {
+	t.Setenv(configPathEnvKey, "")
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "agents.json")
 	if err := os.WriteFile(configPath, []byte(`{"agents":[{"name":"local-agent","command":"local-agent"}]}`), 0o644); err != nil {

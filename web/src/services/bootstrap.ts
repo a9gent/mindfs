@@ -37,7 +37,16 @@ class BootstrapService {
 
   constructor() {
     e2eeService.subscribe((e2ee) => {
-      this.setState({ e2ee });
+      const patch: Partial<BootstrapState> = { e2ee };
+      if (
+        this.state.phase === "ready" &&
+        e2ee.required &&
+        !e2ee.unlocked &&
+        !e2ee.secretPresent
+      ) {
+        patch.phase = "needs_pairing";
+      }
+      this.setState(patch);
     });
   }
 

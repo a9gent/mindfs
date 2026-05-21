@@ -273,19 +273,15 @@ function LocalPanel({
   | "localDisabledAddedRoot"
   | "localBrowseOnly"
 >) {
-  const actionDisabled = localBrowseOnly
-    ? false
-    : !localState.selectedPath || localState.adding;
-  const actionBackground = localBrowseOnly
+  const actionDisabled =
+    localState.loading ||
+    !!localState.error ||
+    localState.adding ||
+    (!localBrowseOnly && !localState.selectedPath);
+  const actionBackground = !actionDisabled
     ? "var(--accent-color)"
-    : !actionDisabled
-      ? "var(--accent-color)"
-      : "rgba(59, 130, 246, 0.65)";
-  const actionCursor = localBrowseOnly
-    ? "pointer"
-    : !actionDisabled
-      ? "pointer"
-      : "not-allowed";
+    : "rgba(59, 130, 246, 0.45)";
+  const actionCursor = !actionDisabled ? "pointer" : "not-allowed";
 
   return (
     <div style={popoverStyle}>
@@ -406,7 +402,7 @@ function LocalPanel({
       </div>
       <button
         type="button"
-        disabled={localBrowseOnly ? false : actionDisabled}
+        disabled={actionDisabled}
         onClick={onLocalAdd}
         style={{
           border: "none",

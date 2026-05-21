@@ -507,6 +507,9 @@ func mapToolItem(item codexsdk.ThreadItem, started bool) (types.ToolCall, bool) 
 			"rawType": "commandExecution",
 			"command": v.Command,
 		}
+		if strings.TrimSpace(v.Source) != "" {
+			meta["source"] = v.Source
+		}
 		if v.ExitCode != nil {
 			meta["exitCode"] = *v.ExitCode
 		}

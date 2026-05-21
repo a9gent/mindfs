@@ -531,7 +531,7 @@ func updateAgentConfigDefaults(agentName string, fileSources []string, envKeys [
 	if err != nil {
 		return err
 	}
-	cfg, err := agent.LoadConfig(path)
+	cfg, err := agent.LoadConfig("")
 	if err != nil {
 		return err
 	}
@@ -564,7 +564,7 @@ func updateAgentEnvConfig(agentName string, env map[string]string) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := agent.LoadConfig(path)
+	cfg, err := agent.LoadConfig("")
 	if err != nil {
 		return err
 	}

@@ -53,36 +53,57 @@ type ConfigBackupDefaults struct {
 
 // LoadConfig loads agent configuration from the given path or default location.
 func LoadConfig(path string) (Config, error) {
-	if path == "" {
-		resolved, err := defaultConfigPath()
-		if err != nil {
-			return Config{}, err
-		}
-		path = resolved
+	if path != "" {
+		return loadConfigFile(path)
 	}
-	payload, err := os.ReadFile(path)
+
+	resolved, err := defaultConfigPath()
+	if err != nil {
+		return Config{}, err
+	}
+	baseCfg, basePath, err := loadInstalledDefaultConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	if samePath(resolved, basePath) {
+		return baseCfg, nil
+	}
+
+	userCfg, err := loadConfigFile(resolved)
 	if err != nil {
 		if os.IsNotExist(err) {
-			if fallbackPath, fallbackErr := installedDefaultConfigPath(); fallbackErr == nil {
-				if fallbackPayload, readErr := os.ReadFile(fallbackPath); readErr == nil {
-					payload = fallbackPayload
-				} else if !os.IsNotExist(readErr) {
-					return Config{}, readErr
-				} else {
-					return defaultConfig(), nil
-				}
-			} else {
-				return defaultConfig(), nil
-			}
-		} else {
-			return Config{}, err
+			return baseCfg, nil
 		}
+		return Config{}, err
+	}
+	return mergeConfigs(baseCfg, userCfg), nil
+}
+
+func loadConfigFile(path string) (Config, error) {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, err
 	}
 	var cfg Config
 	if err := json.Unmarshal(payload, &cfg); err != nil {
 		return Config{}, err
 	}
-	// Apply defaults and validate.
+	return normalizeConfig(cfg)
+}
+
+func loadInstalledDefaultConfig() (Config, string, error) {
+	if fallbackPath, fallbackErr := installedDefaultConfigPath(); fallbackErr == nil {
+		if cfg, err := loadConfigFile(fallbackPath); err == nil {
+			return cfg, fallbackPath, nil
+		} else if !os.IsNotExist(err) {
+			return Config{}, "", err
+		}
+	}
+	cfg, err := normalizeConfig(defaultConfig())
+	return cfg, "", err
+}
+
+func normalizeConfig(cfg Config) (Config, error) {
 	cfg.RelayBaseURL = strings.TrimSpace(cfg.RelayBaseURL)
 	for i := range cfg.Agents {
 		name := strings.TrimSpace(cfg.Agents[i].Name)
@@ -95,6 +116,42 @@ func LoadConfig(path string) (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+func mergeConfigs(base Config, override Config) Config {
+	merged := Config{
+		Agents:       append([]Definition(nil), base.Agents...),
+		RelayBaseURL: base.RelayBaseURL,
+	}
+	if override.RelayBaseURL != "" {
+		merged.RelayBaseURL = override.RelayBaseURL
+	}
+
+	agentIndexes := make(map[string]int, len(merged.Agents))
+	for i, agent := range merged.Agents {
+		agentIndexes[agent.Name] = i
+	}
+	for _, agent := range override.Agents {
+		if index, ok := agentIndexes[agent.Name]; ok {
+			merged.Agents[index] = agent
+			continue
+		}
+		agentIndexes[agent.Name] = len(merged.Agents)
+		merged.Agents = append(merged.Agents, agent)
+	}
+	return merged
+}
+
+func samePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA == nil && errB == nil {
+		return absA == absB
+	}
+	return a == b
 }
 
 func defaultConfigPath() (string, error) {

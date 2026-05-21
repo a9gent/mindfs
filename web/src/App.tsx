@@ -46,6 +46,7 @@ import {
   fetchGitBranches,
   fetchGitHistory,
   fetchGitStatus,
+  fetchGitWorktrees,
   getCachedGitHistory,
   getCachedGitHistoryHead,
   removeGitWorktree,
@@ -55,6 +56,7 @@ import {
   type GitHistoryPayload,
   type GitStatusItem,
   type GitStatusPayload,
+  type GitWorktreeItem,
 } from "./services/git";
 import {
   DEFAULT_DIRECTORY_SORT_MODE,
@@ -312,6 +314,15 @@ type LocalDirsPayload = {
   parent?: string;
   items?: LocalDirItemPayload[];
 };
+
+function managedDirAddErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (message.includes("root name already exists")) {
+    return "已有同名项目目录，请先重命名后再加入。";
+  }
+  return message || fallback;
+}
+
 const RELAY_LAST_NODE_ID_STORAGE_KEY = "mindfs.relay.last_node_id";
 const PLUGIN_QUERY_STORAGE_PREFIX = "vp-progress:";
 const TREE_SORT_STORAGE_KEY = "mindfs-tree-sort-mode";
@@ -893,6 +904,19 @@ type AppProps = {
   onGoHome?: () => void;
 };
 
+const MOBILE_ENTER_KEY_SEND_STORAGE_KEY = "mindfs-mobile-enter-key-sends";
+
+function loadMobileEnterKeySends(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    return window.localStorage.getItem(MOBILE_ENTER_KEY_SEND_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export function App({ onGoHome }: AppProps) {
   const pluginManagerRef = useRef<PluginManager>(new PluginManager());
   const completionAudioContextRef = useRef<AudioContext | null>(null);
@@ -970,6 +994,7 @@ export function App({ onGoHome }: AppProps) {
   const importMenuRef = useRef<HTMLDivElement | null>(null);
   const projectAddPopoverRef = useRef<HTMLDivElement | null>(null);
   const worktreeCreatePopoverRef = useRef<HTMLDivElement | null>(null);
+  const worktreeSwitchPopoverRef = useRef<HTMLDivElement | null>(null);
   const [availableAgents, setAvailableAgents] = useState<AgentStatus[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionItem | null>(
     null,
@@ -986,12 +1011,25 @@ export function App({ onGoHome }: AppProps) {
   const [agentsVersion, setAgentsVersion] = useState(0);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const { isMobile } = useResponsive();
+  const [mobileEnterKeySends, setMobileEnterKeySends] = useState(loadMobileEnterKeySends);
   const [isLeftOpen, setIsLeftOpen] = useState(() => window.innerWidth >= 768);
   const [isRightOpen, setIsRightOpen] = useState(
     () => window.innerWidth >= 768,
   );
   const [currentRootId, setCurrentRootId] = useState<string | null>(null);
   const currentRootIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        MOBILE_ENTER_KEY_SEND_STORAGE_KEY,
+        mobileEnterKeySends ? "1" : "0",
+      );
+    } catch {
+      // Ignore storage failures; the setting can still apply for this session.
+    }
+  }, [mobileEnterKeySends]);
+
   const [managedRootIds, setManagedRootIds] = useState<string[]>([]);
   const managedRootByIdRef = useRef<Record<string, ManagedRootPayload>>({});
   const [rootEntries, setRootEntries] = useState<FileEntry[]>([]);
@@ -1006,6 +1044,11 @@ export function App({ onGoHome }: AppProps) {
   const [worktreeBranchError, setWorktreeBranchError] = useState("");
   const [worktreeBranchMode, setWorktreeBranchMode] = useState<"new" | "existing">("new");
   const [worktreeBranch, setWorktreeBranch] = useState("");
+  const [worktreeSwitchOpen, setWorktreeSwitchOpen] = useState(false);
+  const [worktreeSwitchItems, setWorktreeSwitchItems] = useState<GitWorktreeItem[]>([]);
+  const [worktreeSwitchLoading, setWorktreeSwitchLoading] = useState(false);
+  const [worktreeSwitchError, setWorktreeSwitchError] = useState("");
+  const [switchingWorktreePath, setSwitchingWorktreePath] = useState("");
   const [projectAddMode, setProjectAddMode] = useState<ProjectAddMode | null>(
     null,
   );
@@ -4357,6 +4400,27 @@ export function App({ onGoHome }: AppProps) {
     return bootstrapService.refreshRelayStatus();
   }, []);
 
+  const normalizeComparableRootPath = useCallback((value: string): string => {
+    let normalized = String(value || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+    if (/^[a-z]:/i.test(normalized)) {
+      normalized = normalized.toLowerCase();
+    }
+    return normalized;
+  }, []);
+
+  const findManagedRootByPath = useCallback((path: string): ManagedRootPayload | null => {
+    const target = normalizeComparableRootPath(path);
+    if (!target) {
+      return null;
+    }
+    for (const root of Object.values(managedRootByIdRef.current)) {
+      if (normalizeComparableRootPath(root.root_path || "") === target) {
+        return root;
+      }
+    }
+    return null;
+  }, [normalizeComparableRootPath]);
+
   const handleCreateRootStart = useCallback((parentPath?: string | null) => {
     if (creatingRootBusy) {
       return;
@@ -4389,6 +4453,20 @@ export function App({ onGoHome }: AppProps) {
     }
   }, []);
 
+  const loadWorktreeList = useCallback(async (rootID: string) => {
+    setWorktreeSwitchLoading(true);
+    setWorktreeSwitchError("");
+    try {
+      const payload = await fetchGitWorktrees(rootID);
+      setWorktreeSwitchItems(payload.items || []);
+    } catch (error) {
+      setWorktreeSwitchItems([]);
+      setWorktreeSwitchError(error instanceof Error ? error.message : "加载 worktree 失败");
+    } finally {
+      setWorktreeSwitchLoading(false);
+    }
+  }, []);
+
   const handleCreateWorktreeStart = useCallback((parentPath: string) => {
     if (creatingRootBusy) {
       return;
@@ -4414,6 +4492,55 @@ export function App({ onGoHome }: AppProps) {
     setWorktreeBranchError("");
     void loadWorktreeBranches(rootID);
   }, [creatingRootBusy, loadWorktreeBranches]);
+
+  const handleSwitchWorktreeStart = useCallback(() => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID) {
+      return;
+    }
+    setProjectAddMode(null);
+    setCreatingRootName(null);
+    setWorktreeSwitchOpen(true);
+    setWorktreeSwitchItems([]);
+    setWorktreeSwitchError("");
+    void loadWorktreeList(rootID);
+  }, [loadWorktreeList]);
+
+  const handleSwitchWorktree = useCallback(async (item: GitWorktreeItem) => {
+    const targetPath = String(item.path || "").trim();
+    if (!targetPath || switchingWorktreePath) {
+      return;
+    }
+    setSwitchingWorktreePath(targetPath);
+    try {
+      let targetRoot = findManagedRootByPath(targetPath);
+      if (!targetRoot?.id) {
+        const created = await apiProtectedJSON<ManagedRootPayload>(appPath("/api/dirs"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: targetPath, create: false }),
+        });
+        targetRoot = created;
+        await refreshManagedRoots();
+      }
+      if (targetRoot?.id) {
+        setWorktreeSwitchOpen(false);
+        await actionHandlersRef.current.open_dir({
+          path: targetRoot.id,
+          root: targetRoot.id,
+          isRoot: true,
+          forceDirectory: true,
+        });
+      }
+    } catch (error) {
+      reportError(
+        "git.worktree_switch_failed",
+        managedDirAddErrorMessage(error, "切换 worktree 失败"),
+      );
+    } finally {
+      setSwitchingWorktreePath("");
+    }
+  }, [findManagedRootByPath, refreshManagedRoots, switchingWorktreePath]);
 
   const handleOpenProjectAdd = useCallback(() => {
     if (creatingRootBusy) {
@@ -4533,6 +4660,7 @@ export function App({ onGoHome }: AppProps) {
   }, [openDirectoryPicker]);
 
   const handleOpenWorktreeLocation = useCallback(() => {
+    setWorktreeSwitchOpen(false);
     void openDirectoryPicker("worktree_location");
   }, [openDirectoryPicker]);
 
@@ -4551,6 +4679,7 @@ export function App({ onGoHome }: AppProps) {
     setWorktreeBranchMode("new");
     setWorktreeBranch("");
     setWorktreeBranchError("");
+    setWorktreeSwitchOpen(false);
   }, [creatingRootBusy]);
 
   useEffect(() => {
@@ -4566,6 +4695,20 @@ export function App({ onGoHome }: AppProps) {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [creatingRootKind, creatingRootName, handleCreateRootCancel]);
+
+  useEffect(() => {
+    if (!worktreeSwitchOpen) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      if (worktreeSwitchPopoverRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setWorktreeSwitchOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [worktreeSwitchOpen]);
 
   const handleCreateRootSubmit = useCallback(async () => {
     const name = String(creatingRootName || "").trim();
@@ -4630,7 +4773,7 @@ export function App({ onGoHome }: AppProps) {
     } catch (err) {
       reportError(
         "root.create_failed",
-        String((err as Error)?.message || "新建项目失败"),
+        managedDirAddErrorMessage(err, "新建项目失败"),
       );
     } finally {
       setCreatingRootBusy(false);
@@ -4718,7 +4861,7 @@ export function App({ onGoHome }: AppProps) {
       setLocalDirState((prev) => ({
         ...prev,
         adding: false,
-        error: error instanceof Error ? error.message : "添加目录失败",
+        error: managedDirAddErrorMessage(error, "添加目录失败"),
       }));
     }
   }, [handleCreateRootStart, handleCreateWorktreeStart, loadLocalDirs, localDirState.adding, localDirState.path, localDirState.selectedPath, projectAddMode, refreshManagedRoots]);
@@ -6892,6 +7035,80 @@ export function App({ onGoHome }: AppProps) {
       </div>
     ) : null;
 
+  const worktreeSwitchOverlay =
+    worktreeSwitchOpen ? (
+      <div
+        ref={worktreeSwitchPopoverRef}
+        style={{
+          width: "248px",
+          maxWidth: "calc(100vw - 32px)",
+          maxHeight: "360px",
+          padding: "8px",
+          borderRadius: "12px",
+          border: "1px solid var(--border-color)",
+          background: "var(--menu-bg)",
+          boxShadow: "0 12px 30px rgba(15, 23, 42, 0.14)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "6px",
+          overflow: "auto",
+        }}
+      >
+        <div style={{ padding: "4px 6px 6px", fontSize: "12px", fontWeight: 600, color: "var(--text-primary)" }}>
+          切换 worktree
+        </div>
+        {worktreeSwitchLoading ? (
+          <div style={{ padding: "8px 6px", fontSize: "12px", color: "var(--text-secondary)" }}>加载中...</div>
+        ) : worktreeSwitchError ? (
+          <div style={{ padding: "8px 6px", fontSize: "12px", color: "#b45309" }}>{worktreeSwitchError}</div>
+        ) : worktreeSwitchItems.length === 0 ? (
+          <div style={{ padding: "8px 6px", fontSize: "12px", color: "var(--text-secondary)" }}>没有可切换的 worktree</div>
+        ) : worktreeSwitchItems.map((item) => {
+          const managed = findManagedRootByPath(item.path);
+          const active = item.current || managed?.id === currentRootId;
+          const busy = switchingWorktreePath === item.path;
+          const name = String(item.path || "").replace(/[\\/]+$/, "").split(/[\\/]/).filter(Boolean).pop() || item.path;
+          return (
+            <button
+              key={item.path}
+              type="button"
+              disabled={active || !!switchingWorktreePath}
+              onClick={() => {
+                void handleSwitchWorktree(item);
+              }}
+              style={{
+                width: "100%",
+                border: "none",
+                background: active ? "var(--selection-bg)" : "transparent",
+                color: active ? "var(--accent-color)" : "var(--text-primary)",
+                borderRadius: "8px",
+                padding: "8px 10px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+                textAlign: "left",
+                cursor: active || switchingWorktreePath ? "default" : "pointer",
+                opacity: switchingWorktreePath && !busy ? 0.56 : 1,
+              }}
+            >
+              <span style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: "2px" }}>
+                <span style={{ fontSize: "12px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {name}
+                </span>
+                <span style={{ fontSize: "11px", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {item.branch || item.head?.slice(0, 8) || item.path}
+                </span>
+              </span>
+              <span style={{ fontSize: "11px", color: active ? "var(--accent-color)" : "var(--text-secondary)", flexShrink: 0 }}>
+                {busy ? "..." : active ? "当前" : managed ? "切换" : "加入"}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    ) : null;
+
   let workspaceView: React.ReactNode;
   const showGitStatusPanel = !gitDiff && !file && !!currentRootId;
   const isRootDirectoryView = !selectedDir || selectedDir === currentRootId || selectedDir === ".";
@@ -7203,11 +7420,14 @@ export function App({ onGoHome }: AppProps) {
           setShowGitHistoryByRoot((prev) => ({ ...prev, [root]: prev[root] === false }));
         }}
         onCreateWorktree={handleOpenWorktreeLocation}
+        onSwitchWorktree={handleSwitchWorktreeStart}
         onRemoveWorktree={handleRemoveCurrentWorktree}
         menuOverlay={
           projectAddMode === "worktree_location"
             ? projectAddOverlay
-            : worktreeCreateOverlay
+            : worktreeSwitchOpen
+              ? worktreeSwitchOverlay
+              : worktreeCreateOverlay
         }
         onItemClick={(e) =>
           e.is_dir
@@ -7609,6 +7829,9 @@ export function App({ onGoHome }: AppProps) {
             onUpdateAction={() => {
               void handleStartUpdate();
             }}
+            showEnterKeySendOption={isMobile}
+            enterKeySends={mobileEnterKeySends}
+            onEnterKeySendsChange={setMobileEnterKeySends}
             onGoHome={onGoHome}
           />
         }
@@ -7721,6 +7944,7 @@ export function App({ onGoHome }: AppProps) {
             detachedBoundSession={detachedBoundSession}
             onSendMessage={handleSendMessage}
             onCancelCurrentTurn={handleCancelCurrentTurn}
+            mobileEnterKeySends={mobileEnterKeySends}
             onNewSession={handleNewSession}
             onRequestFileContext={handleRequestFileContext}
             onClearFileContext={handleClearFileContext}
@@ -7799,7 +8023,9 @@ export function App({ onGoHome }: AppProps) {
           </BottomSheet>
         }
       />
-      {e2eeState.required && !e2eeState.unlocked ? (
+      {bootstrapState.phase === "needs_pairing" &&
+        e2eeState.required &&
+        !e2eeState.unlocked ? (
         <div
           style={{
             position: "fixed",

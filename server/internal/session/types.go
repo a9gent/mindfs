@@ -56,7 +56,11 @@ func CompactExchangeAux(aux ExchangeAux) (ExchangeAux, bool) {
 }
 
 func CompactToolCall(toolCall agenttypes.ToolCall) agenttypes.ToolCall {
-	if !PreserveToolCallContent(toolCall.Kind) {
+	switch {
+	case PreserveToolCallContent(toolCall.Kind):
+	case PreserveCommandExecutionContent(toolCall):
+		toolCall.Content = truncateToolCallContent(toolCall.Content, maxExecToolCallContentBytes)
+	default:
 		toolCall.Content = nil
 	}
 	return toolCall
@@ -74,6 +78,71 @@ func PreserveToolCallContent(kind agenttypes.ToolKind) bool {
 	default:
 		return false
 	}
+}
+
+const maxExecToolCallContentBytes = 128 * 1024
+const truncationMarker = "\n...(truncated)"
+
+func PreserveCommandExecutionContent(toolCall agenttypes.ToolCall) bool {
+	if toolCall.Kind != agenttypes.ToolKindExecute || toolCall.RawType != "commandExecution" {
+		return false
+	}
+	if toolCall.Meta == nil {
+		return false
+	}
+	source, _ := toolCall.Meta["source"].(string)
+	return strings.EqualFold(strings.TrimSpace(source), "userShell")
+}
+
+func truncateToolCallContent(items []agenttypes.ToolCallContentItem, maxBytes int) []agenttypes.ToolCallContentItem {
+	if maxBytes <= 0 || len(items) == 0 {
+		return nil
+	}
+	out := make([]agenttypes.ToolCallContentItem, 0, len(items))
+	remaining := maxBytes
+	for _, item := range items {
+		if remaining <= 0 {
+			break
+		}
+		if item.Type == "text" {
+			limit := remaining
+			if len(item.Text) > limit {
+				if remaining <= len(truncationMarker) {
+					item.Text = truncationMarker[:remaining]
+					out = append(out, item)
+					break
+				}
+				limit -= len(truncationMarker)
+			}
+			text, used, truncated := truncateStringBytes(item.Text, limit)
+			item.Text = text
+			remaining -= used
+			if truncated {
+				item.Text += truncationMarker
+				out = append(out, item)
+				break
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func truncateStringBytes(value string, maxBytes int) (string, int, bool) {
+	if maxBytes <= 0 {
+		return "", 0, value != ""
+	}
+	if len(value) <= maxBytes {
+		return value, len(value), false
+	}
+	end := maxBytes
+	for end > 0 && (value[end]&0xC0) == 0x80 {
+		end--
+	}
+	if end == 0 {
+		return "", 0, true
+	}
+	return value[:end], end, true
 }
 
 type RelatedFile struct {

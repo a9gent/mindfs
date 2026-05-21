@@ -347,7 +347,14 @@ func (p *Prober) ReportRuntimeFailure(name string, err error) {
 	if ok {
 		installed = current.Installed
 	}
-	status := unavailableStatus(name, installed, current.ProbeError, time.Now().UTC())
+	status := current
+	if !ok {
+		status = unavailableStatus(name, installed, "", time.Now().UTC())
+	}
+	status.Name = name
+	status.Installed = installed
+	status.Available = false
+	status.LastProbe = time.Now().UTC()
 	status.RuntimeError = msg
 	p.setStatus(status)
 }
@@ -363,8 +370,15 @@ func (p *Prober) ReportProbeFailure(name string, err error) {
 	if ok {
 		installed = current.Installed
 	}
-	status := unavailableStatus(name, installed, msg, time.Now().UTC())
-	status.RuntimeError = current.RuntimeError
+	status := current
+	if !ok {
+		status = unavailableStatus(name, installed, msg, time.Now().UTC())
+	}
+	status.Name = name
+	status.Installed = installed
+	status.Available = false
+	status.ProbeError = msg
+	status.LastProbe = time.Now().UTC()
 	p.setStatus(status)
 }
 
@@ -585,6 +599,18 @@ func statusChanged(prev Status, next Status) bool {
 	if prev.CurrentModeID != next.CurrentModeID {
 		return true
 	}
+	if prev.DefaultModelID != next.DefaultModelID {
+		return true
+	}
+	if prev.DefaultEffort != next.DefaultEffort {
+		return true
+	}
+	if prev.DefaultFastService != next.DefaultFastService {
+		return true
+	}
+	if prev.SupportsFastService != next.SupportsFastService {
+		return true
+	}
 	if len(prev.Efforts) != len(next.Efforts) {
 		return true
 	}
@@ -634,9 +660,12 @@ func statusChanged(prev Status, next Status) bool {
 }
 
 func (p *Prober) setStatus(status Status) {
-	status = normalizeStatus(status)
 	p.mu.Lock()
 	prev, hadPrev := p.statuses[status.Name]
+	if hadPrev {
+		status = preserveKnownCapabilities(prev, status)
+	}
+	status = normalizeStatus(status)
 	p.statuses[status.Name] = status
 	listeners := append([]func(Status){}, p.listeners...)
 	p.mu.Unlock()
@@ -764,23 +793,44 @@ func normalizeStatus(status Status) Status {
 	default:
 		status.Error = strings.TrimSpace(status.Error)
 	}
-	if status.Available {
-		return status
-	}
-	status.CurrentModelID = ""
-	status.CurrentModeID = ""
-	status.DefaultModelID = ""
-	status.DefaultEffort = ""
-	status.DefaultFastService = ""
-	status.Efforts = nil
-	status.SupportsFastService = false
-	status.Models = nil
-	status.Modes = nil
-	status.ModelsError = ""
-	status.ModesError = ""
-	status.Commands = nil
-	status.CommandsError = ""
 	return status
+}
+
+func preserveKnownCapabilities(prev Status, next Status) Status {
+	if next.Available || !next.Installed {
+		return next
+	}
+	if next.CurrentModelID == "" {
+		next.CurrentModelID = prev.CurrentModelID
+	}
+	if next.CurrentModeID == "" {
+		next.CurrentModeID = prev.CurrentModeID
+	}
+	if next.DefaultModelID == "" {
+		next.DefaultModelID = prev.DefaultModelID
+	}
+	if next.DefaultEffort == "" {
+		next.DefaultEffort = prev.DefaultEffort
+	}
+	if next.DefaultFastService == "" {
+		next.DefaultFastService = prev.DefaultFastService
+	}
+	if !next.SupportsFastService {
+		next.SupportsFastService = prev.SupportsFastService
+	}
+	if len(next.Efforts) == 0 {
+		next.Efforts = prev.Efforts
+	}
+	if len(next.Models) == 0 {
+		next.Models = prev.Models
+	}
+	if len(next.Modes) == 0 {
+		next.Modes = prev.Modes
+	}
+	if len(next.Commands) == 0 {
+		next.Commands = prev.Commands
+	}
+	return next
 }
 
 func inferAgentEfforts(models []agenttypes.ModelInfo) []string {
