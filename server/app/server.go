@@ -158,21 +158,33 @@ func resolveStaticDir() string {
 		}
 	}
 
-	if shouldPreferWorkingDirStaticDir() {
-		if exe, err := os.Executable(); err == nil {
-			candidate := filepath.Join(filepath.Dir(exe), "web", "dist")
-			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-				return candidate
-			}
-		}
-	}
-
 	if exe, err := os.Executable(); err == nil {
-		prefix := filepath.Dir(filepath.Dir(exe))
-		candidate := filepath.Join(prefix, "share", "mindfs", "web")
+		return resolveStaticDirFromExecutable(exe, shouldPreferWorkingDirStaticDir())
+	}
+	return ""
+}
+
+func resolveStaticDirFromExecutable(exe string, preferWorkingDir bool) string {
+	exe = strings.TrimSpace(exe)
+	if exe == "" {
+		return ""
+	}
+	exeDir := filepath.Dir(exe)
+	if preferWorkingDir {
+		candidate := filepath.Join(exeDir, "web", "dist")
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return candidate
 		}
+	}
+	// 发布 zip 解压后，web 目录和可执行文件在同一层级。
+	candidate := filepath.Join(exeDir, "web")
+	if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+		return candidate
+	}
+	// 安装布局为 <prefix>/bin/mindfs + <prefix>/share/mindfs/web。
+	candidate = filepath.Join(filepath.Dir(exeDir), "share", "mindfs", "web")
+	if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+		return candidate
 	}
 	return ""
 }

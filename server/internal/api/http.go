@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	stdpath "path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -1016,7 +1017,9 @@ func serveRewrittenStaticAsset(w http.ResponseWriter, r *http.Request, assetPath
 }
 
 func pathForStaticAsset(requestPath string) string {
-	cleaned := filepath.Clean("/" + requestPath)
+	// requestPath 是 URL path，分隔符固定为正斜杠。这里不能用 filepath，
+	// 否则 Windows 会把前导 // 当成 UNC 路径，最终泄漏成 web/// 这类路径。
+	cleaned := stdpath.Clean("/" + requestPath)
 	if cleaned == "/" {
 		return ""
 	}
