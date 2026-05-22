@@ -804,7 +804,7 @@ func openBrowser(target string) error {
 		return nil
 	}
 	if runtime.GOOS == "linux" && strings.TrimSpace(os.Getenv("DISPLAY")) == "" && strings.TrimSpace(os.Getenv("WAYLAND_DISPLAY")) == "" {
-		return fmt.Errorf("%w; open this URL manually: %s", errBrowserUnavailable, target)
+		return fmt.Errorf("%w; open this URL manually: %s; you can run `mindfs -bind-relay` to get a relay binding URL and access MindFS from the public internet after binding", errBrowserUnavailable, target)
 	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {

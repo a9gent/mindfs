@@ -249,13 +249,18 @@ func (s *probeSessionStore) saveLocked() error {
 // Start 启动定期探测
 func (p *Prober) Start(ctx context.Context) {
 	// 首次全量探测放到后台，避免阻塞服务启动和请求处理。
-	go p.ProbeAll(ctx)
+	go p.safeProbeAll(ctx)
 
 	// 启动定期探测：只重试未安装命令。运行时失败不做主动恢复探测，
 	// 避免周期性打开 agent probe session。
 	ticker := time.NewTicker(p.probeInterval)
 	go func() {
 		defer ticker.Stop()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[agent/probe] ticker.panic recovered=%v", r)
+			}
+		}()
 		for {
 			select {
 			case <-ticker.C:
@@ -288,6 +293,15 @@ func (p *Prober) ProbeAll(ctx context.Context) {
 	p.probeConfiguredAgents(ctx, defs)
 }
 
+func (p *Prober) safeProbeAll(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[agent/probe] probe_all.panic recovered=%v", r)
+		}
+	}()
+	p.ProbeAll(ctx)
+}
+
 // ProbeOne probes a single configured agent with recovery-style timeout control.
 func (p *Prober) ProbeOne(ctx context.Context, name string) Status {
 	if p == nil {
@@ -301,7 +315,7 @@ func (p *Prober) ProbeOne(ctx context.Context, name string) Status {
 	if !ok {
 		return unavailableStatus(trimmed, false, "agent not configured", time.Now().UTC())
 	}
-	status := probeConfiguredAgentWithPool(ctx, trimmed, def, p.pool, p.probeSessions, probePhaseRecovery)
+	status := safeProbeConfiguredAgentWithPool(ctx, trimmed, def, p.pool, p.probeSessions, probePhaseRecovery)
 	p.setStatus(status)
 	return status
 }
@@ -897,7 +911,7 @@ func (p *Prober) probeConfiguredAgents(ctx context.Context, defs []Definition) {
 		return
 	}
 	p.runDefinitionsConcurrently(defs, func(_ int, def Definition) {
-		status := probeConfiguredAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions, probePhaseInitial)
+		status := safeProbeConfiguredAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions, probePhaseInitial)
 		p.setStatus(status)
 	})
 }
@@ -919,9 +933,32 @@ func (p *Prober) probeInstalledAgents(ctx context.Context, defs []Definition) {
 	}
 
 	p.runDefinitionsConcurrently(defs, func(_ int, def Definition) {
-		status := probeInstalledAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions, probeInstallStatus(def.Name, def, time.Now().UTC()), probePhaseBackground)
+		status := safeProbeInstalledAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions, probeInstallStatus(def.Name, def, time.Now().UTC()), probePhaseBackground)
 		p.setStatus(status)
 	})
+}
+
+func safeProbeConfiguredAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, probeSessions *probeSessionStore, phase probePhase) (status Status) {
+	defer func() {
+		if r := recover(); r != nil {
+			status = unavailableStatus(name, true, fmt.Sprintf("probe panic: %v", r), time.Now().UTC())
+			log.Printf("[agent/probe] probe.panic agent=%s phase=%s recovered=%v", name, phase, r)
+		}
+	}()
+	return probeConfiguredAgentWithPool(ctx, name, def, pool, probeSessions, phase)
+}
+
+func safeProbeInstalledAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, probeSessions *probeSessionStore, status Status, phase probePhase) (out Status) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = status
+			out.Available = false
+			out.ProbeError = fmt.Sprintf("probe panic: %v", r)
+			out.LastProbe = time.Now().UTC()
+			log.Printf("[agent/probe] probe_installed.panic agent=%s phase=%s recovered=%v", name, phase, r)
+		}
+	}()
+	return probeInstalledAgentWithPool(ctx, name, def, pool, probeSessions, status, phase)
 }
 
 func loadProbeSessionBinding(store *probeSessionStore, agentName string) (ProbeSessionBinding, bool) {
@@ -984,6 +1021,11 @@ func (p *Prober) runDefinitionsConcurrently(defs []Definition, fn func(i int, de
 
 		go func(i int, def Definition) {
 			defer func() {
+				if r := recover(); r != nil {
+					status := unavailableStatus(def.Name, true, fmt.Sprintf("probe panic: %v", r), time.Now().UTC())
+					p.setStatus(status)
+					log.Printf("[agent/probe] worker.panic agent=%s recovered=%v", def.Name, r)
+				}
 				p.mu.Lock()
 				delete(p.inFlight, def.Name)
 				p.mu.Unlock()
