@@ -146,7 +146,7 @@ func TestServicePollBind(t *testing.T) {
 	}
 }
 
-func TestManagerStartGeneratesPendingCode(t *testing.T) {
+func TestManagerStartBindingGeneratesPendingCode(t *testing.T) {
 	configRoot := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	t.Setenv("HOME", configRoot)
@@ -161,6 +161,13 @@ func TestManagerStartGeneratesPendingCode(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	status := manager.Status()
+	if status.PendingCode != "" {
+		t.Fatalf("start should not generate pending code, got %q", status.PendingCode)
+	}
+	status, err = manager.StartBinding()
+	if err != nil {
+		t.Fatalf("StartBinding() error = %v", err)
+	}
 	if status.PendingCode == "" {
 		t.Fatal("expected pending code")
 	}
@@ -238,6 +245,9 @@ func TestManagerPollConfirmedStartsRelay(t *testing.T) {
 	if err := manager.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	if _, err := manager.StartBinding(); err != nil {
+		t.Fatalf("StartBinding() error = %v", err)
+	}
 
 	timeout := time.After(4 * time.Second)
 	for {
@@ -259,7 +269,7 @@ func TestManagerPollConfirmedStartsRelay(t *testing.T) {
 	}
 }
 
-func TestManagerPollTerminalBindStatusRefreshesPendingCode(t *testing.T) {
+func TestManagerPollTerminalBindStatusStopsPolling(t *testing.T) {
 	configRoot := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	t.Setenv("HOME", configRoot)
@@ -290,6 +300,9 @@ func TestManagerPollTerminalBindStatusRefreshesPendingCode(t *testing.T) {
 	if err := manager.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	if _, err := manager.StartBinding(); err != nil {
+		t.Fatalf("StartBinding() error = %v", err)
+	}
 	firstPendingCode := manager.Status().PendingCode
 	if firstPendingCode == "" {
 		t.Fatal("expected initial pending code")
@@ -304,14 +317,11 @@ func TestManagerPollTerminalBindStatusRefreshesPendingCode(t *testing.T) {
 				continue
 			}
 			if status.PendingCode == "" {
-				t.Fatal("expected refreshed pending code")
+				return
 			}
-			if status.PendingCode == firstPendingCode {
-				t.Fatalf("pending code was not refreshed: %q", status.PendingCode)
-			}
-			return
+			t.Fatalf("expected pending code to clear after expired status, got first=%q current=%q", firstPendingCode, status.PendingCode)
 		case <-timeout:
-			t.Fatal("pending code was not refreshed after expired bind status")
+			t.Fatal("pending code did not clear after expired bind status")
 		}
 	}
 }
@@ -334,12 +344,12 @@ func TestManagerDefaultsRelayBaseToLocalhost(t *testing.T) {
 	if status.RelayBaseURL != defaultRelayBaseURL {
 		t.Fatalf("relay base url = %q, want %q", status.RelayBaseURL, defaultRelayBaseURL)
 	}
-	if status.PendingCode == "" {
-		t.Fatal("expected pending code")
+	if status.PendingCode != "" {
+		t.Fatalf("expected no pending code before explicit bind start, got %q", status.PendingCode)
 	}
 }
 
-func TestManagerPermanentRelayErrorClearsCredentialsAndRebinds(t *testing.T) {
+func TestManagerPermanentRelayErrorClearsCredentialsAndWaitsForExplicitRebind(t *testing.T) {
 	configRoot := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	t.Setenv("HOME", configRoot)
@@ -358,7 +368,6 @@ func TestManagerPermanentRelayErrorClearsCredentialsAndRebinds(t *testing.T) {
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	pollSeen := make(chan string, 1)
 	manager.service.client = &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			switch {
@@ -368,17 +377,6 @@ func TestManagerPermanentRelayErrorClearsCredentialsAndRebinds(t *testing.T) {
 					Status:     "200 OK",
 					Header:     http.Header{},
 					Body:       io.NopCloser(strings.NewReader("ok")),
-				}, nil
-			case strings.HasPrefix(req.URL.String(), "https://relay.example.com/api/bind/poll?code=pc_"):
-				select {
-				case pollSeen <- req.URL.String():
-				default:
-				}
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Status:     "200 OK",
-					Header:     http.Header{"Content-Type": []string{"application/json"}},
-					Body:       io.NopCloser(strings.NewReader(`{"status":"pending","next_poll_after_ms":2000}`)),
 				}, nil
 			default:
 				return nil, nil
@@ -392,8 +390,8 @@ func TestManagerPermanentRelayErrorClearsCredentialsAndRebinds(t *testing.T) {
 	if status.Bound {
 		t.Fatal("expected unbound status after permanent relay error")
 	}
-	if status.PendingCode == "" {
-		t.Fatal("expected pending code after permanent relay error")
+	if status.PendingCode != "" {
+		t.Fatalf("expected no pending code before explicit rebind, got %q", status.PendingCode)
 	}
 	if !strings.Contains(status.LastError, "404") {
 		t.Fatalf("last error = %q", status.LastError)
@@ -436,8 +434,8 @@ func TestManagerStartClearsCredentialsWhenRelayBaseChanges(t *testing.T) {
 	if status.Bound {
 		t.Fatal("expected unbound status after relay base changed")
 	}
-	if status.PendingCode == "" {
-		t.Fatal("expected pending code after relay base changed")
+	if status.PendingCode != "" {
+		t.Fatalf("expected no pending code before explicit bind start, got %q", status.PendingCode)
 	}
 	if !strings.Contains(status.LastError, "rebinding required") {
 		t.Fatalf("last error = %q", status.LastError)

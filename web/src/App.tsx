@@ -961,6 +961,7 @@ export function App({ onGoHome }: AppProps) {
   const pluginsLoadedByRootRef = useRef<Record<string, boolean>>({});
   const pluginsLoadingByRootRef = useRef<Record<string, Promise<void>>>({});
   const didInitRef = useRef(false);
+  const relayWSAuthCheckRef = useRef(false);
   const managedRootsRequestRef = useRef<Promise<ManagedRootPayload[] | null> | null>(null);
   const handleSelectSessionRef = useRef<
     ((session: any) => Promise<void>) | null
@@ -1514,6 +1515,43 @@ export function App({ onGoHome }: AppProps) {
   const redirectToRelayNodes = useCallback(() => {
     window.location.replace("/nodes");
   }, []);
+
+  const handleRelayWebSocketClosed = useCallback(async () => {
+    if (!isRelayNodePage() || relayWSAuthCheckRef.current) {
+      return;
+    }
+    relayWSAuthCheckRef.current = true;
+    try {
+      const response = await fetch("/api/auth/me", { cache: "no-cache" });
+      if (!response.ok) {
+        redirectToRelayLogin();
+        return;
+      }
+      const nodeID = relayNodeIdFromPathname(window.location.pathname);
+      if (!nodeID) {
+        return;
+      }
+      const nodeResponse = await fetch(`/n/${encodeURIComponent(nodeID)}/`, {
+        cache: "no-cache",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+      if (
+        nodeResponse.status === 403 ||
+        nodeResponse.status === 404 ||
+        nodeResponse.status === 502 ||
+        nodeResponse.status === 503
+      ) {
+        redirectToRelayNodes();
+      }
+    } catch {
+      // Network failures and connector outages also close the socket. Keep the
+      // normal reconnect path unless the auth probe can prove the session died.
+    } finally {
+      relayWSAuthCheckRef.current = false;
+    }
+  }, [redirectToRelayLogin, redirectToRelayNodes]);
 
   const handleRelayNavigationFailure = useCallback(
     async (status: number, errorCode?: string | null) => {
@@ -4396,8 +4434,8 @@ export function App({ onGoHome }: AppProps) {
     });
   }, [loadManagedRootPayloads, replaceURLState]);
 
-  const refreshRelayStatus = useCallback(async () => {
-    return bootstrapService.refreshRelayStatus();
+  const startRelayBinding = useCallback(async () => {
+    return bootstrapService.startRelayBinding();
   }, []);
 
   const normalizeComparableRootPath = useCallback((value: string): string => {
@@ -5819,6 +5857,9 @@ export function App({ onGoHome }: AppProps) {
           }
           replayTargetsForAllRoots();
           break;
+        case "ws.closed":
+          void handleRelayWebSocketClosed();
+          break;
         case "root.changed":
           void refreshManagedRoots();
           break;
@@ -6228,6 +6269,7 @@ export function App({ onGoHome }: AppProps) {
     setBoundSessionForRoot,
     setDrawerSessionForRoot,
     refreshManagedRoots,
+    handleRelayWebSocketClosed,
     refreshTreeDir,
     refreshCurrentFileContent,
     refreshGitStatus,
@@ -7516,7 +7558,7 @@ export function App({ onGoHome }: AppProps) {
       return;
     }
     const pendingPopup = openPendingPopup();
-    const latestStatus = await refreshRelayStatus();
+    const latestStatus = await startRelayBinding();
     const nextStatus = latestStatus || relayStatus;
     if (!nextStatus) {
       pendingPopup?.close();
@@ -7543,7 +7585,7 @@ export function App({ onGoHome }: AppProps) {
       target.searchParams.set("node_name", nodeName);
     }
     navigatePopup(pendingPopup, target.toString());
-  }, [currentRootId, refreshRelayStatus, relayStatus]);
+  }, [currentRootId, startRelayBinding, relayStatus]);
 
   const relayActionLabel = useMemo(() => {
     if (isRelayNodePage()) {
@@ -7558,7 +7600,7 @@ export function App({ onGoHome }: AppProps) {
   const relayActionDisabled =
     !currentRootId ||
     (!relayStatus?.relay_bound &&
-      (!relayStatus?.pending_code || !relayStatus?.relay_base_url));
+      !relayStatus?.relay_base_url);
   const showUpdateButton = shouldShowUpdateButton(updateState);
   const updateBusy =
     updateSubmitting ||

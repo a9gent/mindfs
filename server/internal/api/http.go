@@ -264,6 +264,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Delete("/api/dirs", h.protectedEndpoint(h.handleRemoveDir))
 	r.Get("/api/local_dirs", h.protectedEndpoint(h.handleLocalDirs))
 	r.Get("/api/relay/status", h.handleRelayStatus)
+	r.Post("/api/relay/bind/start", h.handleRelayBindStart)
 	r.Get("/api/relay/tips", h.protectedEndpoint(h.handleRelayTips))
 	r.Post("/api/e2ee/open", h.handleE2EEOpen)
 	r.Get("/api/app/update", h.protectedEndpoint(h.handleAppUpdateGet))
@@ -1575,6 +1576,29 @@ func (h *HTTPHandler) handleRelayStatus(w http.ResponseWriter, _ *http.Request) 
 		return
 	}
 	status := manager.Status()
+	if e2eeManager := h.AppContext.GetE2EEManager(); e2eeManager != nil {
+		status.E2EERequired = e2eeManager.Enabled()
+		if status.E2EERequired {
+			status.E2EENodeID = e2eeManager.NodeID()
+			if strings.TrimSpace(status.NodeID) == "" {
+				status.NodeID = e2eeManager.NodeID()
+			}
+		}
+	}
+	respondJSON(w, http.StatusOK, status)
+}
+
+func (h *HTTPHandler) handleRelayBindStart(w http.ResponseWriter, _ *http.Request) {
+	manager := h.AppContext.GetRelayManager()
+	if manager == nil {
+		respondError(w, http.StatusServiceUnavailable, errServiceUnavailable("relay manager not configured"))
+		return
+	}
+	status, err := manager.StartBinding()
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, errServiceUnavailable(err.Error()))
+		return
+	}
 	if e2eeManager := h.AppContext.GetE2EEManager(); e2eeManager != nil {
 		status.E2EERequired = e2eeManager.Enabled()
 		if status.E2EERequired {

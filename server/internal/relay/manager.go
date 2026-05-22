@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"log"
 	"net/url"
 	"os"
@@ -36,6 +37,7 @@ type Manager struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	started      bool
+	polling      bool
 	pendingCode  string
 	pendingSince time.Time
 	nodeName     string
@@ -92,8 +94,6 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.startLocked(ctx)
 		return nil
 	}
-	m.ensurePendingLocked()
-	m.startPollingLocked(ctx, m.pendingCode)
 	return nil
 }
 
@@ -101,6 +101,33 @@ func (m *Manager) Status() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	return m.statusLocked()
+}
+
+func (m *Manager) StartBinding() (Status, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.noRelayer {
+		return m.statusLocked(), nil
+	}
+	creds, err := m.service.store.Load()
+	if err != nil {
+		m.lastError = err.Error()
+		return m.statusLocked(), err
+	}
+	if creds.Relay.DeviceToken != "" && creds.Relay.Endpoint != "" {
+		return m.statusLocked(), nil
+	}
+	if m.ctx == nil {
+		return m.statusLocked(), errors.New("relay manager not started")
+	}
+	m.ensurePendingLocked()
+	m.startPollingLocked(m.ctx, m.pendingCode)
+	return m.statusLocked(), nil
+}
+
+func (m *Manager) statusLocked() Status {
 	status := Status{
 		NoRelayer:    m.noRelayer,
 		PendingCode:  m.pendingCode,
@@ -143,19 +170,26 @@ func (m *Manager) startLocked(parent context.Context) {
 }
 
 func (m *Manager) startPollingLocked(parent context.Context, pendingCode string) {
-	if strings.TrimSpace(pendingCode) == "" {
+	if strings.TrimSpace(pendingCode) == "" || m.polling {
 		return
 	}
+	m.polling = true
 	go m.pollLoop(parent, pendingCode)
 }
 
 func (m *Manager) pollLoop(parent context.Context, pendingCode string) {
-	delay := 2 * time.Second
+	defer m.finishPolling(pendingCode)
+
+	delay := time.Duration(0)
 	for {
-		select {
-		case <-parent.Done():
+		if delay > 0 {
+			select {
+			case <-parent.Done():
+				return
+			case <-time.After(delay):
+			}
+		} else if parent.Err() != nil {
 			return
-		case <-time.After(delay):
 		}
 
 		result, err := m.service.PollBind(parent, m.resolveRelayBase(), pendingCode)
@@ -171,7 +205,7 @@ func (m *Manager) pollLoop(parent context.Context, pendingCode string) {
 		case "pending":
 			delay = result.NextPollAfter
 			if delay <= 0 {
-				delay = 2 * time.Second
+				delay = 3 * time.Second
 			}
 		case "confirmed":
 			if err := m.service.store.Save(Credentials{Relay: result.Credentials}); err != nil {
@@ -200,15 +234,19 @@ func (m *Manager) pollLoop(parent context.Context, pendingCode string) {
 			m.mu.Lock()
 			m.lastError = result.Status
 			m.pendingCode = ""
-			m.ensurePendingLocked()
-			nextPendingCode := m.pendingCode
 			m.mu.Unlock()
-			m.startPollingLocked(parent, nextPendingCode)
 			return
 		default:
 			delay = nextDelay(delay)
 		}
 	}
+}
+
+func (m *Manager) finishPolling(pendingCode string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.polling = false
 }
 
 func (m *Manager) restart() {
@@ -225,7 +263,6 @@ func (m *Manager) restart() {
 
 func (m *Manager) handlePermanentRelayError(err error) {
 	m.mu.Lock()
-	parent := m.ctx
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
@@ -233,15 +270,10 @@ func (m *Manager) handlePermanentRelayError(err error) {
 	if clearErr := m.service.store.Clear(); clearErr != nil {
 		log.Printf("[relay] clear credentials failed after permanent error: %v", clearErr)
 	}
-	m.ensurePendingLocked()
 	m.lastError = err.Error()
-	pendingCode := m.pendingCode
 	m.mu.Unlock()
 
 	log.Printf("[relay] credentials invalidated, rebinding required: %v", err)
-	if parent != nil && strings.TrimSpace(pendingCode) != "" {
-		m.startPollingLocked(parent, pendingCode)
-	}
 }
 
 func (m *Manager) ensurePendingLocked() {

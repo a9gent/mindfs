@@ -65,6 +65,7 @@ func main() {
 	stop := flag.Bool("stop", false, "stop the background mindfs service")
 	restart := flag.Bool("restart", false, "restart the background mindfs service")
 	statusFlag := flag.Bool("status", false, "show background service status")
+	bindRelay := flag.Bool("bind-relay", false, "start relay binding and print the relayer bind URL")
 	remove := flag.Bool("remove", false, "remove the managed directory")
 	tlsFlag := flag.Bool("tls", false, "enable HTTPS (auto-generates self-signed cert if -cert/-key not provided)")
 	certFlag := flag.String("cert", "", "TLS certificate file (PEM); auto-generated if empty with -tls")
@@ -160,7 +161,12 @@ func main() {
 			rootID = rootInfo.ID
 			fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
 		}
-		if err := openTarget(*addr, *tlsFlag, rootID); err != nil {
+		if *bindRelay {
+			if err := printRelayBindTarget(os.Stdout, *addr, *tlsFlag, rootID); err != nil {
+				fmt.Fprintln(os.Stderr, err.Error())
+				os.Exit(1)
+			}
+		} else if err := openTarget(*addr, *tlsFlag, rootID); err != nil {
 			reportOpenTargetError(os.Stderr, err)
 		}
 		return
@@ -201,7 +207,12 @@ func main() {
 			rootID = rootInfo.ID
 			fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
 		}
-		if err := openTarget(*addr, *tlsFlag, rootID); err != nil {
+		if *bindRelay {
+			if err := printRelayBindTarget(os.Stdout, *addr, *tlsFlag, rootID); err != nil {
+				fmt.Fprintln(os.Stderr, err.Error())
+				os.Exit(1)
+			}
+		} else if err := openTarget(*addr, *tlsFlag, rootID); err != nil {
 			reportOpenTargetError(os.Stderr, err)
 		}
 		fmt.Fprintf(os.Stdout, "logs: %s\n", logPath)
@@ -252,7 +263,13 @@ func main() {
 	}
 
 	if !internalRestart && (*foreground || !daemonMode) {
-		if err := openTarget(*addr, *tlsFlag, rootID); err != nil {
+		if *bindRelay {
+			if err := printRelayBindTarget(os.Stdout, *addr, *tlsFlag, rootID); err != nil {
+				cancel()
+				fmt.Fprintln(os.Stderr, err.Error())
+				os.Exit(1)
+			}
+		} else if err := openTarget(*addr, *tlsFlag, rootID); err != nil {
 			reportOpenTargetError(os.Stderr, err)
 		}
 	}
@@ -555,6 +572,7 @@ type relayStatusResponse struct {
 	Bound        bool   `json:"relay_bound"`
 	NoRelayer    bool   `json:"no_relayer"`
 	PendingCode  string `json:"pending_code"`
+	NodeName     string `json:"node_name"`
 	NodeID       string `json:"node_id"`
 	RelayBaseURL string `json:"relay_base_url"`
 	NodeURL      string `json:"node_url"`
@@ -659,6 +677,78 @@ func fetchRelayStatus(addr string, useTLS bool) (relayStatusResponse, error) {
 		return relayStatusResponse{}, err
 	}
 	return out, nil
+}
+
+func startRelayBinding(addr string, useTLS bool) (relayStatusResponse, error) {
+	endpoint := addrToURL(addr, "/api/relay/bind/start", useTLS)
+	client := newHTTPClient(useTLS, 3*time.Second)
+	req, err := http.NewRequest(http.MethodPost, endpoint, nil)
+	if err != nil {
+		return relayStatusResponse{}, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return relayStatusResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		message := strings.TrimSpace(string(payload))
+		if message == "" {
+			message = resp.Status
+		}
+		return relayStatusResponse{}, fmt.Errorf("failed to start relay binding: %s", message)
+	}
+	var out relayStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return relayStatusResponse{}, err
+	}
+	return out, nil
+}
+
+func printRelayBindTarget(w io.Writer, addr string, useTLS bool, rootID string) error {
+	status, err := startRelayBinding(addr, useTLS)
+	if err != nil {
+		return err
+	}
+	if status.NoRelayer {
+		return errors.New("relay integration is disabled")
+	}
+	if status.Bound && strings.TrimSpace(status.NodeURL) != "" {
+		u, err := url.Parse(status.NodeURL)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(rootID) != "" {
+			q := u.Query()
+			q.Set("root", rootID)
+			u.RawQuery = q.Encode()
+		}
+		fmt.Fprintln(w, "Relay already bound:")
+		fmt.Fprintln(w, u.String())
+		return nil
+	}
+	pendingCode := strings.TrimSpace(status.PendingCode)
+	relayBaseURL := strings.TrimSpace(status.RelayBaseURL)
+	if pendingCode == "" || relayBaseURL == "" {
+		return errors.New("relay bind URL unavailable")
+	}
+	u, err := url.Parse(strings.TrimSuffix(relayBaseURL, "/") + "/bind")
+	if err != nil {
+		return err
+	}
+	q := u.Query()
+	q.Set("code", pendingCode)
+	if strings.TrimSpace(rootID) != "" {
+		q.Set("root", rootID)
+	}
+	if nodeName := strings.TrimSpace(status.NodeName); nodeName != "" {
+		q.Set("node_name", nodeName)
+	}
+	u.RawQuery = q.Encode()
+	fmt.Fprintln(w, "Open this URL in a browser to bind relay:")
+	fmt.Fprintln(w, u.String())
+	return nil
 }
 
 func openTarget(addr string, useTLS bool, rootID string) error {

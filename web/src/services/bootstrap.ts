@@ -93,6 +93,14 @@ class BootstrapService {
     return status;
   }
 
+  async startRelayBinding(): Promise<RelayStatusPayload | null> {
+    const status = await postRelayBindStart();
+    if (status) {
+      this.applyRelayStatus(status);
+    }
+    return status;
+  }
+
   async submitPairingSecret(secret: string): Promise<BootstrapState> {
     const trimmed = String(secret || "").trim();
     if (!trimmed) {
@@ -177,6 +185,16 @@ async function fetchRelayStatus(): Promise<RelayStatusPayload | null> {
   const response = await fetch(appPath("/api/relay/status"));
   if (!response.ok) {
     throw new Error(`relay_status_failed_${response.status}`);
+  }
+  return (await response.json()) as RelayStatusPayload;
+}
+
+async function postRelayBindStart(): Promise<RelayStatusPayload | null> {
+  const response = await fetch(appPath("/api/relay/bind/start"), {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(`relay_bind_start_failed_${response.status}`);
   }
   return (await response.json()) as RelayStatusPayload;
 }

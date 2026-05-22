@@ -265,9 +265,17 @@ class SessionService {
       })();
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (this.ws !== ws) return;
       this.ws = null;
+      this.emit({
+        type: "ws.closed",
+        payload: {
+          code: event.code,
+          reason: event.reason,
+          was_clean: event.wasClean,
+        },
+      });
       this.fastReconnectUntil = Date.now() + this.fastReconnectWindowMs;
       this.scheduleReconnect();
     };
