@@ -4285,7 +4285,8 @@ export function App({ onGoHome }: AppProps) {
         const path = params.path,
           rootParam = params.root || currentRootIdRef.current,
           isToggle = !!params.toggle,
-          forceDirectory = !!params.forceDirectory;
+          forceDirectory = !!params.forceDirectory,
+          suppressTreeExpand = !!params.suppressTreeExpand;
         if (!path || !rootParam) return;
         setGitDiff(null);
         const isActuallyRoot = params.isRoot === true;
@@ -4411,7 +4412,9 @@ export function App({ onGoHome }: AppProps) {
         }
         if (isActuallyRoot) {
           setCurrentRootId(path);
-          setExpanded((prev) => Array.from(new Set([...prev, path])));
+          if (!suppressTreeExpand) {
+            setExpanded((prev) => Array.from(new Set([...prev, path])));
+          }
           if (!forceDirectory) {
             const restored = await tryShowBoundSessionForRoot(path, {
               pluginQuery: nextPluginQuery,
@@ -8175,6 +8178,14 @@ export function App({ onGoHome }: AppProps) {
               actionHandlers.open({ path: e.path, root: r });
               if (isMobile) setIsLeftOpen(false);
             }}
+            onSelectRoot={(e, r) =>
+              actionHandlers.open_dir({
+                path: e.path,
+                root: r,
+                isRoot: e.is_root === true,
+                suppressTreeExpand: true,
+              })
+            }
             onToggleDir={(e, r) =>
               actionHandlers.open_dir({
                 path: e.path,

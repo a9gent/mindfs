@@ -80,6 +80,7 @@ type FileTreeProps = {
   onSortModeChange?: (mode: DirectorySortMode) => void;
   onShowHiddenFilesChange?: (show: boolean) => void;
   onSelectFile?: (entry: FileEntry, rootId: string) => void;
+  onSelectRoot?: (entry: FileEntry, rootId: string) => void;
   onToggleDir?: (entry: FileEntry, rootId: string) => void;
   creatingRootName?: string | null;
   creatingRootBusy?: boolean;
@@ -646,6 +647,7 @@ export function FileTree({
   onSortModeChange,
   onShowHiddenFilesChange,
   onSelectFile,
+  onSelectRoot,
   onToggleDir,
   creatingRootName = null,
   creatingRootBusy = false,
@@ -1392,12 +1394,30 @@ export function FileTree({
           : null;
         const showRootIndicator = !!rootIndicator?.bound;
         const isRootPending = !!rootIndicator?.pending;
+        const handleEntryClick = () => {
+          if (entry.is_dir) {
+            if (isManagedRootNode) {
+              (onSelectRoot || onToggleDir)?.(entry, entryRoot);
+              return;
+            }
+            onToggleDir?.(entry, entryRoot);
+            return;
+          }
+          onSelectFile?.(entry, entryRoot);
+        };
+        const handleDirectoryIconClick = (event: React.MouseEvent<HTMLSpanElement>) => {
+          if (!entry.is_dir) {
+            return;
+          }
+          event.stopPropagation();
+          onToggleDir?.(entry, entryRoot);
+        };
 
         return (
           <li key={expandedKey}>
             <button
               type="button"
-              onClick={() => entry.is_dir ? onToggleDir?.(entry, entryRoot) : onSelectFile?.(entry, entryRoot)}
+              onClick={handleEntryClick}
               style={{
                 border: "none",
                 background: isSelected ? "var(--selection-bg)" : "transparent",
@@ -1419,7 +1439,19 @@ export function FileTree({
               onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = "rgba(0,0,0,0.04)"; }}
               onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
             >
-              <DirectoryIconSlot entry={entry} isOpen={isOpen} />
+              <span
+                onClick={handleDirectoryIconClick}
+                title={entry.is_dir ? (isOpen ? "收起" : "展开") : undefined}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderRadius: "4px",
+                  cursor: entry.is_dir ? "pointer" : "default",
+                }}
+              >
+                <DirectoryIconSlot entry={entry} isOpen={isOpen} />
+              </span>
               <span
                 style={{
                   whiteSpace: "nowrap",
