@@ -742,6 +742,10 @@ type RenameManagedDirOutput struct {
 	Dir       fs.RootInfo
 }
 
+type rootResourceReleaser interface {
+	ReleaseRootResources(rootID string)
+}
+
 func (s *Service) RenameManagedDir(_ context.Context, in RenameManagedDirInput) (RenameManagedDirOutput, error) {
 	if err := s.ensureRegistry(); err != nil {
 		return RenameManagedDirOutput{}, err
@@ -793,6 +797,9 @@ func (s *Service) RenameManagedDir(_ context.Context, in RenameManagedDirInput) 
 		return RenameManagedDirOutput{}, err
 	}
 
+	if releaser, ok := s.Registry.(rootResourceReleaser); ok {
+		releaser.ReleaseRootResources(rootID)
+	}
 	if err := os.Rename(oldPath, newPath); err != nil {
 		return RenameManagedDirOutput{}, err
 	}

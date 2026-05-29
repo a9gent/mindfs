@@ -241,7 +241,30 @@ func (s *AppContext) RemoveRoot(path string) (fs.RootInfo, error) {
 	if rootCtx != nil && rootCtx.Watcher != nil {
 		rootCtx.Watcher.Close()
 	}
+	if rootCtx != nil && rootCtx.Session != nil {
+		_ = rootCtx.Session.Shutdown()
+	}
 	return dir, nil
+}
+
+func (s *AppContext) ReleaseRootResources(rootID string) {
+	rootID = strings.TrimSpace(rootID)
+	if rootID == "" {
+		return
+	}
+	s.mu.Lock()
+	rootCtx := s.roots[rootID]
+	delete(s.roots, rootID)
+	s.mu.Unlock()
+	if rootCtx == nil {
+		return
+	}
+	if rootCtx.Watcher != nil {
+		rootCtx.Watcher.Close()
+	}
+	if rootCtx.Session != nil {
+		_ = rootCtx.Session.Shutdown()
+	}
 }
 
 func (s *AppContext) RenameRoot(rootID, name, rootPath string) (fs.RootInfo, error) {
@@ -252,13 +275,7 @@ func (s *AppContext) RenameRoot(rootID, name, rootPath string) (fs.RootInfo, err
 	if err != nil {
 		return fs.RootInfo{}, err
 	}
-	s.mu.Lock()
-	rootCtx := s.roots[rootID]
-	delete(s.roots, rootID)
-	s.mu.Unlock()
-	if rootCtx != nil && rootCtx.Watcher != nil {
-		rootCtx.Watcher.Close()
-	}
+	s.ReleaseRootResources(rootID)
 	return dir, nil
 }
 

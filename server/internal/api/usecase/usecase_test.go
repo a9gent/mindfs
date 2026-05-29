@@ -469,6 +469,9 @@ func TestRenameManagedDirRenamesDirectoryAndRegistry(t *testing.T) {
 	if info, err := os.Stat(out.Dir.RootPath); err != nil || !info.IsDir() {
 		t.Fatalf("new path was not created as directory: %v", err)
 	}
+	if !registry.releaseRootResourcesCalled {
+		t.Fatal("expected root resources to be released before rename")
+	}
 }
 
 func TestRenameManagedDirRollsBackDirectoryWhenRegistryFails(t *testing.T) {
@@ -1107,9 +1110,10 @@ func (r *commandTestRegistry) GetFileWatcher(string, *session.Manager) (*rootfs.
 func (r *commandTestRegistry) ReleaseFileWatcher(string, string) {}
 
 type renameManagedDirTestRegistry struct {
-	root      rootfs.RootInfo
-	others    []rootfs.RootInfo
-	renameErr error
+	root                       rootfs.RootInfo
+	others                     []rootfs.RootInfo
+	renameErr                  error
+	releaseRootResourcesCalled bool
 }
 
 func (r *renameManagedDirTestRegistry) GetRoot(rootID string) (rootfs.RootInfo, error) {
@@ -1142,6 +1146,10 @@ func (r *renameManagedDirTestRegistry) RenameRoot(rootID, name, rootPath string)
 	r.root.Name = name
 	r.root.RootPath = filepath.Clean(rootPath)
 	return r.root, nil
+}
+
+func (r *renameManagedDirTestRegistry) ReleaseRootResources(string) {
+	r.releaseRootResourcesCalled = true
 }
 
 func (r *renameManagedDirTestRegistry) ListRoots() []rootfs.RootInfo {

@@ -778,6 +778,17 @@ func (m *Manager) StartIdleLoop(ctx context.Context) {
 	})
 }
 
+func (m *Manager) Shutdown() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.db == nil {
+		return nil
+	}
+	db := m.db
+	m.db = nil
+	return db.Close()
+}
+
 func (m *Manager) MetaDir() string {
 	return m.root.MetaDir()
 }
