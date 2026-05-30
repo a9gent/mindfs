@@ -220,57 +220,24 @@ body {
   background-color: var(--bg-gradient-start);
 }
 
-.mindfs-xterm-output .xterm,
-.mindfs-xterm-output .xterm-viewport,
-.mindfs-xterm-output .xterm-screen {
-  touch-action: auto;
-  overscroll-behavior: auto;
-}
-
-.mindfs-xterm-output .xterm-viewport {
-  overflow-x: hidden !important;
-  overflow-y: hidden !important;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-gutter: stable;
-  scrollbar-width: none;
-}
-
-.mindfs-xterm-output .xterm-viewport::-webkit-scrollbar {
-  display: none;
-}
-
-.mindfs-xterm-output .xterm-scrollable-element > .scrollbar,
-.mindfs-xterm-output .xterm-scrollable-element > .shadow {
-  display: none !important;
-}
-
-.mindfs-xterm-output .xterm-cursor,
-.mindfs-xterm-output .xterm-cursor-layer {
-  display: none !important;
-}
-
-.mindfs-xterm-scroll {
+.mindfs-ansi-output {
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
 }
 
-.mindfs-xterm-scroll::-webkit-scrollbar {
+.mindfs-ansi-output::-webkit-scrollbar {
   width: 4px;
   height: 4px;
 }
 
-.mindfs-xterm-scroll::-webkit-scrollbar-track {
+.mindfs-ansi-output::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.mindfs-xterm-scroll::-webkit-scrollbar-thumb {
+.mindfs-ansi-output::-webkit-scrollbar-thumb {
   background: rgba(148, 163, 184, 0.45);
   border-radius: 999px;
-}
-
-.mindfs-xterm-output-expanded .xterm-viewport {
-  overflow: hidden !important;
 }
 
 @media (max-width: 767px) {

@@ -1,6 +1,4 @@
-import React, { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Terminal } from "@xterm/xterm";
-import "@xterm/xterm/css/xterm.css";
+import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ToolCallContentItem, ToolCallLocation } from "../../services/session";
 import { MarkdownViewer } from "../MarkdownViewer";
 
@@ -124,107 +122,163 @@ function normalizeTerminalText(text: string): string {
   return (text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-function trimTerminalLineEnd(line: string): string {
-  return line.replace(/\s+((?:\x1b\[[0-?]*[ -/]*[@-~])*)$/g, "$1");
-}
+type AnsiStyle = {
+  color?: string;
+  backgroundColor?: string;
+  fontWeight?: React.CSSProperties["fontWeight"];
+  fontStyle?: React.CSSProperties["fontStyle"];
+  opacity?: number;
+  textDecorationLine?: React.CSSProperties["textDecorationLine"];
+};
 
-function normalizeDisplayTerminalText(text: string): string {
-  return normalizeTerminalText(text)
-    .split("\n")
-    .map(trimTerminalLineEnd)
-    .join("\n");
-}
+type AnsiSegment = {
+  text: string;
+  style?: AnsiStyle;
+};
 
-function terminalCharWidth(char: string): number {
-  const codePoint = char.codePointAt(0) || 0;
-  if (codePoint === 0) return 0;
-  if (codePoint < 32 || (codePoint >= 0x7f && codePoint < 0xa0)) return 0;
-  if (
-    codePoint >= 0x1100 &&
-    (codePoint <= 0x115f ||
-      codePoint === 0x2329 ||
-      codePoint === 0x232a ||
-      (codePoint >= 0x2e80 && codePoint <= 0xa4cf && codePoint !== 0x303f) ||
-      (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
-      (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
-      (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
-      (codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
-      (codePoint >= 0xff00 && codePoint <= 0xff60) ||
-      (codePoint >= 0xffe0 && codePoint <= 0xffe6))
-  ) {
-    return 2;
+const ansiBaseColors = [
+  "#0f172a",
+  "#ef4444",
+  "#22c55e",
+  "#eab308",
+  "#3b82f6",
+  "#a855f7",
+  "#06b6d4",
+  "#e5e7eb",
+];
+
+const ansiBrightColors = [
+  "#475569",
+  "#f87171",
+  "#4ade80",
+  "#facc15",
+  "#60a5fa",
+  "#c084fc",
+  "#22d3ee",
+  "#ffffff",
+];
+
+function ansi256Color(index: number): string | undefined {
+  if (index >= 0 && index < 8) return ansiBaseColors[index];
+  if (index >= 8 && index < 16) return ansiBrightColors[index - 8];
+  if (index >= 16 && index <= 231) {
+    const value = index - 16;
+    const r = Math.floor(value / 36);
+    const g = Math.floor((value % 36) / 6);
+    const b = value % 6;
+    const scale = (channel: number) => (channel === 0 ? 0 : 55 + channel * 40);
+    return `rgb(${scale(r)}, ${scale(g)}, ${scale(b)})`;
   }
-  return 1;
-}
-
-function visibleTerminalWidth(text: string): number {
-  const visible = stripAnsi(text);
-  let width = 0;
-  for (let index = 0; index < visible.length; ) {
-    const codePoint = visible.codePointAt(index);
-    if (codePoint === undefined) break;
-    const char = String.fromCodePoint(codePoint);
-    width += char === "\t" ? 8 - (width % 8) : terminalCharWidth(char);
-    index += char.length;
+  if (index >= 232 && index <= 255) {
+    const level = 8 + (index - 232) * 10;
+    return `rgb(${level}, ${level}, ${level})`;
   }
-  return width;
+  return undefined;
 }
 
-function maxTerminalLineWidth(text: string): number {
-  return stripAnsi(normalizeDisplayTerminalText(text))
-    .split("\n")
-    .reduce((max, line) => Math.max(max, visibleTerminalWidth(line)), 0);
+function cloneAnsiStyle(style: AnsiStyle): AnsiStyle | undefined {
+  return Object.keys(style).length > 0 ? { ...style } : undefined;
 }
 
-function countTerminalRows(text: string, cols: number): number {
-  const normalized = stripAnsi(normalizeDisplayTerminalText(text));
-  const width = Math.max(1, cols);
-  let rows = 1;
-  let cursorX = 0;
+function pushAnsiSegment(segments: AnsiSegment[], text: string, style: AnsiStyle) {
+  if (!text) return;
+  const currentStyle = cloneAnsiStyle(style);
+  const previous = segments[segments.length - 1];
+  if (previous && JSON.stringify(previous.style || {}) === JSON.stringify(currentStyle || {})) {
+    previous.text += text;
+    return;
+  }
+  segments.push({ text, style: currentStyle });
+}
 
-  for (let index = 0; index < normalized.length; ) {
-    const codePoint = normalized.codePointAt(index);
-    if (codePoint === undefined) break;
-    const char = String.fromCodePoint(codePoint);
-    index += char.length;
-
-    if (char === "\n") {
-      rows += 1;
-      cursorX = 0;
-      continue;
-    }
-    if (char === "\r") {
-      cursorX = 0;
-      continue;
-    }
-    if (char === "\b") {
-      cursorX = Math.max(0, cursorX - 1);
-      continue;
-    }
-
-    const charWidth = char === "\t" ? 8 - (cursorX % 8) : terminalCharWidth(char);
-    if (charWidth <= 0) {
-      continue;
-    }
-    if (cursorX + charWidth > width) {
-      rows += 1;
-      cursorX = 0;
-    }
-    cursorX += charWidth;
-    if (cursorX >= width) {
-      cursorX = width;
+function applyAnsiCodes(style: AnsiStyle, rawCodes: string) {
+  const codes = rawCodes === "" ? [0] : rawCodes.split(";").map((value) => Number.parseInt(value, 10)).map((value) => (Number.isFinite(value) ? value : 0));
+  for (let i = 0; i < codes.length; i += 1) {
+    const code = codes[i];
+    if (code === 0) {
+      delete style.color;
+      delete style.backgroundColor;
+      delete style.fontWeight;
+      delete style.fontStyle;
+      delete style.opacity;
+      delete style.textDecorationLine;
+    } else if (code === 1) {
+      style.fontWeight = 700;
+    } else if (code === 2) {
+      style.opacity = 0.72;
+    } else if (code === 3) {
+      style.fontStyle = "italic";
+    } else if (code === 4) {
+      style.textDecorationLine = mergeTextDecoration(style.textDecorationLine, "underline");
+    } else if (code === 9) {
+      style.textDecorationLine = mergeTextDecoration(style.textDecorationLine, "line-through");
+    } else if (code === 22) {
+      delete style.fontWeight;
+      delete style.opacity;
+    } else if (code === 23) {
+      delete style.fontStyle;
+    } else if (code === 24) {
+      style.textDecorationLine = removeTextDecoration(style.textDecorationLine, "underline");
+    } else if (code === 29) {
+      style.textDecorationLine = removeTextDecoration(style.textDecorationLine, "line-through");
+    } else if (code === 39) {
+      delete style.color;
+    } else if (code === 49) {
+      delete style.backgroundColor;
+    } else if (code >= 30 && code <= 37) {
+      style.color = ansiBaseColors[code - 30];
+    } else if (code >= 90 && code <= 97) {
+      style.color = ansiBrightColors[code - 90];
+    } else if (code >= 40 && code <= 47) {
+      style.backgroundColor = ansiBaseColors[code - 40];
+    } else if (code >= 100 && code <= 107) {
+      style.backgroundColor = ansiBrightColors[code - 100];
+    } else if ((code === 38 || code === 48) && codes[i + 1] === 5) {
+      const color = ansi256Color(codes[i + 2]);
+      if (color) {
+        if (code === 38) style.color = color;
+        else style.backgroundColor = color;
+      }
+      i += 2;
+    } else if ((code === 38 || code === 48) && codes[i + 1] === 2) {
+      const [r, g, b] = [codes[i + 2], codes[i + 3], codes[i + 4]];
+      if ([r, g, b].every((value) => Number.isFinite(value) && value >= 0 && value <= 255)) {
+        const color = `rgb(${r}, ${g}, ${b})`;
+        if (code === 38) style.color = color;
+        else style.backgroundColor = color;
+      }
+      i += 4;
     }
   }
-
-  return rows;
 }
 
-function outputMetrics(text: string, cols: number, maxVisibleRows: number, expandRows: boolean): { cols: number; rows: number } {
-  const rows = countTerminalRows(text, cols);
-  return {
-    cols,
-    rows: Math.max(1, expandRows ? Math.min(500, rows) : Math.min(maxVisibleRows, rows)),
-  };
+function mergeTextDecoration(value: React.CSSProperties["textDecorationLine"], next: string): React.CSSProperties["textDecorationLine"] {
+  const parts = new Set(String(value || "").split(/\s+/).filter(Boolean));
+  parts.add(next);
+  return Array.from(parts).join(" ") as React.CSSProperties["textDecorationLine"];
+}
+
+function removeTextDecoration(value: React.CSSProperties["textDecorationLine"], target: string): React.CSSProperties["textDecorationLine"] | undefined {
+  const parts = String(value || "").split(/\s+/).filter(Boolean).filter((part) => part !== target);
+  return parts.length > 0 ? (parts.join(" ") as React.CSSProperties["textDecorationLine"]) : undefined;
+}
+
+function parseAnsiSegments(text: string): AnsiSegment[] {
+  const normalized = normalizeTerminalText(text);
+  const segments: AnsiSegment[] = [];
+  const style: AnsiStyle = {};
+  let lastIndex = 0;
+  const pattern = /\x1b\[([0-9;?]*)([ -/]*)?([@-~])|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[ -/]*[@-~]/g;
+  for (const match of normalized.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    pushAnsiSegment(segments, normalized.slice(lastIndex, index), style);
+    if (match[3] === "m") {
+      applyAnsiCodes(style, match[1]);
+    }
+    lastIndex = index + match[0].length;
+  }
+  pushAnsiSegment(segments, normalized.slice(lastIndex), style);
+  return segments;
 }
 
 const statusColors: Record<string, string> = {
@@ -236,139 +290,49 @@ const statusColors: Record<string, string> = {
   error: "#ef4444",
 };
 
-const terminalFontSize = 12;
-const terminalLineHeight = 1.6;
-const terminalLinePx = Math.ceil(terminalFontSize * terminalLineHeight);
-const terminalViewportPadding = 24;
 const terminalFontFamily =
   '"Cascadia Mono", "Cascadia Code", Consolas, "Microsoft YaHei Mono", "Microsoft YaHei", "Noto Sans Mono CJK SC", monospace';
 
-function measureTerminalCharWidth(container: HTMLElement): number {
-  const probe = document.createElement("span");
-  probe.textContent = "mmmmmmmmmm";
-  probe.style.position = "absolute";
-  probe.style.visibility = "hidden";
-  probe.style.pointerEvents = "none";
-  probe.style.whiteSpace = "pre";
-  probe.style.fontFamily = terminalFontFamily;
-  probe.style.fontSize = `${terminalFontSize}px`;
-  container.appendChild(probe);
-  const width = probe.getBoundingClientRect().width / 10;
-  probe.remove();
-  return width > 0 ? width : 7.25;
-}
+function AnsiOutput({ text, onRendered }: { text: string; onRendered?: () => void }) {
+  const segments = useMemo(() => parseAnsiSegments(text), [text]);
 
-function XtermOutput({ text }: { text: string }) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const terminalRef = useRef<Terminal | null>(null);
-  const [cols, setCols] = useState(120);
-  const [charWidth, setCharWidth] = useState(7.25);
-  const [maxVisibleRows, setMaxVisibleRows] = useState(10);
-  const [expandRows, setExpandRows] = useState(false);
-  const displayText = useMemo(() => normalizeDisplayTerminalText(text), [text]);
-  const metrics = useMemo(() => outputMetrics(displayText, cols, maxVisibleRows, expandRows), [displayText, cols, maxVisibleRows, expandRows]);
-  const terminalHeight = Math.max(terminalLinePx, metrics.rows * terminalLinePx + terminalViewportPadding);
-  const terminalWidth = Math.max(1, Math.ceil(metrics.cols * charWidth) + 2);
-
-  useEffect(() => {
-    const container = scrollRef.current;
-    if (!container) return;
-    const updateCols = () => {
-      const width = container.clientWidth || 0;
-      if (width <= 0) return;
-      const charWidth = measureTerminalCharWidth(container);
-      const viewportHeight = window.visualViewport?.height || window.innerHeight || 720;
-      const rowLimit = Math.max(4, Math.min(14, Math.floor(viewportHeight * 0.48 / terminalLinePx)));
-      const viewportCols = Math.max(20, Math.floor(width / charWidth) - 1);
-      const contentCols = Math.min(320, Math.max(1, maxTerminalLineWidth(displayText)));
-      setCharWidth(charWidth);
-      setMaxVisibleRows(rowLimit);
-      setExpandRows(true);
-      setCols(Math.max(viewportCols, contentCols));
-    };
-    updateCols();
-    const observer = new ResizeObserver(updateCols);
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, [displayText]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const terminal = new Terminal({
-      cols: metrics.cols,
-      rows: metrics.rows,
-      convertEol: true,
-      cursorBlink: false,
-      cursorInactiveStyle: "none",
-      cursorStyle: "block",
-      disableStdin: true,
-      scrollback: 5000,
-      fontFamily: terminalFontFamily,
-      fontSize: terminalFontSize,
-      lineHeight: terminalLineHeight,
-      theme: {
-        background: "#0f172a",
-        foreground: "#e5e7eb",
-      },
-    });
-    terminal.open(container);
-    terminal.attachCustomWheelEventHandler(() => false);
-    terminalRef.current = terminal;
-    return () => {
-      terminal.dispose();
-      terminalRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    terminal.reset();
-    terminal.resize(metrics.cols, metrics.rows);
-    terminal.write(displayText || "");
-  }, [displayText, metrics.cols, metrics.rows]);
+  useLayoutEffect(() => {
+    onRendered?.();
+  }, [onRendered, segments]);
 
   return (
     <div
-      className="mindfs-xterm-output"
+      className="mindfs-ansi-output"
       style={{
         marginTop: "10px",
         padding: "8px",
         borderRadius: "8px",
         background: "#0f172a",
-        overflowX: "hidden",
+        overflowX: "auto",
         overflowY: "hidden",
         width: "100%",
         boxSizing: "border-box",
-        height: `${terminalHeight + 16}px`,
-        overscrollBehavior: "auto",
-        touchAction: "auto",
+        WebkitOverflowScrolling: "touch",
       }}
     >
-      <div
-        ref={scrollRef}
-        className="mindfs-xterm-scroll"
+      <pre
         style={{
-          width: "100%",
-          height: `${terminalHeight}px`,
-          overflowX: "auto",
-          overflowY: "hidden",
-          overscrollBehaviorX: "contain",
-          overscrollBehaviorY: "auto",
-          touchAction: "auto",
-          WebkitOverflowScrolling: "touch",
+          margin: 0,
+          minWidth: "max-content",
+          color: "#e5e7eb",
+          fontFamily: terminalFontFamily,
+          fontSize: "12px",
+          lineHeight: 1.6,
+          tabSize: 8,
+          whiteSpace: "pre",
         }}
       >
-        <div
-          ref={containerRef}
-          style={{
-            width: `${terminalWidth}px`,
-            height: `${terminalHeight}px`,
-          }}
-        />
-      </div>
+        {segments.map((segment, index) => (
+          <span key={index} style={segment.style}>
+            {segment.text}
+          </span>
+        ))}
+      </pre>
     </div>
   );
 }
@@ -386,6 +350,8 @@ export const ToolCallCard = memo(function ToolCallCard({
   defaultExpanded = false,
 }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const detailScrollRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickDetailsToBottomRef = useRef(true);
   const labelKind = (kind || "").trim();
   const labelTitle = (title || "").trim();
   const normalizedKind = labelKind.toLowerCase();
@@ -441,6 +407,24 @@ export const ToolCallCard = memo(function ToolCallCard({
       setExpanded(true);
     }
   }, [defaultExpanded, hasDetails]);
+
+  useEffect(() => {
+    const container = detailScrollRef.current;
+    if (!container || !isUserShell || !expanded) return;
+    const updateStickiness = () => {
+      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      shouldStickDetailsToBottomRef.current = distanceFromBottom < 48;
+    };
+    updateStickiness();
+    container.addEventListener("scroll", updateStickiness, { passive: true });
+    return () => container.removeEventListener("scroll", updateStickiness);
+  }, [expanded, isUserShell]);
+
+  const scrollUserShellDetailsToBottom = React.useCallback(() => {
+    const container = detailScrollRef.current;
+    if (!container || !shouldStickDetailsToBottomRef.current) return;
+    container.scrollTop = container.scrollHeight;
+  }, []);
   
   const statusColor = statusColors[normalizedStatus] || "#9ca3af";
 
@@ -546,6 +530,7 @@ export const ToolCallCard = memo(function ToolCallCard({
 
       {expanded && hasDetails && (
         <div
+          ref={isUserShell ? detailScrollRef : undefined}
           style={{
             padding: "0 10px 22px",
             borderTop: "1px solid var(--border-color)",
@@ -556,7 +541,7 @@ export const ToolCallCard = memo(function ToolCallCard({
           }}
         >
           {isUserShell ? (
-            <XtermOutput text={userShellText} />
+            <AnsiOutput text={userShellText} onRendered={scrollUserShellDetailsToBottom} />
           ) : isCollabTool ? (
             <CollabToolDetails meta={meta} />
           ) : hasStructuredDetails ? (
