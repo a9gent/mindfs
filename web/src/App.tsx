@@ -3594,6 +3594,25 @@ export function App({ onGoHome }: AppProps) {
     });
   }, []);
 
+  const toggleAllExternalImportSelection = useCallback((checked: boolean) => {
+    const visibleKeys = externalSessionsRef.current
+      .map((session) =>
+        String(session.agent_session_id || session.key || "").trim(),
+      )
+      .filter(Boolean);
+    setSelectedExternalImportKeys((current) => {
+      const next = new Set(current);
+      visibleKeys.forEach((key) => {
+        if (checked) {
+          next.add(key);
+        } else {
+          next.delete(key);
+        }
+      });
+      return next;
+    });
+  }, []);
+
   const handleConfirmExternalImport = useCallback(async () => {
     const rootID = currentRootIdRef.current || "";
     const sessionKeys = [...selectedExternalImportKeys].filter(Boolean);
@@ -8173,6 +8192,7 @@ export function App({ onGoHome }: AppProps) {
           )
         }
         onToggleImport={toggleExternalImportSelection}
+        onToggleSelectAllImport={toggleAllExternalImportSelection}
         onConfirmImport={() => {
           void handleConfirmExternalImport();
         }}
