@@ -1189,12 +1189,12 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	if err := s.ensureRegistry(); err != nil {
 		return err
 	}
-	turnCtx, turnCancel := context.WithCancel(ctx)
-	registerActiveTurn(in.RootID, in.Key, turnCancel)
-	defer unregisterActiveTurn(in.RootID, in.Key)
 	sendLock := getSessionSendLock(in.Key)
 	sendLock.Lock()
 	defer sendLock.Unlock()
+	turnCtx, turnCancel := context.WithCancel(ctx)
+	registerActiveTurn(in.RootID, in.Key, turnCancel)
+	defer unregisterActiveTurn(in.RootID, in.Key)
 	if in.OnStart != nil {
 		in.OnStart()
 	}
@@ -1371,7 +1371,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		}
 	}
 	flushThought()
-	if sendErr != nil {
+	if sendErr != nil && !isCanceledTurnError(sendErr) {
 		log.Printf("[session] turn.send.error root=%s session=%s agent=%s err=%v", in.RootID, current.Key, in.Agent, sendErr)
 	}
 	resolvedModel := resolveRuntimeModel(current, sess, in.Model)
@@ -2247,12 +2247,17 @@ func (s *Service) CancelSessionTurn(ctx context.Context, in CancelSessionTurnInp
 	if active == nil {
 		return nil
 	}
-	active.cancel()
 	if active.session != nil {
+		// Let the runtime emit its own turn boundary after interrupt. Canceling
+		// turnCtx first can dequeue the current waiter, so a late ResultMessage
+		// may be delivered to the next queued turn.
 		if err := active.session.CancelCurrentTurn(); err != nil {
 			log.Printf("[session] turn.cancel.error root=%s session=%s err=%v", in.RootID, current.Key, err)
+			active.cancel()
 			return err
 		}
+		return nil
 	}
+	active.cancel()
 	return nil
 }

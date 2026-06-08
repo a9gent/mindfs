@@ -133,9 +133,10 @@ type session struct {
 	model      string
 	context    types.ContextWindow
 
-	sendMu sync.Mutex
-	turnMu sync.Mutex
-	turns  []chan error
+	sendMu          sync.Mutex
+	turnMu          sync.Mutex
+	turns           []chan error
+	turnInterrupted bool
 
 	closeOnce sync.Once
 	turn      types.TurnCanceler
@@ -181,7 +182,7 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 
 	select {
 	case err := <-waiter:
-		if err != nil {
+		if err != nil && !isTurnCanceledError(err) {
 			log.Printf("[agent/claude] send.error session=%s err=%v", s.sessionKey, err)
 		}
 		return err
@@ -437,6 +438,7 @@ func (s *session) CancelCurrentTurn() error {
 		return nil
 	}
 	if err := s.stream.Interrupt(context.Background()); err == nil {
+		s.markTurnInterrupted()
 		return nil
 	}
 	s.turn.Cancel()
@@ -1480,6 +1482,18 @@ func (s *session) enqueueTurn(waiter chan error) {
 	s.turnMu.Unlock()
 }
 
+func (s *session) markTurnInterrupted() {
+	s.turnMu.Lock()
+	s.turnInterrupted = true
+	s.turnMu.Unlock()
+}
+
+func (s *session) consumeTurnInterruptedLocked() bool {
+	interrupted := s.turnInterrupted
+	s.turnInterrupted = false
+	return interrupted
+}
+
 func (s *session) dequeueTurn(waiter chan error) {
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
@@ -1488,12 +1502,16 @@ func (s *session) dequeueTurn(waiter chan error) {
 			continue
 		}
 		s.turns = append(s.turns[:i], s.turns[i+1:]...)
+		if len(s.turns) == 0 {
+			s.turnInterrupted = false
+		}
 		return
 	}
 }
 
 func (s *session) completeTurn(err error) {
 	s.turnMu.Lock()
+	interrupted := s.consumeTurnInterruptedLocked()
 	if len(s.turns) == 0 {
 		s.turnMu.Unlock()
 		return
@@ -1502,6 +1520,9 @@ func (s *session) completeTurn(err error) {
 	s.turns = s.turns[1:]
 	s.turnMu.Unlock()
 
+	if interrupted && err != nil {
+		err = errors.New("turn canceled")
+	}
 	waiter <- err
 }
 
@@ -1509,6 +1530,7 @@ func (s *session) failPendingTurns(err error) {
 	s.turnMu.Lock()
 	pending := s.turns
 	s.turns = nil
+	s.turnInterrupted = false
 	s.turnMu.Unlock()
 	for _, ch := range pending {
 		ch <- err
@@ -1531,6 +1553,14 @@ func resultErr(msg claudeagent.ResultMessage) error {
 		return errors.New("claude result: " + msg.Subtype)
 	}
 	return errors.New("claude turn failed")
+}
+
+func isTurnCanceledError(err error) bool {
+	if err == nil {
+		return false
+	}
+	value := strings.ToLower(strings.TrimSpace(err.Error()))
+	return value == "turn canceled" || value == "turn cancelled" || strings.Contains(value, "context canceled")
 }
 
 func contextTokensFromPartialEvent(raw json.RawMessage) int {

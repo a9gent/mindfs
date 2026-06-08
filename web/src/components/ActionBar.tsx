@@ -14,6 +14,7 @@ import {
 import TokenEditor, {
   type TokenEditorHandle,
 } from "./editor/TokenEditor";
+import { renderToolIcon } from "./stream/ToolCallCard";
 
 type SessionInfo = {
   key: string;
@@ -44,6 +45,12 @@ type AttachedFileContext = {
   text?: string;
 };
 
+type QueuedMessageInfo = {
+  id: string;
+  content: string;
+  created_at?: string;
+};
+
 type WSStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
 function getSelectionPreview(text?: string): string {
@@ -67,6 +74,7 @@ type ActionBarProps = {
     id: number;
     content: string;
   } | null;
+  queuedMessages?: QueuedMessageInfo[];
   mobileEnterKeySends?: boolean;
   onSendMessage?: (
     message: string,
@@ -79,6 +87,9 @@ type ActionBarProps = {
     shell?: string,
   ) => void | Promise<void>;
   onCancelCurrentTurn?: (sessionKey: string) => void;
+  onRemoveQueuedMessage?: (queueId: string) => void | Promise<void>;
+  onUpdateQueuedMessage?: (queueId: string, content: string) => void | Promise<void>;
+  onSendQueuedMessageNow?: (queueId: string) => void | Promise<void>;
   onNewSession?: () => void;
   onRequestFileContext?: () => void;
   onClearFileContext?: () => void;
@@ -353,8 +364,12 @@ export function ActionBar({
   sessionDrawerOpen = false,
   detachedBoundSession = false,
   editDraftRequest = null,
+  queuedMessages = [],
   onSendMessage,
   onCancelCurrentTurn,
+  onRemoveQueuedMessage,
+  onUpdateQueuedMessage,
+  onSendQueuedMessageNow,
   onNewSession,
   onRequestFileContext,
   onClearFileContext,
@@ -378,6 +393,8 @@ export function ActionBar({
   const [isDragging, setIsDragging] = useState(false);
   const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
+  const [editingQueueText, setEditingQueueText] = useState("");
   const [isMultiLine, setIsMultiLine] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [isDark, setIsDark] = useState(() => getEffectiveAppearanceMode() === "dark");
@@ -776,6 +793,32 @@ export function ActionBar({
     }
   }, [currentSession?.key, cancelling, onCancelCurrentTurn]);
 
+  const startEditQueuedMessage = useCallback((item: QueuedMessageInfo) => {
+    setEditingQueueId(item.id);
+    setEditingQueueText(item.content || "");
+  }, []);
+
+  const saveEditQueuedMessage = useCallback(async () => {
+    const queueId = editingQueueId;
+    const nextText = editingQueueText.trim();
+    if (!queueId || !nextText) return;
+    await onUpdateQueuedMessage?.(queueId, nextText);
+    setEditingQueueId(null);
+    setEditingQueueText("");
+  }, [editingQueueId, editingQueueText, onUpdateQueuedMessage]);
+
+  const cancelEditQueuedMessage = useCallback(() => {
+    setEditingQueueId(null);
+    setEditingQueueText("");
+  }, []);
+
+  useEffect(() => {
+    if (!editingQueueId) return;
+    if (!queuedMessages.some((item) => item.id === editingQueueId)) {
+      cancelEditQueuedMessage();
+    }
+  }, [cancelEditQueuedMessage, editingQueueId, queuedMessages]);
+
   const isCompositionActive = useCallback((event?: KeyboardEvent | null) => {
     const nativeEvent = event as (KeyboardEvent & { isComposing?: boolean; keyCode?: number }) | null | undefined;
     return isComposingRef.current
@@ -915,7 +958,8 @@ export function ActionBar({
   const isSelectedAgentUnavailable = agents.length > 0 ? agents.find((a) => a.name === agent)?.available === false : false;
   const canSend = (!!serializedInput.trim() || pendingAttachments.length > 0) && isConnected && !sending && (mode === "command" || !!agent);
   const hasBoundSession = !!currentSession;
-  const showCancel = !!currentSession?.pending && !!currentSession?.key;
+  const hasDraft = !!serializedInput.trim() || pendingAttachments.length > 0;
+  const showCancel = !!currentSession?.pending && !!currentSession?.key && !hasDraft;
   const isModeLocked = !!currentSession;
 
   useEffect(() => {
@@ -945,6 +989,166 @@ export function ActionBar({
   return (
     <div style={{ width: "100%", minWidth: 0, padding: isMobile ? "0 0 var(--mindfs-actionbar-bottom-padding, calc(env(safe-area-inset-bottom, 0px) + 2px))" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
       <div style={{ width: "100%", minWidth: 0, display: "flex", flexDirection: "column", gap: isMobile ? "0" : "6px" }}>
+        {queuedMessages.length > 0 ? (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "3px",
+              padding: isMobile ? "0 31px 3px" : "0",
+              maxHeight: isMobile ? "116px" : "144px",
+              overflowY: "auto",
+              scrollbarWidth: "thin",
+            }}
+          >
+            {queuedMessages.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  position: "relative",
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  alignItems: "center",
+                  gap: "6px",
+                  minHeight: "28px",
+                  padding: "2px 3px 2px 9px",
+                  border: "1px solid color-mix(in srgb, var(--accent-color) 32%, transparent)",
+                  borderRadius: "8px",
+                  background: "var(--panel-bg)",
+                  boxShadow: isMobile ? "none" : "var(--panel-shadow)",
+                }}
+              >
+                {editingQueueId === item.id ? (
+                  <input
+                    value={editingQueueText}
+                    onChange={(event) => setEditingQueueText(event.currentTarget.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void saveEditQueuedMessage();
+                      } else if (event.key === "Escape") {
+                        event.preventDefault();
+                        cancelEditQueuedMessage();
+                      }
+                    }}
+                    autoFocus
+                    style={{
+                      minWidth: 0,
+                      height: "24px",
+                      border: "none",
+                      borderRadius: 0,
+                      background: "transparent",
+                      color: "var(--text-primary)",
+                      fontSize: "12px",
+                      padding: 0,
+                      outline: "none",
+                    }}
+                  />
+                ) : (
+                  <div
+                    title={item.content}
+                    style={{
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontSize: "12px",
+                      color: "var(--text-secondary)",
+                      lineHeight: 1.35,
+                    }}
+                  >
+                    {item.content}
+                  </div>
+                )}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "3px",
+                  }}
+                >
+                  {editingQueueId === item.id ? (
+                    <>
+                      <button
+                        type="button"
+                        aria-label="保存排队消息"
+                        title="保存"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => void saveEditQueuedMessage()}
+                        disabled={!editingQueueText.trim()}
+                        style={{ width: "28px", height: "28px", border: "none", borderRadius: "7px", background: "transparent", color: editingQueueText.trim() ? "var(--accent-color)" : "var(--text-secondary)", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: editingQueueText.trim() ? "pointer" : "not-allowed", opacity: editingQueueText.trim() ? 1 : 0.45 }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M20 6 9 17l-5-5" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="取消编辑排队消息"
+                        title="取消"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={cancelEditQueuedMessage}
+                        style={{ width: "28px", height: "28px", border: "none", borderRadius: "7px", background: "transparent", color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M18 6 6 18" />
+                          <path d="m6 6 12 12" />
+                        </svg>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        aria-label="删除排队消息"
+                        title="删除"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => void onRemoveQueuedMessage?.(item.id)}
+                        style={{ width: "28px", height: "28px", border: "none", borderRadius: "7px", background: "transparent", color: "#dc2626", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6l-1 14H6L5 6" />
+                          <path d="M10 11v6" />
+                          <path d="M14 11v6" />
+                          <path d="M9 6V4h6v2" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="编辑排队消息"
+                        title="编辑"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => startEditQueuedMessage(item)}
+                        style={{ width: "28px", height: "28px", border: "none", borderRadius: "7px", background: "transparent", color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                      >
+                        <span style={{ display: "inline-flex", transform: "scale(1.125)" }}>
+                          {renderToolIcon("edit")}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="立即发送排队消息"
+                        title="立即发送"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => void onSendQueuedMessageNow?.(item.id)}
+                        style={{ width: "28px", height: "28px", border: "none", borderRadius: "7px", background: "transparent", color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M0 0h24v24H0z" fill="none" />
+                          <g fill="currentColor" fillRule="evenodd" clipRule="evenodd">
+                            <path d="M3 14a1 1 0 0 1 1-1h12a3 3 0 0 0 3-3V6a1 1 0 1 1 2 0v4a5 5 0 0 1-5 5H4a1 1 0 0 1-1-1" />
+                            <path d="M3.293 14.707a1 1 0 0 1 0-1.414l4-4a1 1 0 0 1 1.414 1.414L5.414 14l3.293 3.293a1 1 0 1 1-1.414 1.414z" />
+                          </g>
+                        </svg>
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "30px minmax(0, 1fr) 30px" : "1fr", alignItems: "center", gap: isMobile ? "1px" : 0, padding: isMobile ? "0 1px" : 0, minWidth: 0, maxWidth: "100%" }}>
           {isMobile ? (
             <button

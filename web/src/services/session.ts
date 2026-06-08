@@ -6,6 +6,17 @@ import { e2eeService } from "./e2ee";
 
 export type SessionType = "chat" | "plugin" | "command";
 
+export type QueuedUserMessage = {
+  id: string;
+  agent?: string;
+  model?: string;
+  mode?: string;
+  effort?: string;
+  fast_service?: string;
+  content: string;
+  timestamp: string;
+};
+
 const commandTerminalFontSize = 12;
 const commandTerminalFontFamily =
   '"Cascadia Mono", "Cascadia Code", Consolas, "Microsoft YaHei Mono", "Microsoft YaHei", "Noto Sans Mono CJK SC", monospace';
@@ -770,6 +781,52 @@ class SessionService {
     };
 
     return this.sendWSMessage(msg);
+  }
+
+  async removeQueuedMessage(rootId: string, sessionKey: string, queueId: string): Promise<boolean> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !rootId || !sessionKey || !queueId) {
+      return false;
+    }
+    return this.sendWSMessage({
+      id: `queue-remove-${Date.now()}`,
+      type: "session.queue.remove",
+      payload: {
+        root_id: rootId,
+        session_key: sessionKey,
+        queue_id: queueId,
+      },
+    });
+  }
+
+  async updateQueuedMessage(rootId: string, sessionKey: string, queueId: string, content: string): Promise<boolean> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !rootId || !sessionKey || !queueId || !content.trim()) {
+      return false;
+    }
+    return this.sendWSMessage({
+      id: `queue-update-${Date.now()}`,
+      type: "session.queue.update",
+      payload: {
+        root_id: rootId,
+        session_key: sessionKey,
+        queue_id: queueId,
+        content,
+      },
+    });
+  }
+
+  async sendQueuedMessageNow(rootId: string, sessionKey: string, queueId: string): Promise<boolean> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !rootId || !sessionKey || !queueId) {
+      return false;
+    }
+    return this.sendWSMessage({
+      id: `queue-send-now-${Date.now()}`,
+      type: "session.queue.send_now",
+      payload: {
+        root_id: rootId,
+        session_key: sessionKey,
+        queue_id: queueId,
+      },
+    });
   }
 
   async answerQuestion(
