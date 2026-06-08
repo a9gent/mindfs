@@ -21,6 +21,11 @@ echo "==> Building mindfs ${VERSION}"
 echo "    Output: ${DIST_DIR}/"
 echo
 
+LDFLAGS="-s -w -X main.version=${VERSION}"
+if [[ -n "${MINDFS_RELEASE_PUBLIC_KEY:-}" ]]; then
+  LDFLAGS="${LDFLAGS} -X mindfs/server/internal/update.releaseManifestPublicKey=${MINDFS_RELEASE_PUBLIC_KEY}"
+fi
+
 built_dirs=()
 for PLATFORM in "${PLATFORMS[@]}"; do
   GOOS="${PLATFORM%%/*}"
@@ -48,7 +53,7 @@ for PLATFORM in "${PLATFORMS[@]}"; do
     GOARM="$GOARM" \
     go build \
       -trimpath \
-      -ldflags "-s -w -X main.version=${VERSION}" \
+      -ldflags "${LDFLAGS}" \
       -o "${ROOT}/${TARGET}" \
       ./cli/cmd
 
