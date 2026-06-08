@@ -209,49 +209,115 @@ func (p *SkillCandidateProvider) Search(ctx context.Context, root rootfs.RootInf
 	items := make([]CandidateItem, 0, 16)
 	seen := make(map[string]struct{})
 	for _, dir := range skillScanDirs(root, agent) {
-		entries, err := os.ReadDir(dir)
+		discovered, err := discoverSkillCandidates(ctx, dir, query)
 		if err != nil {
-			if isMissingSkillScanDir(err) {
-				continue
-			}
 			return nil, err
 		}
-		for _, entry := range entries {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-			}
-			if !isSkillDirectoryEntry(dir, entry) {
+		for _, item := range discovered {
+			normalizedName := normalizeCandidateName(item.Name)
+			if normalizedName == "" {
 				continue
 			}
-			name := entry.Name()
-			if name == "" {
+			if _, ok := seen[normalizedName]; ok {
 				continue
 			}
-			if strings.HasPrefix(name, ".") {
-				continue
-			}
-			if _, ok := seen[name]; ok {
-				continue
-			}
-			if !matchesCandidateName(name, query) {
-				continue
-			}
-			seen[name] = struct{}{}
-			items = append(items, CandidateItem{
-				Type:        CandidateTypeSkill,
-				Name:        name,
-				Description: readSkillDescription(filepath.Join(dir, name, "SKILL.md")),
-			})
+			seen[normalizedName] = struct{}{}
+			items = append(items, item)
 		}
 	}
 	sortCandidateItems(items, query)
 	return limitCandidateItems(items), nil
 }
 
+func discoverSkillCandidates(ctx context.Context, dir, query string) ([]CandidateItem, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if isMissingSkillScanDir(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	items := make([]CandidateItem, 0, len(entries))
+	for _, entry := range entries {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		if !isSkillDirectoryEntry(dir, entry) {
+			continue
+		}
+		name := entry.Name()
+		if name == "" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		skillDir := filepath.Join(dir, name)
+		skillPath := filepath.Join(skillDir, "SKILL.md")
+		if skillFileExists(skillPath) {
+			if matchesCandidateName(name, query) {
+				items = append(items, CandidateItem{
+					Type:        CandidateTypeSkill,
+					Name:        name,
+					Description: readSkillDescription(skillPath),
+				})
+			}
+			continue
+		}
+		namespacedItems, err := discoverNamespacedSkillCandidates(ctx, name, skillDir, query)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, namespacedItems...)
+	}
+	return items, nil
+}
+
+func discoverNamespacedSkillCandidates(ctx context.Context, namespace, dir, query string) ([]CandidateItem, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if isMissingSkillScanDir(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	items := make([]CandidateItem, 0, len(entries))
+	for _, entry := range entries {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		if !isSkillDirectoryEntry(dir, entry) {
+			continue
+		}
+		childName := entry.Name()
+		if childName == "" || strings.HasPrefix(childName, ".") {
+			continue
+		}
+		candidateName := namespace + ":" + childName
+		if !matchesCandidateName(candidateName, query) && !matchesCandidateName(childName, query) && !matchesCandidateName(namespace, query) {
+			continue
+		}
+		skillPath := filepath.Join(dir, childName, "SKILL.md")
+		if !skillFileExists(skillPath) {
+			continue
+		}
+		items = append(items, CandidateItem{
+			Type:        CandidateTypeSkill,
+			Name:        candidateName,
+			Description: readSkillDescription(skillPath),
+		})
+	}
+	return items, nil
+}
+
 func isMissingSkillScanDir(err error) bool {
 	return os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR)
+}
+
+func skillFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func isSkillDirectoryEntry(parent string, entry os.DirEntry) bool {
@@ -449,6 +515,7 @@ func skillScanDirs(root rootfs.RootInfo, agent string) []string {
 			filepath.Join(homeDir, ".codex", "skills"),
 			filepath.Join(homeDir, ".codex", "skills", ".system"),
 			filepath.Join(homeDir, ".agents", "skills"),
+			filepath.Join(rootDir, ".agents", "skills"),
 			filepath.Join(rootDir, ".codex", "skills"),
 		}
 	case "claude":

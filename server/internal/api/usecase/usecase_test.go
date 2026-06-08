@@ -509,6 +509,7 @@ func TestSkillCandidateProviderSearch(t *testing.T) {
 	mustWriteFile(t, filepath.Join(homeDir, ".codex", "skills", "status", "SKILL.md"), "---\nname: status\ndescription: Home status skill\n---\n")
 	mustWriteFile(t, filepath.Join(homeDir, ".agents", "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Shared review skill\n---\n")
 	mustWriteFile(t, filepath.Join(rootDir, ".codex", "skills", "status", "SKILL.md"), "---\nname: status\ndescription: Root status skill\n---\n")
+	mustWriteFile(t, filepath.Join(rootDir, ".agents", "skills", "trellis-start", "SKILL.md"), "---\nname: trellis-start\ndescription: Start Trellis\n---\n")
 	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)
 
 	provider := NewSkillCandidateProvider()
@@ -516,10 +517,10 @@ func TestSkillCandidateProviderSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search returned error: %v", err)
 	}
-	if len(items) != 2 {
-		t.Fatalf("expected 2 unique items, got %d: %#v", len(items), items)
+	if len(items) != 3 {
+		t.Fatalf("expected 3 unique items, got %d: %#v", len(items), items)
 	}
-	if items[0].Name != "review" && items[0].Name != "status" {
+	if items[0].Name != "review" && items[0].Name != "status" && items[0].Name != "trellis-start" {
 		t.Fatalf("unexpected first item: %#v", items[0])
 	}
 	descriptionByName := make(map[string]string, len(items))
@@ -531,6 +532,9 @@ func TestSkillCandidateProviderSearch(t *testing.T) {
 	}
 	if got := descriptionByName["review"]; got != "Shared review skill" {
 		t.Fatalf("unexpected review description: %q", got)
+	}
+	if got := descriptionByName["trellis-start"]; got != "Start Trellis" {
+		t.Fatalf("unexpected trellis-start description: %q", got)
 	}
 }
 
@@ -563,6 +567,66 @@ func TestSkillCandidateProviderSearchFollowsSymlinkedSkillDir(t *testing.T) {
 	}
 	if items[0].Description != "Linked skill" {
 		t.Fatalf("skill description = %q, want Linked skill", items[0].Description)
+	}
+}
+
+func TestSkillCandidateProviderSearchExpandsNamespacedSkillBundle(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	rootDir := t.TempDir()
+	ssotDir := t.TempDir()
+	targetDir := filepath.Join(ssotDir, "aegis-skills")
+	mustWriteFile(t, filepath.Join(targetDir, "brainstorming", "SKILL.md"), "---\nname: brainstorming\ndescription: Aegis brainstorm\n---\n")
+	mustWriteFile(t, filepath.Join(targetDir, "using-aegis", "SKILL.md"), "---\nname: using-aegis\ndescription: Aegis router\n---\n")
+	skillsDir := filepath.Join(homeDir, ".agents", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatalf("mkdir skills dir: %v", err)
+	}
+	if err := os.Symlink(targetDir, filepath.Join(skillsDir, "aegis")); err != nil {
+		t.Skipf("symlink not available: %v", err)
+	}
+	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)
+
+	provider := NewSkillCandidateProvider()
+	items, err := provider.Search(context.Background(), root, "codex", "aegis")
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 namespaced skills, got %d: %#v", len(items), items)
+	}
+	descriptionByName := make(map[string]string, len(items))
+	for _, item := range items {
+		descriptionByName[item.Name] = item.Description
+	}
+	if _, ok := descriptionByName["aegis"]; ok {
+		t.Fatalf("did not expect bare namespace item: %#v", items)
+	}
+	if got := descriptionByName["aegis:brainstorming"]; got != "Aegis brainstorm" {
+		t.Fatalf("unexpected aegis:brainstorming description: %q", got)
+	}
+	if got := descriptionByName["aegis:using-aegis"]; got != "Aegis router" {
+		t.Fatalf("unexpected aegis:using-aegis description: %q", got)
+	}
+}
+
+func TestSkillCandidateProviderSearchMatchesNamespacedChildName(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	rootDir := t.TempDir()
+	mustWriteFile(t, filepath.Join(homeDir, ".agents", "skills", "aegis", "brainstorming", "SKILL.md"), "---\nname: brainstorming\ndescription: Aegis brainstorm\n---\n")
+	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)
+
+	provider := NewSkillCandidateProvider()
+	items, err := provider.Search(context.Background(), root, "codex", "brain")
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 namespaced skill, got %d: %#v", len(items), items)
+	}
+	if items[0].Name != "aegis:brainstorming" {
+		t.Fatalf("skill name = %q, want aegis:brainstorming", items[0].Name)
 	}
 }
 
