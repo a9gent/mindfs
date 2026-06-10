@@ -69,8 +69,8 @@ class E2EEService {
     this.configured = true;
     this.required = nextRequired;
     if (this.nodeId !== nextNodeId) {
+      this.zeroSession();
       this.nodeId = nextNodeId;
-      this.session = null;
       this.openingPromise = null;
     }
     if (changed) {
@@ -83,8 +83,8 @@ class E2EEService {
     if (this.clientId === nextClientId) {
       return;
     }
+    this.zeroSession();
     this.clientId = nextClientId;
-    this.session = null;
     this.openingPromise = null;
     this.emit();
   }
@@ -129,7 +129,7 @@ class E2EEService {
   }
 
   clearSession(options: { silent?: boolean } = {}) {
-    this.session = null;
+    this.zeroSession();
     this.openingPromise = null;
     if (!options.silent) {
       this.emit();
@@ -201,6 +201,20 @@ class E2EEService {
 
   async decodeWSMessage<T>(raw: string): Promise<T> {
     return this.decodeProtectedJSON<T>(raw);
+  }
+
+  async wsProofParams(method: string, path: string): Promise<URLSearchParams> {
+    const session = await this.ensureSession();
+    if (!session) {
+      throw new Error("e2ee_required");
+    }
+    const ts = new Date().toISOString();
+    const proofPath = canonicalProofPath(path);
+    const proof = await buildRequestProof(session.transportKeyBytes, method, proofPath, ts, this.clientId);
+    return new URLSearchParams({
+      e2ee_ts: ts,
+      e2ee_proof: proof,
+    });
   }
 
   sessionProtectedHeaders(headers?: HeadersInit): Headers {
@@ -454,6 +468,13 @@ class E2EEService {
 
   private secretStorageKey(): string {
     return `${SECRET_STORAGE_PREFIX}${this.nodeId}`;
+  }
+
+  private zeroSession() {
+    if (this.session) {
+      this.session.transportKeyBytes.fill(0);
+      this.session = null;
+    }
   }
 
   private emit() {

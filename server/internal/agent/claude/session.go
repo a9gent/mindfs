@@ -133,9 +133,10 @@ type session struct {
 	model      string
 	context    types.ContextWindow
 
-	sendMu sync.Mutex
-	turnMu sync.Mutex
-	turns  []chan error
+	sendMu          sync.Mutex
+	turnMu          sync.Mutex
+	turns           []chan error
+	turnInterrupted bool
 
 	closeOnce sync.Once
 	turn      types.TurnCanceler
@@ -181,7 +182,7 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 
 	select {
 	case err := <-waiter:
-		if err != nil {
+		if err != nil && !isTurnCanceledError(err) {
 			log.Printf("[agent/claude] send.error session=%s err=%v", s.sessionKey, err)
 		}
 		return err
@@ -329,7 +330,7 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 	}
 	supported := s.client.SupportedModelsFromInit()
 	models := make([]types.ModelInfo, 0, len(supported))
-	for _, model := range supported {
+	for index, model := range supported {
 		name := strings.TrimSpace(model.DisplayName)
 		if name == "" {
 			name = strings.TrimSpace(model.Value)
@@ -338,7 +339,7 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 			ID:            model.Value,
 			Name:          name,
 			Description:   model.Description,
-			SupportEffort: claudeModelSupportsEffort(model.Value, name),
+			SupportEffort: claudeModelSupportsEffortAt(supported, index),
 		})
 	}
 	log.Printf("[agent/claude] models.cached session=%s count=%d", s.sessionKey, len(models))
@@ -357,8 +358,28 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 	}, nil
 }
 
-func claudeModelSupportsEffort(id, name string) bool {
-	joined := strings.ToLower(strings.TrimSpace(id) + " " + strings.TrimSpace(name))
+func claudeModelSupportsEffortAt(models []claudeagent.ModelInfo, index int) bool {
+	if index < 0 || index >= len(models) {
+		return false
+	}
+	model := models[index]
+	if claudeModelSupportsEffort(model.Value, model.DisplayName, model.Description) {
+		return true
+	}
+	if !strings.EqualFold(strings.TrimSpace(model.Value), "default") {
+		return false
+	}
+	for _, candidate := range models {
+		if strings.EqualFold(strings.TrimSpace(candidate.Value), "default") {
+			continue
+		}
+		return claudeModelSupportsEffort(candidate.Value, candidate.DisplayName, candidate.Description)
+	}
+	return false
+}
+
+func claudeModelSupportsEffort(id, name, description string) bool {
+	joined := strings.ToLower(strings.TrimSpace(id) + " " + strings.TrimSpace(name) + " " + strings.TrimSpace(description))
 	return strings.Contains(joined, "sonnet") || strings.Contains(joined, "opus")
 }
 
@@ -417,6 +438,7 @@ func (s *session) CancelCurrentTurn() error {
 		return nil
 	}
 	if err := s.stream.Interrupt(context.Background()); err == nil {
+		s.markTurnInterrupted()
 		return nil
 	}
 	s.turn.Cancel()
@@ -1146,16 +1168,26 @@ func (s *session) toolResultUpdate(msg claudeagent.UserMessage) (types.ToolCall,
 	if msg.ToolUseResult == nil {
 		return types.ToolCall{}, false
 	}
-	if msg.ParentToolUseID == nil || strings.TrimSpace(*msg.ParentToolUseID) == "" {
-		return types.ToolCall{}, false
-	}
 
-	base, ok := s.popPendingToolCall(*msg.ParentToolUseID)
+	callID := ""
+	if msg.ParentToolUseID != nil {
+		callID = strings.TrimSpace(*msg.ParentToolUseID)
+	}
+	if callID == "" {
+		callID = extractToolResultCallID(msg.ToolUseResult)
+	}
+	base, ok := s.popPendingToolCall(callID)
+	if !ok && callID == "" {
+		base, ok = s.popOnlyPendingToolCall()
+	}
 	if !ok {
 		return types.ToolCall{}, false
 	}
 
 	result := summarizeToolResult(base.Kind, msg.ToolUseResult)
+	if result == "" {
+		result = summarizeUserToolResultMessage(msg)
+	}
 	update := base
 	update.Status = "complete"
 	if result != "" {
@@ -1197,6 +1229,20 @@ func (s *session) popPendingToolCall(callID string) (types.ToolCall, bool) {
 	return toolCall, true
 }
 
+func (s *session) popOnlyPendingToolCall() (types.ToolCall, bool) {
+	s.pendingToolMu.Lock()
+	defer s.pendingToolMu.Unlock()
+
+	if len(s.pendingToolCalls) != 1 {
+		return types.ToolCall{}, false
+	}
+	for callID, toolCall := range s.pendingToolCalls {
+		delete(s.pendingToolCalls, callID)
+		return toolCall, true
+	}
+	return types.ToolCall{}, false
+}
+
 func summarizeToolResult(kind types.ToolKind, raw any) string {
 	switch kind {
 	case types.ToolKindExecute:
@@ -1213,26 +1259,25 @@ func summarizeExecuteToolResult(raw any) string {
 		Stdout string `json:"stdout"`
 		Stderr string `json:"stderr"`
 	}
-	if !decodeToolResult(raw, &payload) {
-		return ""
+	if decodeToolResult(raw, &payload) {
+		if strings.TrimSpace(payload.Stdout) != "" {
+			return payload.Stdout
+		}
+		if strings.TrimSpace(payload.Stderr) != "" {
+			return payload.Stderr
+		}
 	}
-	if strings.TrimSpace(payload.Stdout) != "" {
-		return payload.Stdout
-	}
-	if strings.TrimSpace(payload.Stderr) != "" {
-		return payload.Stderr
-	}
-	return ""
+	return summarizeGenericToolResult(raw)
 }
 
 func summarizeEditToolResult(raw any) string {
 	var payload struct {
 		Content string `json:"content"`
 	}
-	if !decodeToolResult(raw, &payload) {
-		return ""
+	if decodeToolResult(raw, &payload) && strings.TrimSpace(payload.Content) != "" {
+		return payload.Content
 	}
-	return payload.Content
+	return summarizeGenericToolResult(raw)
 }
 
 func decodeToolResult(raw any, out any) bool {
@@ -1244,6 +1289,81 @@ func decodeToolResult(raw any, out any) bool {
 		return false
 	}
 	return true
+}
+
+func extractToolResultCallID(raw any) string {
+	var payload map[string]any
+	if !decodeToolResult(raw, &payload) {
+		return ""
+	}
+	for _, key := range []string{"parent_tool_use_id", "tool_use_id", "toolUseId", "id"} {
+		if value, ok := payload[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func summarizeUserToolResultMessage(msg claudeagent.UserMessage) string {
+	for _, block := range msg.Message.Content {
+		if strings.TrimSpace(block.Text) == "" {
+			continue
+		}
+		if block.Type == "tool_result" || len(msg.Message.Content) == 1 {
+			if text := summarizeGenericToolResult(block.Text); strings.TrimSpace(text) != "" {
+				return text
+			}
+			return block.Text
+		}
+	}
+	return ""
+}
+
+func summarizeGenericToolResult(raw any) string {
+	var payload any
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return ""
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		if text, ok := raw.(string); ok {
+			return strings.TrimSpace(text)
+		}
+		return ""
+	}
+	return summarizeGenericToolResultValue(payload)
+}
+
+func summarizeGenericToolResultValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return ""
+		}
+		var nested any
+		if err := json.Unmarshal([]byte(trimmed), &nested); err == nil {
+			if text := summarizeGenericToolResultValue(nested); text != "" {
+				return text
+			}
+		}
+		return v
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			if text := summarizeGenericToolResultValue(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	case map[string]any:
+		for _, key := range []string{"stdout", "stderr", "output", "content", "text", "error"} {
+			if text := summarizeGenericToolResultValue(v[key]); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
 }
 
 func (s *session) emitMessageChunk(content string) {
@@ -1362,6 +1482,18 @@ func (s *session) enqueueTurn(waiter chan error) {
 	s.turnMu.Unlock()
 }
 
+func (s *session) markTurnInterrupted() {
+	s.turnMu.Lock()
+	s.turnInterrupted = true
+	s.turnMu.Unlock()
+}
+
+func (s *session) consumeTurnInterruptedLocked() bool {
+	interrupted := s.turnInterrupted
+	s.turnInterrupted = false
+	return interrupted
+}
+
 func (s *session) dequeueTurn(waiter chan error) {
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
@@ -1370,12 +1502,16 @@ func (s *session) dequeueTurn(waiter chan error) {
 			continue
 		}
 		s.turns = append(s.turns[:i], s.turns[i+1:]...)
+		if len(s.turns) == 0 {
+			s.turnInterrupted = false
+		}
 		return
 	}
 }
 
 func (s *session) completeTurn(err error) {
 	s.turnMu.Lock()
+	interrupted := s.consumeTurnInterruptedLocked()
 	if len(s.turns) == 0 {
 		s.turnMu.Unlock()
 		return
@@ -1384,6 +1520,9 @@ func (s *session) completeTurn(err error) {
 	s.turns = s.turns[1:]
 	s.turnMu.Unlock()
 
+	if interrupted && err != nil {
+		err = errors.New("turn canceled")
+	}
 	waiter <- err
 }
 
@@ -1391,6 +1530,7 @@ func (s *session) failPendingTurns(err error) {
 	s.turnMu.Lock()
 	pending := s.turns
 	s.turns = nil
+	s.turnInterrupted = false
 	s.turnMu.Unlock()
 	for _, ch := range pending {
 		ch <- err
@@ -1413,6 +1553,14 @@ func resultErr(msg claudeagent.ResultMessage) error {
 		return errors.New("claude result: " + msg.Subtype)
 	}
 	return errors.New("claude turn failed")
+}
+
+func isTurnCanceledError(err error) bool {
+	if err == nil {
+		return false
+	}
+	value := strings.ToLower(strings.TrimSpace(err.Error()))
+	return value == "turn canceled" || value == "turn cancelled" || strings.Contains(value, "context canceled")
 }
 
 func contextTokensFromPartialEvent(raw json.RawMessage) int {

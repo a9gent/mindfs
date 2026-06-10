@@ -63,8 +63,12 @@ func TestCredentialsStoreSaveLoad(t *testing.T) {
 		t.Fatalf("Load() = %+v, want %+v", got.Relay, input.Relay)
 	}
 
-	if _, err := os.Stat(store.filePath); err != nil {
+	info, err := os.Stat(store.filePath)
+	if err != nil {
 		t.Fatalf("credentials file missing: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("credentials file mode = %o, want 0600", info.Mode().Perm())
 	}
 }
 

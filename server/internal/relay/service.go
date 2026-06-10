@@ -303,6 +303,7 @@ func (s *Service) proxyWebSocket(req *http.Request, stream io.ReadWriter) error 
 	headers.Del("Sec-WebSocket-Key")
 	headers.Del("Sec-WebSocket-Version")
 	headers.Del("Sec-WebSocket-Extensions")
+	headers.Del("Origin")
 
 	dialer := *websocket.DefaultDialer
 	if s.useTLS {

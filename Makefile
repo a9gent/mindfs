@@ -1,4 +1,4 @@
-.PHONY: help dev dev-backend dev-web build-web build build-android build-harmony install uninstall build-all start start-server test dist-clean publish-release-notes release tag
+.PHONY: help dev dev-backend dev-web build-web build build-android build-harmony install uninstall build-all start start-server test dist-clean publish-release-notes verify-release release tag
 
 GO ?= go
 NPM ?= npm
@@ -28,6 +28,7 @@ help:
 		"  make test         # run Go tests" \
 		"  make tag TAG=v1.2.3  # create and push a git tag" \
 		"  make publish-release-notes TAG=v1.2.3  # commit and push release-notes.md if changed" \
+		"  make verify-release TAG=v1.2.3  # verify signed release manifest and artifacts in $(DIST_DIR)" \
 		"  make release TAG=v1.2.3  # publish notes, build-all, then create GitHub release" \
 		"  make release TAG=v1.2.3 RELEASE_ANDROID=1  # include Android APK"
 
@@ -89,7 +90,7 @@ ANDROID_GRADLE_ENV :=
 ifneq ($(strip $(ANDROID_JAVA_HOME)),)
 ANDROID_GRADLE_ENV := JAVA_HOME="$(ANDROID_JAVA_HOME)"
 endif
-RELEASE_ARTIFACTS := $(DIST_DIR)/mindfs_$(TAG)_*.tar.gz $(DIST_DIR)/mindfs_$(TAG)_*.zip
+RELEASE_ARTIFACTS := $(DIST_DIR)/mindfs_$(TAG)_*.tar.gz $(DIST_DIR)/mindfs_$(TAG)_*.zip $(DIST_DIR)/mindfs_$(TAG)_manifest.json
 ifeq ($(RELEASE_ANDROID),1)
 RELEASE_ARTIFACTS += $(DIST_DIR)/mindfs_$(TAG)_android.apk
 endif
@@ -151,23 +152,36 @@ publish-release-notes:
 		git push origin main; \
 	fi
 
+# Usage: make verify-release TAG=v1.2.3
+verify-release:
+	@test -n "$(TAG)" || (echo "Usage: make verify-release TAG=v1.2.3" >&2; exit 1)
+	@test -n "$(MINDFS_RELEASE_PUBLIC_KEY)" || (echo "Error: MINDFS_RELEASE_PUBLIC_KEY is required to verify release manifests." >&2; exit 1)
+	@$(GO) run scripts/sign-release-manifest.go -verify -version "$(TAG)" -dist "$(DIST_DIR)" -repo "a9gent/mindfs" -public-key "$(MINDFS_RELEASE_PUBLIC_KEY)"
+
 # Usage: make release TAG=v1.2.3 [RELEASE_ANDROID=1]
 # Builds desktop/server platforms and creates a GitHub release.
 release:
 	@command -v gh >/dev/null 2>&1 || (echo "Error: gh (GitHub CLI) is required. https://cli.github.com" >&2; exit 1)
 	@test -n "$(TAG)" || (echo "Usage: make release TAG=v1.2.3 [RELEASE_ANDROID=1]" >&2; exit 1)
 	@test -f "$(RELEASE_NOTES_FILE)" || (echo "Error: release notes file not found: $(RELEASE_NOTES_FILE)" >&2; exit 1)
+	@test -n "$(MINDFS_RELEASE_PUBLIC_KEY)" || (echo "Error: MINDFS_RELEASE_PUBLIC_KEY is required for signed auto-update builds." >&2; exit 1)
+	@if [ -z "$$MINDFS_RELEASE_PRIVATE_KEY" ] && [ -z "$$MINDFS_RELEASE_PRIVATE_KEY_FILE" ]; then \
+		echo "Error: MINDFS_RELEASE_PRIVATE_KEY or MINDFS_RELEASE_PRIVATE_KEY_FILE is required to sign release manifests." >&2; \
+		exit 1; \
+	fi
 	@version="$$(sed -nE '1s/^#[[:space:]]+MindFS[[:space:]]+(v?[0-9]+(\.[0-9]+){1,3}[^[:space:]]*).*$$/\1/p' "$(RELEASE_NOTES_FILE)")"; \
 		test "$$version" = "$(TAG)" || (echo "Error: $(RELEASE_NOTES_FILE) first line version '$$version' does not match TAG '$(TAG)'." >&2; exit 1)
 	$(MAKE) dist-clean
 	mkdir -p "$(DIST_DIR)"
 	@awk 'NR > 1 && /^# MindFS[[:space:]]+/ { exit } { print }' "$(RELEASE_NOTES_FILE)" > "$(RELEASE_NOTES_LATEST_FILE)"
-	$(MAKE) build-all VERSION="$(TAG)"
+	MINDFS_RELEASE_PUBLIC_KEY="$(MINDFS_RELEASE_PUBLIC_KEY)" $(MAKE) build-all VERSION="$(TAG)"
 	@if [ "$(RELEASE_ANDROID)" = "1" ]; then \
 		$(MAKE) build-android VERSION="$(TAG)"; \
 	else \
 		echo "Skipping Android release. Use RELEASE_ANDROID=1 to include the APK."; \
 	fi
+	@$(GO) run scripts/sign-release-manifest.go -version "$(TAG)" -dist "$(DIST_DIR)" -repo "a9gent/mindfs"
+	$(MAKE) verify-release TAG="$(TAG)" MINDFS_RELEASE_PUBLIC_KEY="$(MINDFS_RELEASE_PUBLIC_KEY)"
 	@echo "Creating draft GitHub release $(TAG)"
 	gh release create $(TAG) \
 		--draft \

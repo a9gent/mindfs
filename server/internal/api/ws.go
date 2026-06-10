@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -24,9 +25,11 @@ import (
 const (
 	wsPingInterval = 30 * time.Second
 	wsPongWait     = 2 * time.Minute
+	wsProofQuery   = "e2ee_proof"
+	wsTSQuery      = "e2ee_ts"
 )
 
-var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+var upgrader = websocket.Upgrader{}
 
 // WSHandler manages JSON-RPC over WebSocket.
 type WSHandler struct {
@@ -43,6 +46,20 @@ type WSHandler struct {
 type StreamEvent struct {
 	Type string `json:"type"`
 	Data any    `json:"data,omitempty"`
+}
+
+type sessionMessageJob struct {
+	RootID          string
+	Key             string
+	RequestID       string
+	SessionType     string
+	SessionName     string
+	Shell           string
+	TerminalCols    int
+	User            PendingUserMessage
+	ClientCtx       usecase.ClientContext
+	ExcludeClientID string
+	Queued          bool
 }
 
 // ServeHTTP upgrades the connection and processes JSON-RPC messages.
@@ -76,6 +93,10 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	clientID := strings.TrimSpace(r.URL.Query().Get("client_id"))
 	if clientID == "" {
 		http.Error(w, "client_id required", http.StatusBadRequest)
+		return
+	}
+	if err := h.requireWSProof(r, clientID); err != nil {
+		respondError(w, http.StatusUnauthorized, err)
 		return
 	}
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -155,6 +176,61 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		h.handleWSRequest(r.Context(), conn, clientID, req)
 	}
+}
+
+func (h *WSHandler) requireWSProof(r *http.Request, clientID string) error {
+	if h == nil || h.AppContext == nil {
+		return nil
+	}
+	manager := h.AppContext.GetE2EEManager()
+	if manager == nil || !manager.Enabled() {
+		return nil
+	}
+	ts := strings.TrimSpace(r.URL.Query().Get(wsTSQuery))
+	proof := strings.TrimSpace(r.URL.Query().Get(wsProofQuery))
+	if clientID == "" || ts == "" || proof == "" {
+		return errInvalidRequest("e2ee_proof_required")
+	}
+	sess, err := manager.SessionForClient(clientID)
+	if err != nil {
+		return errInvalidRequest(err.Error())
+	}
+	timestamp, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return errInvalidRequest("invalid_e2ee_ts")
+	}
+	now := time.Now().UTC()
+	if timestamp.Before(now.Add(-requestProofMaxSkew)) || timestamp.After(now.Add(requestProofMaxSkew)) {
+		return errInvalidRequest("e2ee_proof_expired")
+	}
+	expected := e2ee.BuildRequestProof(sess.Key, r.Method, wsProofPath(r), ts, clientID)
+	if !e2ee.VerifyProof(expected, proof) {
+		return errInvalidRequest("e2ee_proof_invalid")
+	}
+	return nil
+}
+
+func wsProofPath(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return ""
+	}
+	next := *r.URL
+	query := cloneQuery(next.Query())
+	query.Del(wsTSQuery)
+	query.Del(wsProofQuery)
+	next.RawQuery = query.Encode()
+	if next.RawQuery == "" {
+		return next.Path
+	}
+	return next.Path + "?" + next.RawQuery
+}
+
+func cloneQuery(values url.Values) url.Values {
+	next := make(url.Values, len(values))
+	for key, value := range values {
+		next[key] = append([]string(nil), value...)
+	}
+	return next
 }
 
 func (h *WSHandler) broadcastFileChange(change fs.FileChangeEvent) {
@@ -314,6 +390,12 @@ func (h *WSHandler) handleWSRequest(ctx context.Context, conn *websocket.Conn, c
 		go h.handleSessionReady(clientID, req)
 	case "session.cancel":
 		h.handleSessionCancel(ctx, conn, clientID, req)
+	case "session.queue.remove":
+		h.handleSessionQueueRemove(ctx, conn, clientID, req)
+	case "session.queue.update":
+		h.handleSessionQueueUpdate(ctx, conn, clientID, req)
+	case "session.queue.send_now":
+		h.handleSessionQueueSendNow(ctx, conn, clientID, req)
 	default:
 		h.sendWSError(conn, clientID, req.ID, "method_not_found", "method not found")
 	}
@@ -437,23 +519,63 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 		streamHub.BindSessionClient(key, clientID)
 	}
 	clientCtx := parseClientContext(req.Payload, rootID)
+	userMessage := PendingUserMessage{
+		Agent:       agentName,
+		Model:       model,
+		Mode:        agentMode,
+		Effort:      effort,
+		FastService: fastService,
+		Content:     content,
+		Timestamp:   time.Now().UTC(),
+	}
+	job := sessionMessageJob{
+		RootID:          rootID,
+		Key:             key,
+		RequestID:       requestID,
+		SessionType:     sessionType,
+		SessionName:     sessionName,
+		Shell:           shell,
+		TerminalCols:    terminalCols,
+		User:            userMessage,
+		ClientCtx:       clientCtx,
+		ExcludeClientID: clientID,
+	}
+	if streamHub.IsSessionReplying(key) && sessionType != session.TypeCommand {
+		queue := streamHub.EnqueueSessionMessage(rootID, key, sessionName, QueuedUserMessage{
+			ID:                 requestID,
+			PendingUserMessage: userMessage,
+			ClientCtx:          clientCtx,
+		})
+		streamHub.BroadcastSessionQueueUpdated(rootID, key, queue)
+		log.Printf("[ws] session.queue.enqueue root=%s session=%s request=%s queue=%d", rootID, key, requestID, len(queue))
+		return
+	}
+	h.runSessionMessage(job)
+}
+
+func (h *WSHandler) runSessionMessage(job sessionMessageJob) {
+	rootID := job.RootID
+	key := job.Key
+	requestID := strings.TrimSpace(job.RequestID)
+	uc := &usecase.Service{Registry: h.AppContext}
+	streamHub := h.AppContext.GetSessionStreamHub()
 	msgCtx, cancel := h.sessionMessageContext()
 	defer cancel()
 
 	err := uc.SendMessage(msgCtx, usecase.SendMessageInput{
 		RootID:       rootID,
 		Key:          key,
-		Agent:        agentName,
-		Model:        model,
-		Mode:         agentMode,
-		Effort:       effort,
-		FastService:  fastService,
-		Shell:        shell,
-		TerminalCols: terminalCols,
-		Content:      content,
-		ClientCtx:    clientCtx,
+		Agent:        job.User.Agent,
+		Model:        job.User.Model,
+		Mode:         job.User.Mode,
+		Effort:       job.User.Effort,
+		FastService:  job.User.FastService,
+		Shell:        job.Shell,
+		TerminalCols: job.TerminalCols,
+		Content:      job.User.Content,
+		ClientCtx:    job.ClientCtx,
 		OnStart: func() {
-			streamHub.BroadcastSessionUserMessage(rootID, key, sessionType, sessionName, agentName, model, agentMode, effort, fastService, content, clientID)
+			streamHub.BroadcastSessionUserMessage(rootID, key, job.SessionType, job.SessionName, job.User.Agent, job.User.Model, job.User.Mode, job.User.Effort, job.User.FastService, job.User.Content, job.ExcludeClientID, job.Queued)
 		},
 		OnUpdate: func(update agenttypes.Event) {
 			event := updateToEvent(update)
@@ -481,7 +603,7 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 		},
 	})
 	if err != nil {
-		log.Printf("[ws] session.message.error root=%s session=%s request=%s err=%v", rootID, key, req.ID, err)
+		log.Printf("[ws] session.message.error root=%s session=%s request=%s err=%v", rootID, key, requestID, err)
 		errorMessage := normalizeAgentErrorMessage(err)
 		event := &StreamEvent{
 			Type: "error",
@@ -491,8 +613,40 @@ func (h *WSHandler) handleSessionMessage(ctx context.Context, conn *websocket.Co
 	}
 	streamHub.ClearSessionPending(key)
 
-	log.Printf("[ws] session.done root=%s session=%s request=%s", rootID, key, req.ID)
-	streamHub.BroadcastSessionDone(rootID, key, req.ID)
+	log.Printf("[ws] session.done root=%s session=%s request=%s", rootID, key, requestID)
+	streamHub.BroadcastSessionDone(rootID, key, requestID)
+	h.startNextQueuedSessionMessage(rootID, key)
+}
+
+func (h *WSHandler) startNextQueuedSessionMessage(rootID, key string) {
+	if h == nil || h.AppContext == nil || rootID == "" || key == "" {
+		return
+	}
+	streamHub := h.AppContext.GetSessionStreamHub()
+	item, queue, ok := streamHub.PopQueuedSessionMessage(key, "")
+	if !ok {
+		return
+	}
+	streamHub.BroadcastSessionQueueUpdated(rootID, key, queue)
+	sessionType := session.TypeChat
+	sessionName := ""
+	shell := ""
+	uc := &usecase.Service{Registry: h.AppContext}
+	if current, err := uc.GetSession(context.Background(), usecase.GetSessionInput{RootID: rootID, Key: key}); err == nil && current != nil {
+		sessionType = current.Type
+		sessionName = current.Name
+		shell = current.Shell
+	}
+	go h.runSessionMessage(sessionMessageJob{
+		RootID:      rootID,
+		Key:         key,
+		SessionType: sessionType,
+		SessionName: sessionName,
+		Shell:       shell,
+		User:        item.PendingUserMessage,
+		ClientCtx:   item.ClientCtx,
+		Queued:      true,
+	})
 }
 
 func (h *WSHandler) handleSessionReady(clientID string, req WSRequest) {
@@ -536,6 +690,68 @@ func (h *WSHandler) handleSessionCancel(ctx context.Context, conn *websocket.Con
 		log.Printf("[ws] session.cancel.error root=%s session=%s request=%s err=%v", rootID, key, req.ID, err)
 		h.sendWSError(conn, clientID, req.ID, "session.cancel_failed", err.Error())
 		return
+	}
+}
+
+func (h *WSHandler) handleSessionQueueRemove(_ context.Context, conn *websocket.Conn, clientID string, req WSRequest) {
+	rootID := getString(req.Payload, "root_id")
+	key := getString(req.Payload, "session_key")
+	queueID := strings.TrimSpace(getString(req.Payload, "queue_id"))
+	if rootID == "" || key == "" || queueID == "" {
+		h.sendWSError(conn, clientID, req.ID, "invalid_request", "root_id, session_key and queue_id required")
+		return
+	}
+	streamHub := h.AppContext.GetSessionStreamHub()
+	queue := streamHub.RemoveQueuedSessionMessage(key, queueID)
+	streamHub.BroadcastSessionQueueUpdated(rootID, key, queue)
+	if req.ID != "" {
+		h.sendWSAccepted(conn, clientID, req.ID, rootID, key)
+	}
+}
+
+func (h *WSHandler) handleSessionQueueUpdate(_ context.Context, conn *websocket.Conn, clientID string, req WSRequest) {
+	rootID := getString(req.Payload, "root_id")
+	key := getString(req.Payload, "session_key")
+	queueID := strings.TrimSpace(getString(req.Payload, "queue_id"))
+	content := getString(req.Payload, "content")
+	if rootID == "" || key == "" || queueID == "" || strings.TrimSpace(content) == "" {
+		h.sendWSError(conn, clientID, req.ID, "invalid_request", "root_id, session_key, queue_id and content required")
+		return
+	}
+	streamHub := h.AppContext.GetSessionStreamHub()
+	queue := streamHub.UpdateQueuedSessionMessage(key, queueID, content)
+	streamHub.BroadcastSessionQueueUpdated(rootID, key, queue)
+	if req.ID != "" {
+		h.sendWSAccepted(conn, clientID, req.ID, rootID, key)
+	}
+}
+
+func (h *WSHandler) handleSessionQueueSendNow(ctx context.Context, conn *websocket.Conn, clientID string, req WSRequest) {
+	rootID := getString(req.Payload, "root_id")
+	key := getString(req.Payload, "session_key")
+	queueID := strings.TrimSpace(getString(req.Payload, "queue_id"))
+	if rootID == "" || key == "" || queueID == "" {
+		h.sendWSError(conn, clientID, req.ID, "invalid_request", "root_id, session_key and queue_id required")
+		return
+	}
+	streamHub := h.AppContext.GetSessionStreamHub()
+	streamHub.BindSessionClient(key, clientID)
+	queue, ok := streamHub.PromoteQueuedSessionMessage(key, queueID)
+	if !ok {
+		h.sendWSError(conn, clientID, req.ID, "not_found", "queued message not found")
+		return
+	}
+	streamHub.BroadcastSessionQueueUpdated(rootID, key, queue)
+	if req.ID != "" {
+		h.sendWSAccepted(conn, clientID, req.ID, rootID, key)
+	}
+	if !streamHub.IsSessionReplying(key) {
+		h.startNextQueuedSessionMessage(rootID, key)
+		return
+	}
+	uc := &usecase.Service{Registry: h.AppContext}
+	if err := uc.CancelSessionTurn(ctx, usecase.CancelSessionTurnInput{RootID: rootID, Key: key}); err != nil {
+		log.Printf("[ws] session.queue.send_now.cancel.error root=%s session=%s request=%s err=%v", rootID, key, req.ID, err)
 	}
 }
 

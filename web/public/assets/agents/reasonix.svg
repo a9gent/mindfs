@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="124" height="124" viewBox="23 23 124 124" role="img" aria-label="Reasonix">
+  <title>Reasonix</title>
+  <defs>
+    <!-- Signature cyan → violet → fuchsia gradient used across the TUI wordmark
+         and the brand mark. Renders well on both GitHub dark and light bg. -->
+    <linearGradient id="rx-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#5eead4"/>
+      <stop offset="15%" stop-color="#67e8f9"/>
+      <stop offset="30%" stop-color="#7dd3fc"/>
+      <stop offset="45%" stop-color="#93c5fd"/>
+      <stop offset="60%" stop-color="#a5b4fc"/>
+      <stop offset="75%" stop-color="#c4b5fd"/>
+      <stop offset="90%" stop-color="#d8b4fe"/>
+      <stop offset="100%" stop-color="#f0abfc"/>
+    </linearGradient>
+    <linearGradient id="rx-grad-mark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5eead4"/>
+      <stop offset="50%" stop-color="#93c5fd"/>
+      <stop offset="100%" stop-color="#c4b5fd"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- ◈ brand mark: concentric diamonds. Outer stroke pulses,
+       inner fill breathes, whole group rotates slowly. The rotation
+       is subtle (12s / full turn) so it feels like a heartbeat, not a
+       spinner. -->
+  <g transform="translate(85, 85)" filter="url(#glow)">
+    <g>
+      <animateTransform attributeName="transform" type="rotate"
+                        from="0" to="360" dur="18s" repeatCount="indefinite"/>
+      <!-- Outer hollow diamond -->
+      <path d="M 0,-56 L 56,0 L 0,56 L -56,0 Z"
+            fill="none"
+            stroke="url(#rx-grad-mark)"
+            stroke-width="4.5"
+            stroke-linejoin="round">
+        <animate attributeName="stroke-width"
+                 values="4.5;6.5;4.5"
+                 dur="2.4s"
+                 repeatCount="indefinite"/>
+      </path>
+      <!-- Middle hollow diamond -->
+      <path d="M 0,-33 L 33,0 L 0,33 L -33,0 Z"
+            fill="none"
+            stroke="url(#rx-grad-mark)"
+            stroke-width="3"
+            stroke-linejoin="round"
+            opacity="0.7">
+        <animate attributeName="opacity"
+                 values="0.4;0.9;0.4"
+                 dur="2.4s"
+                 begin="0.8s"
+                 repeatCount="indefinite"/>
+      </path>
+      <!-- Inner solid diamond -->
+      <path d="M 0,-15 L 15,0 L 0,15 L -15,0 Z"
+            fill="url(#rx-grad-mark)">
+        <animate attributeName="opacity"
+                 values="0.75;1;0.75"
+                 dur="2.4s"
+                 repeatCount="indefinite"/>
+      </path>
+    </g>
+  </g>
+
+
+</svg>

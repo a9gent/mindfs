@@ -67,7 +67,10 @@ func (s *CredentialsStore) Save(creds Credentials) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.filePath, payload, 0o644)
+	if err := os.WriteFile(s.filePath, payload, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(s.filePath, 0o600)
 }
 
 func (s *CredentialsStore) Clear() error {

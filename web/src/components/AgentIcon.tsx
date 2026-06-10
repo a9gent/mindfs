@@ -23,6 +23,7 @@ const ICON_URLS: Record<string, { src: string; alt: string }> = {
   pi: { src: appPath('/assets/agents/pi.svg'), alt: 'Pi' },
   qoder: { src: appPath('/assets/agents/qoder.svg'), alt: 'Qoder' },
   qwen: { src: appPath('/assets/agents/qwen.svg'), alt: 'Qwen' },
+  reasonix: { src: appPath('/assets/agents/reasonix.svg'), alt: 'Reasonix' },
 };
 
 const iconCache = new Map<string, string>();
@@ -119,6 +120,8 @@ export function AgentIcon({ agentName, ...props }: AgentIconProps) {
     icon = ICON_URLS.qoder;
   } else if (lowerAgentName.includes('qwen')) {
     icon = ICON_URLS.qwen;
+  } else if (lowerAgentName.includes('reasonix')) {
+    icon = ICON_URLS.reasonix;
   } else if (lowerAgentName.includes('kiro')) {
     icon = ICON_URLS.kiro;
   } else if (lowerAgentName.includes('kimi')) {

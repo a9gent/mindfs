@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/preferences"
 	"mindfs/server/internal/relay"
+	"mindfs/server/internal/scheduled"
 	"mindfs/server/internal/tlsutil"
 	"mindfs/server/internal/update"
 )
@@ -103,6 +105,8 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 			PairingSecret: opts.E2EEConfig.PairingSecret,
 		}),
 	}
+	services.Scheduled = scheduled.NewService(services, services)
+	services.Scheduled.Start(ctx)
 	githubImportSvc, err := githubimport.NewService(services)
 	if err != nil {
 		return err
@@ -125,6 +129,16 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	localCLIToken, err := EnsureLocalCLIToken(addr)
+	if err != nil {
+		return err
+	}
+	httpHandler.LocalCLIToken = localCLIToken
 
 	relayMgr, err := relay.NewManager(addr, opts.NoRelayer, relayBaseURL, opts.UseTLS)
 	if err != nil {
@@ -149,9 +163,9 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	}
 
 	if opts.UseTLS {
-		return server.ListenAndServeTLS(opts.CertFile, opts.KeyFile)
+		return server.ServeTLS(listener, opts.CertFile, opts.KeyFile)
 	}
-	return server.ListenAndServe()
+	return server.Serve(listener)
 }
 
 func autoAddExternalProjectRoots(registry *fs.Registry) {
@@ -175,6 +189,9 @@ func autoAddExternalProjectRoots(registry *fs.Registry) {
 			continue
 		}
 		if hasMindFSMetadataDir(projectPath) {
+			continue
+		}
+		if agent.IsTemporaryWorkDir(projectPath) {
 			continue
 		}
 		if _, err := registry.Upsert(projectPath); err != nil {

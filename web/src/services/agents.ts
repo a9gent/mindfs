@@ -133,8 +133,8 @@ async function fetchAgentRuntime(force = false): Promise<{ agents: AgentStatus[]
 
   inFlightAgents = (async () => {
     const data = await protectedJSON<any>(appPath("/api/agents"));
-    const agentItems = Array.isArray(data) ? data : Array.isArray(data?.agents) ? data.agents : [];
-    const shellItems = Array.isArray(data?.shells) ? data.shells : [];
+    const agentItems: unknown[] = Array.isArray(data) ? data : Array.isArray(data?.agents) ? data.agents : [];
+    const shellItems: unknown[] = Array.isArray(data?.shells) ? data.shells : [];
     cachedAgents = agentItems
       ? agentItems.map(normalizeAgentStatus).filter((item): item is AgentStatus => item !== null)
       : [];
@@ -155,6 +155,14 @@ async function fetchAgentRuntime(force = false): Promise<{ agents: AgentStatus[]
 export async function fetchAgents(force = false): Promise<AgentStatus[]> {
   const data = await fetchAgentRuntime(force);
   return data.agents;
+}
+
+export async function restartAgent(agent: string): Promise<{ restarting: boolean; agent: string }> {
+  return protectedJSON<{ restarting: boolean; agent: string }>(appPath("/api/agents/restart"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent }),
+  });
 }
 
 export async function fetchShells(force = false): Promise<ShellStatus[]> {

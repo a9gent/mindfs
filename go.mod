@@ -11,6 +11,7 @@ require (
 	github.com/gorilla/websocket v1.5.1
 	github.com/hashicorp/yamux v0.1.2
 	github.com/roasbeef/claude-agent-sdk-go v0.0.0-20260423113330-380f586b1dc2
+	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.50.0
 	golang.org/x/sys v0.43.0
 	golang.org/x/text v0.36.0

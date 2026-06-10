@@ -60,14 +60,37 @@ func CompactExchangeAux(aux ExchangeAux) (ExchangeAux, bool) {
 }
 
 func CompactToolCall(toolCall agenttypes.ToolCall) agenttypes.ToolCall {
+	preserveContent := PreserveToolCallContent(toolCall.Kind)
 	switch {
-	case PreserveToolCallContent(toolCall.Kind):
+	case preserveContent:
 	case PreserveCommandExecutionContent(toolCall):
 		toolCall.Content = truncateToolCallContent(toolCall.Content, maxExecToolCallContentBytes)
 	default:
 		toolCall.Content = nil
 	}
+	if !preserveContent {
+		toolCall.Meta = compactToolCallMeta(toolCall.Meta)
+	}
 	return toolCall
+}
+
+func compactToolCallMeta(meta map[string]any) map[string]any {
+	if len(meta) == 0 {
+		return meta
+	}
+	out := make(map[string]any, len(meta))
+	for key, value := range meta {
+		switch key {
+		case "output":
+			continue
+		default:
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func PreserveToolCallContent(kind agenttypes.ToolKind) bool {

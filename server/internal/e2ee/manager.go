@@ -72,7 +72,7 @@ func (m *Manager) OpenSessionForClient(clientID string, key DerivedKey) (*Sessio
 	}
 	m.mu.Lock()
 	if previousID := m.clientIDs[clientID]; previousID != "" {
-		delete(m.sessions, previousID)
+		m.removeSessionLocked(previousID)
 	}
 	m.sessions[sess.ID] = sess
 	m.clientIDs[clientID] = sess.ID
@@ -96,7 +96,7 @@ func (m *Manager) SessionForClient(clientID string) (*Session, error) {
 		return nil, errors.New("e2ee_session_missing")
 	}
 	if expiredLocked(sess) {
-		delete(m.sessions, sessionID)
+		m.removeSessionLocked(sessionID)
 		delete(m.clientIDs, clientID)
 		return nil, errors.New("e2ee_session_expired")
 	}
@@ -112,7 +112,7 @@ func (m *Manager) CleanupExpired() {
 	defer m.mu.Unlock()
 	for id, sess := range m.sessions {
 		if expiredLocked(sess) {
-			delete(m.sessions, id)
+			m.removeSessionLocked(id)
 			m.clearClientBindingLocked(id)
 		}
 	}
@@ -148,6 +148,21 @@ func (m *Manager) clearClientBindingLocked(sessionID string) {
 		if current == sessionID {
 			delete(m.clientIDs, clientID)
 		}
+	}
+}
+
+func (m *Manager) removeSessionLocked(sessionID string) {
+	sess := m.sessions[sessionID]
+	if sess != nil {
+		zeroBytes(sess.Key)
+		sess.Key = nil
+	}
+	delete(m.sessions, sessionID)
+}
+
+func zeroBytes(value []byte) {
+	for i := range value {
+		value[i] = 0
 	}
 }
 

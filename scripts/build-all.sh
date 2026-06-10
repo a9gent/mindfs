@@ -21,6 +21,11 @@ echo "==> Building mindfs ${VERSION}"
 echo "    Output: ${DIST_DIR}/"
 echo
 
+LDFLAGS="-s -w -X main.version=${VERSION}"
+if [[ -n "${MINDFS_RELEASE_PUBLIC_KEY:-}" ]]; then
+  LDFLAGS="${LDFLAGS} -X mindfs/server/internal/update.releaseManifestPublicKey=${MINDFS_RELEASE_PUBLIC_KEY}"
+fi
+
 built_dirs=()
 for PLATFORM in "${PLATFORMS[@]}"; do
   GOOS="${PLATFORM%%/*}"
@@ -48,7 +53,7 @@ for PLATFORM in "${PLATFORMS[@]}"; do
     GOARM="$GOARM" \
     go build \
       -trimpath \
-      -ldflags "-s -w -X main.version=${VERSION}" \
+      -ldflags "${LDFLAGS}" \
       -o "${ROOT}/${TARGET}" \
       ./cli/cmd
 
@@ -63,15 +68,16 @@ done
 
 # Produce archives
 cd "${ROOT}/${DIST_DIR}"
+export COPYFILE_DISABLE=1
 for DIR in "${built_dirs[@]}"; do
   GOOS="$(echo "$DIR" | cut -d_ -f3)"
   if [[ "$GOOS" == "windows" ]]; then
     rm -f "${DIR}.zip"
-    zip -qr "${DIR}.zip" "$DIR"
+    zip -Xqr "${DIR}.zip" "$DIR"
     echo "  Archived: ${DIST_DIR}/${DIR}.zip"
   else
     rm -f "${DIR}.tar.gz"
-    tar czf "${DIR}.tar.gz" "$DIR"
+    tar --no-xattrs -czf "${DIR}.tar.gz" "$DIR"
     echo "  Archived: ${DIST_DIR}/${DIR}.tar.gz"
   fi
 done

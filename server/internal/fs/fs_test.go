@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -263,5 +264,30 @@ func TestRootInfoReadFileDecodesGB18030CodeFile(t *testing.T) {
 	}
 	if got.Content != source {
 		t.Fatalf("ReadFile content = %q, want %q", got.Content, source)
+	}
+}
+
+func TestRootInfoReadFileFullRejectsFilesLargerThanLimit(t *testing.T) {
+	rootDir := t.TempDir()
+	path := filepath.Join(rootDir, "large.txt")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if err := file.Truncate(maxFullReadBytes + 1); err != nil {
+		file.Close()
+		t.Fatalf("Truncate returned error: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	root := NewRootInfo("mindfs", "mindfs", rootDir)
+	_, err = root.ReadFile("large.txt", 0, 0, "full")
+	if err == nil {
+		t.Fatal("expected full read of large file to fail")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("ReadFile error = %v, want too large", err)
 	}
 }

@@ -46,6 +46,10 @@ type agentConfigSwitchRequest struct {
 	ConfirmOverwrite bool   `json:"confirm_overwrite"`
 }
 
+type agentRestartRequest struct {
+	Agent string `json:"agent"`
+}
+
 var agentConfigNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 func (h *HTTPHandler) handleAgentConfigDefaults(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +149,22 @@ func (h *HTTPHandler) handleAgentConfigSwitch(w http.ResponseWriter, r *http.Req
 	respondJSON(w, http.StatusOK, map[string]any{
 		"needs_confirm": false,
 		"backup":        entry,
+	})
+}
+
+func (h *HTTPHandler) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
+	var req agentRestartRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
+		return
+	}
+	if err := restartAgent(req.Agent, h.AppContext); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest(err.Error()))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"restarting": true,
+		"agent":      strings.TrimSpace(req.Agent),
 	})
 }
 
@@ -375,6 +395,22 @@ func switchAgentConfig(req agentConfigSwitchRequest, app *AppContext) (agentConf
 	}
 	triggerAgentConfigSwitchProbe(app, entry.Agent)
 	return entry, false, nil
+}
+
+func restartAgent(agentName string, app *AppContext) error {
+	agentName = strings.TrimSpace(agentName)
+	if agentName == "" {
+		return errors.New("agent required")
+	}
+	if app == nil || app.GetAgentPool() == nil {
+		return errors.New("agent pool not configured")
+	}
+	if _, ok := app.GetAgentPool().Config().GetAgent(agentName); !ok {
+		return fmt.Errorf("agent not configured: %s", agentName)
+	}
+	app.GetAgentPool().KillAgentProcess(agentName, 0)
+	triggerAgentConfigSwitchProbe(app, agentName)
+	return nil
 }
 
 func triggerAgentConfigSwitchProbe(app *AppContext, agentName string) {

@@ -16,6 +16,7 @@ import {
   type SyncSessionResult,
   type RelatedFile,
   type Session,
+  type QueuedUserMessage,
 } from "./services/session";
 import { buildClientContext } from "./services/context";
 import { e2eeService, type E2EEState } from "./services/e2ee";
@@ -94,6 +95,7 @@ import { AgentMenuList } from "./components/AgentMenuList";
 import { ActionBar } from "./components/ActionBar";
 import { ToastContainer } from "./components/Toast";
 import { BottomSheet } from "./components/BottomSheet";
+import { ScheduledAgentTaskDialog } from "./components/ScheduledAgentTaskDialog";
 import {
   type GitHubImportState,
   type LocalDirBrowserState,
@@ -104,6 +106,7 @@ import { fetchAgents, type AgentStatus } from "./services/agents";
 
 // 类型定义
 type SessionMode = "chat" | "plugin" | "command";
+type WSStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
 function normalizeFastService(
   value: unknown,
@@ -285,6 +288,7 @@ type PendingSend = {
   sessionKey?: string;
   tempKey?: string;
 };
+type SessionQueueItem = QueuedUserMessage;
 type ViewerSelection = {
   filePath: string;
   text?: string;
@@ -990,6 +994,8 @@ export function App({ onGoHome }: AppProps) {
   const pendingDraftRef = useRef<PendingSend | null>(null);
   const pendingBySessionRef = useRef<Record<string, PendingSend>>({});
   const pendingRequestRef = useRef<Record<string, PendingSend>>({});
+  const queuedMessagesBySessionRef = useRef<Record<string, SessionQueueItem[]>>({});
+  const optimisticDequeuedIdsRef = useRef<Record<string, Set<string>>>({});
   const cancelRequestedBySessionRef = useRef<Record<string, boolean>>({});
   const sessionCacheRef = useRef<Record<string, Session>>({});
   const loadedSessionRef = useRef<Record<string, boolean>>({});
@@ -1039,6 +1045,7 @@ export function App({ onGoHome }: AppProps) {
   const [sessionListMode, setSessionListMode] = useState<"local" | "import">(
     "local",
   );
+  const sessionListModeRef = useRef<"local" | "import">("local");
   const [externalSessions, setExternalSessions] = useState<SessionItem[]>([]);
   const externalSessionsRef = useRef<SessionItem[]>([]);
   const [hasMoreExternalSessions, setHasMoreExternalSessions] = useState(false);
@@ -1047,6 +1054,7 @@ export function App({ onGoHome }: AppProps) {
   const [loadingExternalSessions, setLoadingExternalSessions] = useState(false);
   const [externalSelectedKey, setExternalSelectedKey] = useState("");
   const [externalImportAgent, setExternalImportAgent] = useState("");
+  const externalImportAgentRef = useRef("");
   const [externalFilterBound, setExternalFilterBound] = useState(true);
   const [selectedExternalImportKeys, setSelectedExternalImportKeys] = useState<
     Set<string>
@@ -1061,6 +1069,7 @@ export function App({ onGoHome }: AppProps) {
   const worktreeCreatePopoverRef = useRef<HTMLDivElement | null>(null);
   const worktreeSwitchPopoverRef = useRef<HTMLDivElement | null>(null);
   const [availableAgents, setAvailableAgents] = useState<AgentStatus[]>([]);
+  const [scheduledAgentDialogOpen, setScheduledAgentDialogOpen] = useState(false);
   const [selectedSession, setSelectedSession] = useState<SessionItem | null>(
     null,
   );
@@ -1070,6 +1079,7 @@ export function App({ onGoHome }: AppProps) {
   >(null);
   const [currentSession, setCurrentSession] = useState<SessionItem | null>(null);
   const [cacheVersion, setCacheVersion] = useState(0);
+  const [queueVersion, setQueueVersion] = useState(0);
   const [interactionMode, setInteractionMode] = useState<"main" | "drawer">(
     "main",
   );
@@ -1208,7 +1218,7 @@ export function App({ onGoHome }: AppProps) {
       return {};
     }
   });
-  const [status, setStatus] = useState("Disconnected");
+  const [status, setStatus] = useState<WSStatus>("disconnected");
   const [file, setFile] = useState<FilePayload | null>(null);
   const [viewerSelection, setViewerSelection] =
     useState<ViewerSelection | null>(null);
@@ -1437,6 +1447,7 @@ export function App({ onGoHome }: AppProps) {
     sessionsRef.current = sessions;
   }, [sessions]);
   useEffect(() => {
+    sessionListModeRef.current = sessionListMode;
     if (sessionListMode !== "local") {
       setSessionSearchOpen(false);
       setSessionSearchResultsMode(false);
@@ -1456,6 +1467,9 @@ export function App({ onGoHome }: AppProps) {
   useEffect(() => {
     externalSessionsRef.current = externalSessions;
   }, [externalSessions]);
+  useEffect(() => {
+    externalImportAgentRef.current = externalImportAgent;
+  }, [externalImportAgent]);
   useEffect(() => {
     currentSessionRef.current = currentSession;
   }, [currentSession]);
@@ -1821,6 +1835,46 @@ export function App({ onGoHome }: AppProps) {
     [rootSessionKey],
   );
 
+  const clearLocalPendingForSession = useCallback(
+    (rootID: string | null | undefined, sessionKey: string | null | undefined) => {
+      const resolvedRoot = String(rootID || "");
+      const resolvedKey = String(sessionKey || "");
+      if (!resolvedRoot || !resolvedKey) {
+        return;
+      }
+      const cacheKey = rootSessionKey(resolvedRoot, resolvedKey);
+      delete pendingBySessionRef.current[cacheKey];
+      const cached = sessionCacheRef.current[cacheKey];
+      if (cached && (cached.key || (cached as any).session_key) === resolvedKey) {
+        sessionCacheRef.current[cacheKey] = {
+          ...(cached as any),
+          pending: false,
+        } as Session;
+      }
+      setSelectedSession((prev) => {
+        const prevKey = prev?.key || prev?.session_key;
+        const prevRoot =
+          (prev?.root_id as string | undefined) || currentRootIdRef.current;
+        if (!prev || prevKey !== resolvedKey || prevRoot !== resolvedRoot) {
+          return prev;
+        }
+        return {
+          ...(prev as any),
+          pending: false,
+        } as SessionItem;
+      });
+      const drawer = drawerSessionByRootRef.current[resolvedRoot];
+      if (drawer && (drawer.key || (drawer as any).session_key) === resolvedKey) {
+        setDrawerSessionForRoot(resolvedRoot, {
+          ...(drawer as any),
+          pending: false,
+        } as Session);
+      }
+      bumpCacheVersion();
+    },
+    [bumpCacheVersion, rootSessionKey, setDrawerSessionForRoot],
+  );
+
   const markSessionStale = useCallback(
     (rootID: string | null | undefined, sessionKey: string | null | undefined) => {
       const resolvedRoot = String(rootID || "");
@@ -1882,11 +1936,17 @@ export function App({ onGoHome }: AppProps) {
       if (!fullSession) {
         return null;
       }
-      const pending = resolvePendingForSession(
-        resolvedRoot,
-        resolvedKey,
-        !!(fullSession as any)?.pending,
-      );
+      const serverPending =
+        typeof (fullSession as any)?.pending === "boolean"
+          ? !!(fullSession as any).pending
+          : undefined;
+      if (serverPending === false) {
+        clearLocalPendingForSession(resolvedRoot, resolvedKey);
+      }
+      const pending =
+        serverPending === false
+          ? false
+          : resolvePendingForSession(resolvedRoot, resolvedKey, !!serverPending);
       sessionCacheRef.current[cacheKey] = {
         ...(fullSession as any),
         key: resolvedKey,
@@ -1900,7 +1960,7 @@ export function App({ onGoHome }: AppProps) {
         pending,
       } as Session;
     },
-    [bumpCacheVersion, resolvePendingForSession, rootSessionKey],
+    [bumpCacheVersion, clearLocalPendingForSession, resolvePendingForSession, rootSessionKey],
   );
 
   const updateSessionRelatedFilesForKey = useCallback(
@@ -3594,6 +3654,25 @@ export function App({ onGoHome }: AppProps) {
     });
   }, []);
 
+  const toggleAllExternalImportSelection = useCallback((checked: boolean) => {
+    const visibleKeys = externalSessionsRef.current
+      .map((session) =>
+        String(session.agent_session_id || session.key || "").trim(),
+      )
+      .filter(Boolean);
+    setSelectedExternalImportKeys((current) => {
+      const next = new Set(current);
+      visibleKeys.forEach((key) => {
+        if (checked) {
+          next.add(key);
+        } else {
+          next.delete(key);
+        }
+      });
+      return next;
+    });
+  }, []);
+
   const handleConfirmExternalImport = useCallback(async () => {
     const rootID = currentRootIdRef.current || "";
     const sessionKeys = [...selectedExternalImportKeys].filter(Boolean);
@@ -3619,6 +3698,8 @@ export function App({ onGoHome }: AppProps) {
         reportError("session.import_failed", "导入会话失败");
         return;
       }
+      setConfirmingExternalImport(false);
+      setImportingExternalSessionKeys(new Set());
       const failedKeys = new Set(
         results
           .filter((item) => !item.success)
@@ -3681,13 +3762,6 @@ export function App({ onGoHome }: AppProps) {
     ) => {
       const activeRoot = currentRootIdRef.current;
       if (!activeRoot) return;
-      if (
-        Object.values(pendingRequestRef.current).some(
-          (pending) => pending.rootId === activeRoot,
-        )
-      ) {
-        return;
-      }
       const selected = selectedSessionRef.current;
       const selectedKey = selected?.key || selected?.session_key;
       const selectedRoot =
@@ -3735,6 +3809,12 @@ export function App({ onGoHome }: AppProps) {
         effectiveEffort = effort || "",
         effectiveFastService = (fastService || "") as "" | "on" | "off",
         effectiveShell = shell || "";
+      const isQueueSend =
+        !!sendSessionKey &&
+        !!session &&
+        (((session as any).pending === true) ||
+          (currentSessionRef.current?.key === sendSessionKey &&
+            currentSessionRef.current?.pending === true));
       if (sendSessionKey && session) {
         const targetSessionKey = sendSessionKey;
         const previousAgent = session.agent || "";
@@ -3786,11 +3866,13 @@ export function App({ onGoHome }: AppProps) {
           shell: effectiveShell,
         } as Session;
         setBoundSessionForRoot(activeRoot, targetSessionKey);
-        setSelectedPendingByKey(targetSessionKey, true);
-        setDrawerSessionForRoot(activeRoot, {
-          ...(session as any),
-          pending: true,
-        } as Session);
+        if (!isQueueSend) {
+          setSelectedPendingByKey(targetSessionKey, true);
+          setDrawerSessionForRoot(activeRoot, {
+            ...(session as any),
+            pending: true,
+          } as Session);
+        }
       } else {
         sendSessionKey = undefined;
         const tempKey = `pending-${Date.now()}`;
@@ -3837,7 +3919,7 @@ export function App({ onGoHome }: AppProps) {
         sessionKey: sendSessionKey || undefined,
         tempKey,
       };
-      if (sendSessionKey) {
+      if (sendSessionKey && !isQueueSend) {
         const ck = rootSessionKey(activeRoot, sendSessionKey);
         const cached =
           sessionCacheRef.current[ck] || ({ ...(session as any) } as Session);
@@ -3855,7 +3937,7 @@ export function App({ onGoHome }: AppProps) {
         } as Session;
         session = sessionCacheRef.current[ck];
         bumpCacheVersion();
-      } else {
+      } else if (!sendSessionKey) {
         const tempSessionKey = session?.key || "";
         pendingDraftRef.current = {
           rootId: activeRoot,
@@ -3891,10 +3973,12 @@ export function App({ onGoHome }: AppProps) {
         setInteractionMode("drawer");
         setDrawerOpenForRoot(activeRoot, true);
       }
-      setDrawerSessionForRoot(activeRoot, {
-        ...(session as any),
-        pending: true,
-      } as Session);
+      if (!isQueueSend) {
+        setDrawerSessionForRoot(activeRoot, {
+          ...(session as any),
+          pending: true,
+        } as Session);
+      }
       const explicitFileContext = hasExplicitFileContext(message);
       const selection =
         explicitFileContext || !attachedFileContext?.filePath
@@ -3989,6 +4073,78 @@ export function App({ onGoHome }: AppProps) {
       }
     },
     [rootSessionKey],
+  );
+
+  const markSessionPending = useCallback(
+    (rootID: string, sessionKey: string) => {
+      if (!rootID || !sessionKey) return;
+      const now = new Date().toISOString();
+      const cacheKey = rootSessionKey(rootID, sessionKey);
+      const cached = sessionCacheRef.current[cacheKey];
+      if (cached) {
+        sessionCacheRef.current[cacheKey] = {
+          ...(cached as any),
+          pending: true,
+          updated_at: now,
+        } as Session;
+        bumpCacheVersion();
+      }
+      setSelectedPendingByKey(sessionKey, true);
+      const drawer = drawerSessionByRootRef.current[rootID];
+      if (drawer && (drawer.key || (drawer as any).session_key) === sessionKey) {
+        setDrawerSessionForRoot(rootID, {
+          ...(drawer as any),
+          pending: true,
+          updated_at: now,
+        } as Session);
+      }
+    },
+    [bumpCacheVersion, rootSessionKey, setDrawerSessionForRoot, setSelectedPendingByKey],
+  );
+
+  const handleRemoveQueuedMessage = useCallback(
+    async (queueId: string) => {
+      const activeRoot = currentRootIdRef.current;
+      const sessionKey = boundSessionByRootRef.current[activeRoot || ""] || "";
+      if (!activeRoot || !sessionKey || !queueId) return;
+      await sessionService.removeQueuedMessage(activeRoot, sessionKey, queueId);
+    },
+    [],
+  );
+
+  const handleUpdateQueuedMessage = useCallback(
+    async (queueId: string, content: string) => {
+      const activeRoot = currentRootIdRef.current;
+      const sessionKey = boundSessionByRootRef.current[activeRoot || ""] || "";
+      if (!activeRoot || !sessionKey || !queueId || !content.trim()) return;
+      await sessionService.updateQueuedMessage(activeRoot, sessionKey, queueId, content);
+    },
+    [],
+  );
+
+  const handleSendQueuedMessageNow = useCallback(
+    async (queueId: string) => {
+      const activeRoot = currentRootIdRef.current;
+      const sessionKey = boundSessionByRootRef.current[activeRoot || ""] || "";
+      if (!activeRoot || !sessionKey || !queueId) return;
+      const cacheKey = rootSessionKey(activeRoot, sessionKey);
+      const previousQueue = queuedMessagesBySessionRef.current[cacheKey] || [];
+      const nextQueue = previousQueue.filter((item) => item.id !== queueId);
+      queuedMessagesBySessionRef.current[cacheKey] = nextQueue;
+      if (!optimisticDequeuedIdsRef.current[cacheKey]) {
+        optimisticDequeuedIdsRef.current[cacheKey] = new Set();
+      }
+      optimisticDequeuedIdsRef.current[cacheKey].add(queueId);
+      setQueueVersion((v) => v + 1);
+      markSessionPending(activeRoot, sessionKey);
+      const sent = await sessionService.sendQueuedMessageNow(activeRoot, sessionKey, queueId);
+      if (!sent) {
+        optimisticDequeuedIdsRef.current[cacheKey]?.delete(queueId);
+        queuedMessagesBySessionRef.current[cacheKey] = previousQueue;
+        setQueueVersion((v) => v + 1);
+      }
+    },
+    [markSessionPending, rootSessionKey],
   );
 
   const handleNewSession = useCallback(() => {
@@ -5693,7 +5849,6 @@ export function App({ onGoHome }: AppProps) {
   useEffect(() => {
     if (!currentRootId) return;
     sessionService.connect(currentRootId);
-    setStatus("Connected");
   }, [currentRootId]);
 
   useEffect(() => {
@@ -5712,7 +5867,7 @@ export function App({ onGoHome }: AppProps) {
   useEffect(
     () => () => {
       sessionService.disconnect();
-      setStatus("Disconnected");
+      setStatus("disconnected");
     },
     [],
   );
@@ -5841,6 +5996,14 @@ export function App({ onGoHome }: AppProps) {
         delete cancelRequestedBySessionRef.current[cacheKey];
       }
       delete pendingBySessionRef.current[cacheKey];
+      const queued = queuedMessagesBySessionRef.current[cacheKey] || [];
+      const hiddenQueued = optimisticDequeuedIdsRef.current[cacheKey];
+      const hasQueuedContinuation =
+        queued.length > 0 || !!(hiddenQueued && hiddenQueued.size > 0);
+      if (hasQueuedContinuation) {
+        markSessionPending(rootID, sessionKey);
+        return;
+      }
       const cached = sessionCacheRef.current[cacheKey];
       if (cached && cached.key === sessionKey) {
         sessionCacheRef.current[cacheKey] = {
@@ -5988,29 +6151,7 @@ export function App({ onGoHome }: AppProps) {
       if (!event?.type) return;
       const markStreamPending = () => {
         if (event.type === "message_done" || event.type === "error") return;
-        const now = new Date().toISOString();
-        const latest = sessionCacheRef.current[ck];
-        let cacheChanged = false;
-        if (latest && !(latest as any).pending) {
-          sessionCacheRef.current[ck] = {
-            ...(latest as any),
-            pending: true,
-            updated_at: now,
-          } as Session;
-          cacheChanged = true;
-        }
-        setSelectedPendingByKey(streamKey, true);
-        const drawer = drawerSessionByRootRef.current[activeRoot];
-        if (drawer && (drawer.key || (drawer as any).session_key) === streamKey) {
-          setDrawerSessionForRoot(activeRoot, {
-            ...(drawer as any),
-            pending: true,
-            updated_at: now,
-          } as Session);
-        }
-        if (cacheChanged) {
-          bumpCacheVersion();
-        }
+        markSessionPending(activeRoot, streamKey);
       };
       const updateDrawerIfShowingStream = () => {
         const drawerKey = drawerSessionByRootRef.current[activeRoot]?.key || "";
@@ -6230,7 +6371,11 @@ export function App({ onGoHome }: AppProps) {
     const unsubscribeEvents = sessionService.subscribeEvents((event) => {
       const payload = (event.payload || {}) as any;
       switch (event.type) {
+        case "ws.connecting":
+          setStatus("connecting");
+          break;
         case "ws.connected":
+          setStatus("connected");
           void refreshManagedRoots();
           if (currentRootIdRef.current) {
             const newest = sessionsRef.current[0]?.updated_at || "";
@@ -6241,7 +6386,11 @@ export function App({ onGoHome }: AppProps) {
           }
           replayTargetsForAllRoots();
           break;
+        case "ws.reconnecting":
+          setStatus("reconnecting");
+          break;
         case "ws.reconnected":
+          setStatus("connected");
           void refreshManagedRoots();
           if (currentRootIdRef.current) {
             const newest = sessionsRef.current[0]?.updated_at || "";
@@ -6253,6 +6402,7 @@ export function App({ onGoHome }: AppProps) {
           replayTargetsForAllRoots();
           break;
         case "ws.closed":
+          setStatus(currentRootIdRef.current ? "reconnecting" : "disconnected");
           void handleRelayWebSocketClosed();
           break;
         case "root.changed":
@@ -6285,17 +6435,86 @@ export function App({ onGoHome }: AppProps) {
         case "session.imported": {
           const rootID =
             typeof payload?.root_id === "string" ? payload.root_id : "";
+          const agentName =
+            typeof payload?.agent === "string" ? payload.agent : "";
+          const agentSessionID =
+            typeof payload?.agent_session_id === "string"
+              ? payload.agent_session_id.trim()
+              : "";
           if (!rootID) {
             break;
           }
           if (rootID === currentRootIdRef.current) {
             void loadSessionsForRoot(rootID, { replace: true });
+            if (
+              sessionListModeRef.current === "import" &&
+              agentSessionID &&
+              (!agentName || agentName === externalImportAgentRef.current)
+            ) {
+              setImportingExternalSessionKeys((current) => {
+                if (!current.has(agentSessionID)) {
+                  return current;
+                }
+                const next = new Set(current);
+                next.delete(agentSessionID);
+                return next;
+              });
+              setSelectedExternalImportKeys((current) => {
+                if (!current.has(agentSessionID)) {
+                  return current;
+                }
+                const next = new Set(current);
+                next.delete(agentSessionID);
+                return next;
+              });
+              setConfirmingExternalImport(false);
+              if (externalImportAgentRef.current) {
+                void loadExternalSessions(rootID, externalImportAgentRef.current, {
+                  replace: true,
+                });
+              }
+            }
           }
           break;
         }
         case "session.stream":
           handleSessionStream(payload);
           break;
+        case "session.queue.updated": {
+          const rootID =
+            typeof payload?.root_id === "string" ? payload.root_id : "";
+          const sessionKey =
+            typeof payload?.session_key === "string" ? payload.session_key : "";
+          if (!rootID || !sessionKey) {
+            break;
+          }
+          const incomingQueue = Array.isArray(payload?.queue)
+            ? (payload.queue.filter(
+                (item: any) =>
+                  item &&
+                  typeof item.id === "string" &&
+                  typeof item.content === "string",
+              ) as SessionQueueItem[])
+            : [];
+          const cacheKey = rootSessionKey(rootID, sessionKey);
+          const hidden = optimisticDequeuedIdsRef.current[cacheKey];
+          const queue = hidden && hidden.size > 0
+            ? incomingQueue.filter((item) => !hidden.has(item.id))
+            : incomingQueue;
+          if (hidden) {
+            for (const queueId of Array.from(hidden)) {
+              if (!incomingQueue.some((item) => item.id === queueId)) {
+                hidden.delete(queueId);
+              }
+            }
+            if (hidden.size === 0) {
+              delete optimisticDequeuedIdsRef.current[cacheKey];
+            }
+          }
+          queuedMessagesBySessionRef.current[cacheKey] = queue;
+          setQueueVersion((v) => v + 1);
+          break;
+        }
         case "session.accepted": {
           const requestId =
             typeof payload?.request_id === "string" ? payload.request_id : "";
@@ -6689,6 +6908,7 @@ export function App({ onGoHome }: AppProps) {
     };
   }, [
     currentRootId,
+    loadExternalSessions,
     loadSessionsForRoot,
     rootSessionKey,
     resolveRootForSessionKey,
@@ -6698,6 +6918,7 @@ export function App({ onGoHome }: AppProps) {
     appendToolCallForSession,
     appendTodoUpdateForSession,
     clearSessionStale,
+    markSessionPending,
     markSessionStale,
     resolvePendingForSession,
     setSelectedPendingByKey,
@@ -7041,6 +7262,15 @@ export function App({ onGoHome }: AppProps) {
   const canOpenSessionDrawer = !!activeBoundSessionKey && !isBoundSessionInMain;
   const detachedBoundSession =
     isDetachedMainSessionTarget && !isDrawerOpen;
+  const actionBarQueuedMessages = useMemo(() => {
+    void queueVersion;
+    if (!currentRootId || !activeBoundSessionKey) return [];
+    return (
+      queuedMessagesBySessionRef.current[
+        rootSessionKey(currentRootId, activeBoundSessionKey)
+      ] || []
+    );
+  }, [activeBoundSessionKey, currentRootId, queueVersion, rootSessionKey]);
 
   const matchedPlugin = useMemo(() => {
     if (!currentRootId || !file) return null;
@@ -7911,6 +8141,7 @@ export function App({ onGoHome }: AppProps) {
         onCreateWorktree={handleOpenWorktreeLocation}
         onSwitchWorktree={handleSwitchWorktreeStart}
         onRemoveWorktree={handleRemoveCurrentWorktree}
+        onOpenScheduledAgentTasks={() => setScheduledAgentDialogOpen(true)}
         menuOverlay={
           projectAddMode === "worktree_location"
             ? projectAddOverlay
@@ -8173,6 +8404,7 @@ export function App({ onGoHome }: AppProps) {
           )
         }
         onToggleImport={toggleExternalImportSelection}
+        onToggleSelectAllImport={toggleAllExternalImportSelection}
         onConfirmImport={() => {
           void handleConfirmExternalImport();
         }}
@@ -8277,6 +8509,8 @@ export function App({ onGoHome }: AppProps) {
         rightOpen={isRightOpen}
         onCloseLeft={() => setIsLeftOpen(false)}
         onCloseRight={() => setIsRightOpen(false)}
+        onOpenLeft={() => setIsLeftOpen(true)}
+        onOpenRight={() => setIsRightOpen(true)}
         sidebar={
           <FileTree
             entries={rootEntries}
@@ -8355,57 +8589,6 @@ export function App({ onGoHome }: AppProps) {
               position: "relative",
             }}
           >
-            {!isMobile && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: "10px",
-                  left: isMobile ? "10px" : isLeftOpen ? "-40px" : "10px",
-                  right: isMobile ? "10px" : isRightOpen ? "-40px" : "10px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  pointerEvents: "none",
-                  zIndex: 100,
-                }}
-              >
-                <button
-                  onClick={() => setIsLeftOpen(!isLeftOpen)}
-                  style={{
-                    pointerEvents: "auto",
-                    background: "var(--content-bg)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "8px",
-                    width: "32px",
-                    height: "32px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: "pointer",
-                    opacity: isLeftOpen && !isMobile ? 0 : 1,
-                  }}
-                >
-                  📁
-                </button>
-                <button
-                  onClick={() => setIsRightOpen(!isRightOpen)}
-                  style={{
-                    pointerEvents: "auto",
-                    background: "var(--content-bg)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "8px",
-                    width: "32px",
-                    height: "32px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: "pointer",
-                    opacity: isRightOpen && !isMobile ? 0 : 1,
-                  }}
-                >
-                  🕒
-                </button>
-              </div>
-            )}
             <div
               style={{
                 flex: 1,
@@ -8451,8 +8634,12 @@ export function App({ onGoHome }: AppProps) {
             sessionDrawerOpen={isDrawerOpen}
             detachedBoundSession={detachedBoundSession}
             editDraftRequest={editDraftRequest}
+            queuedMessages={actionBarQueuedMessages}
             onSendMessage={handleSendMessage}
             onCancelCurrentTurn={handleCancelCurrentTurn}
+            onRemoveQueuedMessage={handleRemoveQueuedMessage}
+            onUpdateQueuedMessage={handleUpdateQueuedMessage}
+            onSendQueuedMessageNow={handleSendQueuedMessageNow}
             mobileEnterKeySends={mobileEnterKeySends}
             onNewSession={handleNewSession}
             onRequestFileContext={handleRequestFileContext}
@@ -8633,6 +8820,12 @@ export function App({ onGoHome }: AppProps) {
           </div>
         </div>
       ) : null}
+      <ScheduledAgentTaskDialog
+        open={scheduledAgentDialogOpen}
+        rootId={currentRootId}
+        agents={availableAgents}
+        onClose={() => setScheduledAgentDialogOpen(false)}
+      />
       <ToastContainer />
     </>
   );

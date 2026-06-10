@@ -3,11 +3,24 @@ import { createRoot } from "react-dom/client";
 import "./index.css";
 import { App } from "./App";
 import { registerServiceWorker } from "./registerServiceWorker";
-import { applyAppearanceMode } from "./services/appearance";
+import { applyAppearanceMode, getAppearanceMode } from "./services/appearance";
 import { isHarmonyRuntime, isNativeShellRuntime } from "./services/runtime";
 import { Login } from "./components/Login";
 
 applyAppearanceMode();
+if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  const syncSystemAppearance = () => {
+    if (getAppearanceMode() === "system") {
+      applyAppearanceMode("system");
+    }
+  };
+  if (typeof media.addEventListener === "function") {
+    media.addEventListener("change", syncSystemAppearance);
+  } else {
+    media.addListener(syncSystemAppearance);
+  }
+}
 
 function readableAssetPath(raw: string): string {
   const value = String(raw || "").trim();

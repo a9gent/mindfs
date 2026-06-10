@@ -259,6 +259,7 @@ func sanitizeClaudeProjectPath(path string) string {
 		"\\", "-",
 		":", "-",
 		".", "-",
+		"_", "-",
 	)
 	return replacer.Replace(path)
 }

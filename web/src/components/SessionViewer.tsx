@@ -478,6 +478,7 @@ function AskUserQuestionCard({
 }) {
   const questions = getAskUserQuestions(toolCall);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [focusedCustomAnswerKey, setFocusedCustomAnswerKey] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const status = `${toolCall.status || ""}`.toLowerCase();
@@ -519,13 +520,13 @@ function AskUserQuestionCard({
   const setAnswer = (index: number, value: string) => {
     setAnswers((prev) => ({ ...prev, [`q_${index}`]: value }));
   };
-  const toggleMultiAnswer = (index: number, label: string) => {
+  const toggleMultiAnswer = (index: number, label: string, validLabels: string[]) => {
     const key = `q_${index}`;
     setAnswers((prev) => {
       const current = (prev[key] || "")
         .split(",")
         .map((item) => item.trim())
-        .filter(Boolean);
+        .filter((item) => item && validLabels.includes(item));
       const next = current.includes(label)
         ? current.filter((item) => item !== label)
         : [...current, label];
@@ -604,85 +605,117 @@ function AskUserQuestionCard({
       </button>
       {expanded ? (
         <div style={{ padding: "10px", display: "flex", flexDirection: "column", gap: "12px" }}>
-        {questions.map((question, index) => {
-          const key = `q_${index}`;
-          const options = Array.isArray(question.options) ? question.options : [];
-          const selected = answers[key] || "";
-          const selectedSet = new Set(
-            selected
-              .split(",")
-              .map((item) => item.trim())
-              .filter(Boolean),
-          );
-          return (
-            <div key={key} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              {options.length > 0 ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                  {options.map((option) => {
-                    const label = `${option.label || ""}`.trim();
-                    if (!label) return null;
-                    const checked = question.multiSelect
-                      ? selectedSet.has(label)
-                      : selected === label;
-                    return (
-                      <label
-                        key={label}
-                        style={{
-                          display: "flex",
-                          gap: "8px",
-                          alignItems: "flex-start",
-                          padding: "7px 8px",
-                          borderRadius: "8px",
-                          border: checked
-                            ? "1px solid rgba(239, 68, 68, 0.42)"
-                            : "1px solid var(--border-color)",
-                          background: checked ? "rgba(239, 68, 68, 0.10)" : "var(--content-bg)",
-                          cursor: submitted ? "default" : "pointer",
-                        }}
-                      >
-                        <input
-                          type={question.multiSelect ? "checkbox" : "radio"}
-                          name={`${toolUseId}-${key}`}
-                          checked={checked}
-                          disabled={submitted}
-                          onChange={() =>
-                            question.multiSelect
-                              ? toggleMultiAnswer(index, label)
-                              : setAnswer(index, label)
-                          }
-                          style={{ marginTop: "2px" }}
-                        />
-                        <span style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                          <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>{label}</span>
-                          {option.description ? (
-                            <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                              {option.description}
-                            </span>
-                          ) : null}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              ) : (
-                <textarea
-                  value={selected}
-                  disabled={submitted}
-                  onChange={(event) => setAnswer(index, event.target.value)}
-                  placeholder="输入回答..."
-                  rows={3}
-                  style={{
-                    width: "100%",
-                    resize: "vertical",
-                    borderRadius: "8px",
-                    border: "1px solid var(--border-color)",
-                    background: "var(--content-bg)",
-                    color: "var(--text-primary)",
-                    padding: "8px",
-                    fontSize: "13px",
-                    boxSizing: "border-box",
-                  }}
-                />
+          {questions.map((question, index) => {
+            const key = `q_${index}`;
+            const options = Array.isArray(question.options) ? question.options : [];
+            const selected = answers[key] || "";
+            const optionLabels = options
+              .map((option) => `${option.label || ""}`.trim())
+              .filter(Boolean);
+            const selectedSet = new Set(
+              selected
+                .split(",")
+                .map((item) => item.trim())
+                .filter(Boolean),
+            );
+            const hasOptionSelection = question.multiSelect
+              ? optionLabels.some((label) => selectedSet.has(label))
+              : optionLabels.includes(selected);
+            const customAnswer = hasOptionSelection ? "" : selected;
+            const customAnswerActive =
+              customAnswer.trim() !== "" || focusedCustomAnswerKey === key;
+            return (
+              <div key={key} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {options.length > 0 ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    {options.map((option) => {
+                      const label = `${option.label || ""}`.trim();
+                      if (!label) return null;
+                      const checked = question.multiSelect
+                        ? selectedSet.has(label)
+                        : selected === label;
+                      return (
+                        <label
+                          key={label}
+                          style={{
+                            display: "flex",
+                            gap: "8px",
+                            alignItems: "flex-start",
+                            padding: "7px 8px",
+                            borderRadius: "8px",
+                            border: checked
+                              ? "1px solid rgba(239, 68, 68, 0.42)"
+                              : "1px solid var(--border-color)",
+                            background: checked ? "rgba(239, 68, 68, 0.10)" : "var(--content-bg)",
+                            cursor: submitted ? "default" : "pointer",
+                          }}
+                        >
+                          <input
+                            type={question.multiSelect ? "checkbox" : "radio"}
+                            name={`${toolUseId}-${key}`}
+                            checked={checked}
+                            disabled={submitted}
+                            onChange={() =>
+                              question.multiSelect
+                                ? toggleMultiAnswer(index, label, optionLabels)
+                                : setAnswer(index, label)
+                            }
+                            style={{ marginTop: "2px" }}
+                          />
+                          <span style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                            <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>{label}</span>
+                            {option.description ? (
+                              <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                                {option.description}
+                              </span>
+                            ) : null}
+                          </span>
+                        </label>
+                      );
+                    })}
+                    <textarea
+                      value={customAnswer}
+                      disabled={submitted}
+                      onFocus={() => setFocusedCustomAnswerKey(key)}
+                      onBlur={() => setFocusedCustomAnswerKey((current) => (current === key ? "" : current))}
+                      onChange={(event) => setAnswer(index, event.target.value)}
+                      placeholder="输入自定义回答..."
+                      rows={2}
+                      style={{
+                        width: "100%",
+                        resize: "vertical",
+                        borderRadius: "8px",
+                        border: customAnswerActive
+                          ? "1px solid rgba(239, 68, 68, 0.42)"
+                          : "1px solid var(--border-color)",
+                        outline: "none",
+                        background: "var(--content-bg)",
+                        color: "var(--text-primary)",
+                        padding: "8px",
+                        fontSize: "13px",
+                        boxSizing: "border-box",
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <textarea
+                    value={selected}
+                    disabled={submitted}
+                    onChange={(event) => setAnswer(index, event.target.value)}
+                    placeholder="输入回答..."
+                    rows={3}
+                    style={{
+                      width: "100%",
+                      resize: "vertical",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      background: "var(--content-bg)",
+                      color: "var(--text-primary)",
+                      padding: "8px",
+                      fontSize: "13px",
+                      boxSizing: "border-box",
+                    }}
+                  />
               )}
             </div>
           );
@@ -1144,6 +1177,8 @@ if (useInnerScrollContainer && !container) {
               locations={tc.locations}
               meta={tc.meta}
               rootPath={rootPath || undefined}
+              rootId={rootId}
+              sessionKey={sessionKey}
               defaultExpanded={isUserShell}
             />
           )}

@@ -545,6 +545,10 @@ type relayStatusResponse struct {
 }
 
 func addManagedDir(addr string, useTLS bool, path string) (managedDirResponse, error) {
+	token, err := app.ReadLocalCLIToken(addr)
+	if err != nil {
+		return managedDirResponse{}, err
+	}
 	url := addrToURL(addr, "/api/dirs", useTLS)
 	body, err := json.Marshal(map[string]any{"path": path})
 	if err != nil {
@@ -555,7 +559,7 @@ func addManagedDir(addr string, useTLS bool, path string) (managedDirResponse, e
 		return managedDirResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-MindFS-Local-CLI", "1")
+	req.Header.Set("X-MindFS-Local-CLI-Token", token)
 	client := newHTTPClient(useTLS, 3*time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -577,12 +581,16 @@ func addManagedDir(addr string, useTLS bool, path string) (managedDirResponse, e
 }
 
 func removeManagedDir(addr string, useTLS bool, path string) error {
+	token, err := app.ReadLocalCLIToken(addr)
+	if err != nil {
+		return err
+	}
 	endpoint := addrToURL(addr, "/api/dirs?path="+url.QueryEscape(path), useTLS)
 	req, err := http.NewRequest(http.MethodDelete, endpoint, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-MindFS-Local-CLI", "1")
+	req.Header.Set("X-MindFS-Local-CLI-Token", token)
 	client := newHTTPClient(useTLS, 3*time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -646,12 +654,17 @@ func fetchRelayStatus(addr string, useTLS bool) (relayStatusResponse, error) {
 }
 
 func startRelayBinding(addr string, useTLS bool) (relayStatusResponse, error) {
+	token, err := app.ReadLocalCLIToken(addr)
+	if err != nil {
+		return relayStatusResponse{}, err
+	}
 	endpoint := addrToURL(addr, "/api/relay/bind/start", useTLS)
 	client := newHTTPClient(useTLS, 3*time.Second)
 	req, err := http.NewRequest(http.MethodPost, endpoint, nil)
 	if err != nil {
 		return relayStatusResponse{}, err
 	}
+	req.Header.Set("X-MindFS-Local-CLI-Token", token)
 	resp, err := client.Do(req)
 	if err != nil {
 		return relayStatusResponse{}, err

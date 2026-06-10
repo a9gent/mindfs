@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/fs"
 
 	_ "modernc.org/sqlite"
@@ -96,16 +97,17 @@ LIMIT 1`
 )
 
 type Manager struct {
-	root            fs.RootInfo
-	mu              sync.Mutex
-	loopOnce        sync.Once
-	db              *sql.DB
-	sessions        map[string]*Session
-	now             func() time.Time
-	idleInterval    time.Duration
-	idleFor         time.Duration
-	closeFor        time.Duration
-	maxIdleSessions int
+	root             fs.RootInfo
+	mu               sync.Mutex
+	loopOnce         sync.Once
+	db               *sql.DB
+	sessions         map[string]*Session
+	pendingToolCalls map[string]map[string]agenttypes.ToolCall
+	now              func() time.Time
+	idleInterval     time.Duration
+	idleFor          time.Duration
+	closeFor         time.Duration
+	maxIdleSessions  int
 }
 
 type CreateInput struct {
@@ -134,13 +136,14 @@ type ListOptions struct {
 
 func NewManager(root fs.RootInfo, opts ...Option) *Manager {
 	m := &Manager{
-		root:            root,
-		sessions:        make(map[string]*Session),
-		now:             time.Now,
-		idleInterval:    1 * time.Minute,
-		idleFor:         10 * time.Minute,
-		closeFor:        7 * 24 * time.Hour,
-		maxIdleSessions: 3,
+		root:             root,
+		sessions:         make(map[string]*Session),
+		pendingToolCalls: make(map[string]map[string]agenttypes.ToolCall),
+		now:              time.Now,
+		idleInterval:     1 * time.Minute,
+		idleFor:          10 * time.Minute,
+		closeFor:         7 * 24 * time.Hour,
+		maxIdleSessions:  3,
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -225,6 +228,79 @@ func (m *Manager) GetExchangeAux(_ context.Context, key string, afterSeq int) (m
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.loadExchangeAux(key, afterSeq)
+}
+
+func (m *Manager) GetFullToolCall(_ context.Context, key, callID string) (*agenttypes.ToolCall, error) {
+	if strings.TrimSpace(key) == "" {
+		return nil, errors.New("session key required")
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return nil, errors.New("tool call id required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if found, ok := m.pendingFullToolCallUnsafe(key, callID); ok {
+		return found, nil
+	}
+	aux, err := m.loadExchangeAuxEntries(key, 0)
+	if err != nil {
+		return nil, err
+	}
+	var found *agenttypes.ToolCall
+	for _, item := range aux {
+		if item.ToolCall == nil || strings.TrimSpace(item.ToolCall.CallID) != callID {
+			continue
+		}
+		next := *item.ToolCall
+		if found == nil {
+			found = &next
+			continue
+		}
+		merged := mergeToolCall(*found, next)
+		found = &merged
+	}
+	if found == nil {
+		return nil, os.ErrNotExist
+	}
+	return found, nil
+}
+
+func (m *Manager) UpsertPendingExchangeAux(_ context.Context, sessionKey string, aux ExchangeAux) error {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return errors.New("session key required")
+	}
+	if aux.ToolCall == nil || strings.TrimSpace(aux.ToolCall.CallID) == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.pendingToolCalls == nil {
+		m.pendingToolCalls = make(map[string]map[string]agenttypes.ToolCall)
+	}
+	callID := strings.TrimSpace(aux.ToolCall.CallID)
+	next := cloneToolCall(*aux.ToolCall)
+	byCallID := m.pendingToolCalls[sessionKey]
+	if byCallID == nil {
+		byCallID = make(map[string]agenttypes.ToolCall)
+		m.pendingToolCalls[sessionKey] = byCallID
+	}
+	if existing, ok := byCallID[callID]; ok {
+		next = mergeToolCall(existing, next)
+	}
+	byCallID[callID] = next
+	return nil
+}
+
+func (m *Manager) ClearPendingExchangeAux(_ context.Context, sessionKey string) {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.pendingToolCalls, sessionKey)
 }
 
 func (m *Manager) List(_ context.Context, opts ListOptions) ([]*Session, error) {
@@ -371,13 +447,9 @@ func (m *Manager) AddExchangeAux(_ context.Context, sessionKey string, aux Excha
 	if aux.ToolCall == nil && strings.TrimSpace(aux.Thought) == "" {
 		return errors.New("aux content required")
 	}
-	compacted, ok := CompactExchangeAux(aux)
-	if !ok {
-		return nil
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.appendExchangeAux(sessionKey, compacted)
+	return m.appendExchangeAux(sessionKey, aux)
 }
 
 func (m *Manager) AddRelatedFile(_ context.Context, key string, file RelatedFile) error {
@@ -1069,6 +1141,22 @@ func (m *Manager) appendExchange(key string, exchange Exchange) error {
 }
 
 func (m *Manager) loadExchangeAux(key string, afterSeq int) (map[int][]ExchangeAux, error) {
+	entries, err := m.loadExchangeAuxEntries(key, afterSeq)
+	if err != nil {
+		return nil, err
+	}
+	items := make(map[int][]ExchangeAux)
+	for _, entry := range entries {
+		compacted, ok := CompactExchangeAux(entry)
+		if !ok {
+			continue
+		}
+		items[compacted.Seq] = append(items[compacted.Seq], compacted)
+	}
+	return items, nil
+}
+
+func (m *Manager) loadExchangeAuxEntries(key string, afterSeq int) ([]ExchangeAux, error) {
 	path, err := m.auxPath(key)
 	if err != nil {
 		return nil, err
@@ -1076,11 +1164,11 @@ func (m *Manager) loadExchangeAux(key string, afterSeq int) (map[int][]ExchangeA
 	payload, err := m.root.ReadMetaFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[int][]ExchangeAux{}, nil
+			return []ExchangeAux{}, nil
 		}
 		return nil, err
 	}
-	items := make(map[int][]ExchangeAux)
+	items := make([]ExchangeAux, 0)
 	scanner := jsonlScanner(payload)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -1097,16 +1185,72 @@ func (m *Manager) loadExchangeAux(key string, afterSeq int) (map[int][]ExchangeA
 		if afterSeq > 0 && entry.Seq <= afterSeq {
 			continue
 		}
-		compacted, ok := CompactExchangeAux(entry)
-		if !ok {
-			continue
-		}
-		items[compacted.Seq] = append(items[compacted.Seq], compacted)
+		items = append(items, entry)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
+}
+
+func mergeToolCall(base, next agenttypes.ToolCall) agenttypes.ToolCall {
+	merged := base
+	if strings.TrimSpace(next.CallID) != "" {
+		merged.CallID = next.CallID
+	}
+	if strings.TrimSpace(next.Title) != "" {
+		merged.Title = next.Title
+	}
+	if strings.TrimSpace(next.Status) != "" {
+		merged.Status = next.Status
+	}
+	if next.Kind != "" {
+		merged.Kind = next.Kind
+	}
+	if len(next.Content) > 0 {
+		merged.Content = append([]agenttypes.ToolCallContentItem(nil), next.Content...)
+	}
+	if len(next.Locations) > 0 {
+		merged.Locations = append([]agenttypes.ToolCallLocation(nil), next.Locations...)
+	}
+	if strings.TrimSpace(next.RawType) != "" {
+		merged.RawType = next.RawType
+	}
+	if len(base.Meta) > 0 || len(next.Meta) > 0 {
+		merged.Meta = make(map[string]any, len(base.Meta)+len(next.Meta))
+		for key, value := range base.Meta {
+			merged.Meta[key] = value
+		}
+		for key, value := range next.Meta {
+			merged.Meta[key] = value
+		}
+	}
+	return merged
+}
+
+func (m *Manager) pendingFullToolCallUnsafe(sessionKey, callID string) (*agenttypes.ToolCall, bool) {
+	if m.pendingToolCalls == nil {
+		return nil, false
+	}
+	toolCall, ok := m.pendingToolCalls[sessionKey][callID]
+	if !ok {
+		return nil, false
+	}
+	out := cloneToolCall(toolCall)
+	return &out, true
+}
+
+func cloneToolCall(toolCall agenttypes.ToolCall) agenttypes.ToolCall {
+	out := toolCall
+	out.Content = append([]agenttypes.ToolCallContentItem(nil), toolCall.Content...)
+	out.Locations = append([]agenttypes.ToolCallLocation(nil), toolCall.Locations...)
+	if len(toolCall.Meta) > 0 {
+		out.Meta = make(map[string]any, len(toolCall.Meta))
+		for key, value := range toolCall.Meta {
+			out.Meta[key] = value
+		}
+	}
+	return out
 }
 
 func jsonlScanner(payload []byte) *bufio.Scanner {

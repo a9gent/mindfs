@@ -23,6 +23,7 @@ const (
 	metaDirName         = ".mindfs"
 	stateFileName       = "state.json"
 	defaultMaxReadBytes = 64 * 1024
+	maxFullReadBytes    = 128 << 20
 )
 
 var (
@@ -376,9 +377,15 @@ func (r RootInfo) ReadFile(pathRel string, maxBytes int64, cursor int64, readMod
 		n   int
 	)
 	if readMode == "full" {
-		buf, err = io.ReadAll(file)
+		if info.Size() > maxFullReadBytes {
+			return ReadResult{}, errors.New("file is too large for full read")
+		}
+		buf, err = io.ReadAll(io.LimitReader(file, maxFullReadBytes+1))
 		if err != nil {
 			return ReadResult{}, err
+		}
+		if len(buf) > maxFullReadBytes {
+			return ReadResult{}, errors.New("file is too large for full read")
 		}
 		n = len(buf)
 	} else {

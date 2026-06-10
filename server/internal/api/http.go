@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,7 @@ import (
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/gitview"
+	"mindfs/server/internal/relay"
 	"mindfs/server/internal/session"
 
 	"github.com/go-chi/chi/v5"
@@ -38,8 +40,9 @@ import (
 
 // HTTPHandler provides REST endpoints for health, tree, file, and action.
 type HTTPHandler struct {
-	AppContext *AppContext
-	StaticDir  string
+	AppContext    *AppContext
+	StaticDir     string
+	LocalCLIToken string
 }
 
 type protectedResponseWriter struct {
@@ -56,7 +59,7 @@ const (
 	clientIDHeaderName    = "X-MindFS-Client-ID"
 	e2eeProofHeaderName   = "X-MindFS-Proof"
 	e2eeTSHeaderName      = "X-MindFS-TS"
-	localCLIHeaderName    = "X-MindFS-Local-CLI"
+	localCLIHeaderName    = "X-MindFS-Local-CLI-Token"
 	requestProofMaxSkew   = 5 * time.Minute
 )
 
@@ -153,7 +156,7 @@ func (w *protectedResponseWriter) Write(payload []byte) (int, error) {
 
 func (h *HTTPHandler) protectedEndpoint(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if isLocalCLIRequest(r) {
+		if h.isLocalCLIRequest(r) {
 			next(w, r)
 			return
 		}
@@ -206,8 +209,12 @@ func (h *HTTPHandler) protectedEndpoint(next http.HandlerFunc) http.HandlerFunc 
 	}
 }
 
-func isLocalCLIRequest(r *http.Request) bool {
-	if strings.TrimSpace(r.Header.Get(localCLIHeaderName)) != "1" {
+func (h *HTTPHandler) isLocalCLIRequest(r *http.Request) bool {
+	token := strings.TrimSpace(h.LocalCLIToken)
+	if token == "" || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(r.Header.Get(localCLIHeaderName))), []byte(token)) != 1 {
+		return false
+	}
+	if !isLocalCLIPath(r) {
 		return false
 	}
 	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
@@ -216,6 +223,20 @@ func isLocalCLIRequest(r *http.Request) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func isLocalCLIPath(r *http.Request) bool {
+	if r == nil || r.URL == nil {
+		return false
+	}
+	switch r.Method {
+	case http.MethodPost:
+		return r.URL.Path == "/api/dirs" || r.URL.Path == "/api/relay/bind/start"
+	case http.MethodDelete:
+		return r.URL.Path == "/api/dirs"
+	default:
+		return false
+	}
 }
 
 func (h *HTTPHandler) broadcastRootChanged(action, rootID string, extra ...map[string]any) {
@@ -263,18 +284,24 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/sessions/external", h.protectedEndpoint(h.handleExternalSessionsList))
 	r.Post("/api/sessions/import", h.protectedEndpoint(h.handleExternalSessionImport))
 	r.Post("/api/sessions/import/batch", h.protectedEndpoint(h.handleExternalSessionImportBatch))
+	r.Get("/api/sessions/{key}/toolcalls/{callID}", h.protectedEndpoint(h.handleSessionToolCallGet))
 	r.Get("/api/sessions/{key}", h.protectedEndpoint(h.handleSessionGet))
 	r.Get("/api/sessions/{key}/related-files", h.protectedEndpoint(h.handleSessionRelatedFilesGet))
 	r.Post("/api/sessions/{key}/rename", h.protectedEndpoint(h.handleSessionRename))
 	r.Delete("/api/sessions/{key}/related-files", h.protectedEndpoint(h.handleSessionRelatedFilesDelete))
 	r.Delete("/api/sessions/{key}", h.protectedEndpoint(h.handleSessionDelete))
+	r.Get("/api/scheduled-agent-tasks", h.protectedEndpoint(h.handleScheduledAgentTasksList))
+	r.Post("/api/scheduled-agent-tasks", h.protectedEndpoint(h.handleScheduledAgentTaskCreate))
+	r.Put("/api/scheduled-agent-tasks/{id}", h.protectedEndpoint(h.handleScheduledAgentTaskUpdate))
+	r.Delete("/api/scheduled-agent-tasks/{id}", h.protectedEndpoint(h.handleScheduledAgentTaskDelete))
+	r.Post("/api/scheduled-agent-tasks/{id}/run", h.protectedEndpoint(h.handleScheduledAgentTaskRun))
 	r.Get("/api/dirs", h.protectedEndpoint(h.handleDirs))
 	r.Post("/api/dirs", h.protectedEndpoint(h.handleAddDir))
 	r.Post("/api/dirs/{id}/rename", h.protectedEndpoint(h.handleRenameDir))
 	r.Delete("/api/dirs", h.protectedEndpoint(h.handleRemoveDir))
 	r.Get("/api/local_dirs", h.protectedEndpoint(h.handleLocalDirs))
 	r.Get("/api/relay/status", h.handleRelayStatus)
-	r.Post("/api/relay/bind/start", h.handleRelayBindStart)
+	r.Post("/api/relay/bind/start", h.protectedEndpoint(h.handleRelayBindStart))
 	r.Get("/api/relay/tips", h.protectedEndpoint(h.handleRelayTips))
 	r.Post("/api/e2ee/open", h.handleE2EEOpen)
 	r.Get("/api/app/update", h.protectedEndpoint(h.handleAppUpdateGet))
@@ -283,6 +310,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 
 	// Agent status API
 	r.Get("/api/agents", h.protectedEndpoint(h.handleAgentsList))
+	r.Post("/api/agents/restart", h.protectedEndpoint(h.handleAgentRestart))
 	r.Get("/api/agent-config/defaults", h.protectedEndpoint(h.handleAgentConfigDefaults))
 	r.Get("/api/agent-config/backups", h.protectedEndpoint(h.handleAgentConfigBackupsList))
 	r.Post("/api/agent-config/backups", h.protectedEndpoint(h.handleAgentConfigBackupCreate))
@@ -607,6 +635,30 @@ func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		Seq:    afterSeq,
 	})
 	respondJSON(w, http.StatusOK, h.sessionResponse(out, pendingUser, contextWindow, exchangeAux))
+}
+
+func (h *HTTPHandler) handleSessionToolCallGet(w http.ResponseWriter, r *http.Request) {
+	rootID := r.URL.Query().Get("root")
+	key := chi.URLParam(r, "key")
+	callID := chi.URLParam(r, "callID")
+	if strings.TrimSpace(key) == "" || strings.TrimSpace(callID) == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("session key and tool call id required"))
+		return
+	}
+	toolCall, err := h.service().GetSessionToolCall(r.Context(), usecase.GetSessionToolCallInput{
+		RootID: rootID,
+		Key:    key,
+		CallID: callID,
+	})
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			respondError(w, http.StatusNotFound, err)
+			return
+		}
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"toolcall": toolCall})
 }
 
 func (h *HTTPHandler) handleSessionRelatedFilesGet(w http.ResponseWriter, r *http.Request) {
@@ -1712,23 +1764,49 @@ func readManagedDirPath(r *http.Request) string {
 	return strings.TrimSpace(req.Path)
 }
 
-func (h *HTTPHandler) handleRelayStatus(w http.ResponseWriter, _ *http.Request) {
+func (h *HTTPHandler) handleRelayStatus(w http.ResponseWriter, r *http.Request) {
 	manager := h.AppContext.GetRelayManager()
 	if manager == nil {
 		respondError(w, http.StatusServiceUnavailable, errServiceUnavailable("relay manager not configured"))
 		return
 	}
-	status := manager.Status()
-	if e2eeManager := h.AppContext.GetE2EEManager(); e2eeManager != nil {
-		status.E2EERequired = e2eeManager.Enabled()
-		if status.E2EERequired {
-			status.E2EENodeID = e2eeManager.NodeID()
-			if strings.TrimSpace(status.NodeID) == "" {
-				status.NodeID = e2eeManager.NodeID()
-			}
-		}
+	status := h.relayStatusWithE2EE(manager.Status())
+	if !status.E2EERequired {
+		respondJSON(w, http.StatusOK, status)
+		return
 	}
-	respondJSON(w, http.StatusOK, status)
+
+	sess, err := h.relayStatusSession(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, err)
+		return
+	}
+	if sess == nil {
+		respondJSON(w, http.StatusOK, publicRelayStatus(status))
+		return
+	}
+	if err := writeProtectedJSON(w, http.StatusOK, sess.Key, status); err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+}
+
+func (h *HTTPHandler) relayStatusSession(r *http.Request) (*e2ee.Session, error) {
+	if strings.TrimSpace(r.Header.Get(e2eeHeaderName)) == "" {
+		return nil, nil
+	}
+	sess, protected, err := h.requireProtectedHTTPSession(r)
+	if !protected {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	sess, err = h.requireRequestProof(r)
+	if err != nil {
+		return nil, err
+	}
+	return sess, nil
 }
 
 func (h *HTTPHandler) handleRelayBindStart(w http.ResponseWriter, _ *http.Request) {
@@ -1742,16 +1820,30 @@ func (h *HTTPHandler) handleRelayBindStart(w http.ResponseWriter, _ *http.Reques
 		respondError(w, http.StatusServiceUnavailable, errServiceUnavailable(err.Error()))
 		return
 	}
-	if e2eeManager := h.AppContext.GetE2EEManager(); e2eeManager != nil {
-		status.E2EERequired = e2eeManager.Enabled()
-		if status.E2EERequired {
-			status.E2EENodeID = e2eeManager.NodeID()
-			if strings.TrimSpace(status.NodeID) == "" {
-				status.NodeID = e2eeManager.NodeID()
-			}
-		}
+	respondJSON(w, http.StatusOK, h.relayStatusWithE2EE(status))
+}
+
+func (h *HTTPHandler) relayStatusWithE2EE(status relay.Status) relay.Status {
+	if h == nil || h.AppContext == nil {
+		return status
 	}
-	respondJSON(w, http.StatusOK, status)
+	e2eeManager := h.AppContext.GetE2EEManager()
+	if e2eeManager == nil || !e2eeManager.Enabled() {
+		status.E2EERequired = false
+		status.E2EENodeID = ""
+		return status
+	}
+	status.E2EERequired = true
+	status.E2EENodeID = e2eeManager.NodeID()
+	return status
+}
+
+func publicRelayStatus(status relay.Status) relay.Status {
+	return relay.Status{
+		NoRelayer:    status.NoRelayer,
+		E2EERequired: status.E2EERequired,
+		E2EENodeID:   status.E2EENodeID,
+	}
 }
 
 func (h *HTTPHandler) handleRelayTips(w http.ResponseWriter, _ *http.Request) {

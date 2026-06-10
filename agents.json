@@ -243,6 +243,15 @@
           "~/.hermes/config.yaml"
         ]
       }
+    },
+    {
+      "name": "reasonix",
+      "command": "reasonix",
+      "protocol": "acp",
+      "args": [
+        "acp"
+      ],
+      "configBackup": {}
     }
   ],
   "relayBaseURL": "https://relay.a9gent.com"

@@ -4,6 +4,10 @@ export const APPEARANCE_STORAGE_KEY = "mindfs-appearance-mode";
 export const APPEARANCE_CHANGE_EVENT = "mindfs:appearance-changed";
 
 const appearanceModes = new Set<AppearanceMode>(["dark", "light", "system"]);
+const themeColors: Record<"dark" | "light", string> = {
+  dark: "#0f172a",
+  light: "#f3f4f6",
+};
 
 export function normalizeAppearanceMode(value: unknown): AppearanceMode {
   return appearanceModes.has(value as AppearanceMode) ? (value as AppearanceMode) : "system";
@@ -30,15 +34,29 @@ export function getEffectiveAppearanceMode(mode: AppearanceMode = getAppearanceM
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+export function syncThemeColor(mode: AppearanceMode = getAppearanceMode()): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const color = themeColors[getEffectiveAppearanceMode(mode)];
+  const metas = document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]');
+  metas.forEach((meta) => {
+    meta.content = color;
+    meta.removeAttribute("media");
+  });
+}
+
 export function applyAppearanceMode(mode: AppearanceMode = getAppearanceMode()): void {
   if (typeof document === "undefined") {
     return;
   }
   if (mode === "system") {
     document.documentElement.removeAttribute("data-theme");
+    syncThemeColor(mode);
     return;
   }
   document.documentElement.setAttribute("data-theme", mode);
+  syncThemeColor(mode);
 }
 
 export function setAppearanceMode(mode: AppearanceMode): void {

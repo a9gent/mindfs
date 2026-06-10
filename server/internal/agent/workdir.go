@@ -21,3 +21,16 @@ func EnsureStableWorkDir(kind, agentName string) (string, error) {
 	}
 	return path, nil
 }
+
+func IsTemporaryWorkDir(path string) bool {
+	normalizedPath := NormalizeComparablePath(path)
+	normalizedTemp := NormalizeComparablePath(os.TempDir())
+	if normalizedPath == "" || normalizedTemp == "" {
+		return false
+	}
+	rel, err := filepath.Rel(normalizedTemp, normalizedPath)
+	if err != nil || rel == ".." || filepath.IsAbs(rel) {
+		return false
+	}
+	return rel == "." || !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}

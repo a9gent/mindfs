@@ -1,5 +1,5 @@
 import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ToolCallContentItem, ToolCallLocation } from "../../services/session";
+import { sessionService, type ToolCall, type ToolCallContentItem, type ToolCallLocation } from "../../services/session";
 import { MarkdownViewer } from "../MarkdownViewer";
 
 type ToolCallCardProps = {
@@ -12,6 +12,8 @@ type ToolCallCardProps = {
   locations?: ToolCallLocation[];
   meta?: Record<string, unknown>;
   rootPath?: string;
+  rootId?: string | null;
+  sessionKey?: string | null;
   defaultExpanded?: boolean;
 };
 
@@ -23,6 +25,22 @@ function basename(path: string): string {
   const normalized = (path || "").replace(/\\/g, "/");
   const parts = normalized.split("/");
   return parts[parts.length - 1] || path;
+}
+
+function shouldPreserveDisplayStatus(current?: string, incoming?: string): boolean {
+  const currentStatus = (current || "").toLowerCase();
+  const incomingStatus = (incoming || "").toLowerCase();
+  const currentIsTerminal =
+    currentStatus === "complete" ||
+    currentStatus === "success" ||
+    currentStatus === "failed" ||
+    currentStatus === "error" ||
+    currentStatus === "cancelled";
+  const incomingIsRunning =
+    incomingStatus === "running" ||
+    incomingStatus === "pending" ||
+    incomingStatus === "in_progress";
+  return currentIsTerminal && incomingIsRunning;
 }
 
 const toolIcons: Record<string, string> = {
@@ -307,7 +325,8 @@ function AnsiOutput({ text, onRendered }: { text: string; onRendered?: () => voi
         marginTop: "10px",
         padding: "8px",
         borderRadius: "8px",
-        background: "#0f172a",
+        background: "var(--mindfs-code-bg, #f8fafc)",
+        border: "1px solid var(--mindfs-code-border, var(--border-color))",
         overflowX: "auto",
         overflowY: "hidden",
         width: "100%",
@@ -319,7 +338,7 @@ function AnsiOutput({ text, onRendered }: { text: string; onRendered?: () => voi
         style={{
           margin: 0,
           minWidth: "max-content",
-          color: "#e5e7eb",
+          color: "var(--mindfs-code-text, var(--text-primary))",
           fontFamily: terminalFontFamily,
           fontSize: "12px",
           lineHeight: 1.6,
@@ -347,31 +366,61 @@ export const ToolCallCard = memo(function ToolCallCard({
   locations,
   meta,
   rootPath,
+  rootId,
+  sessionKey,
   defaultExpanded = false,
 }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const [loadedToolCall, setLoadedToolCall] = useState<ToolCall | null>(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+  const [detailLoadFailed, setDetailLoadFailed] = useState(false);
   const detailScrollRef = useRef<HTMLDivElement | null>(null);
+  const loadingDetailKeyRef = useRef("");
+  const loadedDetailKeyRef = useRef("");
   const shouldStickDetailsToBottomRef = useRef(true);
-  const labelKind = (kind || "").trim();
-  const labelTitle = (title || "").trim();
+  const effectiveKind = loadedToolCall?.kind || kind;
+  const effectiveTitle = loadedToolCall?.title || title;
+  const effectiveStatus = shouldPreserveDisplayStatus(status, loadedToolCall?.status)
+    ? status
+    : loadedToolCall?.status || status;
+  const effectiveContent = loadedToolCall?.content || content;
+  const effectiveLocations = loadedToolCall?.locations || locations;
+  const effectiveMeta = loadedToolCall?.meta || meta;
+  const labelKind = (effectiveKind || "").trim();
+  const labelTitle = (effectiveTitle || "").trim();
   const normalizedKind = labelKind.toLowerCase();
-  const isCollabTool = meta?.rawType === "collabToolCall" || meta?.type === "collabAgentToolCall";
-  const collabToolName = typeof meta?.tool === "string" ? meta.tool.trim() : "";
+  const isCollabTool = effectiveMeta?.rawType === "collabToolCall" || effectiveMeta?.type === "collabAgentToolCall";
+  const collabToolName = typeof effectiveMeta?.tool === "string" ? effectiveMeta.tool.trim() : "";
   const isCollabWait = isCollabTool && collabToolName === "wait";
-  const isUserShell = normalizedKind === "execute" && meta?.source === "userShell";
+  const isUserShell = normalizedKind === "execute" && effectiveMeta?.source === "userShell";
   const userShellText = useMemo(
-    () => (content || []).map((item) => ("text" in item ? item.text || "" : "")).join("") || result || "",
-    [content, result],
+    () => (effectiveContent || []).map((item) => ("text" in item ? item.text || "" : "")).join("") || result || "",
+    [effectiveContent, result],
   );
-  const hasContent = !!(content && content.length > 0);
-  const hasLocations = !!(locations && locations.length > 0);
+  const hasContent = !!(effectiveContent && effectiveContent.length > 0);
+  const hasLocations = !!(effectiveLocations && effectiveLocations.length > 0);
   const hasResult = !!result;
   const hasUserShellOutput = userShellText.trim().length > 0;
-  const hasCollabDetails = isCollabTool && !isCollabWait && Boolean(meta?.prompt);
-  const hasDetails = isUserShell ? hasUserShellOutput : hasContent || hasLocations || hasResult || hasCollabDetails;
+  const hasCollabDetails = isCollabTool && !isCollabWait && Boolean(effectiveMeta?.prompt);
+  const canLoadDetails = Boolean(rootId && sessionKey && _callId);
+  const needsRemoteDetails = canLoadDetails && (isUserShell ? !hasUserShellOutput : !hasContent);
+  const hasDetails = (isUserShell ? hasUserShellOutput : hasContent || hasLocations || hasResult || hasCollabDetails) || canLoadDetails;
   const icon = renderToolIcon(normalizedKind);
-  const normalizedStatus = (status || "").toLowerCase();
-  const detailSections = useMemo(() => buildDetailSections(content, locations, rootPath), [content, locations, rootPath]);
+  const normalizedStatus = (effectiveStatus || "").toLowerCase();
+  const detailSections = useMemo(() => {
+    const sections = buildDetailSections(effectiveContent, effectiveLocations, rootPath);
+    if (sections.length > 0 || !result || !isDiffLikeText(result)) {
+      return sections;
+    }
+    const fallbackPath = normalizeDisplayPath(effectiveLocations?.[0]?.path || "(unknown)", rootPath);
+    return [
+      {
+        type: "diff" as const,
+        path: normalizeDisplayPath(extractDiffPath(result, fallbackPath), rootPath),
+        markdown: `~~~diff\n${result.trim()}\n~~~`,
+      },
+    ];
+  }, [effectiveContent, effectiveLocations, result, rootPath]);
   const isFileChange =
     normalizedKind === "edit" ||
     normalizedKind === "delete" ||
@@ -382,13 +431,13 @@ export const ToolCallCard = memo(function ToolCallCard({
       .filter((section): section is Extract<DetailSection, { type: "diff" }> => section.type === "diff")
       .map((section) => basename(section.path))
       .filter(Boolean);
-    const locationNames = (locations || [])
+    const locationNames = (effectiveLocations || [])
       .map((loc) => basename(normalizeDisplayPath(loc.path, rootPath)))
       .filter(Boolean);
     return Array.from(new Set([...diffNames, ...locationNames]));
-  }, [detailSections, locations, rootPath]);
+  }, [detailSections, effectiveLocations, rootPath]);
   const label = isUserShell
-    ? String(meta?.command || labelTitle || "command")
+    ? String(effectiveMeta?.command || labelTitle || "command")
     : isCollabTool
     ? labelTitle || collabToolName || "subagent"
     : isFileChange
@@ -407,6 +456,42 @@ export const ToolCallCard = memo(function ToolCallCard({
       setExpanded(true);
     }
   }, [defaultExpanded, hasDetails]);
+
+  useEffect(() => {
+    setLoadedToolCall(null);
+    setDetailLoadFailed(false);
+    setLoadingDetails(false);
+    loadingDetailKeyRef.current = "";
+    loadedDetailKeyRef.current = "";
+  }, [_callId, rootId, sessionKey]);
+
+  useEffect(() => {
+    if (!expanded || !needsRemoteDetails) return;
+    const detailKey = `${rootId || ""}::${sessionKey || ""}::${_callId}`;
+    if (loadedDetailKeyRef.current === detailKey || loadingDetailKeyRef.current === detailKey) return;
+    loadingDetailKeyRef.current = detailKey;
+    setLoadingDetails(true);
+    setDetailLoadFailed(false);
+    sessionService
+      .getToolCall(String(rootId || ""), String(sessionKey || ""), _callId)
+      .then((toolCall) => {
+        if (loadingDetailKeyRef.current !== detailKey) return;
+        if (toolCall) {
+          setLoadedToolCall(toolCall);
+          loadedDetailKeyRef.current = detailKey;
+        } else {
+          setDetailLoadFailed(true);
+        }
+      })
+      .catch(() => {
+        if (loadingDetailKeyRef.current === detailKey) setDetailLoadFailed(true);
+      })
+      .finally(() => {
+        if (loadingDetailKeyRef.current !== detailKey) return;
+        loadingDetailKeyRef.current = "";
+        setLoadingDetails(false);
+      });
+  }, [_callId, expanded, needsRemoteDetails, rootId, sessionKey]);
 
   useEffect(() => {
     const container = detailScrollRef.current;
@@ -542,8 +627,12 @@ export const ToolCallCard = memo(function ToolCallCard({
         >
           {isUserShell ? (
             <AnsiOutput text={userShellText} onRendered={scrollUserShellDetailsToBottom} />
+          ) : loadingDetails ? (
+            <div style={{ marginTop: "10px", fontSize: "12px", color: "var(--text-secondary)" }}>加载中...</div>
+          ) : detailLoadFailed && !hasContent && !hasLocations && !hasResult && !hasCollabDetails ? (
+            <div style={{ marginTop: "10px", fontSize: "12px", color: "var(--text-secondary)" }}>加载失败</div>
           ) : isCollabTool ? (
-            <CollabToolDetails meta={meta} />
+            <CollabToolDetails meta={effectiveMeta} />
           ) : hasStructuredDetails ? (
             <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginTop: "10px" }}>
               {detailSections.map((section, index) => (
@@ -581,7 +670,7 @@ export const ToolCallCard = memo(function ToolCallCard({
                 minWidth: 0,
               }}
             >
-              {locations!.slice(0, 3).map((loc, idx) => (
+              {effectiveLocations!.slice(0, 3).map((loc, idx) => (
                 <div
                   key={`${loc.path}-${loc.line ?? 0}-${idx}`}
                   style={{ wordBreak: "break-all", whiteSpace: "normal" }}
@@ -590,7 +679,7 @@ export const ToolCallCard = memo(function ToolCallCard({
                   {typeof loc.line === "number" ? `:${loc.line}` : ""}
                 </div>
               ))}
-              {locations!.length > 3 && <div>... +{locations!.length - 3} 处</div>}
+              {effectiveLocations!.length > 3 && <div>... +{effectiveLocations!.length - 3} 处</div>}
             </div>
           ) : null}
           {!hasStructuredDetails && hasResult && <MarkdownViewer content={result || ""} />}
@@ -640,14 +729,14 @@ function renderDeletedText(path: string, text: string): string {
 }
 
 function isDiffLikeText(text: string): boolean {
-  const trimmed = text.trim();
+  const trimmed = stripAnsi(text).trim();
   if (!trimmed) return false;
   if (/^(```|~~~)/.test(trimmed)) return false;
   return /^(diff --git|index |--- |\+\+\+ |@@ )/m.test(trimmed);
 }
 
 function extractDiffPath(text: string, fallbackPath = "(unknown)"): string {
-  const lines = text.split("\n");
+  const lines = stripAnsi(text).split("\n");
   for (const line of lines) {
     const match = line.match(/^\+\+\+\s+(?:b\/)?(.+)$/);
     if (match?.[1]) return match[1].trim();

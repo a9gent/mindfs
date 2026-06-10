@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 
@@ -15,6 +16,7 @@ import (
 	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/preferences"
 	"mindfs/server/internal/relay"
+	"mindfs/server/internal/scheduled"
 	"mindfs/server/internal/session"
 	"mindfs/server/internal/update"
 )
@@ -35,6 +37,7 @@ type AppContext struct {
 	GitHub    *githubimport.Service
 	E2EE      *e2ee.Manager
 	Prefs     *preferences.Store
+	Scheduled *scheduled.Service
 
 	mu                       sync.RWMutex
 	roots                    map[string]*RootContext // root id -> root context
@@ -223,7 +226,13 @@ func (s *AppContext) UpsertRoot(path string) (fs.RootInfo, error) {
 	if s.Dirs == nil {
 		return fs.RootInfo{}, errors.New("registry not configured")
 	}
-	return s.Dirs.Upsert(path)
+	dir, err := s.Dirs.Upsert(path)
+	if err == nil && s.Scheduled != nil {
+		if reloadErr := s.Scheduled.ReloadRoot(dir.ID); reloadErr != nil {
+			log.Printf("[scheduled-agent] reload.error root=%s err=%v", dir.ID, reloadErr)
+		}
+	}
+	return dir, err
 }
 
 func (s *AppContext) RemoveRoot(path string) (fs.RootInfo, error) {
@@ -243,6 +252,9 @@ func (s *AppContext) RemoveRoot(path string) (fs.RootInfo, error) {
 	}
 	if rootCtx != nil && rootCtx.Session != nil {
 		_ = rootCtx.Session.Shutdown()
+	}
+	if s.Scheduled != nil {
+		s.Scheduled.RemoveRoot(dir.ID)
 	}
 	return dir, nil
 }
@@ -276,6 +288,11 @@ func (s *AppContext) RenameRoot(rootID, name, rootPath string) (fs.RootInfo, err
 		return fs.RootInfo{}, err
 	}
 	s.ReleaseRootResources(rootID)
+	if s.Scheduled != nil {
+		if reloadErr := s.Scheduled.ReloadRoot(dir.ID); reloadErr != nil {
+			log.Printf("[scheduled-agent] reload.error root=%s err=%v", dir.ID, reloadErr)
+		}
+	}
 	return dir, nil
 }
 
@@ -347,6 +364,60 @@ func (s *AppContext) GetSessionStreamHub() *StreamHub {
 		s.streamHub = NewStreamHub(s.E2EE)
 	}
 	return s.streamHub
+}
+
+func (s *AppContext) BroadcastSessionMetaUpdated(rootID string, sess *session.Session) {
+	if sess == nil {
+		s.GetSessionStreamHub().BroadcastAll(WSResponse{Type: "session.meta.updated"})
+		return
+	}
+	s.GetSessionStreamHub().BroadcastAll(WSResponse{
+		Type: "session.meta.updated",
+		Payload: map[string]any{
+			"root_id": rootID,
+			"session": map[string]any{
+				"key":                 sess.Key,
+				"type":                sess.Type,
+				"parent_session_key":  sess.ParentSessionKey,
+				"parent_tool_call_id": sess.ParentToolCallID,
+				"name":                sess.Name,
+				"model":               sess.Model,
+				"mode":                session.InferModeFromSession(sess),
+				"effort":              session.InferEffortFromSession(sess),
+				"fast_service":        session.InferFastServiceFromSession(sess),
+				"updated_at":          sess.UpdatedAt,
+			},
+		},
+	})
+}
+
+func (s *AppContext) SetSessionPendingReply(rootID, sessionKey, sessionTitle string) {
+	s.GetSessionStreamHub().SetPendingReply(rootID, sessionKey, sessionTitle)
+}
+
+func (s *AppContext) BroadcastSessionUserMessage(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, fastService, content string) {
+	s.GetSessionStreamHub().BroadcastSessionUserMessage(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, fastService, content, "", false)
+}
+
+func (s *AppContext) BroadcastSessionUpdate(rootID, sessionKey string, update agenttypes.Event) {
+	event := updateToEvent(update)
+	if event == nil {
+		return
+	}
+	s.GetSessionStreamHub().BroadcastSessionStream(rootID, sessionKey, event)
+}
+
+func (s *AppContext) BroadcastSessionError(rootID, sessionKey, message string) {
+	s.GetSessionStreamHub().BroadcastSessionStream(rootID, sessionKey, &StreamEvent{
+		Type: "error",
+		Data: map[string]string{"message": normalizeAgentErrorMessage(errors.New(message))},
+	})
+}
+
+func (s *AppContext) BroadcastSessionDone(rootID, sessionKey, requestID string) {
+	hub := s.GetSessionStreamHub()
+	hub.ClearSessionPending(sessionKey)
+	hub.BroadcastSessionDone(rootID, sessionKey, requestID)
 }
 
 func (s *AppContext) GetCandidateRegistry() *usecase.CandidateRegistry {

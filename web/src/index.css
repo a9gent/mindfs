@@ -38,6 +38,9 @@
   --panel-border: rgba(15, 23, 42, 0.15);
   --panel-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
   --panel-focus-shadow: 0 4px 24px rgba(37, 99, 235, 0.1);
+  --mindfs-code-bg: #f8fafc;
+  --mindfs-code-text: #0f172a;
+  --mindfs-code-border: rgba(15, 23, 42, 0.12);
   --menu-bg: #ffffff;
   --menu-border: rgba(15, 23, 42, 0.08);
   --menu-divider: rgba(15, 23, 42, 0.06);
@@ -92,6 +95,9 @@ html {
     --panel-border: rgba(148, 163, 184, 0.2);
     --panel-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
     --panel-focus-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+    --mindfs-code-bg: #0f172a;
+    --mindfs-code-text: #e2e8f0;
+    --mindfs-code-border: rgba(255, 255, 255, 0.1);
     --menu-bg: #0f172a;
     --menu-border: rgba(148, 163, 184, 0.18);
     --menu-divider: rgba(148, 163, 184, 0.1);
@@ -107,10 +113,10 @@ html {
   /* 仅修正语法高亮代码块，避免全局 pre/code 叠出双层边框 */
   pre[class*="language-"], code[class*="language-"] {
     box-shadow: none !important;
-    background: #0f172a !important; /* 统一更深邃的代码背景 */
-    color: #e2e8f0 !important;
+    background: var(--mindfs-code-bg) !important;
+    color: var(--mindfs-code-text) !important;
     text-shadow: none !important;
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border: 1px solid var(--mindfs-code-border) !important;
   }
 
   pre[class*="language-"] > code[class*="language-"] {
@@ -151,6 +157,9 @@ html {
   --panel-border: rgba(148, 163, 184, 0.2);
   --panel-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
   --panel-focus-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  --mindfs-code-bg: #0f172a;
+  --mindfs-code-text: #e2e8f0;
+  --mindfs-code-border: rgba(255, 255, 255, 0.1);
   --menu-bg: #0f172a;
   --menu-border: rgba(148, 163, 184, 0.18);
   --menu-divider: rgba(148, 163, 184, 0.1);
@@ -166,10 +175,10 @@ html {
 :root[data-theme="dark"] pre[class*="language-"],
 :root[data-theme="dark"] code[class*="language-"] {
   box-shadow: none !important;
-  background: #0f172a !important;
-  color: #e2e8f0 !important;
+  background: var(--mindfs-code-bg) !important;
+  color: var(--mindfs-code-text) !important;
   text-shadow: none !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border: 1px solid var(--mindfs-code-border) !important;
 }
 
 :root[data-theme="dark"] pre[class*="language-"] > code[class*="language-"] {
@@ -178,8 +187,86 @@ html {
   box-shadow: none !important;
 }
 
+:root[data-theme="light"] pre[class*="language-"],
+:root[data-theme="light"] code[class*="language-"] {
+  box-shadow: none !important;
+  background: var(--mindfs-code-bg) !important;
+  color: var(--mindfs-code-text) !important;
+  text-shadow: none !important;
+  border: 1px solid var(--mindfs-code-border) !important;
+}
+
+:root[data-theme="light"] pre[class*="language-"] > code[class*="language-"] {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
 * {
   box-sizing: border-box;
+}
+
+.mindfs-sidebar-resize-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  appearance: none;
+  z-index: 120;
+  outline: none;
+  touch-action: none;
+}
+
+.mindfs-sidebar-resize-rail::before {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 50%;
+  width: 2px;
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      180deg,
+      transparent 0%,
+      rgba(37, 99, 235, 0.08) 12%,
+      rgba(37, 99, 235, 0.82) 50%,
+      rgba(37, 99, 235, 0.08) 88%,
+      transparent 100%
+    );
+  box-shadow: 0 0 0 rgba(37, 99, 235, 0);
+  opacity: 0;
+  transform: translateX(-50%) scaleY(0.88);
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.mindfs-sidebar-resize-rail:hover::before,
+.mindfs-sidebar-resize-rail:focus-visible::before {
+  opacity: 1;
+  transform: translateX(-50%) scaleY(1);
+  box-shadow: 0 0 16px rgba(37, 99, 235, 0.3);
+}
+
+.mindfs-sidebar-resize-rail--left.is-open::before {
+  left: calc(50% + 3px);
+}
+
+.mindfs-sidebar-resize-rail--left.is-closed::before {
+  left: 1px;
+}
+
+.mindfs-sidebar-resize-rail--right.is-open::before {
+  left: calc(50% - 3px);
+}
+
+.mindfs-sidebar-resize-rail--right.is-closed::before {
+  left: 7px;
 }
 
 .token.operator,
