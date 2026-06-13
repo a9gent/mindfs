@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	agenttypes "mindfs/server/internal/agent/types"
 )
@@ -161,6 +162,28 @@ func TestPoolUpdateConfigAppliesRuntimeEnvWithoutFreezingHostedFields(t *testing
 	}
 	if hostedOnly.Command != "hosted-only-v2" || hostedOnly.Brief != "hosted only v2" {
 		t.Fatalf("hosted update was frozen: %+v", hostedOnly)
+	}
+}
+
+func TestProbeInstalledAgentWithPoolSkipsMissingCommand(t *testing.T) {
+	def := Definition{
+		Name:    "missing-agent",
+		Command: "mindfs-test-agent-command-that-does-not-exist",
+	}
+	status := probeInstallStatus(def.Name, def, time.Now().UTC())
+	if status.Installed {
+		t.Fatalf("test command unexpectedly exists in PATH")
+	}
+
+	got := probeInstalledAgentWithPool(context.Background(), def.Name, def, nil, nil, status, probePhaseBackground)
+	if got.Installed {
+		t.Fatalf("missing command should not be marked installed: %+v", got)
+	}
+	if got.Available {
+		t.Fatalf("missing command should not be available: %+v", got)
+	}
+	if !strings.Contains(got.ProbeError, def.Command) {
+		t.Fatalf("probe error = %q, want command name", got.ProbeError)
 	}
 }
 

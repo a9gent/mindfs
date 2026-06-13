@@ -292,7 +292,7 @@ func (p *Prober) UpdateConfig(ctx context.Context, cfg *Config) {
 		return
 	}
 	now := time.Now().UTC()
-	var missing []Definition
+	var installed []Definition
 	p.mu.Lock()
 	p.cfg = cfg
 	for _, def := range cfg.Agents {
@@ -301,11 +301,13 @@ func (p *Prober) UpdateConfig(ctx context.Context, cfg *Config) {
 		}
 		status := normalizeStatus(probeInstallStatus(def.Name, def, now))
 		p.statuses[def.Name] = status
-		missing = append(missing, def)
+		if status.Installed {
+			installed = append(installed, def)
+		}
 	}
 	p.mu.Unlock()
-	if len(missing) > 0 {
-		go p.probeInstalledAgents(ctx, missing)
+	if len(installed) > 0 {
+		go p.probeInstalledAgents(ctx, installed)
 	}
 }
 
@@ -524,6 +526,9 @@ func probeConfiguredAgentWithPool(ctx context.Context, name string, def Definiti
 }
 
 func probeInstalledAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, probeSessions *probeSessionStore, status Status, phase probePhase) Status {
+	if !status.Installed {
+		return status
+	}
 	status.Installed = true
 
 	tmpRoot, err := EnsureStableWorkDir("agent-probe", name)
@@ -607,17 +612,6 @@ func (p *Prober) probeMissingCommands() {
 	})
 	log.Printf("[agent/probe] probe_missing_commands count=%d agents=%s", len(defs), definitionNames(defs))
 	p.probeInstallOnly(defs)
-}
-
-func (p *Prober) probeFailedInstalledOnly(ctx context.Context) {
-	if p.cfg == nil {
-		return
-	}
-	defs := p.collectDefinitions(func(st Status, ok bool) bool {
-		return ok && st.Installed && !st.Available
-	})
-	log.Printf("[agent/probe] probe_failed_installed count=%d agents=%s", len(defs), definitionNames(defs))
-	p.probeInstalledAgents(ctx, defs)
 }
 
 // AddListener registers a callback invoked when an agent status changes.
@@ -1009,7 +1003,8 @@ func (p *Prober) probeInstalledAgents(ctx context.Context, defs []Definition) {
 	}
 
 	p.runDefinitionsConcurrently(defs, func(_ int, def Definition) {
-		status := safeProbeInstalledAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions, probeInstallStatus(def.Name, def, time.Now().UTC()), probePhaseBackground)
+		status := unavailableStatus(def.Name, true, "probe pending", time.Now().UTC())
+		status = safeProbeInstalledAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions, status, probePhaseBackground)
 		p.setStatus(status)
 	})
 }
