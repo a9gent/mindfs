@@ -7402,18 +7402,6 @@ export function App({ onGoHome }: AppProps) {
     );
   }, [actionBarSessionKey, currentRootId, queueVersion, rootSessionKey]);
 
-  useEffect(() => {
-    if (
-      status !== "connected" ||
-      !currentRootId ||
-      !actionBarSessionKey ||
-      actionBarSessionKey.startsWith("pending-")
-    ) {
-      return;
-    }
-    void sessionService.markSessionReady(currentRootId, actionBarSessionKey);
-  }, [actionBarSessionKey, currentRootId, status]);
-
   const matchedPlugin = useMemo(() => {
     if (!currentRootId || !file) return null;
     const input = toPluginInput(file, pluginQuery);

@@ -247,8 +247,6 @@ class SessionService {
   private readonly connectTimeoutMs = 5000;
   private readonly probeTimeoutMs = 2000;
   private readonly reconnectWatchdogMs = 3000;
-  private readonly readyDedupeWindowMs = 1000;
-  private readySentAt = new Map<string, number>();
   private contextCache = new Map<string, { selectionKey: string }>();
 
   constructor() {
@@ -868,16 +866,11 @@ class SessionService {
     if (!rootId || !sessionKey) {
       return false;
     }
-    const readyKey = `${rootId}::${sessionKey}`;
     const now = Date.now();
-    const previous = this.readySentAt.get(readyKey) || 0;
-    if (now - previous < this.readyDedupeWindowMs) {
-      return true;
-    }
     if (e2eeService.isRequired()) {
       await e2eeService.ensureSession();
     }
-    const sent = await this.sendWSMessage({
+    return this.sendWSMessage({
       id: `ready-${now}`,
       type: "session.ready",
       payload: {
@@ -885,10 +878,6 @@ class SessionService {
         session_key: sessionKey,
       },
     });
-    if (sent) {
-      this.readySentAt.set(readyKey, now);
-    }
-    return sent;
   }
 
   async fetchSessions(
