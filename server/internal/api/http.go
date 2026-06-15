@@ -42,6 +42,7 @@ import (
 type HTTPHandler struct {
 	AppContext    *AppContext
 	StaticDir     string
+	Version       string
 	LocalCLIToken string
 }
 
@@ -998,7 +999,7 @@ func (h *HTTPHandler) handleFrontend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if isRelayedRequest(r) {
+	if h.shouldRewriteRelayedAssets(r) {
 		w.Write([]byte(rewriteRelayedFrontendContent(indexHTML)))
 		return
 	}
@@ -1037,7 +1038,7 @@ func (h *HTTPHandler) serveStaticAsset(w http.ResponseWriter, r *http.Request) b
 			h.serveFrontendIndex(w, r, staticDir, assetPath)
 			return true
 		}
-		if isRelayedRequest(r) && shouldRewriteRelayedStaticAsset(cleanPath) {
+		if h.shouldRewriteRelayedAssets(r) && shouldRewriteRelayedStaticAsset(cleanPath) {
 			serveRewrittenStaticAsset(w, r, assetPath)
 			return true
 		}
@@ -1072,7 +1073,7 @@ func (h *HTTPHandler) serveFrontendIndex(w http.ResponseWriter, r *http.Request,
 		w.Write([]byte(renderFallbackFrontend(indexHTML, frontendAssetMissingNotice(missing))))
 		return
 	}
-	if isRelayedRequest(r) {
+	if h.shouldRewriteRelayedAssets(r) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write([]byte(rewriteRelayedFrontendContent(string(content))))
 		return
@@ -1154,6 +1155,33 @@ func applyStaticCacheHeaders(w http.ResponseWriter, cleanPath string) {
 
 func isRelayedRequest(r *http.Request) bool {
 	return strings.TrimSpace(r.Header.Get("X-MindFS-Relayed")) == "1"
+}
+
+func (h *HTTPHandler) shouldRewriteRelayedAssets(r *http.Request) bool {
+	return isRelayedRequest(r) && isStandardReleaseVersion(h.Version)
+}
+
+func isStandardReleaseVersion(version string) bool {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return false
+	}
+	version, _ = strings.CutPrefix(version, "v")
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, ch := range part {
+			if ch < '0' || ch > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func shouldRewriteRelayedStaticAsset(cleanPath string) bool {

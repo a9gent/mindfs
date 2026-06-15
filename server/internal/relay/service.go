@@ -297,16 +297,16 @@ func (s *Service) handleServiceStream(req *http.Request, stream net.Conn, slug s
 		return writeSimpleHTTPError(stream, http.StatusForbidden, "service_disabled")
 	}
 	if websocket.IsWebSocketUpgrade(req) {
-		return s.proxyWebSocketToBase(req, stream, service.LocalURL)
+		return s.proxyWebSocketToBase(req, stream, service.LocalURL, true)
 	}
-	return s.proxyHTTPToBase(req, stream, service.LocalURL)
+	return s.proxyHTTPToBase(req, stream, service.LocalURL, true)
 }
 
 func (s *Service) proxyHTTP(req *http.Request, stream io.Writer) error {
-	return s.proxyHTTPToBase(req, stream, s.localURL)
+	return s.proxyHTTPToBase(req, stream, s.localURL, false)
 }
 
-func (s *Service) proxyHTTPToBase(req *http.Request, stream io.Writer, baseURL string) error {
+func (s *Service) proxyHTTPToBase(req *http.Request, stream io.Writer, baseURL string, stripRelayInternalHeaders bool) error {
 	targetURL, err := localTargetURL(baseURL, req.URL)
 	if err != nil {
 		return err
@@ -315,7 +315,7 @@ func (s *Service) proxyHTTPToBase(req *http.Request, stream io.Writer, baseURL s
 	outbound.URL = targetURL
 	outbound.RequestURI = ""
 	outbound.Host = targetURL.Host
-	prepareLocalProxyHeaders(outbound, req, targetURL)
+	prepareLocalProxyHeaders(outbound, req, targetURL, stripRelayInternalHeaders)
 
 	resp, err := s.client.Do(outbound)
 	if err != nil {
@@ -327,10 +327,10 @@ func (s *Service) proxyHTTPToBase(req *http.Request, stream io.Writer, baseURL s
 }
 
 func (s *Service) proxyWebSocket(req *http.Request, stream io.ReadWriter) error {
-	return s.proxyWebSocketToBase(req, stream, s.localURL)
+	return s.proxyWebSocketToBase(req, stream, s.localURL, false)
 }
 
-func (s *Service) proxyWebSocketToBase(req *http.Request, stream io.ReadWriter, baseURL string) error {
+func (s *Service) proxyWebSocketToBase(req *http.Request, stream io.ReadWriter, baseURL string, stripRelayInternalHeaders bool) error {
 	targetURL, err := websocketTargetURL(baseURL, req.URL)
 	if err != nil {
 		return err
@@ -342,6 +342,10 @@ func (s *Service) proxyWebSocketToBase(req *http.Request, stream io.ReadWriter, 
 	headers.Del("Sec-WebSocket-Version")
 	headers.Del("Sec-WebSocket-Extensions")
 	headers.Del("Origin")
+	if stripRelayInternalHeaders {
+		headers.Del("X-MindFS-Relay-Service-Slug")
+		headers.Del("X-MindFS-Relayed")
+	}
 	if localOrigin := originFromBaseURL(baseURL); localOrigin != "" {
 		headers.Set("Origin", localOrigin)
 	}
@@ -455,9 +459,11 @@ func websocketTargetURL(base string, requestURL *url.URL) (string, error) {
 	return target.String(), nil
 }
 
-func prepareLocalProxyHeaders(outbound, original *http.Request, targetURL *url.URL) {
-	outbound.Header.Del("X-MindFS-Relay-Service-Slug")
-	outbound.Header.Del("X-MindFS-Relayed")
+func prepareLocalProxyHeaders(outbound, original *http.Request, targetURL *url.URL, stripRelayInternalHeaders bool) {
+	if stripRelayInternalHeaders {
+		outbound.Header.Del("X-MindFS-Relay-Service-Slug")
+		outbound.Header.Del("X-MindFS-Relayed")
+	}
 	if original.Host != "" {
 		outbound.Header.Set("X-Forwarded-Host", original.Host)
 	}

@@ -3,6 +3,9 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"mindfs/server/internal/e2ee"
@@ -37,6 +40,89 @@ func TestPathForStaticAssetCleansURLPaths(t *testing.T) {
 			got := pathForStaticAsset(tt.requestPath)
 			if got != tt.want {
 				t.Fatalf("pathForStaticAsset(%q) = %q, want %q", tt.requestPath, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestServeFrontendIndexRewritesRelayedAssetRefsForReleaseVersion(t *testing.T) {
+	staticDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(staticDir, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(staticDir, "index.html")
+	content := `<!doctype html><script type="module" src="./assets/index-test.js"></script><link rel="stylesheet" href="./assets/index-test.css">`
+	if err := os.WriteFile(indexPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staticDir, "assets", "index-test.js"), []byte("console.log('ok')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staticDir, "assets", "index-test.css"), []byte("body{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := &HTTPHandler{StaticDir: staticDir, Version: "v0.3.5"}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-MindFS-Relayed", "1")
+	resp := httptest.NewRecorder()
+
+	handler.serveFrontendIndex(resp, req, staticDir, indexPath)
+
+	body := resp.Body.String()
+	if strings.Contains(body, "./assets/") {
+		t.Fatalf("body still contains local assets path: %s", body)
+	}
+	if !strings.Contains(body, "/mindfs-assets/index-test.js") || !strings.Contains(body, "/mindfs-assets/index-test.css") {
+		t.Fatalf("body missing relayed asset paths: %s", body)
+	}
+}
+
+func TestServeFrontendIndexKeepsLocalAssetRefsForDevVersion(t *testing.T) {
+	staticDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(staticDir, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(staticDir, "index.html")
+	content := `<!doctype html><script type="module" src="./assets/index-test.js"></script>`
+	if err := os.WriteFile(indexPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staticDir, "assets", "index-test.js"), []byte("console.log('ok')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := &HTTPHandler{StaticDir: staticDir, Version: "v0.3.5-9-g92b8c85-dirty"}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-MindFS-Relayed", "1")
+	resp := httptest.NewRecorder()
+
+	handler.serveFrontendIndex(resp, req, staticDir, indexPath)
+
+	body := resp.Body.String()
+	if !strings.Contains(body, "./assets/index-test.js") {
+		t.Fatalf("body should keep local asset path for dev version: %s", body)
+	}
+	if strings.Contains(body, "/mindfs-assets/") {
+		t.Fatalf("body should not contain relayed asset path for dev version: %s", body)
+	}
+}
+
+func TestIsStandardReleaseVersion(t *testing.T) {
+	tests := []struct {
+		version string
+		want    bool
+	}{
+		{version: "v0.3.5", want: true},
+		{version: "0.3.5", want: true},
+		{version: "v0.3.5-9-g92b8c85-dirty", want: false},
+		{version: "dev", want: false},
+		{version: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			if got := isStandardReleaseVersion(tt.version); got != tt.want {
+				t.Fatalf("isStandardReleaseVersion(%q) = %v, want %v", tt.version, got, tt.want)
 			}
 		})
 	}

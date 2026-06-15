@@ -121,6 +121,7 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	httpHandler := &api.HTTPHandler{
 		AppContext: services,
 		StaticDir:  resolveStaticDir(),
+		Version:    opts.Version,
 	}
 	wsHandler := &api.WSHandler{AppContext: services}
 
