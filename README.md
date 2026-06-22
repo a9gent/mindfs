@@ -33,6 +33,7 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 - **Multi-device sync**: Access the same instance from multiple devices simultaneously with live session sync.
 - **Configuration backup and switching**: Agent configurations can be backed up and switched with one click, making it easier to move between multiple accounts or API keys.
 - **Subagents**: Codex subagents are automatically discovered and displayed.
+- **session fork**: Session can forked from historical replies.
 - **Scheduled tasks**: Trigger agents to run tasks at specified times.
 
 ### File Access
