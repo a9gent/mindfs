@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	agenttypes "mindfs/server/internal/agent/types"
+	configpkg "mindfs/server/internal/config"
 	"mindfs/server/internal/fs"
 
 	_ "modernc.org/sqlite"
@@ -26,6 +28,7 @@ import (
 
 const (
 	sessionDBPath    = "sessions/session-list.db"
+	sessionDBLinkExt = ".link"
 	exchangeFileTpl  = "sessions/%s.jsonl"
 	auxFileTpl       = "sessions/%s.aux.jsonl"
 	selectSessionSQL = `
@@ -99,6 +102,12 @@ FROM session_agent_bindings
 WHERE agent = ? AND agent_session_id = ?
 LIMIT 1`
 )
+
+var openSQLiteDB = func(path string) (*sql.DB, error) {
+	return sql.Open("sqlite", path)
+}
+
+var mindFSConfigDir = configpkg.MindFSConfigDir
 
 type Manager struct {
 	root             fs.RootInfo
@@ -1413,11 +1422,56 @@ func (m *Manager) ensureSessionMetaDBUnsafe() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	dbFile := filepath.Join(metaDir, filepath.FromSlash(sessionDBPath))
+	legacyDBFile := filepath.Join(metaDir, filepath.FromSlash(sessionDBPath))
+	linkFile := legacyDBFile + sessionDBLinkExt
+	if linkedDBFile, ok, err := readSessionDBLink(linkFile); err != nil {
+		return nil, err
+	} else if ok {
+		db, err := openSessionMetaDB(linkedDBFile)
+		if err != nil {
+			return nil, err
+		}
+		m.db = db
+		return m.db, nil
+	}
+
+	db, err := openSessionMetaDB(legacyDBFile)
+	if err == nil {
+		m.db = db
+		return m.db, nil
+	}
+	legacyErr := err
+
+	fallbackDBFile, err := userDataSessionDBFile(m.root.ID)
+	if err != nil {
+		return nil, fmt.Errorf("open legacy session db: %w; resolve fallback session db: %w", legacyErr, err)
+	}
+	db, err = openSessionMetaDB(fallbackDBFile)
+	if err != nil {
+		return nil, fmt.Errorf("open legacy session db: %w; open fallback session db: %w", legacyErr, err)
+	}
+	if err := writeSessionDBLink(linkFile, fallbackDBFile); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open legacy session db: %w; write session db link: %w", legacyErr, err)
+	}
+	log.Printf("[session/store] sqlite fallback root=%s legacy=%s fallback=%s err=%v", m.root.ID, legacyDBFile, fallbackDBFile, legacyErr)
+	m.db = db
+	return m.db, nil
+}
+
+func openSessionMetaDB(dbFile string) (db *sql.DB, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if db != nil {
+				db.Close()
+			}
+			err = fmt.Errorf("sqlite init panic for %s: %v", dbFile, r)
+		}
+	}()
 	if err := os.MkdirAll(filepath.Dir(dbFile), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", dbFile)
+	db, err = openSQLiteDB(dbFile)
 	if err != nil {
 		return nil, err
 	}
@@ -1452,8 +1506,50 @@ func (m *Manager) ensureSessionMetaDBUnsafe() (*sql.DB, error) {
 			return nil, err
 		}
 	}
-	m.db = db
-	return m.db, nil
+	return db, nil
+}
+
+func readSessionDBLink(linkFile string) (string, bool, error) {
+	payload, err := os.ReadFile(linkFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	dbFile := strings.TrimSpace(string(payload))
+	if dbFile == "" {
+		return "", false, fmt.Errorf("empty session db link: %s", linkFile)
+	}
+	if !filepath.IsAbs(dbFile) {
+		return "", false, fmt.Errorf("session db link must be absolute: %s", linkFile)
+	}
+	return dbFile, true, nil
+}
+
+func writeSessionDBLink(linkFile, dbFile string) error {
+	if strings.TrimSpace(dbFile) == "" {
+		return errors.New("session db link target required")
+	}
+	if !filepath.IsAbs(dbFile) {
+		return errors.New("session db link target must be absolute")
+	}
+	if err := os.MkdirAll(filepath.Dir(linkFile), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(linkFile, []byte(dbFile+"\n"), 0o644)
+}
+
+func userDataSessionDBFile(rootID string) (string, error) {
+	configDir, err := mindFSConfigDir()
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(rootID)
+	if id == "" {
+		id = "default"
+	}
+	return filepath.Join(configDir, url.PathEscape(id), "session-list.db"), nil
 }
 
 func sessionMetaUpsertArgs(session *Session) ([]any, error) {
