@@ -301,6 +301,54 @@ func (m *Manager) UpsertPendingExchangeAux(_ context.Context, sessionKey string,
 	return nil
 }
 
+func (m *Manager) MarkPendingAskUserAnswered(_ context.Context, sessionKey, callID string, answers map[string]string, answeredAt time.Time) error {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return errors.New("session key required")
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return errors.New("tool call id required")
+	}
+	cleanAnswers := make(map[string]string, len(answers))
+	for key, value := range answers {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			cleanAnswers[key] = value
+		}
+	}
+	if len(cleanAnswers) == 0 {
+		return errors.New("answers required")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.pendingToolCalls == nil || m.pendingToolCalls[sessionKey] == nil {
+		return errors.New("pending tool call not found")
+	}
+	existing, ok := m.pendingToolCalls[sessionKey][callID]
+	if !ok {
+		return errors.New("pending tool call not found")
+	}
+	if existing.Kind != "" && existing.Kind != agenttypes.ToolKindAskUser {
+		return errors.New("pending tool call is not ask_user")
+	}
+	meta := make(map[string]any, len(existing.Meta)+2)
+	for key, value := range existing.Meta {
+		meta[key] = value
+	}
+	meta["answers"] = cleanAnswers
+	if !answeredAt.IsZero() {
+		meta["answeredAt"] = answeredAt.UTC().Format(time.RFC3339Nano)
+	}
+	existing.Kind = agenttypes.ToolKindAskUser
+	existing.Status = "complete"
+	existing.Meta = meta
+	m.pendingToolCalls[sessionKey][callID] = existing
+	return nil
+}
+
 func (m *Manager) ClearPendingExchangeAux(_ context.Context, sessionKey string) {
 	sessionKey = strings.TrimSpace(sessionKey)
 	if sessionKey == "" {

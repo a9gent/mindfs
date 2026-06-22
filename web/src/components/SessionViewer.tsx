@@ -508,6 +508,22 @@ function getAskUserQuestions(toolCall: Partial<ToolCall>): AskUserQuestionItem[]
   }
 }
 
+function getAskUserAnswers(toolCall: Partial<ToolCall>): Record<string, string> {
+  const raw = toolCall.meta?.answers;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {};
+  }
+  const answers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const cleanKey = `${key || ""}`.trim();
+    const cleanValue = `${value || ""}`.trim();
+    if (cleanKey && cleanValue) {
+      answers[cleanKey] = cleanValue;
+    }
+  }
+  return answers;
+}
+
 function AskUserIcon() {
   return (
     <svg
@@ -569,10 +585,8 @@ function AskUserQuestionCard({
   onAnswer?: SessionViewerProps["onAskUserAnswer"];
 }) {
   const questions = getAskUserQuestions(toolCall);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
   const [focusedCustomAnswerKey, setFocusedCustomAnswerKey] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
   const status = `${toolCall.status || ""}`.toLowerCase();
   const isCurrent =
     status === "running" || status === "pending" || status === "in_progress";
@@ -580,6 +594,11 @@ function AskUserQuestionCard({
   const toolUseId =
     toolCall.callId ||
     (typeof toolCall.meta?.toolUseId === "string" ? toolCall.meta.toolUseId : "");
+  const persistedAnswers = getAskUserAnswers(toolCall);
+  const persistedAnswersKey = JSON.stringify(persistedAnswers);
+  const hasPersistedAnswers = Object.keys(persistedAnswers).length > 0;
+  const [answers, setAnswers] = useState<Record<string, string>>(persistedAnswers);
+  const [submitted, setSubmitted] = useState(hasPersistedAnswers);
   const firstQuestion = questions[0] || {};
   const questionTitle = `${firstQuestion.question || ""}`.trim();
   const questionHeader = `${firstQuestion.header || ""}`.trim();
@@ -600,6 +619,17 @@ function AskUserQuestionCard({
     questions.every((_, index) => (answers[`q_${index}`] || "").trim() !== "") &&
     !submitting &&
     !submitted;
+
+  useEffect(() => {
+    if (hasPersistedAnswers) {
+      setAnswers(persistedAnswers);
+      setSubmitted(true);
+      setExpanded(false);
+      return;
+    }
+    setAnswers({});
+    setSubmitted(false);
+  }, [toolUseId, persistedAnswersKey, hasPersistedAnswers]);
 
   useEffect(() => {
     if (submitted) {
@@ -1236,7 +1266,6 @@ if (useInnerScrollContainer && !container) {
       const tc = item.toolCall || {};
       const isAskUser =
         `${tc.kind || ""}`.toLowerCase() === "ask_user" &&
-        `${tc.status || ""}`.toLowerCase() !== "complete" &&
         getAskUserQuestions(tc).length > 0;
       const isUserShell =
         `${tc.kind || ""}`.toLowerCase() === "execute" &&

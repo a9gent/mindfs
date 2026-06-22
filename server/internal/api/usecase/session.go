@@ -1805,6 +1805,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 		return err
 	}
 	for _, aux := range dedupeExchangeAuxBuffer(auxBuffer) {
+		aux = hydratePendingToolCallAux(ctx, manager, current.Key, aux)
 		if err := manager.AddExchangeAux(ctx, current.Key, aux); err != nil {
 			return err
 		}
@@ -2307,6 +2308,7 @@ func attachBackgroundSessionUpdates(ctx context.Context, in subagentSessionInput
 			return
 		}
 		for _, aux := range dedupeExchangeAuxBuffer(auxBuffer) {
+			aux = hydratePendingToolCallAux(ctx, in.Manager, child.Key, aux)
 			if err := in.Manager.AddExchangeAux(ctx, child.Key, aux); err != nil {
 				log.Printf("[subagent] persist.aux.error root=%s session=%s err=%v", in.RootID, child.Key, err)
 				return
@@ -2737,12 +2739,12 @@ func (s *Service) AnswerQuestion(ctx context.Context, in AnswerQuestionInput) er
 	if sessionKey == "" {
 		return errors.New("session key required")
 	}
+	manager, err := s.Registry.GetSessionManager(in.RootID)
+	if err != nil {
+		return err
+	}
 	agentName := strings.TrimSpace(in.Agent)
 	if agentName == "" {
-		manager, err := s.Registry.GetSessionManager(in.RootID)
-		if err != nil {
-			return err
-		}
 		current, err := manager.Get(ctx, sessionKey, 0)
 		if err != nil {
 			return err
@@ -2760,10 +2762,17 @@ func (s *Service) AnswerQuestion(ctx context.Context, in AnswerQuestionInput) er
 	if !ok {
 		return errors.New("agent session not found")
 	}
-	return sess.AnswerQuestion(ctx, agenttypes.AskUserAnswer{
+	answer := agenttypes.AskUserAnswer{
 		ToolUseID: strings.TrimSpace(in.ToolUseID),
 		Answers:   in.Answers,
-	})
+	}
+	if err := manager.MarkPendingAskUserAnswered(ctx, sessionKey, answer.ToolUseID, answer.Answers, time.Now()); err != nil {
+		return err
+	}
+	if err := sess.AnswerQuestion(ctx, answer); err != nil {
+		return err
+	}
+	return nil
 }
 
 func currentAssistantLine(responseText string) int {
@@ -2771,6 +2780,25 @@ func currentAssistantLine(responseText string) int {
 		return 0
 	}
 	return strings.Count(responseText, "\n") + 1
+}
+
+func hydratePendingToolCallAux(ctx context.Context, manager *session.Manager, sessionKey string, aux session.ExchangeAux) session.ExchangeAux {
+	if manager == nil || aux.ToolCall == nil || strings.TrimSpace(aux.ToolCall.CallID) == "" {
+		return aux
+	}
+	if aux.ToolCall.Kind != agenttypes.ToolKindAskUser {
+		return aux
+	}
+	latest, err := manager.GetFullToolCall(ctx, sessionKey, aux.ToolCall.CallID)
+	if err != nil || latest == nil {
+		return aux
+	}
+	if latest.Kind != agenttypes.ToolKindAskUser {
+		return aux
+	}
+	toolCall := *latest
+	aux.ToolCall = &toolCall
+	return aux
 }
 
 func dedupeExchangeAuxBuffer(items []session.ExchangeAux) []session.ExchangeAux {
