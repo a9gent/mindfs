@@ -1,3 +1,20 @@
+# MindFS v0.3.7
+
+## 新功能
+- codex 支持 ask user，todolist, plan 卡片/toolcall
+- cc 支持 subagent
+- web push 通知（需要菜单中手动打开）
+- 从历史消息 fork 新会话
+
+## 优化和修复
+- 修复 markdown 中本地文件无法预览
+- 修复 e2ee 模式下无法下载文件
+- acp 协议新版本适配，修复无法设置模型
+- 修复 ask user 刷新页面后回答丢失
+- 修复 cc 模型名称显示问题
+- 修复无法添加 nas/网络盘 项目
+
+
 # MindFS v0.3.6
 
 ## 新功能
