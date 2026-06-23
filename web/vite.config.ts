@@ -80,6 +80,55 @@ self.addEventListener("activate", (event) => {
   })());
 });
 
+self.addEventListener("push", (event) => {
+  event.waitUntil((async () => {
+    const payload = readPushPayload(event);
+    const title = payload.title || "MindFS";
+    const options = {
+      body: payload.body || "",
+      tag: payload.tag || undefined,
+      renotify: Boolean(payload.renotify),
+      requireInteraction: Boolean(payload.requireInteraction),
+      icon: payload.icon ? new URL(payload.icon, self.location.href).toString() : new URL("./pwa-192.png", self.location.href).toString(),
+      badge: payload.badge ? new URL(payload.badge, self.location.href).toString() : new URL("./pwa-192.png", self.location.href).toString(),
+      data: {
+        ...(payload.data || {}),
+        url: payload.url || "./",
+      },
+    };
+    await self.registration.showNotification(title, options);
+  })());
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const targetURL = new URL(event.notification.data?.url || "./", self.location.href).toString();
+    const clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const client of clientList) {
+      if (new URL(client.url).origin === self.location.origin) {
+        await client.focus();
+        if ("navigate" in client) {
+          await client.navigate(targetURL);
+        }
+        return;
+      }
+    }
+    await self.clients.openWindow(targetURL);
+  })());
+});
+
+function readPushPayload(event) {
+  if (!event.data) {
+    return {};
+  }
+  try {
+    return event.data.json() || {};
+  } catch {
+    return { title: "MindFS", body: event.data.text() };
+  }
+}
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") {

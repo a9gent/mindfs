@@ -1,4 +1,5 @@
 import { appURL } from "./base";
+import { protectedJSON } from "./api";
 
 export type UpdateState = {
   current_version?: string;
@@ -15,20 +16,11 @@ export type UpdateState = {
 };
 
 export async function fetchUpdateState(): Promise<UpdateState> {
-  const res = await fetch(appURL("/api/app/update"));
-  if (!res.ok) {
-    throw new Error(`failed to fetch update state: ${res.status}`);
-  }
-  return res.json();
+  return protectedJSON<UpdateState>(appURL("/api/app/update"));
 }
 
 export async function triggerUpdate(): Promise<UpdateState> {
-  const res = await fetch(appURL("/api/app/update"), {
+  return protectedJSON<UpdateState>(appURL("/api/app/update"), {
     method: "POST",
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `failed to start update: ${res.status}`);
-  }
-  return res.json();
 }

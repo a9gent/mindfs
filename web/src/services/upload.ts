@@ -53,6 +53,6 @@ export async function uploadFiles(params: {
     }
     throw new Error(message);
   }
-  const payload = (await response.json()) as UploadResponse;
+  const payload = await e2eeService.parseProtectedJSONResponse<UploadResponse>(response);
   return Array.isArray(payload.files) ? payload.files : [];
 }

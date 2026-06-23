@@ -18,14 +18,15 @@ import {
   KEY_ENTER_COMMAND,
   LexicalEditor,
   NodeKey,
+  PASTE_COMMAND,
   SerializedTextNode,
   Spread,
   TextNode,
 } from "lexical";
 
 type TokenType = "file" | "skill";
-type CandidateType = TokenType | "slash_command" | "prompt";
-type ActiveTokenType = "file" | "slash" | "prompt";
+type CandidateType = TokenType | "slash_command" | "prompt" | "command";
+type ActiveTokenType = "file" | "slash" | "prompt" | "command";
 
 type ActiveToken = {
   type: ActiveTokenType;
@@ -37,6 +38,7 @@ export type TokenEditorHandle = {
   blur: () => void;
   getHeight: () => number;
   clear: () => void;
+  setText: (value: string) => void;
   insertCandidate: (type: CandidateType, value: string) => void;
 };
 
@@ -45,6 +47,7 @@ type TokenEditorProps = {
   disabled?: boolean;
   isDark?: boolean;
   rightInset?: number;
+  topInset?: number;
   bottomInset?: number;
   onChange: (payload: { serializedText: string; displayText: string; activeToken: ActiveToken | null }) => void;
   onFocusChange?: (focused: boolean) => void;
@@ -52,6 +55,7 @@ type TokenEditorProps = {
   onKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: React.ClipboardEvent<HTMLDivElement>) => void;
   onEnter?: (event: KeyboardEvent | null) => boolean;
+  enterKeyHint?: React.HTMLAttributes<HTMLElement>["enterKeyHint"];
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
 };
@@ -266,6 +270,9 @@ function parseActiveToken(displayText: string, cursorPos: number): ActiveToken |
 }
 
 function expectedActiveTokenType(candidateType: CandidateType): ActiveTokenType {
+  if (candidateType === "command") {
+    return "command";
+  }
   if (candidateType === "file") {
     return "file";
   }
@@ -285,6 +292,91 @@ function triggerChar(tokenType: ActiveTokenType): "@" | "/" | "#" {
   return "/";
 }
 
+function getPasteDataTransfer(event: ClipboardEvent | InputEvent | KeyboardEvent): DataTransfer | null {
+  if (typeof ClipboardEvent !== "undefined" && event instanceof ClipboardEvent) {
+    return event.clipboardData;
+  }
+  if (typeof InputEvent !== "undefined" && event instanceof InputEvent) {
+    return event.dataTransfer;
+  }
+  return null;
+}
+
+function getPlainTextFromPasteEvent(event: ClipboardEvent | InputEvent | KeyboardEvent): string {
+  const dataTransfer = getPasteDataTransfer(event);
+  return dataTransfer?.getData("text/plain") || dataTransfer?.getData("text/uri-list") || "";
+}
+
+function pasteEventHasFiles(event: ClipboardEvent | InputEvent | KeyboardEvent): boolean {
+  const dataTransfer = getPasteDataTransfer(event);
+  return Array.from(dataTransfer?.items || []).some((item) => item.kind === "file");
+}
+
+function isKeyboardPasteInput(event: InputEvent): boolean {
+  const data = event.data || "";
+  return event.inputType === "insertFromPaste"
+    || event.inputType === "insertFromPasteAsQuotation"
+    || !!event.dataTransfer
+    || data.includes("\n")
+    || data.includes("\r");
+}
+
+async function readClipboardTextFallback(): Promise<string> {
+  try {
+    const mod = await import("@capacitor/clipboard");
+    const result = await mod.Clipboard.read();
+    if (result.value) {
+      return result.value;
+    }
+  } catch {
+    // Fall through to the browser clipboard API.
+  }
+  try {
+    return await navigator.clipboard?.readText?.() || "";
+  } catch {
+    return "";
+  }
+}
+
+function $insertPlainTextAtSelection(text: string): boolean {
+  if (text === "") {
+    return false;
+  }
+  let selection = $getSelection();
+  if (!$isRangeSelection(selection)) {
+    $getRoot().selectEnd();
+    selection = $getSelection();
+  }
+  if (!$isRangeSelection(selection)) {
+    return false;
+  }
+  const parts = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (part) {
+      selection.insertText(part);
+    }
+    if (index < parts.length - 1) {
+      selection.insertLineBreak();
+    }
+    selection = $getSelection();
+    if (!$isRangeSelection(selection)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function $replaceWithPlainText(text: string): void {
+  const root = $getRoot();
+  root.clear();
+  root.selectEnd();
+  if (text !== "") {
+    $insertPlainTextAtSelection(text);
+  }
+  $getRoot().selectEnd();
+}
+
 function EditorBridge({
   onChange,
   onReady,
@@ -298,13 +390,59 @@ function EditorBridge({
 }) {
   const [editor] = useLexicalComposerContext();
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
     return editor.registerRootListener((rootElement) => {
       rootRef.current = rootElement as HTMLDivElement | null;
+      setRootElement(rootRef.current);
       onReady({ editor, root: rootRef.current });
     });
   }, [editor, onReady]);
+
+  useEffect(() => {
+    if (!rootElement) {
+      return;
+    }
+    const insertFromNativePaste = (event: ClipboardEvent | InputEvent) => {
+      if (pasteEventHasFiles(event)) {
+        return;
+      }
+      const text = getPlainTextFromPasteEvent(event);
+      const inputText = typeof InputEvent !== "undefined" && event instanceof InputEvent ? event.data || "" : "";
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      const insert = (nextText: string) => {
+        if (nextText === "") {
+          return;
+        }
+        editor.update(() => {
+          $insertPlainTextAtSelection(nextText);
+        });
+        rootElement.focus({ preventScroll: true });
+      };
+      if (text !== "") {
+        insert(text);
+        return;
+      }
+      void readClipboardTextFallback().then((clipboardText) => {
+        insert(clipboardText || inputText);
+      });
+    };
+    const handlePaste = (event: ClipboardEvent) => insertFromNativePaste(event);
+    const handleBeforeInput = (event: InputEvent) => {
+      if (isKeyboardPasteInput(event)) {
+        insertFromNativePaste(event);
+      }
+    };
+    rootElement.addEventListener("paste", handlePaste, { capture: true });
+    rootElement.addEventListener("beforeinput", handleBeforeInput, { capture: true });
+    return () => {
+      rootElement.removeEventListener("paste", handlePaste, { capture: true });
+      rootElement.removeEventListener("beforeinput", handleBeforeInput, { capture: true });
+    };
+  }, [editor, rootElement]);
 
   useEffect(() => {
     return editor.registerUpdateListener(({ editorState }) => {
@@ -317,6 +455,27 @@ function EditorBridge({
       });
     });
   }, [editor, onChange]);
+
+  useEffect(() => {
+    return editor.registerCommand(
+      PASTE_COMMAND,
+      (event) => {
+        if (pasteEventHasFiles(event)) {
+          return false;
+        }
+        const text = getPlainTextFromPasteEvent(event);
+        if (text === "") {
+          return false;
+        }
+        event.preventDefault();
+        if ($insertPlainTextAtSelection(text)) {
+          return true;
+        }
+        return false;
+      },
+      COMMAND_PRIORITY_HIGH
+    );
+  }, [editor]);
 
   useEffect(() => {
     return editor.registerCommand(
@@ -351,6 +510,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
     disabled = false,
     isDark = false,
     rightInset = 120,
+    topInset = 0,
     bottomInset = 12,
     onChange,
     onFocusChange,
@@ -358,6 +518,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
     onKeyDown,
     onPaste,
     onEnter,
+    enterKeyHint,
     onCompositionStart,
     onCompositionEnd,
   },
@@ -393,12 +554,25 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
     },
     clear() {
       editorRef.current?.update(() => {
-        $getRoot().clear();
+        $replaceWithPlainText("");
       });
+    },
+    setText(value: string) {
+      editorRef.current?.update(() => {
+        $replaceWithPlainText(value);
+      });
+      rootRef.current?.focus({ preventScroll: true });
     },
     insertCandidate(type: CandidateType, value: string) {
       const editor = editorRef.current;
       if (!editor) return;
+      if (type === "command") {
+        editor.update(() => {
+          $replaceWithPlainText(value);
+        });
+        rootRef.current?.focus({ preventScroll: true });
+        return;
+      }
       editor.update(() => {
         const selection = $getSelection();
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) {
@@ -455,6 +629,18 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
       rootRef.current?.focus({ preventScroll: true });
     },
   }));
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) {
+      return;
+    }
+    if (enterKeyHint) {
+      root.setAttribute("enterkeyhint", enterKeyHint);
+      return;
+    }
+    root.removeAttribute("enterkeyhint");
+  }, [enterKeyHint]);
 
   const handleChange = (payload: { serializedText: string; displayText: string; activeToken: ActiveToken | null }) => {
     setIsEmpty(payload.displayText.length === 0);
@@ -557,6 +743,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
               }}
               onKeyDown={onKeyDown}
               onPaste={onPaste}
+              enterKeyHint={enterKeyHint}
               onCompositionStart={onCompositionStart}
               onCompositionEnd={onCompositionEnd}
               style={{
@@ -566,8 +753,8 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
                 maxHeight: "240px",
                 overflowY: "auto",
                 padding: isSingleLine
-                  ? `12px ${rightInset}px 12px 14px`
-                  : `8px ${rightInset}px ${bottomInset}px 14px`,
+                  ? `${12 + topInset}px ${rightInset}px 12px 14px`
+                  : `${8 + topInset}px ${rightInset}px ${bottomInset}px 14px`,
                 outline: "none",
                 fontSize: "16px",
                 lineHeight: "20px",
@@ -588,8 +775,8 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
                   position: "absolute",
                   left: "14px",
                   right: `${rightInset}px`,
-                  top: "50%",
-                  transform: "translateY(-50%)",
+                  top: topInset > 0 ? `${topInset + 12}px` : "50%",
+                  transform: topInset > 0 ? "none" : "translateY(-50%)",
                   color: "var(--text-secondary)",
                   fontSize: "16px",
                   pointerEvents: "none",
@@ -611,6 +798,9 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
           onReady={({ editor, root }) => {
             editorRef.current = editor;
             rootRef.current = root;
+            if (root && enterKeyHint) {
+              root.setAttribute("enterkeyhint", enterKeyHint);
+            }
           }}
           onEnter={onEnter}
           onDeleteToken={handleDeleteToken}

@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "build:android": "rimraf ../android/app/src/main/assets/public && VITE_APP_SHELL=1 vite build --outDir ../android/app/src/main/assets/public --emptyOutDir",
+    "build:harmony": "rimraf ../harmony/entry/src/main/resources/rawfile/public && VITE_APP_SHELL=1 VITE_NATIVE_PLATFORM=harmony vite build --outDir ../harmony/entry/src/main/resources/rawfile/public --emptyOutDir",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "preview": "vite preview"
   },
@@ -26,15 +27,18 @@
     "@lexical/react": "^0.41.0",
     "@lexical/selection": "^0.41.0",
     "@lexical/utils": "^0.41.0",
+    "katex": "^0.16.47",
     "lexical": "^0.41.0",
     "mermaid": "^11.14.0",
     "prismjs": "^1.29.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^9.0.1",
+    "rehype-katex": "^7.0.1",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.0",
+    "remark-math": "^6.0.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

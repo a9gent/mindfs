@@ -1,72 +1,394 @@
 {
-  "relayBaseURL": "https://relay.a9gent.com",
+  "shells": [
+    {
+      "command": "zsh",
+      "args": ["-ic"],
+      "longShellArgs": [],
+      "os": ["darwin", "linux"]
+    },
+    {
+      "command": "bash",
+      "args": ["-ic"],
+      "longShellArgs": [],
+      "os": ["darwin", "linux"]
+    },
+    {
+      "command": "sh",
+      "args": ["-lc"],
+      "longShellArgs": [],
+      "os": ["darwin", "linux"]
+    },
+    {
+      "command": "pwsh",
+      "args": ["-NoLogo", "-NoProfile", "-Command"],
+      "longShellArgs": ["-NoLogo", "-NoProfile"],
+      "commandPrefix": "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::InputEncoding = [Console]::OutputEncoding; $OutputEncoding = [Console]::OutputEncoding;",
+      "os": "windows"
+    },
+    {
+      "name": "ps",
+      "command": "powershell.exe",
+      "args": ["-NoLogo", "-NoProfile", "-Command"],
+      "longShellArgs": ["-NoLogo", "-NoProfile"],
+      "commandPrefix": "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::InputEncoding = [Console]::OutputEncoding; $OutputEncoding = [Console]::OutputEncoding;",
+      "os": "windows"
+    },
+    {
+      "command": "bash.exe",
+      "args": ["-lc"],
+      "longShellArgs": [],
+      "os": "windows"
+    },
+    {
+      "command": "wsl.exe",
+      "args": ["--exec", "bash", "-lc"],
+      "longShellArgs": ["--exec", "bash"],
+      "os": "windows"
+    },
+    {
+      "command": "cmd.exe",
+      "args": ["/D", "/S", "/C"],
+      "longShellArgs": ["/Q", "/K"],
+      "commandPrefix": "chcp 65001 >NUL &",
+      "os": "windows"
+    }
+  ],
   "agents": [
     {
       "name": "gemini",
+      "brief": "Google 的开源终端 agent，走 ReAct 循环调用本地工具和 MCP；强项是把 Gemini 的长上下文、多模态和 Google 搜索/生态能力直接放进 shell。",
+      "installCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g @google/gemini-cli@latest" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g @google/gemini-cli@latest" }
+      ],
       "command": "gemini",
-      "args": ["--experimental-acp"]
+      "protocol": "acp",
+      "args": [
+        "--experimental-acp"
+      ],
+      "configBackup": {
+        "fileSources": [
+          "~/.gemini/.env",
+          "~/.gemini/settings.json"
+        ],
+        "envKeys": [
+          "GEMINI_API_KEY",
+          "GOOGLE_GEMINI_BASE_URL",
+          "GEMINI_MODEL"
+        ]
+      }
     },
     {
       "name": "codex",
-      "command": "codex"
+      "brief": "OpenAI 的本地终端 coding agent，强调读代码、改文件、运行命令和测试；适合把明确的软件任务交给一个能在仓库里实际执行的 agent。",
+      "installCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://chatgpt.com/codex/install.sh | sh" },
+        { "os": "windows", "command": "irm https://chatgpt.com/codex/install.ps1 | iex" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh" },
+        { "os": "windows", "command": "irm https://chatgpt.com/codex/install.ps1 | iex" }
+      ],
+      "command": "codex",
+      "protocol": "codex-sdk",
+      "configBackup": {
+        "fileSources": [
+          "~/.codex/auth.json",
+          "~/.codex/config.toml"
+        ]
+      }
     },
     {
       "name": "claude",
-      "command": "claude"
+      "brief": "Anthropic 的终端 coding agent，强在复杂推理、长期多步任务和代码库语义理解；常用于重构、调试、测试补齐和高风险改动前的确认式协作。",
+      "installCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://claude.ai/install.sh | bash" },
+        { "os": "windows", "command": "irm https://claude.ai/install.ps1 | iex" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://claude.ai/install.sh | bash" },
+        { "os": "windows", "command": "irm https://claude.ai/install.ps1 | iex" }
+      ],
+      "command": "claude",
+      "protocol": "claude-sdk",
+      "configBackup": {
+        "envKeys": [
+          "ANTHROPIC_AUTH_TOKEN",
+          "ANTHROPIC_BASE_URL",
+          "ANTHROPIC_API_KEY",
+          "ANTHROPIC_MODEL",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL",
+          "ANTHROPIC_DEFAULT_OPUS_MODEL",
+          "AUTH_MODE"
+        ]
+      }
     },
     {
       "name": "cursor",
+      "brief": "把 Cursor agent 带到终端、脚本和自动化流程；适合复用 Cursor 的代码上下文、MCP、headless 执行和带安全检查的 shell mode。",
+      "installCommands": [
+        { "os": ["darwin", "linux"], "command": "curl https://cursor.com/install -fsS | bash" },
+        { "os": "windows", "command": "irm 'https://cursor.com/install?win32=true' | iex" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux"], "command": "curl https://cursor.com/install -fsS | bash" },
+        { "os": "windows", "command": "irm 'https://cursor.com/install?win32=true' | iex" }
+      ],
       "command": "agent",
-      "args": ["acp"]
+      "protocol": "acp",
+      "args": [
+        "acp"
+      ],
+      "configBackup": {}
     },
     {
       "name": "augment",
+      "brief": "Augment 的终端 agent，主打大型代码库理解和自动化开发栈；适合 PR 代码审查、issue triage、CI 失败修复、文档同步和团队重复工作流。",
+      "installCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g @augmentcode/auggie@latest" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g @augmentcode/auggie@latest" }
+      ],
       "command": "auggie",
-      "args": ["--acp"]
+      "protocol": "acp",
+      "args": [
+        "--acp"
+      ],
+      "configBackup": {}
     },
     {
       "name": "cline",
+      "brief": "开源终端 agent，可单次/交互运行，也能用 Kanban 并行编排多个任务；适合本地多 agent 调度、diff review、工具调用和多 provider 场景。",
+      "installCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g cline@latest" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "cline update" }
+      ],
       "command": "cline",
-      "args": ["--acp"]
+      "protocol": "acp",
+      "args": [
+        "--acp"
+      ],
+      "configBackup": {}
     },
     {
       "name": "copilot",
+      "brief": "GitHub Copilot 的命令行 agent，深度贴合 GitHub 工作流；特点是 issue/PR 上下文、custom agents、CLI handoff、安全扫描和 Copilot coding agent runtime。",
+      "installCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g @github/copilot@latest" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g @github/copilot@latest" }
+      ],
       "command": "copilot",
-      "args": ["--acp"]
+      "protocol": "acp",
+      "args": [
+        "--acp"
+      ],
+      "configBackup": {}
     },
     {
       "name": "kimi",
+      "brief": "Moonshot 的终端开发 agent，能读写代码、执行 shell、抓取网页并自主规划/调整动作；适合中文上下文、终端操作和软件开发任务串联。",
+      "installCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash" },
+        { "os": "windows", "command": "Invoke-RestMethod https://code.kimi.com/install.ps1 | Invoke-Expression" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "kimi upgrade" }
+      ],
       "command": "kimi",
-      "args": ["acp"]
+      "protocol": "acp",
+      "args": [
+        "acp"
+      ],
+      "configBackup": {}
     },
     {
       "name": "kiro",
+      "brief": "规格驱动的 agentic 开发工具，强调 specs、steering、hooks 和 custom agents；适合先固化需求/设计/任务，再让 agent 执行复杂代码改动。",
+      "installCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://cli.kiro.dev/install | bash" },
+        { "os": "windows", "command": "irm 'https://cli.kiro.dev/install.ps1' | iex" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "kiro-cli update --non-interactive" }
+      ],
       "command": "kiro-cli",
-      "args": ["acp"]
+      "protocol": "acp",
+      "args": [
+        "acp"
+      ],
+      "configBackup": {}
     },
     {
       "name": "openclaw",
+      "brief": "自托管个人 AI 助手，不只是 coding copilot；核心是把 WhatsApp、Telegram、Slack、日历、邮箱等渠道接到能实际执行任务的 agent gateway。",
+      "installCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard" },
+        { "os": "windows", "command": "& ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -NoOnboard" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux"], "command": "openclaw update --channel stable" }
+      ],
       "command": "openclaw",
-      "args": ["acp"]
+      "protocol": "acp",
+      "args": [
+        "acp"
+      ],
+      "configBackup": {
+        "fileSources": [
+          "~/.openclaw/openclaw.json"
+        ]
+      }
     },
     {
       "name": "opencode",
+      "brief": "终端优先的开源 coding agent，有 TUI、多 provider 和 IDE/桌面表面；特点是模型无关、会话体验强，适合在 shell 里驱动读写文件和调试。",
+      "installCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://opencode.ai/install | bash" },
+        { "os": "windows", "command": "npm install -g opencode-ai" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://opencode.ai/install | bash" }
+      ],
       "command": "opencode",
-      "args": ["acp"]
+      "protocol": "acp",
+      "args": [
+        "acp"
+      ],
+      "configBackup": {
+        "fileSources": [
+          "~/.config/opencode/opencode.json",
+          "~/.local/share/opencode/auth.json"
+        ]
+      }
     },
     {
       "name": "qwen",
+      "brief": "面向 Qwen/Qwen3-Coder 优化的开源终端 agent；重点是大代码库理解、自动化繁琐开发任务，以及配合 Qwen coder 模型做 agentic coding。",
+      "installCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.sh | bash" },
+        { "os": "windows", "command": "npm install -g @qwen-code/qwen-code@latest" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g @qwen-code/qwen-code@latest" }
+      ],
       "command": "qwen",
-      "args": ["--acp"]
+      "protocol": "acp",
+      "args": [
+        "--acp"
+      ],
+      "configBackup": {}
     },
     {
       "name": "qoder",
+      "brief": "Qoder 的 CLI 形态，核心是 context engineering、adaptive memory 和 Quest/CodeReview 模式；更像结构化任务代理而不是普通聊天式补全。",
+      "installCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://qoder.com/install | bash" },
+        { "os": "windows", "command": "irm https://qoder.com/install.ps1 | iex" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "qodercli update" }
+      ],
       "command": "qodercli",
-      "args": ["--acp"]
+      "protocol": "acp",
+      "args": [
+        "--acp"
+      ],
+      "configBackup": {}
+    },
+    {
+      "name": "omp",
+      "brief": "Oh My Pi 是可黑客化的终端 coding agent，强调 hash-anchored edits、优化工具 harness、LSP/DAP、浏览器、Python 和 subagents。",
+      "installCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://omp.sh/install | sh" },
+        { "os": "windows", "command": "irm https://omp.sh/install.ps1 | iex" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://omp.sh/install | sh" },
+        { "os": "windows", "command": "irm https://omp.sh/install.ps1 | iex" }
+      ],
+      "command": "omp",
+      "protocol": "acp",
+      "args": [
+        "acp"
+      ],
+      "configBackup": {
+        "fileSources": [
+          "~/.omp/agent/.env",
+          "~/.omp/.env",
+          "~/.omp/agent/config.yml",
+          "~/.omp/agent/models.yml",
+          "~/.omp/agent/mcp.json",
+          "~/.omp/agent/agent.db"
+        ],
+        "envKeys": [
+          "PI_CONFIG_DIR",
+          "PI_CODING_AGENT_DIR",
+          "OMP_AUTH_BROKER_URL",
+          "OMP_AUTH_BROKER_TOKEN"
+        ]
+      }
     },
     {
       "name": "pi",
-      "command": "pi-acp"
+      "brief": "Pi 是极简 agent harness，理念是让你用 extensions、skills、prompt templates、themes 和 npm/git 包定制工作流，而不是被内置功能绑住。",
+      "installCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g @earendil-works/pi-coding-agent@latest" },
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g pi-acp@latest" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g @earendil-works/pi-coding-agent@latest" },
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g pi-acp@latest" }
+      ],
+      "command": "pi-acp",
+      "protocol": "acp",
+      "configBackup": {}
+    },
+    {
+      "name": "hermes",
+      "brief": "Nous Research 的 self-improving agent；内置 learning loop，会从经验创建/改进 skills，主动持久化知识，搜索过往会话，并跨 session 建立对你的长期模型。",
+      "installCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash" },
+        { "os": "windows", "command": "iex (irm https://hermes-agent.nousresearch.com/install.ps1)" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "hermes update" }
+      ],
+      "command": "hermes",
+      "protocol": "acp",
+      "args": [
+        "acp"
+      ],
+      "configBackup": {
+        "fileSources": [
+          "~/.hermes/auth.json",
+          "~/.hermes/config.yaml"
+        ]
+      }
+    },
+    {
+      "name": "reasonix",
+      "brief": "DeepSeek 原生终端 coding agent，重点在长会话推理和 prefix-cache 友好工作流；适合追求低成本、可持续上下文和推理型代码任务。",
+      "installCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g reasonix@latest" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g reasonix@latest" }
+      ],
+      "command": "reasonix",
+      "protocol": "acp",
+      "args": [
+        "acp"
+      ],
+      "configBackup": {}
     }
-  ]
+  ],
+  "relayBaseURL": "https://relay.a9gent.com"
 }

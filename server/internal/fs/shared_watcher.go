@@ -2,7 +2,6 @@ package fs
 
 import (
 	"context"
-	iofs "io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,9 +13,8 @@ import (
 )
 
 const (
-	fileChangeBatchDelay             = time.Second
-	maxWatchDirs                     = 1024
-	maxDirectChildDirsRecursiveWatch = 128
+	fileChangeBatchDelay = time.Second
+	maxWatchDirs         = 1024
 )
 
 var ignoredWatchNames = map[string]struct{}{
@@ -56,6 +54,7 @@ type SharedFileWatcher struct {
 
 	mu                sync.RWMutex
 	sessions          map[string]*sessionInfo
+	watchedDirs       map[string]struct{}
 	pendingWrites     map[string]string
 	pendingChanges    map[string]FileChangeEvent
 	pendingChangeDirs map[string]struct{}
@@ -106,12 +105,13 @@ func NewSharedFileWatcher(root RootInfo, sessions SessionFileRecorder) (*SharedF
 		watcher:           w,
 		sessionStore:      sessions,
 		sessions:          make(map[string]*sessionInfo),
+		watchedDirs:       make(map[string]struct{}),
 		pendingWrites:     make(map[string]string),
 		pendingChanges:    make(map[string]FileChangeEvent),
 		pendingChangeDirs: make(map[string]struct{}),
 		done:              make(chan struct{}),
 	}
-	if err := sw.addWatchRecursive("."); err != nil {
+	if err := sw.WatchDir("."); err != nil {
 		if closeErr := w.Close(); closeErr != nil {
 		}
 		return nil, err
@@ -141,13 +141,18 @@ func (sw *SharedFileWatcher) MarkSessionActive(_ string) {
 }
 
 func (sw *SharedFileWatcher) RecordPendingWrite(sessionKey, filePath string) {
+	watchDir := ""
 	sw.mu.Lock()
-	defer sw.mu.Unlock()
 	if rel, err := sw.root.NormalizePath(filePath); err == nil {
 		filePath = rel
 	}
 	filePath = filepath.ToSlash(filePath)
 	sw.pendingWrites[filePath] = sessionKey
+	watchDir = parentDir(filePath)
+	sw.mu.Unlock()
+	if watchDir != "" {
+		sw.watchNearestExistingDir(watchDir)
+	}
 }
 
 func (sw *SharedFileWatcher) RecordSessionFile(sessionKey, filePath string) {
@@ -258,7 +263,7 @@ func (sw *SharedFileWatcher) run() {
 					Op:     event.Op.String(),
 					IsDir:  true,
 				})
-				sw.addWatchRecursive(rel)
+				_ = sw.WatchDir(rel)
 				continue
 			}
 			sw.emitFileChange(FileChangeEvent{
@@ -406,58 +411,57 @@ func (sw *SharedFileWatcher) emitRelatedFile(change RelatedFileEvent) {
 	}
 }
 
-func (sw *SharedFileWatcher) addWatchRecursive(startRel string) error {
-	startAbs, err := sw.root.resolveRelativePath(startRel)
+func (sw *SharedFileWatcher) WatchDir(dirRel string) error {
+	dirAbs, err := sw.root.resolveRelativePath(dirRel)
 	if err != nil {
 		return err
 	}
-	watched := 0
-	return filepath.WalkDir(startAbs, func(entryPath string, d iofs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if sw.shouldIgnore(entryPath) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
-			if watched >= maxWatchDirs {
-				return filepath.SkipDir
-			}
-			if err := sw.watcher.Add(entryPath); err != nil {
-				return err
-			}
-			watched++
-			if sw.shouldSkipRecursiveWatch(entryPath) {
-				return filepath.SkipDir
-			}
-		}
+	if sw.shouldIgnore(dirAbs) {
 		return nil
-	})
+	}
+	info, err := os.Stat(dirAbs)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	clean := filepath.Clean(dirAbs)
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	select {
+	case <-sw.done:
+		return nil
+	default:
+	}
+	if _, ok := sw.watchedDirs[clean]; ok {
+		return nil
+	}
+	if len(sw.watchedDirs) >= maxWatchDirs {
+		return nil
+	}
+	if err := sw.watcher.Add(clean); err != nil {
+		return err
+	}
+	sw.watchedDirs[clean] = struct{}{}
+	return nil
 }
 
-func (sw *SharedFileWatcher) shouldSkipRecursiveWatch(dirPath string) bool {
-	childDirCount := 0
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		return false
+func (sw *SharedFileWatcher) watchNearestExistingDir(dirRel string) {
+	dirRel = strings.TrimSpace(filepath.ToSlash(dirRel))
+	if dirRel == "" {
+		dirRel = "."
 	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+	for {
+		if err := sw.WatchDir(dirRel); err == nil {
+			return
 		}
-		childPath := filepath.Join(dirPath, entry.Name())
-		if sw.shouldIgnore(childPath) {
-			continue
+		next := parentDir(dirRel)
+		if next == dirRel {
+			return
 		}
-		childDirCount++
-		if childDirCount > maxDirectChildDirsRecursiveWatch {
-			return true
-		}
+		dirRel = next
 	}
-	return false
 }
 
 func (sw *SharedFileWatcher) shouldIgnore(path string) bool {

@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"mindfs/server/internal/agent"
 	rootfs "mindfs/server/internal/fs"
+	"mindfs/server/internal/session"
 
 	"gopkg.in/yaml.v3"
 )
@@ -22,6 +24,7 @@ const (
 	CandidateTypePrompt       CandidateType = "prompt"
 	CandidateTypeSkill        CandidateType = "skill"
 	CandidateTypeSlashCommand CandidateType = "slash_command"
+	CandidateTypeCommand      CandidateType = "command"
 )
 
 type CandidateItem struct {
@@ -206,45 +209,129 @@ func (p *SkillCandidateProvider) Search(ctx context.Context, root rootfs.RootInf
 	items := make([]CandidateItem, 0, 16)
 	seen := make(map[string]struct{})
 	for _, dir := range skillScanDirs(root, agent) {
-		entries, err := os.ReadDir(dir)
+		discovered, err := discoverSkillCandidates(ctx, dir, query)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
 			return nil, err
 		}
-		for _, entry := range entries {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-			}
-			if !entry.IsDir() {
+		for _, item := range discovered {
+			normalizedName := normalizeCandidateName(item.Name)
+			if normalizedName == "" {
 				continue
 			}
-			name := entry.Name()
-			if name == "" {
+			if _, ok := seen[normalizedName]; ok {
 				continue
 			}
-			if strings.HasPrefix(name, ".") {
-				continue
-			}
-			if _, ok := seen[name]; ok {
-				continue
-			}
-			if !matchesCandidateName(name, query) {
-				continue
-			}
-			seen[name] = struct{}{}
-			items = append(items, CandidateItem{
-				Type:        CandidateTypeSkill,
-				Name:        name,
-				Description: readSkillDescription(filepath.Join(dir, name, "SKILL.md")),
-			})
+			seen[normalizedName] = struct{}{}
+			items = append(items, item)
 		}
 	}
 	sortCandidateItems(items, query)
 	return limitCandidateItems(items), nil
+}
+
+func discoverSkillCandidates(ctx context.Context, dir, query string) ([]CandidateItem, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if isMissingSkillScanDir(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	items := make([]CandidateItem, 0, len(entries))
+	for _, entry := range entries {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		if !isSkillDirectoryEntry(dir, entry) {
+			continue
+		}
+		name := entry.Name()
+		if name == "" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		skillDir := filepath.Join(dir, name)
+		skillPath := filepath.Join(skillDir, "SKILL.md")
+		if skillFileExists(skillPath) {
+			if matchesCandidateName(name, query) {
+				items = append(items, CandidateItem{
+					Type:        CandidateTypeSkill,
+					Name:        name,
+					Description: readSkillDescription(skillPath),
+				})
+			}
+			continue
+		}
+		namespacedItems, err := discoverNamespacedSkillCandidates(ctx, name, skillDir, query)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, namespacedItems...)
+	}
+	return items, nil
+}
+
+func discoverNamespacedSkillCandidates(ctx context.Context, namespace, dir, query string) ([]CandidateItem, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if isMissingSkillScanDir(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	items := make([]CandidateItem, 0, len(entries))
+	for _, entry := range entries {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		if !isSkillDirectoryEntry(dir, entry) {
+			continue
+		}
+		childName := entry.Name()
+		if childName == "" || strings.HasPrefix(childName, ".") {
+			continue
+		}
+		candidateName := namespace + ":" + childName
+		if !matchesCandidateName(candidateName, query) && !matchesCandidateName(childName, query) && !matchesCandidateName(namespace, query) {
+			continue
+		}
+		skillPath := filepath.Join(dir, childName, "SKILL.md")
+		if !skillFileExists(skillPath) {
+			continue
+		}
+		items = append(items, CandidateItem{
+			Type:        CandidateTypeSkill,
+			Name:        candidateName,
+			Description: readSkillDescription(skillPath),
+		})
+	}
+	return items, nil
+}
+
+func isMissingSkillScanDir(err error) bool {
+	return os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR)
+}
+
+func skillFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func isSkillDirectoryEntry(parent string, entry os.DirEntry) bool {
+	if entry.IsDir() {
+		return true
+	}
+	if entry.Type()&fs.ModeSymlink == 0 {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(parent, entry.Name()))
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }
 
 type SlashCommandCandidateProvider struct {
@@ -263,12 +350,20 @@ func (p *SlashCommandCandidateProvider) Search(ctx context.Context, _ rootfs.Roo
 	if p == nil || p.getStatus == nil {
 		return nil, nil
 	}
+	query = strings.TrimSpace(strings.ToLower(query))
+	items := make([]CandidateItem, 0, 1)
+	if matchesCandidateName("plan", query) {
+		items = append(items, CandidateItem{
+			Type:        CandidateTypeSlashCommand,
+			Name:        "plan",
+			Description: "open Plan mode",
+		})
+	}
 	status, ok := p.getStatus(strings.TrimSpace(agentName))
 	if !ok || len(status.Commands) == 0 {
-		return nil, nil
+		sortCandidateItems(items, query)
+		return limitCandidateItems(items), nil
 	}
-	query = strings.TrimSpace(strings.ToLower(query))
-	items := make([]CandidateItem, 0, len(status.Commands))
 	for _, command := range status.Commands {
 		select {
 		case <-ctx.Done():
@@ -276,6 +371,9 @@ func (p *SlashCommandCandidateProvider) Search(ctx context.Context, _ rootfs.Roo
 		default:
 		}
 		name := strings.TrimSpace(command.Name)
+		if name == "plan" {
+			continue
+		}
 		if name == "" || !matchesCandidateName(name, query) {
 			continue
 		}
@@ -319,9 +417,36 @@ func (p *PromptCandidateProvider) Search(ctx context.Context, _ rootfs.RootInfo,
 	return items, nil
 }
 
+type CommandCandidateProvider struct {
+	shellProvider func() ShellHistorySpec
+}
+
+func NewCommandCandidateProvider(shellProvider ...func() ShellHistorySpec) *CommandCandidateProvider {
+	provider := &CommandCandidateProvider{}
+	if len(shellProvider) > 0 {
+		provider.shellProvider = shellProvider[0]
+	}
+	return provider
+}
+
+func (p *CommandCandidateProvider) Type() CandidateType {
+	return CandidateTypeCommand
+}
+
+func (p *CommandCandidateProvider) Search(ctx context.Context, root rootfs.RootInfo, _ string, query string) ([]CandidateItem, error) {
+	manager := session.NewManager(root)
+	var shell ShellHistorySpec
+	if p.shellProvider != nil {
+		shell = p.shellProvider()
+	}
+	return SearchCommandCandidates(ctx, manager, root.ID, query, maxCandidateItems, shell)
+}
+
 func validateSearchCandidatesInput(in SearchCandidatesInput) error {
 	switch in.Type {
 	case CandidateTypeFile:
+		return nil
+	case CandidateTypeCommand:
 		return nil
 	case CandidateTypePrompt:
 		return nil
@@ -401,6 +526,7 @@ func skillScanDirs(root rootfs.RootInfo, agent string) []string {
 			filepath.Join(homeDir, ".codex", "skills"),
 			filepath.Join(homeDir, ".codex", "skills", ".system"),
 			filepath.Join(homeDir, ".agents", "skills"),
+			filepath.Join(rootDir, ".agents", "skills"),
 			filepath.Join(rootDir, ".codex", "skills"),
 		}
 	case "claude":

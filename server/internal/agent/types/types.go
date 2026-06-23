@@ -27,6 +27,9 @@ type Session interface {
 	// SetMode updates the mode used by the current session.
 	SetMode(ctx context.Context, mode string) error
 
+	// SetPlanMode updates the plan mode used by the current session.
+	SetPlanMode(ctx context.Context, enabled bool) error
+
 	// ListModes returns the modes visible to the current session/runtime.
 	ListModes(ctx context.Context) (ModeList, error)
 
@@ -49,6 +52,51 @@ type Session interface {
 	Close() error
 }
 
+type ForkPointKind string
+
+const (
+	ForkPointClaudeMessageUUID ForkPointKind = "claude_message_uuid"
+	ForkPointCodexUserOrdinal  ForkPointKind = "codex_user_ordinal"
+)
+
+type ResolveForkPointInput struct {
+	RootPath       string
+	AgentSessionID string
+	AgentTurnIndex int
+}
+
+type ResolveForkPointOutput struct {
+	Kind              ForkPointKind
+	AgentSessionID    string
+	ClaudeMessageUUID string
+	CodexUserOrdinal  int
+}
+
+type ForkPointResolver interface {
+	ResolveForkPointByAgentTurnIndex(ctx context.Context, in ResolveForkPointInput) (ResolveForkPointOutput, error)
+}
+
+type ForkSessionInput struct {
+	SessionKey         string
+	AgentName          string
+	Model              string
+	Mode               string
+	Effort             string
+	FastService        string
+	PlanMode           bool
+	RootPath           string
+	SourceAgentSession string
+	ForkPoint          ResolveForkPointOutput
+}
+
+type ForkSessionOutput struct {
+	AgentSessionID string
+}
+
+type SessionForker interface {
+	ForkSession(ctx context.Context, in ForkSessionInput) (ForkSessionOutput, error)
+}
+
 type ContextWindow struct {
 	TotalTokens        int `json:"totalTokens"`
 	ModelContextWindow int `json:"modelContextWindow"`
@@ -60,16 +108,34 @@ type OpenSessionInput struct {
 	Model          string
 	Mode           string
 	Effort         string
+	FastService    string
+	PlanMode       bool
 	Probe          bool
 	RootPath       string
 	AgentSessionID string
 	AgentCtxSeq    int
+	ForkPoint      ResolveForkPointOutput
+}
+
+type RuntimeDefaults struct {
+	Model       string `json:"model,omitempty"`
+	Effort      string `json:"effort,omitempty"`
+	FastService string `json:"fast_service,omitempty"`
+}
+
+type DefaultsReader interface {
+	RuntimeDefaults(ctx context.Context) (RuntimeDefaults, error)
+}
+
+type ThreadEventSubscriber interface {
+	SubscribeThreadEvents(ctx context.Context) error
 }
 
 type ExternalSessionSummary struct {
 	Agent          string    `json:"agent"`
 	AgentSessionID string    `json:"agent_session_id"`
 	Cwd            string    `json:"cwd,omitempty"`
+	Title          string    `json:"title,omitempty"`
 	FirstUserText  string    `json:"-"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
@@ -86,6 +152,8 @@ type ListExternalSessionsInput struct {
 type ListExternalSessionsResult struct {
 	Items []ExternalSessionSummary `json:"items"`
 }
+
+type ExternalSessionVisitFunc func(ExternalSessionSummary) (bool, error)
 
 type ImportExternalSessionInput struct {
 	RootPath       string
@@ -104,6 +172,7 @@ type ImportedExternalSession struct {
 	Agent          string
 	AgentSessionID string
 	Cwd            string
+	Title          string
 	Exchanges      []ImportedExchange
 }
 
@@ -111,6 +180,11 @@ type ExternalSessionImporter interface {
 	AgentName() string
 	ListExternalSessions(ctx context.Context, in ListExternalSessionsInput) (ListExternalSessionsResult, error)
 	ImportExternalSession(ctx context.Context, in ImportExternalSessionInput) (ImportedExternalSession, error)
+}
+
+type StreamingExternalSessionImporter interface {
+	ExternalSessionImporter
+	ScanExternalSessions(ctx context.Context, in ListExternalSessionsInput, visit ExternalSessionVisitFunc) error
 }
 
 type ModelInfo struct {
@@ -156,6 +230,8 @@ const (
 	EventTypeToolCall     EventType = "tool_call"
 	EventTypeToolUpdate   EventType = "tool_update"
 	EventTypeTodoUpdate   EventType = "todo_update"
+	EventTypePlanUpdate   EventType = "plan_update"
+	EventTypeCompact      EventType = "compact_notice"
 	EventTypeMessageDone  EventType = "message_done"
 	EventTypeRecovery     EventType = "recovery"
 )
@@ -168,15 +244,28 @@ type Event struct {
 }
 
 type MessageChunk struct {
-	Content string `json:"content"`
+	Content         string `json:"content"`
+	ParentToolUseID string `json:"parentToolUseId,omitempty"`
+	TaskID          string `json:"taskId,omitempty"`
+	SubagentType    string `json:"subagentType,omitempty"`
+	TaskDescription string `json:"taskDescription,omitempty"`
 }
 
 type ThoughtChunk struct {
-	Content string `json:"content"`
+	ID              string `json:"id,omitempty"`
+	Content         string `json:"content"`
+	ParentToolUseID string `json:"parentToolUseId,omitempty"`
+	TaskID          string `json:"taskId,omitempty"`
+	SubagentType    string `json:"subagentType,omitempty"`
+	TaskDescription string `json:"taskDescription,omitempty"`
 }
 
 type MessageDone struct {
-	ContextWindow ContextWindow `json:"contextWindow"`
+	ContextWindow   ContextWindow `json:"contextWindow"`
+	ParentToolUseID string        `json:"parentToolUseId,omitempty"`
+	TaskID          string        `json:"taskId,omitempty"`
+	SubagentType    string        `json:"subagentType,omitempty"`
+	TaskDescription string        `json:"taskDescription,omitempty"`
 }
 
 type RecoveryStatus struct {
@@ -191,6 +280,18 @@ type TodoItem struct {
 
 type TodoUpdate struct {
 	Items []TodoItem `json:"items"`
+}
+
+type PlanUpdate struct {
+	ID      string `json:"id,omitempty"`
+	Content string `json:"content"`
+	Delta   bool   `json:"delta,omitempty"`
+}
+
+type CompactNotice struct {
+	ID      string `json:"id,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 type AskUserQuestionOption struct {

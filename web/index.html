@@ -5,13 +5,81 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!--APP_SHELL_PWA_LINKS-->
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f3f4f6" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f172a" />
+    <meta name="theme-color" content="#f3f4f6" />
+    <script>
+      (function () {
+        var key = "mindfs-appearance-mode";
+        var mode = "system";
+        try {
+          var stored = window.localStorage && window.localStorage.getItem(key);
+          if (stored === "dark" || stored === "light" || stored === "system") {
+            mode = stored;
+          }
+        } catch (_) {}
+
+        if (mode === "dark" || mode === "light") {
+          document.documentElement.setAttribute("data-theme", mode);
+        } else {
+          document.documentElement.removeAttribute("data-theme");
+        }
+
+        var effective = mode;
+        if (effective !== "dark" && effective !== "light") {
+          effective = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light";
+        }
+        var color = effective === "dark" ? "#0f172a" : "#f3f4f6";
+        var metas = document.querySelectorAll('meta[name="theme-color"]');
+        for (var i = 0; i < metas.length; i += 1) {
+          metas[i].setAttribute("content", color);
+          metas[i].removeAttribute("media");
+        }
+      })();
+    </script>
     <!--APP_SHELL_PWA_META-->
     <title>MindFS</title>
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      (function () {
+        var notice = "版本太老，请重新安装最新版 mindfs";
+        var shown = false;
+        function isRelayNodePage() {
+          return /^\/n\/[^/]+(?:\/|$)/.test(window.location.pathname);
+        }
+        function isMainAsset(url) {
+          if (!url) {
+            return false;
+          }
+          var parsed;
+          try {
+            parsed = new URL(url, window.location.href);
+          } catch (_) {
+            return false;
+          }
+          if (parsed.origin !== window.location.origin) {
+            return false;
+          }
+          return /^\/(?:mindfs-assets|assets)\/index-[^/]+\.(?:js|css)$/i.test(parsed.pathname);
+        }
+        function showNotice() {
+          if (shown || !isRelayNodePage()) {
+            return;
+          }
+          shown = true;
+          window.alert(notice);
+        }
+        window.addEventListener("error", function (event) {
+          var target = event.target;
+          if (!target || target === window || !isMainAsset(target.src || target.href)) {
+            return;
+          }
+          showNotice();
+        }, true);
+      })();
+    </script>
     <script type="module" src="./src/main.tsx"></script>
   </body>
 </html>

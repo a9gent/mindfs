@@ -1,11 +1,16 @@
 import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import Prism from "prismjs";
+import { copyText } from "../services/clipboard";
 import { fetchProofProtectedBlob } from "../services/file";
+import { openExternalURL } from "../services/platformNavigation";
 import "prismjs/themes/prism.css";
+import "katex/dist/katex.min.css";
 // Reuse the language imports from global Prism context (since they are imported in CodeViewer, they might be available if loaded, 
 // but strictly speaking we should import them here or centralize. For simplicity, we rely on the side-effects of CodeViewer imports 
 // if both are used, or we re-import essential ones here to be safe)
@@ -176,6 +181,189 @@ function renderDiffCode(rawContent: string) {
   });
 }
 
+function MarkdownCodeBlock({
+  className,
+  rawContent,
+  language,
+  sourceLineProps,
+}: {
+  className: string;
+  rawContent: string;
+  language: string;
+  sourceLineProps: Record<string, unknown>;
+}) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const resetTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (resetTimerRef.current) {
+        window.clearTimeout(resetTimerRef.current);
+      }
+    };
+  }, []);
+
+  const highlightedHtml = useMemo(() => {
+    if (!language || language === "diff") return "";
+    const grammar = Prism.languages[language] ?? Prism.languages.markup;
+    try {
+      return Prism.highlight(rawContent, grammar, language);
+    } catch {
+      return "";
+    }
+  }, [language, rawContent]);
+
+  const handleCopy = () => {
+    if (resetTimerRef.current) {
+      window.clearTimeout(resetTimerRef.current);
+    }
+    void copyText(rawContent)
+      .then(() => {
+        setCopyState("copied");
+      })
+      .catch(() => {
+        setCopyState("failed");
+      })
+      .finally(() => {
+        resetTimerRef.current = window.setTimeout(() => {
+          setCopyState("idle");
+          resetTimerRef.current = null;
+        }, 1200);
+      });
+  };
+
+  const isCopied = copyState === "copied";
+  const isFailed = copyState === "failed";
+
+  return (
+    <div
+      {...sourceLineProps}
+      style={{
+        position: "relative",
+        width: "100%",
+        boxSizing: "border-box",
+        margin: "1.5em 0",
+      }}
+    >
+      <button
+        type="button"
+        onClick={handleCopy}
+        aria-label={isCopied ? "已复制代码" : "复制代码"}
+        title={isCopied ? "已复制" : isFailed ? "复制失败" : "复制代码"}
+        style={{
+          position: "absolute",
+          top: "4px",
+          right: "4px",
+          zIndex: 1,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: "24px",
+          height: "24px",
+          borderRadius: "6px",
+          border: "none",
+          background: "transparent",
+          color: isFailed ? "#b91c1c" : "#2563eb",
+          cursor: "pointer",
+          opacity: isFailed ? 1 : 0.5,
+          padding: 0,
+        }}
+      >
+        {isCopied ? (
+          <span
+            aria-hidden="true"
+            style={{
+              fontSize: "13px",
+              fontWeight: 800,
+              lineHeight: 1,
+            }}
+          >
+            ✓
+          </span>
+        ) : (
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+          >
+            <path
+              fill="currentColor"
+              d="M20 2H10c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2m0 12H10V4h10z"
+            />
+            <path
+              fill="currentColor"
+              d="M14 20H4V10h2V8H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2v-2h-2z"
+            />
+          </svg>
+        )}
+      </button>
+      <pre
+        className={className}
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          background: "var(--mindfs-code-bg, #f8fafc)",
+          color: "var(--mindfs-code-text, var(--text-primary))",
+          padding: "16px",
+          borderRadius: "10px",
+          overflow: "auto",
+          border: "1px solid var(--mindfs-code-border, var(--border-color))",
+          fontFamily: monoFontFamily,
+          fontSize: "13px",
+          margin: 0,
+          lineHeight: "1.6",
+          whiteSpace: "pre",
+          tabSize: 2 as any,
+          fontVariantLigatures: "none",
+          boxShadow: "none",
+        }}
+      >
+        {language === "diff" ? (
+          <code
+            className={className}
+            style={{
+              display: "block",
+              textShadow: "none",
+              fontFamily: monoFontFamily,
+              tabSize: 2 as any,
+              fontVariantLigatures: "none",
+              whiteSpace: "pre",
+              border: "none",
+              background: "transparent",
+            }}
+          >
+            {renderDiffCode(rawContent)}
+          </code>
+        ) : highlightedHtml ? (
+          <code
+            className={className}
+            dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+            style={{ display: "block", textShadow: "none", fontFamily: monoFontFamily, border: "none", background: "transparent" }}
+          />
+        ) : (
+          <code
+            className={className}
+            style={{
+              display: "block",
+              textShadow: "none",
+              fontFamily: monoFontFamily,
+              tabSize: 2 as any,
+              fontVariantLigatures: "none",
+              whiteSpace: "pre",
+              border: "none",
+              background: "transparent",
+            }}
+          >
+            {rawContent}
+          </code>
+        )}
+      </pre>
+    </div>
+  );
+}
+
 function normalizePosixPath(input: string): string {
   const absolute = input.startsWith("/");
   const parts = input.split("/").filter((part) => part && part !== ".");
@@ -227,6 +415,38 @@ const markdownSanitizeSchema = {
     img: [...(defaultSchema.attributes?.img || []), "alt", "title", "width"],
   },
 };
+
+function normalizeMarkdownMathDelimiters(content: string): string {
+  const lines = content.split("\n");
+  let fenced = false;
+  let fenceMarker = "";
+
+  return lines
+    .map((line) => {
+      const fenceMatch = /^(\s*)(`{3,}|~{3,})/.exec(line);
+      if (fenceMatch) {
+        const marker = fenceMatch[2][0];
+        if (!fenced) {
+          fenced = true;
+          fenceMarker = marker;
+        } else if (marker === fenceMarker) {
+          fenced = false;
+          fenceMarker = "";
+        }
+        return line;
+      }
+
+      if (fenced) return line;
+
+      const trimmed = line.trim();
+      if (trimmed === "\\[" || trimmed === "\\]") {
+        return `${line.slice(0, line.indexOf(trimmed))}$$`;
+      }
+
+      return line.replace(/\\\((.+?)\\\)/g, (_match, formula: string) => `$${formula}$`);
+    })
+    .join("\n");
+}
 
 function MarkdownImage({
   src = "",
@@ -331,6 +551,7 @@ function MarkdownViewerInner({
     if (!targetLine || targetLine < 1) return "";
     return "[data-source-line]";
   }, [targetLine]);
+  const normalizedContent = useMemo(() => normalizeMarkdownMathDelimiters(content), [content]);
 
   useEffect(() => {
     onFileClickRef.current = onFileClick;
@@ -379,9 +600,9 @@ function MarkdownViewerInner({
       }}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
         remarkRehypeOptions={{ allowDangerousHtml: true }}
-        rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]]}
+        rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema], rehypeKatex]}
         components={{
           h1: ({ node, ...props }: any) => (
             <h1 style={{ fontSize: "24px", marginTop: 0 }} {...getSourceLineProps(node)} {...props} />
@@ -416,11 +637,21 @@ function MarkdownViewerInner({
           ),
           a: ({ href = "", children, ...props }) => {
             if (!href || href.startsWith("#") || isExternalHref(href) || !onFileClick) {
+              const shouldOpenExternally = isExternalHref(href);
               return (
                 <a
-                  href={href}
-                  style={{ color: "var(--accent-color)" }}
                   {...props}
+                  href={href}
+                  style={{ color: "var(--accent-color)", cursor: shouldOpenExternally ? "pointer" : undefined }}
+                  onClick={
+                    shouldOpenExternally
+                      ? (event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          openExternalURL(href);
+                        }
+                      : undefined
+                  }
                 >
                   {children}
                 </a>
@@ -550,82 +781,18 @@ function MarkdownViewerInner({
               );
             }
 
-            let html = "";
-            if (language && language !== "diff") {
-              const grammar = Prism.languages[language] ?? Prism.languages.markup;
-              try {
-                html = Prism.highlight(rawContent, grammar, language);
-              } catch {
-                html = "";
-              }
-            }
             return (
-              <pre
+              <MarkdownCodeBlock
                 className={className}
-                {...getSourceLineProps(node)}
-                style={{
-                  width: "100%",
-                  boxSizing: "border-box",
-                  background: "rgba(0,0,0,0.04)",
-                  padding: "16px",
-                  borderRadius: "10px",
-                  overflow: "auto",
-                  border: "1px solid var(--border-color)",
-                  fontFamily: monoFontFamily,
-                  fontSize: "13px",
-                  margin: "1.5em 0",
-                  lineHeight: "1.6",
-                  whiteSpace: "pre",
-                  tabSize: 2 as any,
-                  fontVariantLigatures: "none",
-                  boxShadow: "none",
-                }}
-              >
-                {language === "diff" ? (
-                  <code
-                    className={className}
-                    style={{
-                      display: "block",
-                      textShadow: "none",
-                      fontFamily: monoFontFamily,
-                      tabSize: 2 as any,
-                      fontVariantLigatures: "none",
-                      whiteSpace: "pre",
-                      border: "none",
-                      background: "transparent",
-                    }}
-                  >
-                    {renderDiffCode(rawContent)}
-                  </code>
-                ) : html ? (
-                  <code
-                    className={className}
-                    dangerouslySetInnerHTML={{ __html: html }}
-                    style={{ display: "block", textShadow: "none", fontFamily: monoFontFamily, border: "none", background: "transparent" }}
-                  />
-                ) : (
-                  <code
-                    className={className}
-                    style={{
-                      display: "block",
-                      textShadow: "none",
-                      fontFamily: monoFontFamily,
-                      tabSize: 2 as any,
-                      fontVariantLigatures: "none",
-                      whiteSpace: "pre",
-                      border: "none",
-                      background: "transparent",
-                    }}
-                  >
-                    {rawContent}
-                  </code>
-                )}
-              </pre>
+                rawContent={rawContent}
+                language={language}
+                sourceLineProps={getSourceLineProps(node)}
+              />
             );
           },
         }}
       >
-        {content}
+        {normalizedContent}
       </ReactMarkdown>
     </div>
   );

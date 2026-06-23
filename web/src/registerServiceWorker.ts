@@ -25,7 +25,19 @@ export function registerServiceWorker(): void {
   if (!("serviceWorker" in navigator)) {
     return;
   }
-  if (import.meta.env.DEV || !shouldRegisterServiceWorker()) {
+  if (!shouldRegisterServiceWorker()) {
+    navigator.serviceWorker.getRegistrations()
+      .then((registrations) => {
+        registrations.forEach((registration) => {
+          void registration.unregister();
+        });
+      })
+      .catch((error: unknown) => {
+        console.error("service worker unregister failed", error);
+      });
+    return;
+  }
+  if (import.meta.env.DEV) {
     return;
   }
 

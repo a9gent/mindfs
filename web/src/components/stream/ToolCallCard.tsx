@@ -1,5 +1,5 @@
-import React, { memo, useEffect, useMemo, useState } from "react";
-import type { ToolCallContentItem, ToolCallLocation } from "../../services/session";
+import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { sessionService, type ToolCall, type ToolCallContentItem, type ToolCallLocation } from "../../services/session";
 import { MarkdownViewer } from "../MarkdownViewer";
 
 type ToolCallCardProps = {
@@ -10,7 +10,10 @@ type ToolCallCardProps = {
   content?: ToolCallContentItem[];
   result?: string;
   locations?: ToolCallLocation[];
+  meta?: Record<string, unknown>;
   rootPath?: string;
+  rootId?: string | null;
+  sessionKey?: string | null;
   defaultExpanded?: boolean;
 };
 
@@ -24,6 +27,39 @@ function basename(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
+function shouldPreserveDisplayStatus(current?: string, incoming?: string): boolean {
+  const currentStatus = (current || "").toLowerCase();
+  const incomingStatus = (incoming || "").toLowerCase();
+  const currentIsTerminal =
+    currentStatus === "complete" ||
+    currentStatus === "success" ||
+    currentStatus === "failed" ||
+    currentStatus === "error" ||
+    currentStatus === "cancelled";
+  const incomingIsRunning =
+    incomingStatus === "running" ||
+    incomingStatus === "pending" ||
+    incomingStatus === "in_progress";
+  return currentIsTerminal && incomingIsRunning;
+}
+
+function isRunningStatus(status?: string): boolean {
+  const normalized = (status || "").toLowerCase();
+  return normalized === "running" || normalized === "pending" || normalized === "in_progress";
+}
+
+function stringMeta(meta: Record<string, unknown> | undefined, key: string): string {
+  const value = meta?.[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function toolProgressText(meta: Record<string, unknown> | undefined): string {
+  const progress = stringMeta(meta, "progress");
+  if (progress) return progress;
+  const lastToolName = stringMeta(meta, "lastToolName");
+  return lastToolName ? `Using ${lastToolName}` : "";
+}
+
 const toolIcons: Record<string, string> = {
   delete: "🗑️",
   move: "📦",
@@ -35,7 +71,7 @@ const toolIcons: Record<string, string> = {
   other: "🔧",
 };
 
-function renderToolIcon(kind: string): React.ReactNode {
+export function renderToolIcon(kind: string): React.ReactNode {
   if (kind === "read") {
     return (
       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 32 32" aria-hidden="true" style={{ color: "#2f80ed" }}>
@@ -90,9 +126,9 @@ function renderToolIcon(kind: string): React.ReactNode {
     return (
       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 80 80" aria-hidden="true">
         <g fill="none">
-          <path fill="#2f80ed" d="M38.4 22.742a2 2 0 1 0 0-4zm23.6 19.6a2 2 0 1 0-4 0zm-52-19.6v44h4v-44zm4 48h44v-4H14zm24.4-52H14v4h24.4zm23.6 48v-24.4h-4v24.4zm-4 4a4 4 0 0 0 4-4h-4zm-48-4a4 4 0 0 0 4 4v-4zm4-44v-4a4 4 0 0 0-4 4z" />
-          <path fill="#9b51e0" fillRule="evenodd" d="M68.015 21.897c.78-.78.78-2.044 0-2.824l-5.657-5.657a2.003 2.003 0 0 0-2.833 0L30.7 42.242a16 16 0 0 0-4.555 9.267l-.308 2.384l-.125.974a.758.758 0 0 0 .848.849l.975-.126l2.384-.307a16 16 0 0 0 9.266-4.555z" clipRule="evenodd" />
-          <path stroke="#f2c94c" strokeLinejoin="round" strokeWidth="4" d="m52.147 20.804l8.48 8.48" />
+          <path fill="#2f80ed" stroke="#2f80ed" strokeLinejoin="round" strokeWidth="1.6" d="M38.4 22.742a2 2 0 1 0 0-4zm23.6 19.6a2 2 0 1 0-4 0zm-52-19.6v44h4v-44zm4 48h44v-4H14zm24.4-52H14v4h24.4zm23.6 48v-24.4h-4v24.4zm-4 4a4 4 0 0 0 4-4h-4zm-48-4a4 4 0 0 0 4 4v-4zm4-44v-4a4 4 0 0 0-4 4z" />
+          <path fill="#9b51e0" stroke="#9b51e0" strokeLinejoin="round" strokeWidth="1.4" fillRule="evenodd" d="M68.015 21.897c.78-.78.78-2.044 0-2.824l-5.657-5.657a2.003 2.003 0 0 0-2.833 0L30.7 42.242a16 16 0 0 0-4.555 9.267l-.308 2.384l-.125.974a.758.758 0 0 0 .848.849l.975-.126l2.384-.307a16 16 0 0 0 9.266-4.555z" clipRule="evenodd" />
+          <path stroke="#f2c94c" strokeLinejoin="round" strokeWidth="5.2" d="m52.147 20.804l8.48 8.48" />
         </g>
       </svg>
     );
@@ -100,7 +136,7 @@ function renderToolIcon(kind: string): React.ReactNode {
   if (kind === "execute") {
     return (
       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 80 80" aria-hidden="true">
-        <g fill="none" strokeLinecap="round" strokeLinejoin="round" strokeWidth="4">
+        <g fill="none" strokeLinecap="round" strokeLinejoin="round" strokeWidth="5.4">
           <path stroke="#9b51e0" d="m15 24l17.16 15.253a1 1 0 0 1 0 1.494L15 56" />
           <path stroke="#2f80ed" d="M65 56H41" />
         </g>
@@ -108,6 +144,176 @@ function renderToolIcon(kind: string): React.ReactNode {
     );
   }
   return toolIcons[kind] || toolIcons.other;
+}
+
+function stripAnsi(text: string): string {
+  return text
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b[ -/]*[@-~]/g, "");
+}
+
+function normalizeTerminalText(text: string): string {
+  return (text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+type AnsiStyle = {
+  color?: string;
+  backgroundColor?: string;
+  fontWeight?: React.CSSProperties["fontWeight"];
+  fontStyle?: React.CSSProperties["fontStyle"];
+  opacity?: number;
+  textDecorationLine?: React.CSSProperties["textDecorationLine"];
+};
+
+type AnsiSegment = {
+  text: string;
+  style?: AnsiStyle;
+};
+
+const ansiBaseColors = [
+  "#0f172a",
+  "#ef4444",
+  "#22c55e",
+  "#eab308",
+  "#3b82f6",
+  "#a855f7",
+  "#06b6d4",
+  "#e5e7eb",
+];
+
+const ansiBrightColors = [
+  "#475569",
+  "#f87171",
+  "#4ade80",
+  "#facc15",
+  "#60a5fa",
+  "#c084fc",
+  "#22d3ee",
+  "#ffffff",
+];
+
+function ansi256Color(index: number): string | undefined {
+  if (index >= 0 && index < 8) return ansiBaseColors[index];
+  if (index >= 8 && index < 16) return ansiBrightColors[index - 8];
+  if (index >= 16 && index <= 231) {
+    const value = index - 16;
+    const r = Math.floor(value / 36);
+    const g = Math.floor((value % 36) / 6);
+    const b = value % 6;
+    const scale = (channel: number) => (channel === 0 ? 0 : 55 + channel * 40);
+    return `rgb(${scale(r)}, ${scale(g)}, ${scale(b)})`;
+  }
+  if (index >= 232 && index <= 255) {
+    const level = 8 + (index - 232) * 10;
+    return `rgb(${level}, ${level}, ${level})`;
+  }
+  return undefined;
+}
+
+function cloneAnsiStyle(style: AnsiStyle): AnsiStyle | undefined {
+  return Object.keys(style).length > 0 ? { ...style } : undefined;
+}
+
+function pushAnsiSegment(segments: AnsiSegment[], text: string, style: AnsiStyle) {
+  if (!text) return;
+  const currentStyle = cloneAnsiStyle(style);
+  const previous = segments[segments.length - 1];
+  if (previous && JSON.stringify(previous.style || {}) === JSON.stringify(currentStyle || {})) {
+    previous.text += text;
+    return;
+  }
+  segments.push({ text, style: currentStyle });
+}
+
+function applyAnsiCodes(style: AnsiStyle, rawCodes: string) {
+  const codes = rawCodes === "" ? [0] : rawCodes.split(";").map((value) => Number.parseInt(value, 10)).map((value) => (Number.isFinite(value) ? value : 0));
+  for (let i = 0; i < codes.length; i += 1) {
+    const code = codes[i];
+    if (code === 0) {
+      delete style.color;
+      delete style.backgroundColor;
+      delete style.fontWeight;
+      delete style.fontStyle;
+      delete style.opacity;
+      delete style.textDecorationLine;
+    } else if (code === 1) {
+      style.fontWeight = 700;
+    } else if (code === 2) {
+      style.opacity = 0.72;
+    } else if (code === 3) {
+      style.fontStyle = "italic";
+    } else if (code === 4) {
+      style.textDecorationLine = mergeTextDecoration(style.textDecorationLine, "underline");
+    } else if (code === 9) {
+      style.textDecorationLine = mergeTextDecoration(style.textDecorationLine, "line-through");
+    } else if (code === 22) {
+      delete style.fontWeight;
+      delete style.opacity;
+    } else if (code === 23) {
+      delete style.fontStyle;
+    } else if (code === 24) {
+      style.textDecorationLine = removeTextDecoration(style.textDecorationLine, "underline");
+    } else if (code === 29) {
+      style.textDecorationLine = removeTextDecoration(style.textDecorationLine, "line-through");
+    } else if (code === 39) {
+      delete style.color;
+    } else if (code === 49) {
+      delete style.backgroundColor;
+    } else if (code >= 30 && code <= 37) {
+      style.color = ansiBaseColors[code - 30];
+    } else if (code >= 90 && code <= 97) {
+      style.color = ansiBrightColors[code - 90];
+    } else if (code >= 40 && code <= 47) {
+      style.backgroundColor = ansiBaseColors[code - 40];
+    } else if (code >= 100 && code <= 107) {
+      style.backgroundColor = ansiBrightColors[code - 100];
+    } else if ((code === 38 || code === 48) && codes[i + 1] === 5) {
+      const color = ansi256Color(codes[i + 2]);
+      if (color) {
+        if (code === 38) style.color = color;
+        else style.backgroundColor = color;
+      }
+      i += 2;
+    } else if ((code === 38 || code === 48) && codes[i + 1] === 2) {
+      const [r, g, b] = [codes[i + 2], codes[i + 3], codes[i + 4]];
+      if ([r, g, b].every((value) => Number.isFinite(value) && value >= 0 && value <= 255)) {
+        const color = `rgb(${r}, ${g}, ${b})`;
+        if (code === 38) style.color = color;
+        else style.backgroundColor = color;
+      }
+      i += 4;
+    }
+  }
+}
+
+function mergeTextDecoration(value: React.CSSProperties["textDecorationLine"], next: string): React.CSSProperties["textDecorationLine"] {
+  const parts = new Set(String(value || "").split(/\s+/).filter(Boolean));
+  parts.add(next);
+  return Array.from(parts).join(" ") as React.CSSProperties["textDecorationLine"];
+}
+
+function removeTextDecoration(value: React.CSSProperties["textDecorationLine"], target: string): React.CSSProperties["textDecorationLine"] | undefined {
+  const parts = String(value || "").split(/\s+/).filter(Boolean).filter((part) => part !== target);
+  return parts.length > 0 ? (parts.join(" ") as React.CSSProperties["textDecorationLine"]) : undefined;
+}
+
+function parseAnsiSegments(text: string): AnsiSegment[] {
+  const normalized = normalizeTerminalText(text);
+  const segments: AnsiSegment[] = [];
+  const style: AnsiStyle = {};
+  let lastIndex = 0;
+  const pattern = /\x1b\[([0-9;?]*)([ -/]*)?([@-~])|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[ -/]*[@-~]/g;
+  for (const match of normalized.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    pushAnsiSegment(segments, normalized.slice(lastIndex, index), style);
+    if (match[3] === "m") {
+      applyAnsiCodes(style, match[1]);
+    }
+    lastIndex = index + match[0].length;
+  }
+  pushAnsiSegment(segments, normalized.slice(lastIndex), style);
+  return segments;
 }
 
 const statusColors: Record<string, string> = {
@@ -119,6 +325,54 @@ const statusColors: Record<string, string> = {
   error: "#ef4444",
 };
 
+const terminalFontFamily =
+  '"Cascadia Mono", "Cascadia Code", Consolas, "Microsoft YaHei Mono", "Microsoft YaHei", "Noto Sans Mono CJK SC", monospace';
+
+function AnsiOutput({ text, onRendered }: { text: string; onRendered?: () => void }) {
+  const segments = useMemo(() => parseAnsiSegments(text), [text]);
+
+  useLayoutEffect(() => {
+    onRendered?.();
+  }, [onRendered, segments]);
+
+  return (
+    <div
+      className="mindfs-ansi-output"
+      style={{
+        marginTop: "10px",
+        padding: "8px",
+        borderRadius: "8px",
+        background: "var(--mindfs-code-bg, #f8fafc)",
+        border: "1px solid var(--mindfs-code-border, var(--border-color))",
+        overflowX: "auto",
+        overflowY: "hidden",
+        width: "100%",
+        boxSizing: "border-box",
+        WebkitOverflowScrolling: "touch",
+      }}
+    >
+      <pre
+        style={{
+          margin: 0,
+          minWidth: "max-content",
+          color: "var(--mindfs-code-text, var(--text-primary))",
+          fontFamily: terminalFontFamily,
+          fontSize: "12px",
+          lineHeight: 1.6,
+          tabSize: 8,
+          whiteSpace: "pre",
+        }}
+      >
+        {segments.map((segment, index) => (
+          <span key={index} style={segment.style}>
+            {segment.text}
+          </span>
+        ))}
+      </pre>
+    </div>
+  );
+}
+
 export const ToolCallCard = memo(function ToolCallCard({
   kind,
   title,
@@ -127,20 +381,68 @@ export const ToolCallCard = memo(function ToolCallCard({
   content,
   result,
   locations,
+  meta,
   rootPath,
+  rootId,
+  sessionKey,
   defaultExpanded = false,
 }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const labelKind = (kind || "").trim();
-  const labelTitle = (title || "").trim();
-  const hasContent = !!(content && content.length > 0);
-  const hasLocations = !!(locations && locations.length > 0);
-  const hasResult = !!result;
-  const hasDetails = hasContent || hasLocations || hasResult;
+  const [loadedToolCall, setLoadedToolCall] = useState<ToolCall | null>(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+  const [detailLoadFailed, setDetailLoadFailed] = useState(false);
+  const detailScrollRef = useRef<HTMLDivElement | null>(null);
+  const loadingDetailKeyRef = useRef("");
+  const loadedDetailKeyRef = useRef("");
+  const shouldStickDetailsToBottomRef = useRef(true);
+  const effectiveKind = loadedToolCall?.kind || kind;
+  const effectiveTitle = loadedToolCall?.title || title;
+  const effectiveStatus = isRunningStatus(status)
+    ? status
+    : shouldPreserveDisplayStatus(status, loadedToolCall?.status)
+    ? status
+    : loadedToolCall?.status || status;
+  const effectiveContent = loadedToolCall?.content || content;
+  const effectiveLocations = loadedToolCall?.locations || locations;
+  const effectiveMeta =
+    loadedToolCall?.meta || meta
+      ? { ...(loadedToolCall?.meta || {}), ...(meta || {}) }
+      : undefined;
+  const labelKind = (effectiveKind || "").trim();
+  const labelTitle = (effectiveTitle || "").trim();
   const normalizedKind = labelKind.toLowerCase();
+  const isCollabTool = effectiveMeta?.rawType === "collabToolCall" || effectiveMeta?.type === "collabAgentToolCall";
+  const collabToolName = typeof effectiveMeta?.tool === "string" ? effectiveMeta.tool.trim() : "";
+  const isCollabWait = isCollabTool && collabToolName === "wait";
+  const isUserShell = normalizedKind === "execute" && effectiveMeta?.source === "userShell";
+  const userShellText = useMemo(
+    () => (effectiveContent || []).map((item) => ("text" in item ? item.text || "" : "")).join("") || result || "",
+    [effectiveContent, result],
+  );
+  const hasContent = !!(effectiveContent && effectiveContent.length > 0);
+  const hasLocations = !!(effectiveLocations && effectiveLocations.length > 0);
+  const hasResult = !!result;
+  const hasUserShellOutput = userShellText.trim().length > 0;
+  const hasCollabDetails = isCollabTool && !isCollabWait && Boolean(effectiveMeta?.prompt);
+  const canLoadDetails = Boolean(rootId && sessionKey && _callId);
+  const needsRemoteDetails = canLoadDetails && (isUserShell ? !hasUserShellOutput : !hasContent);
+  const hasDetails = (isUserShell ? hasUserShellOutput : hasContent || hasLocations || hasResult || hasCollabDetails) || canLoadDetails;
   const icon = renderToolIcon(normalizedKind);
-  const normalizedStatus = (status || "").toLowerCase();
-  const detailSections = useMemo(() => buildDetailSections(content, locations, rootPath), [content, locations, rootPath]);
+  const normalizedStatus = (effectiveStatus || "").toLowerCase();
+  const detailSections = useMemo(() => {
+    const sections = buildDetailSections(effectiveContent, effectiveLocations, rootPath);
+    if (sections.length > 0 || !result || !isDiffLikeText(result)) {
+      return sections;
+    }
+    const fallbackPath = normalizeDisplayPath(effectiveLocations?.[0]?.path || "(unknown)", rootPath);
+    return [
+      {
+        type: "diff" as const,
+        path: normalizeDisplayPath(extractDiffPath(result, fallbackPath), rootPath),
+        markdown: `~~~diff\n${result.trim()}\n~~~`,
+      },
+    ];
+  }, [effectiveContent, effectiveLocations, result, rootPath]);
   const isFileChange =
     normalizedKind === "edit" ||
     normalizedKind === "delete" ||
@@ -151,27 +453,92 @@ export const ToolCallCard = memo(function ToolCallCard({
       .filter((section): section is Extract<DetailSection, { type: "diff" }> => section.type === "diff")
       .map((section) => basename(section.path))
       .filter(Boolean);
-    const locationNames = (locations || [])
+    const locationNames = (effectiveLocations || [])
       .map((loc) => basename(normalizeDisplayPath(loc.path, rootPath)))
       .filter(Boolean);
     return Array.from(new Set([...diffNames, ...locationNames]));
-  }, [detailSections, locations, rootPath]);
-  const label = isFileChange
+  }, [detailSections, effectiveLocations, rootPath]);
+  const label = isUserShell
+    ? String(effectiveMeta?.command || labelTitle || "command")
+    : isCollabTool
+    ? labelTitle || collabToolName || "subagent"
+    : isFileChange
     ? labelKind || "edit"
     : [labelKind, labelTitle].filter(Boolean).join(" ").trim() || labelKind || labelTitle || "tool";
   const isRunning = normalizedStatus === "running" || normalizedStatus === "in_progress";
   const isComplete = normalizedStatus === "complete" || normalizedStatus === "success";
   const isFailed = normalizedStatus === "failed" || normalizedStatus === "error";
+  const progressText = toolProgressText(effectiveMeta);
+  const showProgress = Boolean(progressText);
   const hasStructuredDetails = detailSections.length > 0;
   useEffect(() => {
-    if (!isRunning || !hasDetails) {
+    if (!hasDetails) {
       setExpanded(false);
+      return;
     }
-  }, [hasDetails, isRunning]);
+    if (defaultExpanded) {
+      setExpanded(true);
+    }
+  }, [defaultExpanded, hasDetails]);
+
+  useEffect(() => {
+    setLoadedToolCall(null);
+    setDetailLoadFailed(false);
+    setLoadingDetails(false);
+    loadingDetailKeyRef.current = "";
+    loadedDetailKeyRef.current = "";
+  }, [_callId, rootId, sessionKey]);
+
+  useEffect(() => {
+    if (!expanded || !needsRemoteDetails) return;
+    const detailKey = `${rootId || ""}::${sessionKey || ""}::${_callId}`;
+    if (loadedDetailKeyRef.current === detailKey || loadingDetailKeyRef.current === detailKey) return;
+    loadingDetailKeyRef.current = detailKey;
+    setLoadingDetails(true);
+    setDetailLoadFailed(false);
+    sessionService
+      .getToolCall(String(rootId || ""), String(sessionKey || ""), _callId)
+      .then((toolCall) => {
+        if (loadingDetailKeyRef.current !== detailKey) return;
+        if (toolCall) {
+          setLoadedToolCall(toolCall);
+          loadedDetailKeyRef.current = detailKey;
+        } else {
+          setDetailLoadFailed(true);
+        }
+      })
+      .catch(() => {
+        if (loadingDetailKeyRef.current === detailKey) setDetailLoadFailed(true);
+      })
+      .finally(() => {
+        if (loadingDetailKeyRef.current !== detailKey) return;
+        loadingDetailKeyRef.current = "";
+        setLoadingDetails(false);
+      });
+  }, [_callId, expanded, needsRemoteDetails, rootId, sessionKey]);
+
+  useEffect(() => {
+    const container = detailScrollRef.current;
+    if (!container || !isUserShell || !expanded) return;
+    const updateStickiness = () => {
+      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      shouldStickDetailsToBottomRef.current = distanceFromBottom < 48;
+    };
+    updateStickiness();
+    container.addEventListener("scroll", updateStickiness, { passive: true });
+    return () => container.removeEventListener("scroll", updateStickiness);
+  }, [expanded, isUserShell]);
+
+  const scrollUserShellDetailsToBottom = React.useCallback(() => {
+    const container = detailScrollRef.current;
+    if (!container || !shouldStickDetailsToBottomRef.current) return;
+    container.scrollTop = container.scrollHeight;
+  }, []);
   
   const statusColor = statusColors[normalizedStatus] || "#9ca3af";
 
   return (
+    <>
     <div
       style={{
         width: "100%",
@@ -204,7 +571,7 @@ export const ToolCallCard = memo(function ToolCallCard({
       >
         <span style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0, flex: 1 }}>
           <span>{icon}</span>
-          <span style={{ fontWeight: 500, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          <span style={{ fontWeight: 500, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%", minWidth: 0 }}>
             {label}
           </span>
           {isFileChange ? (
@@ -273,14 +640,25 @@ export const ToolCallCard = memo(function ToolCallCard({
 
       {expanded && hasDetails && (
         <div
+          ref={isUserShell ? detailScrollRef : undefined}
           style={{
-            padding: "0 10px 10px",
+            padding: "0 10px 22px",
             borderTop: "1px solid var(--border-color)",
             maxHeight: "min(60vh, 720px)",
             overflowY: "auto",
+            WebkitOverflowScrolling: "touch",
+            overscrollBehavior: isUserShell ? "auto" : undefined,
           }}
         >
-          {hasStructuredDetails ? (
+          {isUserShell ? (
+            <AnsiOutput text={userShellText} onRendered={scrollUserShellDetailsToBottom} />
+          ) : loadingDetails ? (
+            <div style={{ marginTop: "10px", fontSize: "12px", color: "var(--text-secondary)" }}>加载中...</div>
+          ) : detailLoadFailed && !hasContent && !hasLocations && !hasResult && !hasCollabDetails ? (
+            <div style={{ marginTop: "10px", fontSize: "12px", color: "var(--text-secondary)" }}>加载失败</div>
+          ) : isCollabTool ? (
+            <CollabToolDetails meta={effectiveMeta} rootId={rootId} />
+          ) : hasStructuredDetails ? (
             <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginTop: "10px" }}>
               {detailSections.map((section, index) => (
                 <div key={`${section.type}-${index}`} style={{ minWidth: 0 }}>
@@ -297,10 +675,10 @@ export const ToolCallCard = memo(function ToolCallCard({
                       >
                         {section.path}
                       </div>
-                      <MarkdownViewer content={section.markdown} />
+                      <MarkdownViewer content={section.markdown} root={rootId || undefined} />
                     </>
                   ) : (
-                    <MarkdownViewer content={section.markdown} />
+                    <MarkdownViewer content={section.markdown} root={rootId || undefined} />
                   )}
                 </div>
               ))}
@@ -317,7 +695,7 @@ export const ToolCallCard = memo(function ToolCallCard({
                 minWidth: 0,
               }}
             >
-              {locations!.slice(0, 3).map((loc, idx) => (
+              {effectiveLocations!.slice(0, 3).map((loc, idx) => (
                 <div
                   key={`${loc.path}-${loc.line ?? 0}-${idx}`}
                   style={{ wordBreak: "break-all", whiteSpace: "normal" }}
@@ -326,10 +704,10 @@ export const ToolCallCard = memo(function ToolCallCard({
                   {typeof loc.line === "number" ? `:${loc.line}` : ""}
                 </div>
               ))}
-              {locations!.length > 3 && <div>... +{locations!.length - 3} 处</div>}
+              {effectiveLocations!.length > 3 && <div>... +{effectiveLocations!.length - 3} 处</div>}
             </div>
           ) : null}
-          {!hasStructuredDetails && hasResult && <MarkdownViewer content={result || ""} />}
+          {!hasStructuredDetails && hasResult && <MarkdownViewer content={result || ""} root={rootId || undefined} />}
         </div>
       )}
 
@@ -340,8 +718,61 @@ export const ToolCallCard = memo(function ToolCallCard({
         }
       `}</style>
     </div>
+      {showProgress ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "5px",
+            marginTop: "3px",
+            paddingLeft: "8px",
+            paddingRight: "4px",
+            color: "var(--text-secondary)",
+            fontSize: "11px",
+            lineHeight: 1.25,
+            minWidth: 0,
+          }}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="13"
+            height="13"
+            viewBox="0 0 36 36"
+            aria-hidden="true"
+            style={{
+              flexShrink: 0,
+              opacity: isRunning ? 1 : 0.72,
+            }}
+          >
+            <path d="M0 0h36v36H0z" fill="none" />
+            <path fill="#ffe8b6" d="M21 18c0-2.001 3.246-3.369 5-6c2-3 2-10 2-10H8s0 7 2 10c1.754 2.631 5 3.999 5 6s-3.246 3.369-5 6c-2 3-2 10-2 10h20s0-7-2-10c-1.754-2.631-5-3.999-5-6" />
+            <path fill="#ffac33" d="M18 2h-8s0 4 1 7c1.304 3.912 6 4.999 6 9s0 13 1 13s1-9 1-13s4.697-5.088 6-9c1-3 1-7 1-7z" />
+            <path fill="#3b88c3" d="M30 34a2 2 0 0 1-2 2H8a2 2 0 0 1 0-4h20a2 2 0 0 1 2 2m0-32a2 2 0 0 1-2 2H8a2 2 0 0 1 0-4h20a2 2 0 0 1 2 2" />
+          </svg>
+          <span
+            style={{
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {progressText}
+          </span>
+        </div>
+      ) : null}
+    </>
   );
 });
+
+function CollabToolDetails({ meta, rootId }: { meta?: Record<string, unknown>; rootId?: string | null }) {
+  const prompt = typeof meta?.prompt === "string" ? meta.prompt.trim() : "";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "10px", minWidth: 0 }}>
+      {prompt ? <MarkdownViewer content={prompt} root={rootId || undefined} /> : null}
+    </div>
+  );
+}
 
 function prefixDiffLines(text: string, prefix: "+" | "-"): string[] {
   return text.split("\n").map((line) => `${prefix}${line}`);
@@ -367,14 +798,14 @@ function renderDeletedText(path: string, text: string): string {
 }
 
 function isDiffLikeText(text: string): boolean {
-  const trimmed = text.trim();
+  const trimmed = stripAnsi(text).trim();
   if (!trimmed) return false;
   if (/^(```|~~~)/.test(trimmed)) return false;
   return /^(diff --git|index |--- |\+\+\+ |@@ )/m.test(trimmed);
 }
 
 function extractDiffPath(text: string, fallbackPath = "(unknown)"): string {
-  const lines = text.split("\n");
+  const lines = stripAnsi(text).split("\n");
   for (const line of lines) {
     const match = line.match(/^\+\+\+\s+(?:b\/)?(.+)$/);
     if (match?.[1]) return match[1].trim();

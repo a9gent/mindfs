@@ -2,23 +2,32 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { type SessionMode } from "./ModeSelector";
 import { ModeSelector } from "./ModeSelector";
 import { AgentSelector } from "./AgentSelector";
-import { fetchAgents, type AgentStatus } from "../services/agents";
+import { fetchAgents, fetchShells, restartAgent, type AgentStatus, type ShellStatus } from "../services/agents";
 import { fetchCandidates, type CandidateItem } from "../services/candidates";
 import { reportError } from "../services/error";
 import { uploadFiles } from "../services/upload";
+import {
+  APPEARANCE_CHANGE_EVENT,
+  getAppearanceMode,
+  getEffectiveAppearanceMode,
+} from "../services/appearance";
 import TokenEditor, {
   type TokenEditorHandle,
 } from "./editor/TokenEditor";
+import { renderToolIcon } from "./stream/ToolCallCard";
 
 type SessionInfo = {
   key: string;
   session_key?: string;
   name: string;
-  type: "chat" | "plugin";
+  type: "chat" | "plugin" | "command";
   agent: string;
   model?: string;
+  shell?: string;
   mode?: string;
   effort?: string;
+  fast_service?: string;
+  plan_mode?: boolean;
   pending?: boolean;
 };
 
@@ -37,6 +46,14 @@ type AttachedFileContext = {
   text?: string;
 };
 
+type QueuedMessageInfo = {
+  id: string;
+  content: string;
+  created_at?: string;
+};
+
+type WSStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
+
 function getSelectionPreview(text?: string): string {
   const trimmed = String(text || "").trim();
   if (!trimmed) {
@@ -46,13 +63,21 @@ function getSelectionPreview(text?: string): string {
 }
 
 type ActionBarProps = {
-  status?: string;
+  status?: WSStatus;
   agentsVersion?: number;
   currentRootId?: string | null;
   currentSession?: SessionInfo | null;
+  pendingPlanMode?: boolean;
   attachedFileContext?: AttachedFileContext | null;
   canOpenSessionDrawer?: boolean;
+  sessionDrawerOpen?: boolean;
   detachedBoundSession?: boolean;
+  editDraftRequest?: {
+    id: number;
+    content: string;
+  } | null;
+  queuedMessages?: QueuedMessageInfo[];
+  mobileEnterKeySends?: boolean;
   onSendMessage?: (
     message: string,
     mode: SessionMode,
@@ -60,8 +85,18 @@ type ActionBarProps = {
     model?: string,
     agentMode?: string,
     effort?: string,
+    fastService?: "" | "on" | "off",
+    shell?: string,
+  ) => void | Promise<void>;
+  onSetPlanMode?: (
+    enabled: boolean,
+    sessionKey?: string,
+    rootId?: string,
   ) => void | Promise<void>;
   onCancelCurrentTurn?: (sessionKey: string) => void;
+  onRemoveQueuedMessage?: (queueId: string) => void | Promise<void>;
+  onUpdateQueuedMessage?: (queueId: string, content: string) => void | Promise<void>;
+  onSendQueuedMessageNow?: (queueId: string) => void | Promise<void>;
   onNewSession?: () => void;
   onRequestFileContext?: () => void;
   onClearFileContext?: () => void;
@@ -70,9 +105,44 @@ type ActionBarProps = {
   onToggleRightSidebar?: () => void;
 };
 
+function wsStatusMeta(status: WSStatus): {
+  color: string;
+  shadow: string;
+  label: string;
+} {
+  switch (status) {
+    case "connected":
+      return {
+        color: "#22c55e",
+        shadow: "none",
+        label: "WebSocket 连接正常",
+      };
+    case "connecting":
+      return {
+        color: "#f59e0b",
+        shadow: "none",
+        label: "WebSocket 正在连接",
+      };
+    case "reconnecting":
+      return {
+        color: "#ef4444",
+        shadow: "none",
+        label: "WebSocket 已断开，正在重连",
+      };
+    case "disconnected":
+    default:
+      return {
+        color: "#94a3b8",
+        shadow: "none",
+        label: "WebSocket 未连接",
+      };
+  }
+}
+
 const modePlaceholders: Record<SessionMode, string> = {
   chat: "给 agent 发消息...",
   plugin: "描述要生成的视图插件...",
+  command: "输入命令...",
 };
 
 const chatBlurPlaceholders = [
@@ -82,12 +152,14 @@ const chatBlurPlaceholders = [
 
 const MOBILE_BREAKPOINT = 768;
 const IME_ENTER_GUARD_MS = 120;
+const CANDIDATE_FETCH_DEBOUNCE_MS = 512;
 
 function getAgentDefaults(agent?: AgentStatus | null) {
   return {
     model: agent?.default_model_id || agent?.current_model_id || "",
     effort: agent?.default_effort || "",
-  };
+    fastService: (agent?.default_fast_service || "") as "" | "on" | "off",
+  } as const;
 }
 
 function buildPendingAttachment(file: File): PendingAttachment {
@@ -106,6 +178,149 @@ function buildPendingAttachment(file: File): PendingAttachment {
     isImage,
     previewUrl: isImage ? URL.createObjectURL(normalizedFile) : undefined,
   };
+}
+
+function ShellSelector({
+  shell,
+  shells,
+  onShellChange,
+  compact = false,
+}: {
+  shell: string;
+  shells: ShellStatus[];
+  onShellChange: (shell: string) => void;
+  compact?: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const selected = shells.find((item) => item.id === shell || item.command === shell || item.resolved_command === shell) || shells.find((item) => item.default) || shells[0];
+
+  useEffect(() => {
+    const handlePointerOutside = (event: PointerEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener("pointerdown", handlePointerOutside);
+      return () => document.removeEventListener("pointerdown", handlePointerOutside);
+    }
+  }, [isOpen]);
+
+  return (
+    <div ref={dropdownRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => shells.length > 0 && setIsOpen((prev) => !prev)}
+        disabled={shells.length === 0}
+        title="Shell"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          maxWidth: compact ? "72px" : "92px",
+          height: compact ? "24px" : "28px",
+          border: "none",
+          borderRadius: "8px",
+          background: "transparent",
+          color: "inherit",
+          fontSize: "11px",
+          fontWeight: 700,
+          lineHeight: 1,
+          padding: "0 3px",
+          outline: "none",
+          cursor: shells.length === 0 ? "default" : "pointer",
+          opacity: shells.length === 0 ? 0.45 : 1,
+        }}
+      >
+        <span
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            display: "inline-block",
+            maxWidth: "100%",
+            padding: "1px 4px",
+            borderRadius: "6px",
+            background: "#1d4ed8",
+            color: "#fff",
+            lineHeight: 1.2,
+            boxSizing: "border-box",
+          }}
+        >
+          {selected?.label || "shell"}
+        </span>
+      </button>
+
+      {isOpen && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: "calc(100% + 8px)",
+            right: 0,
+            background: "var(--menu-bg)",
+            border: "1px solid var(--menu-border)",
+            borderRadius: "12px",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.15)",
+            zIndex: 1000,
+            width: "max-content",
+            minWidth: "104px",
+            maxWidth: "min(72vw, 180px)",
+            padding: "8px 0",
+          }}
+        >
+          <div
+            style={{
+              padding: "6px 12px",
+              fontSize: "11px",
+              fontWeight: 600,
+              color: "var(--text-secondary)",
+              textTransform: "uppercase",
+            }}
+          >
+            Shell
+          </div>
+          {shells.map((item) => {
+            const isSelected = item.id === selected?.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  onShellChange(item.id);
+                  setIsOpen(false);
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  padding: "9px 12px",
+                  border: "none",
+                  background: isSelected ? "rgba(59, 130, 246, 0.08)" : "transparent",
+                  color: isSelected ? "var(--accent-color)" : "var(--text-primary)",
+                  fontSize: "13px",
+                  fontWeight: isSelected ? 700 : 500,
+                  textAlign: "left",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+                onMouseEnter={(event) => {
+                  if (!isSelected) {
+                    event.currentTarget.style.background = "rgba(0,0,0,0.04)";
+                  }
+                }}
+                onMouseLeave={(event) => {
+                  event.currentTarget.style.background = isSelected ? "rgba(59, 130, 246, 0.08)" : "transparent";
+                }}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function useResponsive() {
@@ -134,38 +349,83 @@ function candidateNameColor(candidateType: CandidateItem["type"], isDark: boolea
   }
 }
 
+function replaceActiveTokenText(input: string, activeToken: { type: "file" | "slash" | "prompt" | "command"; query: string } | null, value: string): string {
+  if (!activeToken) return input;
+  const trigger = activeToken.type === "file" ? "@" : activeToken.type === "prompt" ? "#" : activeToken.type === "slash" ? "/" : "";
+  if (!trigger) return value;
+  const needle = `${trigger}${activeToken.query}`;
+  const index = input.lastIndexOf(needle);
+  if (index < 0) {
+    return `${input}${value} `;
+  }
+  return `${input.slice(0, index)}${value} ${input.slice(index + needle.length)}`;
+}
+
+function parsePlanCommand(input: string): boolean | null {
+  const normalized = input.trim().toLowerCase();
+  if (normalized === "/plan" || normalized.startsWith("/plan ")) {
+    return true;
+  }
+  return null;
+}
+
+function stripPlanCommandPrefix(input: string): string {
+  const trimmed = input.trim();
+  if (trimmed.toLowerCase() === "/plan") {
+    return "";
+  }
+  if (trimmed.toLowerCase().startsWith("/plan ")) {
+    return trimmed.slice(5).trimStart();
+  }
+  return trimmed;
+}
+
 export function ActionBar({
-  status = "Disconnected",
+  status = "disconnected",
   agentsVersion = 0,
   currentRootId,
   currentSession,
+  pendingPlanMode = false,
   attachedFileContext,
   canOpenSessionDrawer = false,
+  sessionDrawerOpen = false,
   detachedBoundSession = false,
+  editDraftRequest = null,
+  queuedMessages = [],
   onSendMessage,
+  onSetPlanMode,
   onCancelCurrentTurn,
+  onRemoveQueuedMessage,
+  onUpdateQueuedMessage,
+  onSendQueuedMessageNow,
   onNewSession,
   onRequestFileContext,
   onClearFileContext,
   onSessionClick,
   onToggleLeftSidebar,
   onToggleRightSidebar,
+  mobileEnterKeySends = false,
 }: ActionBarProps) {
   const [mode, setMode] = useState<SessionMode>("chat");
   const [agent, setAgent] = useState("");
   const [model, setModel] = useState("");
   const [agentMode, setAgentMode] = useState("");
   const [effort, setEffort] = useState("");
+  const [fastService, setFastService] = useState<"" | "on" | "off">("");
   const [agents, setAgents] = useState<AgentStatus[]>([]);
+  const [shells, setShells] = useState<ShellStatus[]>([]);
+  const [shell, setShell] = useState("");
   const [serializedInput, setSerializedInput] = useState("");
-  const [activeToken, setActiveToken] = useState<{ type: "file" | "slash" | "prompt"; query: string } | null>(null);
+  const [activeToken, setActiveToken] = useState<{ type: "file" | "slash" | "prompt" | "command"; query: string } | null>(null);
   const [dragX, setDragX] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
+  const [editingQueueText, setEditingQueueText] = useState("");
   const [isMultiLine, setIsMultiLine] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
-  const [isDark, setIsDark] = useState(window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const [isDark, setIsDark] = useState(() => getEffectiveAppearanceMode() === "dark");
   const [blurPlaceholder, setBlurPlaceholder] = useState(
     () => chatBlurPlaceholders[Math.floor(Math.random() * chatBlurPlaceholders.length)] || modePlaceholders.chat,
   );
@@ -177,11 +437,13 @@ export function ActionBar({
   const editorRef = useRef<TokenEditorHandle>(null);
   const candidateAbortRef = useRef<AbortController | null>(null);
   const candidateItemRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const suppressedCommandCandidateTextRef = useRef("");
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
   const compositionGuardUntilRef = useRef(0);
   const { isMobile } = useResponsive();
-  const isConnected = status === "Connected";
+  const isConnected = status === "connected";
+  const connectionMeta = wsStatusMeta(status);
   const DRAG_THRESHOLD = -40;
   const boundRingColor = detachedBoundSession ? "#f59e0b" : "#2563eb";
   const boundRingShadow = detachedBoundSession
@@ -191,9 +453,25 @@ export function ActionBar({
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = (e: MediaQueryListEvent) => setIsDark(e.matches);
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
+    const syncAppearance = () => setIsDark(getEffectiveAppearanceMode() === "dark");
+    const onSystemChange = () => {
+      if (getAppearanceMode() === "system") {
+        syncAppearance();
+      }
+    };
+    window.addEventListener(APPEARANCE_CHANGE_EVENT, syncAppearance);
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", onSystemChange);
+      return () => {
+        window.removeEventListener(APPEARANCE_CHANGE_EVENT, syncAppearance);
+        media.removeEventListener("change", onSystemChange);
+      };
+    }
+    media.addListener(onSystemChange);
+    return () => {
+      window.removeEventListener(APPEARANCE_CHANGE_EVENT, syncAppearance);
+      media.removeListener(onSystemChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -202,12 +480,14 @@ export function ActionBar({
       syncedSessionSignatureRef.current = "";
       return;
     }
-    const nextMode = currentSession.type === "plugin" ? "plugin" : "chat";
+    const nextMode = currentSession.type === "plugin" ? "plugin" : currentSession.type === "command" ? "command" : "chat";
     const nextAgent = currentSession.agent || "";
     const nextModel = currentSession.model || "";
+    const nextShell = currentSession.shell || "";
     const nextAgentMode = currentSession.mode || "";
     const nextEffort = currentSession.effort || "";
-    const signature = `${sessionKey || ""}::${nextMode}::${nextAgent}::${nextModel}::${nextAgentMode}::${nextEffort}`;
+    const nextFastService = (currentSession.fast_service || "") as "" | "on" | "off";
+    const signature = `${sessionKey || ""}::${nextMode}::${nextAgent}::${nextModel}::${nextShell}::${nextAgentMode}::${nextEffort}::${nextFastService}`;
     if (syncedSessionSignatureRef.current === signature) {
       return;
     }
@@ -215,8 +495,10 @@ export function ActionBar({
     setMode(nextMode);
     setAgent(nextAgent);
     setModel(nextModel);
+    setShell(nextShell);
     setAgentMode(nextAgentMode);
     setEffort(nextEffort);
+    setFastService(nextFastService);
   }, [currentSession]);
 
   useEffect(() => {
@@ -226,10 +508,24 @@ export function ActionBar({
   }, [currentSession?.pending]);
 
   useEffect(() => {
-    fetchAgents(true)
-      .then(setAgents)
+    Promise.all([fetchAgents(true), fetchShells(true)])
+      .then(([nextAgents, nextShells]) => {
+        setAgents(nextAgents);
+        setShells(nextShells);
+      })
       .catch((err) => console.error("Failed to fetch agents:", err));
   }, [agentsVersion]);
+
+  useEffect(() => {
+    if (mode !== "command" || shells.length === 0) {
+      return;
+    }
+    if (shells.some((item) => item.id === shell || item.command === shell || item.resolved_command === shell)) {
+      return;
+    }
+    const preferred = shells.find((item) => item.default) || shells[0];
+    setShell(preferred?.id || "");
+  }, [mode, shell, shells]);
 
   useEffect(() => {
     if (currentSession || agents.length === 0) return;
@@ -243,6 +539,7 @@ export function ActionBar({
     setModel(defaults.model);
     setAgentMode("");
     setEffort(defaults.effort);
+    setFastService(defaults.fastService);
   }, [agent, agents, currentSession]);
 
   useEffect(() => {
@@ -269,6 +566,10 @@ export function ActionBar({
   const isCodexEffortAgent = selectedAgent?.name === "codex";
   const supportsEffort =
     availableEfforts.length > 0 && !!selectedModelInfo?.supportEffort;
+  const supportsServiceTier = !!selectedAgent?.supports_fast_service;
+  const planModeActive = (!!currentSession?.plan_mode || pendingPlanMode) && mode !== "command";
+  const planSessionKey = currentSession?.key || currentSession?.session_key || "";
+  const planRootId = currentSession?.root_id || currentRootId || "";
 
   useEffect(() => {
     if (!supportsEffort) {
@@ -277,18 +578,33 @@ export function ActionBar({
       }
       return;
     }
-    if (isCodexEffortAgent) {
-      if (!effort || !availableEfforts.includes(effort)) {
-        setEffort("medium");
-      }
+    if (effort && !availableEfforts.includes(effort)) {
+      setEffort(getAgentDefaults(selectedAgent).effort);
+    }
+  }, [supportsEffort, effort, availableEfforts, selectedAgent, isCodexEffortAgent]);
+
+  useEffect(() => {
+    if (!supportsServiceTier) {
       return;
     }
-    if (effort && !availableEfforts.includes(effort)) {
-      setEffort("");
+    if (fastService === "on" && !selectedAgent?.supports_fast_service) {
+      setFastService(getAgentDefaults(selectedAgent).fastService);
     }
-  }, [supportsEffort, effort, availableEfforts, isCodexEffortAgent]);
+  }, [supportsServiceTier, fastService, selectedAgent]);
 
   useEffect(() => () => candidateAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (mode !== "command") {
+      return;
+    }
+    if (!isFocused) {
+      candidateAbortRef.current?.abort();
+      setActiveToken(null);
+      setCandidates([]);
+      setActiveCandidateIndex(0);
+    }
+  }, [mode, isFocused]);
 
   useEffect(() => {
     return () => {
@@ -301,7 +617,7 @@ export function ActionBar({
   }, []);
 
   useEffect(() => {
-    if (!activeToken || !currentRootId || (activeToken.type === "slash" && !agent)) {
+    if (!activeToken || !currentRootId || (activeToken.type === "slash" && mode !== "command" && !agent)) {
       candidateAbortRef.current?.abort();
       setCandidates([]);
       setActiveCandidateIndex(0);
@@ -310,29 +626,57 @@ export function ActionBar({
     const controller = new AbortController();
     candidateAbortRef.current?.abort();
     candidateAbortRef.current = controller;
-    fetchCandidates({
-      rootId: currentRootId,
-      type: activeToken.type === "file" ? "file" : activeToken.type === "prompt" ? "prompt" : "skill",
-      query: activeToken.query,
-      agent: activeToken.type === "slash" ? agent : undefined,
-      signal: controller.signal,
-    })
-      .then((items) => {
-        setCandidates(items);
-        setActiveCandidateIndex(0);
+    const timer = window.setTimeout(() => {
+      fetchCandidates({
+        rootId: currentRootId,
+        type: activeToken.type === "file"
+          ? "file"
+          : activeToken.type === "prompt"
+            ? "prompt"
+            : activeToken.type === "command" || mode === "command"
+              ? "command"
+              : "skill",
+        query: activeToken.query,
+        agent: activeToken.type === "slash" && mode !== "command" ? agent : undefined,
+        signal: controller.signal,
       })
-      .catch((err) => {
-        if (controller.signal.aborted) return;
-        console.error("Failed to fetch candidates:", err);
-        setCandidates([]);
-        setActiveCandidateIndex(0);
-      });
-    return () => controller.abort();
-  }, [activeToken, currentRootId, agent]);
+        .then((items) => {
+          const supportsPlanCommand =
+            activeToken.type !== "slash" ||
+            mode === "command" ||
+            ["codex", "claude"].includes(agent.trim().toLowerCase());
+          const filteredItems = supportsPlanCommand
+            ? items
+            : items.filter(
+                (item) =>
+                  item.type !== "slash_command" ||
+                  item.name.trim().toLowerCase() !== "plan",
+              );
+          const nextItems = activeToken.type === "command"
+            ? filteredItems.filter((item) => item.name.trim() !== activeToken.query.trim())
+            : filteredItems;
+          setCandidates(nextItems);
+          setActiveCandidateIndex(activeToken.type === "command" ? -1 : 0);
+        })
+        .catch((err) => {
+          if (controller.signal.aborted) return;
+          console.error("Failed to fetch candidates:", err);
+          setCandidates([]);
+          setActiveCandidateIndex(0);
+        });
+    }, CANDIDATE_FETCH_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [activeToken, currentRootId, agent, mode]);
 
   useEffect(() => {
     if (candidates.length === 0) {
       candidateItemRefs.current = [];
+      return;
+    }
+    if (activeCandidateIndex < 0) {
       return;
     }
     const activeItem = candidateItemRefs.current[activeCandidateIndex];
@@ -347,6 +691,19 @@ export function ActionBar({
     setIsMultiLine(height > 50);
   }, []);
 
+  useEffect(() => {
+    if (!editDraftRequest) {
+      return;
+    }
+    const nextText = editDraftRequest.content || "";
+    editorRef.current?.setText(nextText);
+    setSerializedInput(nextText);
+    setActiveToken(null);
+    setCandidates([]);
+    setActiveCandidateIndex(0);
+    requestAnimationFrame(syncEditorHeight);
+  }, [editDraftRequest, syncEditorHeight]);
+
   const appendPendingAttachments = useCallback((files: File[]) => {
     if (files.length === 0) {
       return;
@@ -356,30 +713,82 @@ export function ActionBar({
 
   const handleEditorChange = useCallback((payload: {
     serializedText: string;
-    activeToken: { type: "file" | "slash" | "prompt"; query: string } | null;
+    displayText: string;
+    activeToken: { type: "file" | "slash" | "prompt" | "command"; query: string } | null;
   }) => {
     setSerializedInput(payload.serializedText);
-    setActiveToken(payload.activeToken);
-    if (payload.serializedText.length === 0) {
+    if (mode === "command") {
+      const query = payload.displayText.trim();
+      if (!query) {
+        suppressedCommandCandidateTextRef.current = "";
+        setActiveToken(null);
+      } else if (payload.activeToken) {
+        suppressedCommandCandidateTextRef.current = "";
+        setActiveToken(payload.activeToken);
+      } else if (query === suppressedCommandCandidateTextRef.current) {
+        setActiveToken(null);
+      } else {
+        suppressedCommandCandidateTextRef.current = "";
+        setActiveToken({ type: "command", query });
+      }
+    } else {
+      suppressedCommandCandidateTextRef.current = "";
+      setActiveToken(payload.activeToken);
+    }
+    if (payload.displayText.trim().length === 0) {
       setIsMultiLine(false);
       return;
     }
     requestAnimationFrame(syncEditorHeight);
-  }, [syncEditorHeight]);
+  }, [mode, syncEditorHeight]);
 
   const applyCandidate = useCallback((candidate: CandidateItem) => {
     if (!activeToken) return;
     setCandidates([]);
     setActiveCandidateIndex(0);
-    editorRef.current?.insertCandidate(candidate.type, candidate.name);
+    if (candidate.type === "command") {
+      suppressedCommandCandidateTextRef.current = candidate.name.trim();
+      editorRef.current?.setText(candidate.name);
+    } else if (mode === "command" && candidate.type === "file") {
+      suppressedCommandCandidateTextRef.current = "";
+      const nextText = replaceActiveTokenText(serializedInput, activeToken, candidate.name);
+      editorRef.current?.setText(nextText);
+      setSerializedInput(nextText);
+    } else {
+      suppressedCommandCandidateTextRef.current = "";
+      editorRef.current?.insertCandidate(candidate.type, candidate.name);
+    }
     editorRef.current?.focus();
     syncEditorHeight();
-  }, [activeToken, syncEditorHeight]);
+  }, [activeToken, mode, serializedInput, syncEditorHeight]);
 
   const handleSend = useCallback(async () => {
     const messageText = serializedInput.trim();
-    if ((!messageText && pendingAttachments.length === 0) || !isConnected || sending || !agent) return;
+    if ((!messageText && pendingAttachments.length === 0) || !isConnected || sending || (mode !== "command" && !agent)) return;
+    const planCommand = pendingAttachments.length === 0 ? parsePlanCommand(messageText) : null;
+    if (planCommand !== null) {
+      const planContent = stripPlanCommandPrefix(messageText);
+      if (!planContent) {
+        setSending(true);
+        try {
+          await onSetPlanMode?.(planCommand, planSessionKey, planRootId);
+          editorRef.current?.clear();
+          setSerializedInput("");
+          setActiveToken(null);
+          setCandidates([]);
+          setActiveCandidateIndex(0);
+        } finally {
+          setSending(false);
+          if (!isMobile) {
+            requestAnimationFrame(() => editorRef.current?.focus());
+          }
+        }
+        return;
+      }
+    }
     setSending(true);
+    setCandidates([]);
+    setActiveCandidateIndex(0);
     try {
       let attachmentTokens = "";
       if (pendingAttachments.length > 0) {
@@ -402,10 +811,12 @@ export function ActionBar({
       await onSendMessage?.(
         payload,
         mode,
-        agent,
+        mode === "command" ? "" : agent,
         model || undefined,
         agentMode || undefined,
         supportsEffort ? effort || undefined : undefined,
+        supportsServiceTier ? fastService : undefined,
+        mode === "command" ? shell || undefined : undefined,
       );
       editorRef.current?.clear();
       setSerializedInput("");
@@ -432,7 +843,7 @@ export function ActionBar({
         requestAnimationFrame(() => editorRef.current?.focus());
       }
     }
-  }, [serializedInput, pendingAttachments, isConnected, sending, agent, model, agentMode, onSendMessage, mode, currentRootId, supportsEffort, effort, isMobile]);
+  }, [serializedInput, pendingAttachments, isConnected, sending, mode, agent, planSessionKey, planRootId, onSetPlanMode, isMobile, model, agentMode, onSendMessage, currentRootId, supportsEffort, effort, supportsServiceTier, fastService, shell]);
 
   const handleCancel = useCallback(async () => {
     const sessionKey = currentSession?.key;
@@ -441,9 +852,35 @@ export function ActionBar({
     try {
       await onCancelCurrentTurn?.(sessionKey);
     } finally {
-      // Reset is driven by currentSession.pending.
+      setCancelling(false);
     }
   }, [currentSession?.key, cancelling, onCancelCurrentTurn]);
+
+  const startEditQueuedMessage = useCallback((item: QueuedMessageInfo) => {
+    setEditingQueueId(item.id);
+    setEditingQueueText(item.content || "");
+  }, []);
+
+  const saveEditQueuedMessage = useCallback(async () => {
+    const queueId = editingQueueId;
+    const nextText = editingQueueText.trim();
+    if (!queueId || !nextText) return;
+    await onUpdateQueuedMessage?.(queueId, nextText);
+    setEditingQueueId(null);
+    setEditingQueueText("");
+  }, [editingQueueId, editingQueueText, onUpdateQueuedMessage]);
+
+  const cancelEditQueuedMessage = useCallback(() => {
+    setEditingQueueId(null);
+    setEditingQueueText("");
+  }, []);
+
+  useEffect(() => {
+    if (!editingQueueId) return;
+    if (!queuedMessages.some((item) => item.id === editingQueueId)) {
+      cancelEditQueuedMessage();
+    }
+  }, [cancelEditQueuedMessage, editingQueueId, queuedMessages]);
 
   const isCompositionActive = useCallback((event?: KeyboardEvent | null) => {
     const nativeEvent = event as (KeyboardEvent & { isComposing?: boolean; keyCode?: number }) | null | undefined;
@@ -460,21 +897,24 @@ export function ActionBar({
     if (candidates.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setActiveCandidateIndex((prev) => (prev + 1) % candidates.length);
+        setActiveCandidateIndex((prev) => (prev < 0 ? 0 : (prev + 1) % candidates.length));
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        setActiveCandidateIndex((prev) => (prev - 1 + candidates.length) % candidates.length);
+        setActiveCandidateIndex((prev) => (prev < 0 ? candidates.length - 1 : (prev - 1 + candidates.length) % candidates.length));
         return;
       }
       if (e.key === "Tab") {
         e.preventDefault();
-        applyCandidate(candidates[activeCandidateIndex] || candidates[0]);
+        if (activeCandidateIndex >= 0) {
+          applyCandidate(candidates[activeCandidateIndex]);
+        }
         return;
       }
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopPropagation();
         setCandidates([]);
         setActiveCandidateIndex(0);
         return;
@@ -490,19 +930,27 @@ export function ActionBar({
       return false;
     }
     if (candidates.length > 0) {
-      event?.preventDefault();
-      event?.stopPropagation();
-      applyCandidate(candidates[activeCandidateIndex] || candidates[0]);
-      return true;
+      if (activeCandidateIndex >= 0) {
+        event?.preventDefault();
+        event?.stopPropagation();
+        applyCandidate(candidates[activeCandidateIndex]);
+        return true;
+      }
+      if (mode !== "command") {
+        event?.preventDefault();
+        event?.stopPropagation();
+        applyCandidate(candidates[0]);
+        return true;
+      }
     }
-    if (!isMobile) {
+    if (!isMobile || (mobileEnterKeySends && mode === "chat")) {
       event?.preventDefault();
       event?.stopPropagation();
       void handleSend();
       return true;
     }
     return false;
-  }, [candidates, activeCandidateIndex, applyCandidate, handleSend, isCompositionActive, isMobile]);
+  }, [candidates, activeCandidateIndex, applyCandidate, handleSend, isCompositionActive, isMobile, mobileEnterKeySends, mode]);
 
   const handleEditorPaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
     if (sending || !currentRootId) {
@@ -532,6 +980,7 @@ export function ActionBar({
     setModel(defaults.model);
     setAgentMode("");
     setEffort(defaults.effort);
+    setFastService(defaults.fastService);
     syncedSessionSignatureRef.current = "";
   }, [agent, agents]);
 
@@ -570,22 +1019,199 @@ export function ActionBar({
   }, [isDragging, handleDragEnd]);
 
   const isSelectedAgentUnavailable = agents.length > 0 ? agents.find((a) => a.name === agent)?.available === false : false;
-  const canSend = (!!serializedInput.trim() || pendingAttachments.length > 0) && isConnected && !sending && !!agent;
+  const canSend = (!!serializedInput.trim() || pendingAttachments.length > 0) && isConnected && !sending && (mode === "command" || !!agent);
   const hasBoundSession = !!currentSession;
-  const showCancel = !!currentSession?.pending && !!currentSession?.key;
+  const hasDraft = !!serializedInput.trim() || pendingAttachments.length > 0;
+  const showCancel = !!currentSession?.pending && !!currentSession?.key && !hasDraft;
   const isModeLocked = !!currentSession;
+
+  useEffect(() => {
+    if (isMobile || !showCancel) {
+      return;
+    }
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.key !== "Escape" || isCompositionActive(event) || event.repeat) {
+        return;
+      }
+      event.preventDefault();
+      void handleCancel();
+    };
+    window.addEventListener("keydown", cancelOnEscape);
+    return () => window.removeEventListener("keydown", cancelOnEscape);
+  }, [handleCancel, isCompositionActive, isMobile, showCancel]);
+
   const inputPlaceholder = currentSession && !currentSession.pending
     ? "左滑蓝环开始新会话..."
     : mode === "chat" && !isFocused
       ? blurPlaceholder
       : modePlaceholders[mode];
-  const editorRightInset = isMultiLine ? 14 : isMobile ? 124 : 148;
+  const editorRightInset = isMultiLine ? 14 : mode === "command" ? (isMobile ? 92 : 116) : isMobile ? 124 : 148;
   const editorBottomInset = isMultiLine ? 44 : 12;
   const editorMinHeight = 44;
 
   return (
     <div style={{ width: "100%", minWidth: 0, padding: isMobile ? "0 0 var(--mindfs-actionbar-bottom-padding, calc(env(safe-area-inset-bottom, 0px) + 2px))" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
       <div style={{ width: "100%", minWidth: 0, display: "flex", flexDirection: "column", gap: isMobile ? "0" : "6px" }}>
+        {queuedMessages.length > 0 ? (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "3px",
+              padding: isMobile ? "0 31px 3px" : "0",
+              maxHeight: isMobile ? "116px" : "144px",
+              overflowY: "auto",
+              scrollbarWidth: "thin",
+            }}
+          >
+            {queuedMessages.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  position: "relative",
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  alignItems: "center",
+                  gap: "6px",
+                  minHeight: "28px",
+                  padding: "2px 3px 2px 9px",
+                  border: "1px solid color-mix(in srgb, var(--accent-color) 32%, transparent)",
+                  borderRadius: "8px",
+                  background: "var(--panel-bg)",
+                  boxShadow: isMobile ? "none" : "var(--panel-shadow)",
+                }}
+              >
+                {editingQueueId === item.id ? (
+                  <input
+                    value={editingQueueText}
+                    onChange={(event) => setEditingQueueText(event.currentTarget.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void saveEditQueuedMessage();
+                      } else if (event.key === "Escape") {
+                        event.preventDefault();
+                        cancelEditQueuedMessage();
+                      }
+                    }}
+                    autoFocus
+                    style={{
+                      minWidth: 0,
+                      height: "24px",
+                      border: "none",
+                      borderRadius: 0,
+                      background: "transparent",
+                      color: "var(--text-primary)",
+                      fontSize: "12px",
+                      padding: 0,
+                      outline: "none",
+                    }}
+                  />
+                ) : (
+                  <div
+                    title={item.content}
+                    style={{
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontSize: "12px",
+                      color: "var(--text-secondary)",
+                      lineHeight: 1.35,
+                    }}
+                  >
+                    {item.content}
+                  </div>
+                )}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "3px",
+                  }}
+                >
+                  {editingQueueId === item.id ? (
+                    <>
+                      <button
+                        type="button"
+                        aria-label="保存排队消息"
+                        title="保存"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => void saveEditQueuedMessage()}
+                        disabled={!editingQueueText.trim()}
+                        style={{ width: "28px", height: "28px", border: "none", borderRadius: "7px", background: "transparent", color: editingQueueText.trim() ? "var(--accent-color)" : "var(--text-secondary)", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: editingQueueText.trim() ? "pointer" : "not-allowed", opacity: editingQueueText.trim() ? 1 : 0.45 }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M20 6 9 17l-5-5" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="取消编辑排队消息"
+                        title="取消"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={cancelEditQueuedMessage}
+                        style={{ width: "28px", height: "28px", border: "none", borderRadius: "7px", background: "transparent", color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M18 6 6 18" />
+                          <path d="m6 6 12 12" />
+                        </svg>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        aria-label="删除排队消息"
+                        title="删除"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => void onRemoveQueuedMessage?.(item.id)}
+                        style={{ width: "28px", height: "28px", border: "none", borderRadius: "7px", background: "transparent", color: "#dc2626", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6l-1 14H6L5 6" />
+                          <path d="M10 11v6" />
+                          <path d="M14 11v6" />
+                          <path d="M9 6V4h6v2" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="编辑排队消息"
+                        title="编辑"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => startEditQueuedMessage(item)}
+                        style={{ width: "28px", height: "28px", border: "none", borderRadius: "7px", background: "transparent", color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                      >
+                        <span style={{ display: "inline-flex", transform: "scale(1.125)" }}>
+                          {renderToolIcon("edit")}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="立即发送排队消息"
+                        title="立即发送"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => void onSendQueuedMessageNow?.(item.id)}
+                        style={{ width: "28px", height: "28px", border: "none", borderRadius: "7px", background: "transparent", color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M0 0h24v24H0z" fill="none" />
+                          <g fill="currentColor" fillRule="evenodd" clipRule="evenodd">
+                            <path d="M3 14a1 1 0 0 1 1-1h12a3 3 0 0 0 3-3V6a1 1 0 1 1 2 0v4a5 5 0 0 1-5 5H4a1 1 0 0 1-1-1" />
+                            <path d="M3.293 14.707a1 1 0 0 1 0-1.414l4-4a1 1 0 0 1 1.414 1.414L5.414 14l3.293 3.293a1 1 0 1 1-1.414 1.414z" />
+                          </g>
+                        </svg>
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "30px minmax(0, 1fr) 30px" : "1fr", alignItems: "center", gap: isMobile ? "1px" : 0, padding: isMobile ? "0 1px" : 0, minWidth: 0, maxWidth: "100%" }}>
           {isMobile ? (
             <button
@@ -603,30 +1229,90 @@ export function ActionBar({
 
           <div
             style={{
-              background: "var(--panel-bg)",
-              border: isFocused
-                ? "1px solid var(--accent-color)"
-                : "1px solid var(--panel-border)",
-              borderRadius: isMobile ? "10px" : "12px",
-              boxShadow: isMobile
-                ? "none"
-                : (isFocused ? "var(--panel-focus-shadow)" : "var(--panel-shadow)"),
               display: "flex",
-              alignItems: "center",
-              position: "relative",
-              transition: isDragging ? "none" : "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
-              minHeight: `${editorMinHeight}px`,
+              flexDirection: "column",
+              alignItems: "flex-start",
+              gap: planModeActive ? "4px" : 0,
               minWidth: 0,
-              overflow: "visible",
             }}
           >
-            <TokenEditor
-              ref={editorRef}
-              placeholder={inputPlaceholder}
-              disabled={sending}
-              isDark={isDark}
-              rightInset={editorRightInset}
-              bottomInset={editorBottomInset}
+            {planModeActive ? (
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  height: "20px",
+                  padding: "0 5px 0 8px",
+                  borderRadius: "999px",
+                  border: "1px solid rgba(37, 99, 235, 0.22)",
+                  background: "rgba(37, 99, 235, 0.10)",
+                  color: "#2563eb",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  lineHeight: 1,
+                }}
+              >
+                <span>Plan</span>
+                <button
+                  type="button"
+                  aria-label="关闭 Plan 模式"
+                  title="关闭 Plan 模式"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => void onSetPlanMode?.(false, planSessionKey, planRootId)}
+                  style={{
+                    width: "14px",
+                    height: "14px",
+                    border: "none",
+                    borderRadius: "999px",
+                    background: "transparent",
+                    color: "currentColor",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    fontSize: "14px",
+                    lineHeight: 1,
+                    padding: 0,
+                  }}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M0 0h24v24H0z" fill="none" />
+                    <path fill="currentColor" fillRule="evenodd" d="M21 12a9 9 0 1 1-18 0a9 9 0 0 1 18 0M7.293 16.707a1 1 0 0 1 0-1.414L10.586 12L7.293 8.707a1 1 0 0 1 1.414-1.414L12 10.586l3.293-3.293a1 1 0 1 1 1.414 1.414L13.414 12l3.293 3.293a1 1 0 0 1-1.414 1.414L12 13.414l-3.293 3.293a1 1 0 0 1-1.414 0" clipRule="evenodd" />
+                  </svg>
+                </button>
+              </div>
+            ) : null}
+
+            <div
+              data-mindfs-command-input-width="1"
+              style={{
+                background: "var(--panel-bg)",
+                border: isFocused
+                  ? "1px solid var(--accent-color)"
+                  : "1px solid var(--panel-border)",
+                borderRadius: isMobile ? "10px" : "12px",
+                boxShadow: isMobile
+                  ? "none"
+                  : (isFocused ? "var(--panel-focus-shadow)" : "var(--panel-shadow)"),
+                display: "flex",
+                alignItems: "center",
+                position: "relative",
+                transition: isDragging ? "none" : "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+                minHeight: `${editorMinHeight}px`,
+                minWidth: 0,
+                width: "100%",
+                overflow: "visible",
+              }}
+            >
+	            <TokenEditor
+	              ref={editorRef}
+	              placeholder={inputPlaceholder}
+	              disabled={sending}
+	              isDark={isDark}
+	              rightInset={editorRightInset}
+	              topInset={0}
+	              bottomInset={editorBottomInset}
               onChange={handleEditorChange}
               onFocusChange={(focused) => {
                 setIsFocused(focused);
@@ -636,6 +1322,9 @@ export function ActionBar({
                   );
                 }
                 if (focused) {
+                  if (mode === "command" && serializedInput.trim()) {
+                    setActiveToken({ type: "command", query: serializedInput.trim() });
+                  }
                   onRequestFileContext?.();
                 }
               }}
@@ -643,6 +1332,7 @@ export function ActionBar({
               onKeyDown={handleKeyDown}
               onPaste={handleEditorPaste}
               onEnter={handleEditorEnter}
+              enterKeyHint={isMobile && mobileEnterKeySends && mode === "chat" ? "send" : undefined}
               onCompositionStart={() => {
                 isComposingRef.current = true;
                 compositionGuardUntilRef.current = 0;
@@ -681,7 +1371,7 @@ export function ActionBar({
                       lineHeight: 1.5,
                     }}
                   >
-                    收藏用户消息后，可快速插入提示词
+                    {activeToken.type === "command" ? "暂无命令历史，成功执行后会出现在这里" : "收藏用户消息后，可快速插入提示词"}
                   </div>
                 ) : (
                   candidates.map((candidate, index) => (
@@ -698,11 +1388,11 @@ export function ActionBar({
                       aria-selected={index === activeCandidateIndex}
                       style={{
                         display: "flex",
-                        flexDirection: "column",
-                        alignItems: "flex-start",
-                        gap: "2px",
+                        flexDirection: candidate.type === "command" ? "row" : "column",
+                        alignItems: candidate.type === "command" ? "center" : "flex-start",
+                        gap: candidate.type === "command" ? "0" : "2px",
                         width: "100%",
-                        padding: "10px 12px",
+                        padding: candidate.type === "command" ? "8px 12px" : "10px 12px",
                         border: "none",
                         borderTop: index === 0 ? "none" : "1px solid var(--menu-divider)",
                         background: index === activeCandidateIndex ? "var(--menu-active-bg)" : "transparent",
@@ -711,10 +1401,18 @@ export function ActionBar({
                         textAlign: "left",
                       }}
                     >
-                      <span style={{ fontSize: "13px", fontWeight: 500, color: candidateNameColor(candidate.type, isDark) }}>
-                        {candidate.type === "file" ? `@${candidate.name}` : candidate.type === "prompt" ? `#${candidate.name}` : `/${candidate.name}`}
+                      <span style={{
+                        fontSize: "13px",
+                        fontWeight: 500,
+                        color: candidateNameColor(candidate.type, isDark),
+                        minWidth: 0,
+                        overflow: candidate.type === "command" ? "hidden" : "visible",
+                        textOverflow: candidate.type === "command" ? "ellipsis" : "clip",
+                        whiteSpace: candidate.type === "command" ? "nowrap" : "normal",
+                      }}>
+                        {candidate.type === "file" ? (mode === "command" ? candidate.name : `@${candidate.name}`) : candidate.type === "prompt" ? `#${candidate.name}` : candidate.type === "command" ? candidate.name : `/${candidate.name}`}
                       </span>
-                      {candidate.description ? (
+                      {candidate.type !== "command" && candidate.description ? (
                         <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{candidate.description}</span>
                       ) : null}
                     </div>
@@ -722,6 +1420,23 @@ export function ActionBar({
                 )}
               </div>
             ) : null}
+
+            <span
+              aria-label={connectionMeta.label}
+              title={connectionMeta.label}
+              style={{
+                position: "absolute",
+                left: "5px",
+                bottom: "4px",
+                width: "6px",
+                height: "6px",
+                borderRadius: "50%",
+                background: connectionMeta.color,
+                boxShadow: connectionMeta.shadow,
+                pointerEvents: "auto",
+                zIndex: 6,
+              }}
+            />
 
             <div style={{ position: "absolute", right: isMobile ? "4px" : "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: isMobile ? "0px" : "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
               <div
@@ -786,7 +1501,7 @@ export function ActionBar({
                     aria-hidden="true"
                   >
                     <path
-                      d="M3.25 7.25 6 4.5l2.75 2.75"
+                      d={sessionDrawerOpen ? "M3.25 4.75 6 7.5l2.75-2.75" : "M3.25 7.25 6 4.5l2.75 2.75"}
                       stroke="currentColor"
                       strokeWidth="1.8"
                       strokeLinecap="round"
@@ -802,25 +1517,42 @@ export function ActionBar({
               </div>
 
               <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} />
-              <AgentSelector
-                agent={agent}
-                model={model}
-                mode={agentMode}
-                effort={effort}
-                agents={agents}
-                onAgentChange={(nextAgent, nextModel) => {
-                  const nextStatus = agents.find((item) => item.name === nextAgent);
-                  const defaults = getAgentDefaults(nextStatus);
-                  setAgent(nextAgent);
-                  setModel(nextModel || defaults.model);
-                  setAgentMode("");
-                  setEffort(defaults.effort);
-                }}
-                onModeChange={(nextAgentMode) => setAgentMode(nextAgentMode || "")}
-                onEffortChange={(nextEffort) => setEffort(nextEffort || "")}
-                compact={true}
-                warnUnavailable={isSelectedAgentUnavailable}
-              />
+              {mode !== "command" ? (
+                <AgentSelector
+                  agent={agent}
+                  model={model}
+                  mode={agentMode}
+                  effort={effort}
+                  agents={agents}
+                  onAgentChange={(nextAgent, nextModel) => {
+                    const nextStatus = agents.find((item) => item.name === nextAgent);
+                    const defaults = getAgentDefaults(nextStatus);
+                    setAgent(nextAgent);
+                    setModel(nextModel || defaults.model);
+                    setAgentMode("");
+                    setEffort(defaults.effort);
+                    setFastService(defaults.fastService);
+                  }}
+                  onModeChange={(nextAgentMode) => setAgentMode(nextAgentMode || "")}
+                  onEffortChange={(nextEffort) => setEffort(nextEffort || "")}
+                  fastService={fastService}
+                  onFastServiceChange={(nextFastService) => setFastService(nextFastService || "")}
+                  onAgentRestart={async (targetAgent) => {
+                    await restartAgent(targetAgent);
+                    const items = await fetchAgents(true);
+                    setAgents(items);
+                  }}
+                  compact={true}
+                  warnUnavailable={isSelectedAgentUnavailable}
+                />
+              ) : (
+                <ShellSelector
+                  shell={shell}
+                  shells={shells}
+                  onShellChange={setShell}
+                  compact={true}
+                />
+              )}
 
               <button
                 type="button"
@@ -879,6 +1611,7 @@ export function ActionBar({
                 }}
               />
             </div>
+          </div>
           </div>
 
           {isMobile ? (

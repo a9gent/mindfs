@@ -1,5 +1,11 @@
 {
   "relayBaseURL": "https://relay.example.com",
+  "shells": [
+    {"command": "zsh", "args": ["-ic"], "longShellArgs": [], "os": ["darwin", "linux"]},
+    {"command": "bash", "args": ["-ic"], "longShellArgs": [], "os": ["darwin", "linux"]},
+    {"command": "sh", "args": ["-lc"], "longShellArgs": [], "os": ["darwin", "linux"]},
+    {"command": "pwsh", "args": ["-NoLogo", "-NoProfile", "-Command"], "longShellArgs": ["-NoLogo", "-NoProfile"], "commandPrefix": "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::InputEncoding = [Console]::OutputEncoding; $OutputEncoding = [Console]::OutputEncoding;", "os": "windows"}
+  ],
   "agents": [
     {
       "name": "gemini",
@@ -16,6 +22,12 @@
       "name": "claude",
       "command": "claude",
       "protocol": "claude-sdk"
+    },
+    {
+      "name": "omp",
+      "command": "omp",
+      "protocol": "acp",
+      "args": ["acp"]
     }
   ]
 }

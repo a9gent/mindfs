@@ -6,6 +6,12 @@ type AppShellProps = {
   rightSidebar?: React.ReactNode;
   footer: React.ReactNode;
   drawer?: React.ReactNode;
+  leftOpen?: boolean;
+  rightOpen?: boolean;
+  onCloseLeft?: () => void;
+  onCloseRight?: () => void;
+  onOpenLeft?: () => void;
+  onOpenRight?: () => void;
 };
 
 const MOBILE_BREAKPOINT = 768;
@@ -84,17 +90,14 @@ export function AppShell({
   rightOpen = true,
   onCloseLeft,
   onCloseRight,
-}: AppShellProps & { 
-  leftOpen?: boolean; 
-  rightOpen?: boolean;
-  onCloseLeft?: () => void;
-  onCloseRight?: () => void;
-}) {
+  onOpenLeft,
+  onOpenRight,
+}: AppShellProps) {
   const { isMobile, isTablet } = useResponsive();
   
   const sidebarWidth = isMobile ? "0px" : (isTablet ? "200px" : "260px");
   const rightWidth = isMobile ? "0px" : (rightSidebar ? (isTablet ? "240px" : "280px") : "0px");
-  const mobileHeight = "calc(100vh - var(--mindfs-ime-bottom, 0px))";
+  const mobileHeight = "var(--mindfs-viewport-height, 100dvh)";
 
   const shellStyle: React.CSSProperties & {
     "--mindfs-actionbar-bottom-padding"?: string;
@@ -133,6 +136,11 @@ export function AppShell({
     transition: "transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1)",
     display: "flex",
     flexDirection: "column",
+    overflow: "hidden",
+    borderTopRightRadius: side === 'left' ? "14px" : undefined,
+    borderBottomRightRadius: side === 'left' ? "14px" : undefined,
+    borderTopLeftRadius: side === 'right' ? "14px" : undefined,
+    borderBottomLeftRadius: side === 'right' ? "14px" : undefined,
     willChange: "transform",
     backfaceVisibility: "hidden",
     transform: "translateX(0) translateZ(0)",
@@ -161,7 +169,17 @@ export function AppShell({
       {isMobile && <div style={overlayStyle} onClick={() => { onCloseLeft?.(); onCloseRight?.(); }} />}
 
       {(!isMobile || leftOpen) ? (
-        <aside style={isMobile ? mobileSidebarStyle('left') : sidebarStyle}>
+        <aside
+          style={
+            isMobile
+              ? mobileSidebarStyle('left')
+              : {
+                  ...sidebarStyle,
+                  overflow: leftOpen ? "auto" : "hidden",
+                  pointerEvents: leftOpen ? "auto" : "none",
+                }
+          }
+        >
           {sidebar}
         </aside>
       ) : null}
@@ -184,9 +202,48 @@ export function AppShell({
       </main>
 
       {(!isMobile || rightOpen) ? (
-        <aside style={isMobile ? mobileSidebarStyle('right') : rightStyle}>
+        <aside
+          style={
+            isMobile
+              ? mobileSidebarStyle('right')
+              : {
+                  ...rightStyle,
+                  overflow: rightOpen ? "auto" : "hidden",
+                  pointerEvents: rightOpen ? "auto" : "none",
+                }
+          }
+        >
           {rightSidebar}
         </aside>
+      ) : null}
+
+      {!isMobile ? (
+        <>
+          <button
+            type="button"
+            className={`mindfs-sidebar-resize-rail mindfs-sidebar-resize-rail--left${leftOpen ? " is-open" : " is-closed"}`}
+            onClick={leftOpen ? onCloseLeft : onOpenLeft}
+            aria-label={leftOpen ? "收起文件侧栏" : "展开文件侧栏"}
+            title={leftOpen ? "收起文件侧栏" : "展开文件侧栏"}
+            style={{
+              left: leftOpen ? `calc(${sidebarWidth} - 4px)` : 0,
+              cursor: leftOpen ? "w-resize" : "e-resize",
+            }}
+          />
+          {rightSidebar ? (
+            <button
+              type="button"
+              className={`mindfs-sidebar-resize-rail mindfs-sidebar-resize-rail--right${rightOpen ? " is-open" : " is-closed"}`}
+              onClick={rightOpen ? onCloseRight : onOpenRight}
+              aria-label={rightOpen ? "收起会话侧栏" : "展开会话侧栏"}
+              title={rightOpen ? "收起会话侧栏" : "展开会话侧栏"}
+              style={{
+                right: rightOpen ? `calc(${rightWidth} - 4px)` : 0,
+                cursor: rightOpen ? "e-resize" : "w-resize",
+              }}
+            />
+          ) : null}
+        </>
       ) : null}
 
       <footer

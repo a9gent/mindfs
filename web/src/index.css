@@ -7,6 +7,8 @@
   --mindfs-safe-area-top: 0px;
   --mindfs-safe-area-bottom: 0px;
   --mindfs-ime-bottom: 0px;
+  --mindfs-viewport-height: 100dvh;
+  --mindfs-viewport-offset-top: 0px;
   --mindfs-system-bar-bg: #ffffff;
   --mindfs-topbar-bg: #ffffff;
   --mindfs-launcher-bg: radial-gradient(circle at top left, rgba(91, 125, 184, 0.07), transparent 22%), radial-gradient(circle at right 18%, rgba(148, 163, 184, 0.18), transparent 24%), linear-gradient(180deg, #f8fafc 0%, #edf2f7 100%);
@@ -36,6 +38,9 @@
   --panel-border: rgba(15, 23, 42, 0.15);
   --panel-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
   --panel-focus-shadow: 0 4px 24px rgba(37, 99, 235, 0.1);
+  --mindfs-code-bg: #f8fafc;
+  --mindfs-code-text: #0f172a;
+  --mindfs-code-border: rgba(15, 23, 42, 0.12);
   --menu-bg: #ffffff;
   --menu-border: rgba(15, 23, 42, 0.08);
   --menu-divider: rgba(15, 23, 42, 0.06);
@@ -50,13 +55,16 @@
 
 html {
   height: 100%;
+  height: var(--mindfs-viewport-height, 100dvh);
   width: 100%;
   background: var(--bg-gradient-start);
   overflow-x: hidden;
+  overflow-y: hidden;
+  overscroll-behavior: none;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     color-scheme: dark;
     --mindfs-system-bar-bg: #020617;
     --mindfs-topbar-bg: #020617;
@@ -87,6 +95,9 @@ html {
     --panel-border: rgba(148, 163, 184, 0.2);
     --panel-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
     --panel-focus-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+    --mindfs-code-bg: #0f172a;
+    --mindfs-code-text: #e2e8f0;
+    --mindfs-code-border: rgba(255, 255, 255, 0.1);
     --menu-bg: #0f172a;
     --menu-border: rgba(148, 163, 184, 0.18);
     --menu-divider: rgba(148, 163, 184, 0.1);
@@ -102,10 +113,10 @@ html {
   /* 仅修正语法高亮代码块，避免全局 pre/code 叠出双层边框 */
   pre[class*="language-"], code[class*="language-"] {
     box-shadow: none !important;
-    background: #0f172a !important; /* 统一更深邃的代码背景 */
-    color: #e2e8f0 !important;
+    background: var(--mindfs-code-bg) !important;
+    color: var(--mindfs-code-text) !important;
     text-shadow: none !important;
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border: 1px solid var(--mindfs-code-border) !important;
   }
 
   pre[class*="language-"] > code[class*="language-"] {
@@ -115,8 +126,147 @@ html {
   }
 }
 
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --mindfs-system-bar-bg: #020617;
+  --mindfs-topbar-bg: #020617;
+  --mindfs-launcher-bg: radial-gradient(circle at top left, rgba(59, 130, 246, 0.10), transparent 22%), radial-gradient(circle at right 18%, rgba(15, 23, 42, 0.72), transparent 24%), linear-gradient(180deg, #020617 0%, #0f172a 100%);
+  --mindfs-launcher-surface: rgba(15, 23, 42, 0.82);
+  --mindfs-launcher-surface-strong: rgba(15, 23, 42, 0.94);
+  --mindfs-launcher-surface-soft: rgba(15, 23, 42, 0.56);
+  --mindfs-launcher-border: rgba(148, 163, 184, 0.18);
+  --mindfs-launcher-border-strong: rgba(148, 163, 184, 0.34);
+  --mindfs-launcher-modal-border: rgba(148, 163, 184, 0.26);
+  --mindfs-launcher-input-bg: rgba(2, 6, 23, 0.72);
+  --mindfs-launcher-text: #f8fafc;
+  --mindfs-launcher-muted: #94a3b8;
+  --mindfs-launcher-accent: #60a5fa;
+  --mindfs-launcher-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+  --mindfs-launcher-error-bg: rgba(127, 29, 29, 0.35);
+  --mindfs-launcher-error-text: #fecaca;
+  --bg-gradient-start: #0F172A;
+  --bg-gradient-end: #020617;
+  --text-primary: #F8FAFC;
+  --text-secondary: #94A3B8;
+  --border-color: rgba(255, 255, 255, 0.08);
+  --sidebar-bg: #0f172a;
+  --mobile-sidebar-bg: #0f172a;
+  --content-bg: #020617;
+  --mobile-overlay-bg: #020617;
+  --panel-bg: #0f172a;
+  --panel-border: rgba(148, 163, 184, 0.2);
+  --panel-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  --panel-focus-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  --mindfs-code-bg: #0f172a;
+  --mindfs-code-text: #e2e8f0;
+  --mindfs-code-border: rgba(255, 255, 255, 0.1);
+  --menu-bg: #0f172a;
+  --menu-border: rgba(148, 163, 184, 0.18);
+  --menu-divider: rgba(148, 163, 184, 0.1);
+  --menu-active-bg: rgba(59, 130, 246, 0.16);
+  --accent-color: #3b82f6;
+  --accent-hover: #60a5fa;
+  --selection-bg: rgba(59, 130, 246, 0.2);
+  --root-badge-bg: rgba(129, 140, 248, 0.22);
+  --root-badge-border: rgba(165, 180, 252, 0.34);
+  --root-badge-text: #c7d2fe;
+}
+
+:root[data-theme="dark"] pre[class*="language-"],
+:root[data-theme="dark"] code[class*="language-"] {
+  box-shadow: none !important;
+  background: var(--mindfs-code-bg) !important;
+  color: var(--mindfs-code-text) !important;
+  text-shadow: none !important;
+  border: 1px solid var(--mindfs-code-border) !important;
+}
+
+:root[data-theme="dark"] pre[class*="language-"] > code[class*="language-"] {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+:root[data-theme="light"] pre[class*="language-"],
+:root[data-theme="light"] code[class*="language-"] {
+  box-shadow: none !important;
+  background: var(--mindfs-code-bg) !important;
+  color: var(--mindfs-code-text) !important;
+  text-shadow: none !important;
+  border: 1px solid var(--mindfs-code-border) !important;
+}
+
+:root[data-theme="light"] pre[class*="language-"] > code[class*="language-"] {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
 * {
   box-sizing: border-box;
+}
+
+.mindfs-sidebar-resize-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  appearance: none;
+  z-index: 120;
+  outline: none;
+  touch-action: none;
+}
+
+.mindfs-sidebar-resize-rail::before {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 50%;
+  width: 2px;
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      180deg,
+      transparent 0%,
+      rgba(37, 99, 235, 0.08) 12%,
+      rgba(37, 99, 235, 0.82) 50%,
+      rgba(37, 99, 235, 0.08) 88%,
+      transparent 100%
+    );
+  box-shadow: 0 0 0 rgba(37, 99, 235, 0);
+  opacity: 0;
+  transform: translateX(-50%) scaleY(0.88);
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.mindfs-sidebar-resize-rail:hover::before,
+.mindfs-sidebar-resize-rail:focus-visible::before {
+  opacity: 1;
+  transform: translateX(-50%) scaleY(1);
+  box-shadow: 0 0 16px rgba(37, 99, 235, 0.3);
+}
+
+.mindfs-sidebar-resize-rail--left.is-open::before {
+  left: calc(50% + 3px);
+}
+
+.mindfs-sidebar-resize-rail--left.is-closed::before {
+  left: 1px;
+}
+
+.mindfs-sidebar-resize-rail--right.is-open::before {
+  left: calc(50% - 3px);
+}
+
+.mindfs-sidebar-resize-rail--right.is-closed::before {
+  left: 7px;
 }
 
 .token.operator,
@@ -138,20 +288,64 @@ body {
   overflow: hidden;
   overflow-x: hidden;
   height: 100%;
+  height: var(--mindfs-viewport-height, 100dvh);
   width: 100%;
   min-height: 100vh;
   min-height: 100dvh;
+  min-height: var(--mindfs-viewport-height, 100dvh);
 }
 
 #root {
   min-height: 100%;
   height: 100vh;
   height: 100dvh;
+  height: var(--mindfs-viewport-height, 100dvh);
   width: 100%;
   max-width: 100%;
   overflow-x: hidden;
   background: linear-gradient(135deg, var(--bg-gradient-start), var(--bg-gradient-end));
   background-color: var(--bg-gradient-start);
+}
+
+.mindfs-ansi-output {
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
+}
+
+.mindfs-ansi-output::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.mindfs-ansi-output::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.mindfs-ansi-output::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.45);
+  border-radius: 999px;
+}
+
+@media (max-width: 767px) {
+  html,
+  body {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #root {
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: var(--mindfs-viewport-offset-top, 0px);
+    height: var(--mindfs-viewport-height, 100dvh);
+    min-height: 0;
+    overflow: hidden;
+  }
 }
 
 .plugin-shadcn-sandbox {
@@ -193,7 +387,7 @@ body {
 }
 
 @media (prefers-color-scheme: dark) {
-  .plugin-shadcn-sandbox {
+  :root:not([data-theme]) .plugin-shadcn-sandbox {
     --vp-surface-bg: #0b1220;
     --vp-surface-bg-elevated: #0f172a;
     --vp-text: #e2e8f0;
@@ -201,6 +395,15 @@ body {
     --vp-border: rgba(148, 163, 184, 0.24);
     --vp-shadow: 0 14px 32px rgba(0, 0, 0, 0.5);
   }
+}
+
+:root[data-theme="dark"] .plugin-shadcn-sandbox {
+  --vp-surface-bg: #0b1220;
+  --vp-surface-bg-elevated: #0f172a;
+  --vp-text: #e2e8f0;
+  --vp-text-muted: #94a3b8;
+  --vp-border: rgba(148, 163, 184, 0.24);
+  --vp-shadow: 0 14px 32px rgba(0, 0, 0, 0.5);
 }
 
 body[data-plugin-theme="1"] [data-slot="dialog-overlay"] {
@@ -364,6 +567,17 @@ body[data-plugin-theme="1"] [data-slot="drawer-content"] {
   margin: 1em 0;
   border-radius: 12px;
   box-shadow: 0 12px 24px rgba(31, 37, 48, 0.08);
+}
+
+.markdown-viewer .katex-display {
+  margin: 1em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25em 0;
+}
+
+.markdown-viewer .katex {
+  font-size: 1.04em;
 }
 
 /* Scrollbar styling */

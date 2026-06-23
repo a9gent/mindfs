@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	agenttypes "mindfs/server/internal/agent/types"
+	configpkg "mindfs/server/internal/config"
 	"mindfs/server/internal/fs"
 
 	_ "modernc.org/sqlite"
@@ -25,11 +28,12 @@ import (
 
 const (
 	sessionDBPath    = "sessions/session-list.db"
+	sessionDBLinkExt = ".link"
 	exchangeFileTpl  = "sessions/%s.jsonl"
 	auxFileTpl       = "sessions/%s.aux.jsonl"
 	selectSessionSQL = `
-SELECT key, type, model, name, related_files_json, created_at, updated_at, closed_at
-FROM sessions`
+	SELECT key, type, parent_session_key, parent_tool_call_id, source, model, shell, plan_mode, name, related_files_json, created_at, updated_at, closed_at
+	FROM sessions`
 	deleteSessionSQL = `
 DELETE FROM sessions
 WHERE key = ?`
@@ -38,12 +42,17 @@ DELETE FROM session_agent_bindings
 WHERE session_key = ?`
 	upsertSessionMetaSQL = `
 INSERT INTO sessions (
-	key, type, model, name, related_files_json, created_at, updated_at, closed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		key, type, parent_session_key, parent_tool_call_id, source, model, shell, plan_mode, name, related_files_json, created_at, updated_at, closed_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(key) DO UPDATE SET
 	type = excluded.type,
-	model = excluded.model,
-	name = excluded.name,
+	parent_session_key = excluded.parent_session_key,
+		parent_tool_call_id = excluded.parent_tool_call_id,
+		source = excluded.source,
+		model = excluded.model,
+		shell = excluded.shell,
+		plan_mode = excluded.plan_mode,
+		name = excluded.name,
 	related_files_json = excluded.related_files_json,
 	created_at = excluded.created_at,
 	updated_at = excluded.updated_at,
@@ -52,8 +61,13 @@ ON CONFLICT(key) DO UPDATE SET
 CREATE TABLE IF NOT EXISTS sessions (
 	key TEXT PRIMARY KEY,
 	type TEXT NOT NULL,
-	model TEXT NOT NULL DEFAULT '',
-	name TEXT NOT NULL,
+	parent_session_key TEXT NOT NULL DEFAULT '',
+	parent_tool_call_id TEXT NOT NULL DEFAULT '',
+	source TEXT NOT NULL DEFAULT '',
+		model TEXT NOT NULL DEFAULT '',
+		shell TEXT NOT NULL DEFAULT '',
+		plan_mode INTEGER NOT NULL DEFAULT 0,
+		name TEXT NOT NULL,
 	related_files_json TEXT NOT NULL,
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL,
@@ -83,31 +97,43 @@ SELECT session_key, agent, agent_session_id, agent_ctx_seq
 FROM session_agent_bindings
 WHERE session_key = ?`
 	selectBindingByAgentSessionSQL = `
-SELECT 1
+SELECT session_key, agent, agent_session_id, agent_ctx_seq
 FROM session_agent_bindings
 WHERE agent = ? AND agent_session_id = ?
 LIMIT 1`
 )
 
+var openSQLiteDB = func(path string) (*sql.DB, error) {
+	return sql.Open("sqlite", path)
+}
+
+var mindFSConfigDir = configpkg.MindFSConfigDir
+
 type Manager struct {
-	root            fs.RootInfo
-	mu              sync.Mutex
-	loopOnce        sync.Once
-	db              *sql.DB
-	sessions        map[string]*Session
-	now             func() time.Time
-	idleInterval    time.Duration
-	idleFor         time.Duration
-	closeFor        time.Duration
-	maxIdleSessions int
+	root             fs.RootInfo
+	mu               sync.Mutex
+	loopOnce         sync.Once
+	db               *sql.DB
+	sessions         map[string]*Session
+	pendingToolCalls map[string]map[string]agenttypes.ToolCall
+	now              func() time.Time
+	idleInterval     time.Duration
+	idleFor          time.Duration
+	closeFor         time.Duration
+	maxIdleSessions  int
 }
 
 type CreateInput struct {
-	Key   string
-	Type  string
-	Agent string
-	Model string
-	Name  string
+	Key              string
+	Type             string
+	ParentSessionKey string
+	ParentToolCallID string
+	Source           string
+	Agent            string
+	Model            string
+	Shell            string
+	PlanMode         bool
+	Name             string
 }
 
 type AgentBinding struct {
@@ -125,13 +151,14 @@ type ListOptions struct {
 
 func NewManager(root fs.RootInfo, opts ...Option) *Manager {
 	m := &Manager{
-		root:            root,
-		sessions:        make(map[string]*Session),
-		now:             time.Now,
-		idleInterval:    1 * time.Minute,
-		idleFor:         10 * time.Minute,
-		closeFor:        7 * 24 * time.Hour,
-		maxIdleSessions: 3,
+		root:             root,
+		sessions:         make(map[string]*Session),
+		pendingToolCalls: make(map[string]map[string]agenttypes.ToolCall),
+		now:              time.Now,
+		idleInterval:     1 * time.Minute,
+		idleFor:          10 * time.Minute,
+		closeFor:         7 * 24 * time.Hour,
+		maxIdleSessions:  3,
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -183,15 +210,20 @@ func (m *Manager) Create(_ context.Context, input CreateInput) (*Session, error)
 		agentCtxSeq[initialAgent] = 0
 	}
 	session := &Session{
-		Key:          key,
-		Type:         input.Type,
-		AgentCtxSeq:  agentCtxSeq,
-		Model:        strings.TrimSpace(input.Model),
-		Name:         name,
-		Exchanges:    []Exchange{},
-		RelatedFiles: []RelatedFile{},
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		Key:              key,
+		Type:             input.Type,
+		ParentSessionKey: strings.TrimSpace(input.ParentSessionKey),
+		ParentToolCallID: strings.TrimSpace(input.ParentToolCallID),
+		Source:           strings.TrimSpace(input.Source),
+		AgentCtxSeq:      agentCtxSeq,
+		Model:            strings.TrimSpace(input.Model),
+		Shell:            strings.TrimSpace(input.Shell),
+		PlanMode:         input.PlanMode,
+		Name:             name,
+		Exchanges:        []Exchange{},
+		RelatedFiles:     []RelatedFile{},
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 
 	m.mu.Lock()
@@ -215,10 +247,137 @@ func (m *Manager) GetExchangeAux(_ context.Context, key string, afterSeq int) (m
 	return m.loadExchangeAux(key, afterSeq)
 }
 
+func (m *Manager) GetFullToolCall(_ context.Context, key, callID string) (*agenttypes.ToolCall, error) {
+	if strings.TrimSpace(key) == "" {
+		return nil, errors.New("session key required")
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return nil, errors.New("tool call id required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if found, ok := m.pendingFullToolCallUnsafe(key, callID); ok {
+		return found, nil
+	}
+	aux, err := m.loadExchangeAuxEntries(key, 0)
+	if err != nil {
+		return nil, err
+	}
+	var found *agenttypes.ToolCall
+	for _, item := range aux {
+		if item.ToolCall == nil || strings.TrimSpace(item.ToolCall.CallID) != callID {
+			continue
+		}
+		next := *item.ToolCall
+		if found == nil {
+			found = &next
+			continue
+		}
+		merged := mergeToolCall(*found, next)
+		found = &merged
+	}
+	if found == nil {
+		return nil, os.ErrNotExist
+	}
+	return found, nil
+}
+
+func (m *Manager) UpsertPendingExchangeAux(_ context.Context, sessionKey string, aux ExchangeAux) error {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return errors.New("session key required")
+	}
+	if aux.ToolCall == nil || strings.TrimSpace(aux.ToolCall.CallID) == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.pendingToolCalls == nil {
+		m.pendingToolCalls = make(map[string]map[string]agenttypes.ToolCall)
+	}
+	callID := strings.TrimSpace(aux.ToolCall.CallID)
+	next := cloneToolCall(*aux.ToolCall)
+	byCallID := m.pendingToolCalls[sessionKey]
+	if byCallID == nil {
+		byCallID = make(map[string]agenttypes.ToolCall)
+		m.pendingToolCalls[sessionKey] = byCallID
+	}
+	if existing, ok := byCallID[callID]; ok {
+		next = mergeToolCall(existing, next)
+	}
+	byCallID[callID] = next
+	return nil
+}
+
+func (m *Manager) MarkPendingAskUserAnswered(_ context.Context, sessionKey, callID string, answers map[string]string, answeredAt time.Time) error {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return errors.New("session key required")
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return errors.New("tool call id required")
+	}
+	cleanAnswers := make(map[string]string, len(answers))
+	for key, value := range answers {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			cleanAnswers[key] = value
+		}
+	}
+	if len(cleanAnswers) == 0 {
+		return errors.New("answers required")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.pendingToolCalls == nil || m.pendingToolCalls[sessionKey] == nil {
+		return errors.New("pending tool call not found")
+	}
+	existing, ok := m.pendingToolCalls[sessionKey][callID]
+	if !ok {
+		return errors.New("pending tool call not found")
+	}
+	if existing.Kind != "" && existing.Kind != agenttypes.ToolKindAskUser {
+		return errors.New("pending tool call is not ask_user")
+	}
+	meta := make(map[string]any, len(existing.Meta)+2)
+	for key, value := range existing.Meta {
+		meta[key] = value
+	}
+	meta["answers"] = cleanAnswers
+	if !answeredAt.IsZero() {
+		meta["answeredAt"] = answeredAt.UTC().Format(time.RFC3339Nano)
+	}
+	existing.Kind = agenttypes.ToolKindAskUser
+	existing.Status = "complete"
+	existing.Meta = meta
+	m.pendingToolCalls[sessionKey][callID] = existing
+	return nil
+}
+
+func (m *Manager) ClearPendingExchangeAux(_ context.Context, sessionKey string) {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.pendingToolCalls, sessionKey)
+}
+
 func (m *Manager) List(_ context.Context, opts ListOptions) ([]*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.listSessionsUnsafe(opts)
+}
+
+func (m *Manager) ListMetas(_ context.Context) ([]*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.listSessionMetasUnsafe()
 }
 
 func (m *Manager) Search(_ context.Context, opts SearchOptions) ([]SearchHit, error) {
@@ -280,15 +439,33 @@ func (m *Manager) Search(_ context.Context, opts SearchOptions) ([]SearchHit, er
 	return results, nil
 }
 
-func (m *Manager) AddExchangeForAgent(_ context.Context, session *Session, role, content, agent, mode, effort string) error {
-	return m.addExchangeForAgentAt(session, role, content, agent, mode, effort, time.Time{})
+type exchangeModelDisplayNameContextKey struct{}
+
+func WithExchangeModelDisplayName(ctx context.Context, displayName string) context.Context {
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, exchangeModelDisplayNameContextKey{}, displayName)
 }
 
-func (m *Manager) AddExchangeForAgentAt(_ context.Context, session *Session, role, content, agent, mode, effort string, timestamp time.Time) error {
-	return m.addExchangeForAgentAt(session, role, content, agent, mode, effort, timestamp)
+func exchangeModelDisplayNameFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	value, _ := ctx.Value(exchangeModelDisplayNameContextKey{}).(string)
+	return strings.TrimSpace(value)
 }
 
-func (m *Manager) addExchangeForAgentAt(session *Session, role, content, agent, mode, effort string, timestamp time.Time) error {
+func (m *Manager) AddExchangeForAgent(ctx context.Context, session *Session, role, content, agent, mode, effort, fastService string) error {
+	return m.addExchangeForAgentAt(session, role, content, agent, exchangeModelDisplayNameFromContext(ctx), mode, effort, fastService, time.Time{})
+}
+
+func (m *Manager) AddExchangeForAgentAt(ctx context.Context, session *Session, role, content, agent, mode, effort, fastService string, timestamp time.Time) error {
+	return m.addExchangeForAgentAt(session, role, content, agent, exchangeModelDisplayNameFromContext(ctx), mode, effort, fastService, timestamp)
+}
+
+func (m *Manager) addExchangeForAgentAt(session *Session, role, content, agent, modelDisplayName, mode, effort, fastService string, timestamp time.Time) error {
 	if session == nil || strings.TrimSpace(session.Key) == "" {
 		return errors.New("session required")
 	}
@@ -313,14 +490,16 @@ func (m *Manager) addExchangeForAgentAt(session *Session, role, content, agent, 
 		ts = m.now().UTC()
 	}
 	record := Exchange{
-		Seq:       nextSeq,
-		Role:      role,
-		Agent:     resolvedAgent,
-		Model:     session.Model,
-		Mode:      strings.TrimSpace(mode),
-		Effort:    strings.TrimSpace(effort),
-		Content:   content,
-		Timestamp: ts,
+		Seq:              nextSeq,
+		Role:             role,
+		Agent:            resolvedAgent,
+		Model:            session.Model,
+		ModelDisplayName: strings.TrimSpace(modelDisplayName),
+		Mode:             strings.TrimSpace(mode),
+		Effort:           strings.TrimSpace(effort),
+		FastService:      fastService,
+		Content:          content,
+		Timestamp:        ts,
 	}
 	if err := m.appendExchange(session.Key, record); err != nil {
 		log.Printf("[session/store] append.error session=%s seq=%d role=%s agent=%s err=%v", session.Key, record.Seq, role, resolvedAgent, err)
@@ -349,7 +528,7 @@ func (m *Manager) AddExchangeAux(_ context.Context, sessionKey string, aux Excha
 	if aux.Seq <= 0 {
 		return errors.New("aux seq required")
 	}
-	if aux.ToolCall == nil && strings.TrimSpace(aux.Thought) == "" {
+	if aux.ToolCall == nil && strings.TrimSpace(aux.Thought) == "" && aux.Plan == nil && aux.Compact == nil {
 		return errors.New("aux content required")
 	}
 	m.mu.Lock()
@@ -495,32 +674,40 @@ func (m *Manager) FindAgentBinding(ctx context.Context, sessionKey, agent string
 	return binding, err
 }
 
-func (m *Manager) HasAgentBinding(_ context.Context, agent, agentSessionID string) (bool, error) {
+func (m *Manager) FindAgentBindingByAgentSession(_ context.Context, agent, agentSessionID string) (*AgentBinding, error) {
 	if strings.TrimSpace(agent) == "" {
-		return false, errors.New("agent required")
+		return nil, errors.New("agent required")
 	}
 	if strings.TrimSpace(agentSessionID) == "" {
-		return false, errors.New("agent session id required")
+		return nil, errors.New("agent session id required")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	db, err := m.ensureSessionMetaDBUnsafe()
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	var found int
+	var binding AgentBinding
 	err = db.QueryRow(
 		selectBindingByAgentSessionSQL,
 		strings.TrimSpace(agent),
 		strings.TrimSpace(agentSessionID),
-	).Scan(&found)
+	).Scan(&binding.SessionKey, &binding.Agent, &binding.AgentSessionID, &binding.AgentCtxSeq)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	return &binding, nil
+}
+
+func (m *Manager) HasAgentBinding(ctx context.Context, agent, agentSessionID string) (bool, error) {
+	binding, err := m.FindAgentBindingByAgentSession(ctx, agent, agentSessionID)
 	if err != nil {
 		return false, err
 	}
-	return found == 1, nil
+	return binding != nil, nil
 }
 
 func (m *Manager) listAgentBindingsUnsafe(sessionKey string) ([]AgentBinding, error) {
@@ -617,6 +804,48 @@ func (m *Manager) UpdateModel(_ context.Context, session *Session, model string)
 	}
 	current.Model = model
 	current.UpdatedAt = m.now().UTC()
+	return m.upsertSessionMetaUnsafe(current)
+}
+
+func (m *Manager) UpdateShell(_ context.Context, session *Session, shell string) error {
+	if session == nil || strings.TrimSpace(session.Key) == "" {
+		return errors.New("session required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, err := m.getSessionUnsafe(session.Key, 0)
+	if err != nil {
+		return err
+	}
+	shell = strings.TrimSpace(shell)
+	if current.Shell == shell {
+		return nil
+	}
+	current.Shell = shell
+	current.UpdatedAt = m.now().UTC()
+	session.Shell = shell
+	session.UpdatedAt = current.UpdatedAt
+	return m.upsertSessionMetaUnsafe(current)
+}
+
+func (m *Manager) UpdatePlanMode(_ context.Context, session *Session, enabled bool) error {
+	if session == nil || strings.TrimSpace(session.Key) == "" {
+		return errors.New("session required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, err := m.getSessionUnsafe(session.Key, 0)
+	if err != nil {
+		return err
+	}
+	if current.PlanMode == enabled {
+		session.PlanMode = enabled
+		return nil
+	}
+	current.PlanMode = enabled
+	current.UpdatedAt = m.now().UTC()
+	session.PlanMode = enabled
+	session.UpdatedAt = current.UpdatedAt
 	return m.upsertSessionMetaUnsafe(current)
 }
 
@@ -726,6 +955,17 @@ func (m *Manager) StartIdleLoop(ctx context.Context) {
 	})
 }
 
+func (m *Manager) Shutdown() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.db == nil {
+		return nil
+	}
+	db := m.db
+	m.db = nil
+	return db.Close()
+}
+
 func (m *Manager) MetaDir() string {
 	return m.root.MetaDir()
 }
@@ -765,7 +1005,7 @@ func (m *Manager) createSessionUnsafe(session *Session) error {
 	if statErr == nil {
 		return nil
 	}
-	if !os.IsNotExist(statErr) {
+	if !errors.Is(statErr, os.ErrNotExist) {
 		return statErr
 	}
 	return m.root.WriteMetaFile(path, []byte{})
@@ -951,7 +1191,7 @@ func (m *Manager) loadExchanges(key string, afterSeq int) ([]Exchange, int, erro
 	}
 	payload, err := m.root.ReadMetaFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return []Exchange{}, 0, nil
 		}
 		return nil, 0, err
@@ -1006,18 +1246,34 @@ func (m *Manager) appendExchange(key string, exchange Exchange) error {
 }
 
 func (m *Manager) loadExchangeAux(key string, afterSeq int) (map[int][]ExchangeAux, error) {
+	entries, err := m.loadExchangeAuxEntries(key, afterSeq)
+	if err != nil {
+		return nil, err
+	}
+	items := make(map[int][]ExchangeAux)
+	for _, entry := range entries {
+		compacted, ok := CompactExchangeAux(entry)
+		if !ok {
+			continue
+		}
+		items[compacted.Seq] = append(items[compacted.Seq], compacted)
+	}
+	return items, nil
+}
+
+func (m *Manager) loadExchangeAuxEntries(key string, afterSeq int) ([]ExchangeAux, error) {
 	path, err := m.auxPath(key)
 	if err != nil {
 		return nil, err
 	}
 	payload, err := m.root.ReadMetaFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return map[int][]ExchangeAux{}, nil
+		if errors.Is(err, os.ErrNotExist) {
+			return []ExchangeAux{}, nil
 		}
 		return nil, err
 	}
-	items := make(map[int][]ExchangeAux)
+	items := make([]ExchangeAux, 0)
 	scanner := jsonlScanner(payload)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -1034,12 +1290,72 @@ func (m *Manager) loadExchangeAux(key string, afterSeq int) (map[int][]ExchangeA
 		if afterSeq > 0 && entry.Seq <= afterSeq {
 			continue
 		}
-		items[entry.Seq] = append(items[entry.Seq], entry)
+		items = append(items, entry)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
+}
+
+func mergeToolCall(base, next agenttypes.ToolCall) agenttypes.ToolCall {
+	merged := base
+	if strings.TrimSpace(next.CallID) != "" {
+		merged.CallID = next.CallID
+	}
+	if strings.TrimSpace(next.Title) != "" {
+		merged.Title = next.Title
+	}
+	if strings.TrimSpace(next.Status) != "" {
+		merged.Status = next.Status
+	}
+	if next.Kind != "" {
+		merged.Kind = next.Kind
+	}
+	if len(next.Content) > 0 {
+		merged.Content = append([]agenttypes.ToolCallContentItem(nil), next.Content...)
+	}
+	if len(next.Locations) > 0 {
+		merged.Locations = append([]agenttypes.ToolCallLocation(nil), next.Locations...)
+	}
+	if strings.TrimSpace(next.RawType) != "" {
+		merged.RawType = next.RawType
+	}
+	if len(base.Meta) > 0 || len(next.Meta) > 0 {
+		merged.Meta = make(map[string]any, len(base.Meta)+len(next.Meta))
+		for key, value := range base.Meta {
+			merged.Meta[key] = value
+		}
+		for key, value := range next.Meta {
+			merged.Meta[key] = value
+		}
+	}
+	return merged
+}
+
+func (m *Manager) pendingFullToolCallUnsafe(sessionKey, callID string) (*agenttypes.ToolCall, bool) {
+	if m.pendingToolCalls == nil {
+		return nil, false
+	}
+	toolCall, ok := m.pendingToolCalls[sessionKey][callID]
+	if !ok {
+		return nil, false
+	}
+	out := cloneToolCall(toolCall)
+	return &out, true
+}
+
+func cloneToolCall(toolCall agenttypes.ToolCall) agenttypes.ToolCall {
+	out := toolCall
+	out.Content = append([]agenttypes.ToolCallContentItem(nil), toolCall.Content...)
+	out.Locations = append([]agenttypes.ToolCallLocation(nil), toolCall.Locations...)
+	if len(toolCall.Meta) > 0 {
+		out.Meta = make(map[string]any, len(toolCall.Meta))
+		for key, value := range toolCall.Meta {
+			out.Meta[key] = value
+		}
+	}
+	return out
 }
 
 func jsonlScanner(payload []byte) *bufio.Scanner {
@@ -1106,11 +1422,56 @@ func (m *Manager) ensureSessionMetaDBUnsafe() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	dbFile := filepath.Join(metaDir, filepath.FromSlash(sessionDBPath))
+	legacyDBFile := filepath.Join(metaDir, filepath.FromSlash(sessionDBPath))
+	linkFile := legacyDBFile + sessionDBLinkExt
+	if linkedDBFile, ok, err := readSessionDBLink(linkFile); err != nil {
+		return nil, err
+	} else if ok {
+		db, err := openSessionMetaDB(linkedDBFile)
+		if err != nil {
+			return nil, err
+		}
+		m.db = db
+		return m.db, nil
+	}
+
+	db, err := openSessionMetaDB(legacyDBFile)
+	if err == nil {
+		m.db = db
+		return m.db, nil
+	}
+	legacyErr := err
+
+	fallbackDBFile, err := userDataSessionDBFile(m.root.ID)
+	if err != nil {
+		return nil, fmt.Errorf("open legacy session db: %w; resolve fallback session db: %w", legacyErr, err)
+	}
+	db, err = openSessionMetaDB(fallbackDBFile)
+	if err != nil {
+		return nil, fmt.Errorf("open legacy session db: %w; open fallback session db: %w", legacyErr, err)
+	}
+	if err := writeSessionDBLink(linkFile, fallbackDBFile); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open legacy session db: %w; write session db link: %w", legacyErr, err)
+	}
+	log.Printf("[session/store] sqlite fallback root=%s legacy=%s fallback=%s err=%v", m.root.ID, legacyDBFile, fallbackDBFile, legacyErr)
+	m.db = db
+	return m.db, nil
+}
+
+func openSessionMetaDB(dbFile string) (db *sql.DB, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if db != nil {
+				db.Close()
+			}
+			err = fmt.Errorf("sqlite init panic for %s: %v", dbFile, r)
+		}
+	}()
 	if err := os.MkdirAll(filepath.Dir(dbFile), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", dbFile)
+	db, err = openSQLiteDB(dbFile)
 	if err != nil {
 		return nil, err
 	}
@@ -1127,8 +1488,68 @@ func (m *Manager) ensureSessionMetaDBUnsafe() (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
-	m.db = db
-	return m.db, nil
+	if _, err := db.Exec(`ALTER TABLE sessions ADD COLUMN shell TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(`ALTER TABLE sessions ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		db.Close()
+		return nil, err
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE sessions ADD COLUMN parent_session_key TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN parent_tool_call_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+			db.Close()
+			return nil, err
+		}
+	}
+	return db, nil
+}
+
+func readSessionDBLink(linkFile string) (string, bool, error) {
+	payload, err := os.ReadFile(linkFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	dbFile := strings.TrimSpace(string(payload))
+	if dbFile == "" {
+		return "", false, fmt.Errorf("empty session db link: %s", linkFile)
+	}
+	if !filepath.IsAbs(dbFile) {
+		return "", false, fmt.Errorf("session db link must be absolute: %s", linkFile)
+	}
+	return dbFile, true, nil
+}
+
+func writeSessionDBLink(linkFile, dbFile string) error {
+	if strings.TrimSpace(dbFile) == "" {
+		return errors.New("session db link target required")
+	}
+	if !filepath.IsAbs(dbFile) {
+		return errors.New("session db link target must be absolute")
+	}
+	if err := os.MkdirAll(filepath.Dir(linkFile), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(linkFile, []byte(dbFile+"\n"), 0o644)
+}
+
+func userDataSessionDBFile(rootID string) (string, error) {
+	configDir, err := mindFSConfigDir()
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(rootID)
+	if id == "" {
+		id = "default"
+	}
+	return filepath.Join(configDir, url.PathEscape(id), "session-list.db"), nil
 }
 
 func sessionMetaUpsertArgs(session *Session) ([]any, error) {
@@ -1146,13 +1567,25 @@ func sessionMetaUpsertArgs(session *Session) ([]any, error) {
 	return []any{
 		session.Key,
 		session.Type,
+		session.ParentSessionKey,
+		session.ParentToolCallID,
+		session.Source,
 		session.Model,
+		session.Shell,
+		boolToSQLiteInt(session.PlanMode),
 		session.Name,
 		string(relatedFilesJSON),
 		session.CreatedAt.UTC().Format(time.RFC3339Nano),
 		session.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		closedAt,
 	}, nil
+}
+
+func boolToSQLiteInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 type rowScanner interface {
@@ -1163,7 +1596,12 @@ func scanSessionMetaRow(scanner rowScanner) (*Session, error) {
 	var (
 		key              string
 		typ              string
+		parentSessionKey string
+		parentToolCallID string
+		source           string
 		model            string
+		shell            string
+		planMode         int
 		name             string
 		relatedFilesJSON string
 		createdAtRaw     string
@@ -1173,7 +1611,12 @@ func scanSessionMetaRow(scanner rowScanner) (*Session, error) {
 	if err := scanner.Scan(
 		&key,
 		&typ,
+		&parentSessionKey,
+		&parentToolCallID,
+		&source,
 		&model,
+		&shell,
+		&planMode,
 		&name,
 		&relatedFilesJSON,
 		&createdAtRaw,
@@ -1183,12 +1626,17 @@ func scanSessionMetaRow(scanner rowScanner) (*Session, error) {
 		return nil, err
 	}
 	session := &Session{
-		Key:          key,
-		Type:         typ,
-		Model:        model,
-		Name:         name,
-		Exchanges:    []Exchange{},
-		RelatedFiles: []RelatedFile{},
+		Key:              key,
+		Type:             typ,
+		ParentSessionKey: parentSessionKey,
+		ParentToolCallID: parentToolCallID,
+		Source:           source,
+		Model:            model,
+		Shell:            shell,
+		PlanMode:         planMode != 0,
+		Name:             name,
+		Exchanges:        []Exchange{},
+		RelatedFiles:     []RelatedFile{},
 	}
 	if strings.TrimSpace(relatedFilesJSON) != "" {
 		if err := json.Unmarshal([]byte(relatedFilesJSON), &session.RelatedFiles); err != nil {
@@ -1225,6 +1673,9 @@ func normalizeSessionMeta(s *Session) {
 	if s.Exchanges == nil {
 		s.Exchanges = []Exchange{}
 	}
+	s.ParentSessionKey = strings.TrimSpace(s.ParentSessionKey)
+	s.ParentToolCallID = strings.TrimSpace(s.ParentToolCallID)
+	s.Source = strings.TrimSpace(s.Source)
 }
 
 var errSessionNotFound = errors.New("session not found")
@@ -1260,18 +1711,21 @@ func scoreSessionName(name, qLower string) int {
 
 func buildSearchHit(s *Session, matchType string, score, seq int, snippet string) SearchHit {
 	return SearchHit{
-		Key:        s.Key,
-		Type:       s.Type,
-		Agent:      InferAgentFromSession(s),
-		Model:      s.Model,
-		Name:       s.Name,
-		CreatedAt:  s.CreatedAt,
-		UpdatedAt:  s.UpdatedAt,
-		ClosedAt:   s.ClosedAt,
-		MatchType:  matchType,
-		MatchScore: score,
-		Seq:        seq,
-		Snippet:    strings.TrimSpace(snippet),
+		Key:              s.Key,
+		Type:             s.Type,
+		ParentSessionKey: s.ParentSessionKey,
+		ParentToolCallID: s.ParentToolCallID,
+		Agent:            InferAgentFromSession(s),
+		Model:            s.Model,
+		Shell:            s.Shell,
+		Name:             s.Name,
+		CreatedAt:        s.CreatedAt,
+		UpdatedAt:        s.UpdatedAt,
+		ClosedAt:         s.ClosedAt,
+		MatchType:        matchType,
+		MatchScore:       score,
+		Seq:              seq,
+		Snippet:          strings.TrimSpace(snippet),
 	}
 }
 
@@ -1312,7 +1766,7 @@ func (m *Manager) searchSessionContent(s *Session, qLower string) (SearchHit, bo
 	}
 	file, err := m.root.OpenMetaFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return SearchHit{}, false, nil
 		}
 		return SearchHit{}, false, err

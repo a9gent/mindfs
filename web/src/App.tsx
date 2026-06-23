@@ -16,9 +16,20 @@ import {
   type SyncSessionResult,
   type RelatedFile,
   type Session,
+  type QueuedUserMessage,
 } from "./services/session";
 import { buildClientContext } from "./services/context";
 import { e2eeService, type E2EEState } from "./services/e2ee";
+import {
+  bootstrapService,
+  type BootstrapState,
+  type RelayStatusPayload,
+} from "./services/bootstrap";
+import { syncNativeReplyPollerE2EE } from "./services/replyPoller";
+import {
+  ProtectedAPIError,
+  protectedJSON as apiProtectedJSON,
+} from "./services/api";
 import { reportError } from "./services/error";
 import {
   fetchFile,
@@ -28,11 +39,25 @@ import {
 } from "./services/file";
 import {
   buildGitDiffCacheSignature,
+  checkoutGitBranch,
+  clearGitHistoryCache,
+  createGitWorktree,
+  fetchGitCommitDiff,
   fetchGitDiff,
+  fetchGitBranches,
+  fetchGitHistory,
   fetchGitStatus,
+  fetchGitWorktrees,
+  getCachedGitHistory,
+  getCachedGitHistoryHead,
+  removeGitWorktree,
+  type GitBranchesPayload,
   type GitDiffPayload,
+  type GitHistoryItem,
+  type GitHistoryPayload,
   type GitStatusItem,
   type GitStatusPayload,
+  type GitWorktreeItem,
 } from "./services/git";
 import {
   DEFAULT_DIRECTORY_SORT_MODE,
@@ -51,21 +76,26 @@ import {
   cancelScheduledWebViewCacheClear,
   scheduleWebViewCacheClearOnNextLaunch,
 } from "./services/nativeCacheControl";
-
+import { storeRelayNodes } from "./services/launcherNodeSync";
+import { isNativeShellRuntime } from "./services/runtime";
 // 直接导入标准组件
 import { AppShell } from "./layout/AppShell";
+import { ModeIcon } from "./components/ModeIcon";
 import { FileTree } from "./components/FileTree";
 import { FileViewer } from "./components/FileViewer";
 import { GitDiffViewer } from "./components/GitDiffViewer";
+import { GitHistoryPanel } from "./components/GitHistoryPanel";
 import { GitStatusPanel } from "./components/GitStatusPanel";
 import { SessionViewer } from "./components/SessionViewer";
 import { DefaultListView } from "./components/DefaultListView";
 import { SessionList } from "./components/SessionList";
 import { ExternalSessionList } from "./components/ExternalSessionList";
 import { AgentIcon } from "./components/AgentIcon";
+import { AgentMenuList } from "./components/AgentMenuList";
 import { ActionBar } from "./components/ActionBar";
 import { ToastContainer } from "./components/Toast";
 import { BottomSheet } from "./components/BottomSheet";
+import { ScheduledAgentTaskDialog } from "./components/ScheduledAgentTaskDialog";
 import {
   type GitHubImportState,
   type LocalDirBrowserState,
@@ -75,40 +105,70 @@ import {
 import { fetchAgents, type AgentStatus } from "./services/agents";
 
 // 类型定义
-type SessionMode = "chat" | "plugin";
+type SessionMode = "chat" | "plugin" | "command";
+type WSStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
+
+function normalizeFastService(
+  value: unknown,
+): "" | "on" | "off" {
+  return value === "on" || value === "off" ? value : "";
+}
+
 export type SessionItem = {
   key: string;
   session_key: string;
   root_id?: string;
   name?: string;
   type?: SessionMode;
+  parent_session_key?: string;
+  parent_tool_call_id?: string;
   agent?: string;
   model?: string;
+  shell?: string;
+  source?: string;
   mode?: string;
   effort?: string;
+  fast_service?: "" | "on" | "off";
+  plan_mode?: boolean;
   scope?: string;
   purpose?: string;
   created_at?: string;
   updated_at?: string;
   closed_at?: string;
+  title?: string;
+  agent_session_id?: string;
+  context_window?: {
+    totalTokens: number;
+    modelContextWindow: number;
+  };
   search_seq?: number;
+  search_target_id?: string;
   search_snippet?: string;
   search_match_type?: "name" | "user" | "reply";
   related_files?: RelatedFile[];
   exchanges?: Array<{
+    seq?: number;
     role?: string;
+    agent?: string;
     content?: string;
+    thought_id?: string;
     timestamp?: string;
     model?: string;
-    mode?: string;
-    effort?: string;
+    model_display_name?: string;
+	    mode?: string;
+	    effort?: string;
+	    fast_service?: "" | "on" | "off";
+	    context_window?: {
+      totalTokens: number;
+      modelContextWindow: number;
+    };
   }>;
   pending?: boolean;
 };
 
 function latestExchangeText(
   exchanges: unknown,
-  field: "agent" | "mode" | "effort",
+  field: "agent" | "mode" | "effort" | "fast_service",
 ): string {
   if (!Array.isArray(exchanges)) {
     return "";
@@ -140,15 +200,22 @@ function toSessionItem(
     session_key: key,
     root_id: nextRoot,
     name: typeof session?.name === "string" ? session.name : "",
-    type:
-      session?.type === "plugin" || session?.type === "chat"
-        ? session.type
-        : "chat",
+    type: normalizeMode(session?.type),
+    parent_session_key:
+      typeof session?.parent_session_key === "string"
+        ? session.parent_session_key
+        : undefined,
+    parent_tool_call_id:
+      typeof session?.parent_tool_call_id === "string"
+        ? session.parent_tool_call_id
+        : undefined,
+    source: typeof session?.source === "string" ? session.source : undefined,
     agent:
       typeof session?.agent === "string" && session.agent.trim()
         ? session.agent
         : latestExchangeText(session?.exchanges, "agent"),
     model: typeof session?.model === "string" ? session.model : "",
+    shell: typeof session?.shell === "string" ? session.shell : "",
     mode:
       typeof session?.mode === "string" && session.mode.trim()
         ? session.mode
@@ -157,6 +224,13 @@ function toSessionItem(
       typeof session?.effort === "string" && session.effort.trim()
         ? session.effort
         : latestExchangeText(session?.exchanges, "effort"),
+    fast_service:
+      normalizeFastService(session?.fast_service) ||
+      normalizeFastService(latestExchangeText(session?.exchanges, "fast_service")),
+    plan_mode:
+      typeof session?.plan_mode === "boolean"
+        ? session.plan_mode
+        : false,
     scope: typeof session?.scope === "string" ? session.scope : "",
     purpose: typeof session?.purpose === "string" ? session.purpose : "",
     created_at:
@@ -165,8 +239,21 @@ function toSessionItem(
       typeof session?.updated_at === "string" ? session.updated_at : undefined,
     closed_at:
       typeof session?.closed_at === "string" ? session.closed_at : undefined,
+    context_window:
+      session?.context_window &&
+      Number(session.context_window.totalTokens) > 0 &&
+      Number(session.context_window.modelContextWindow) > 0
+        ? {
+            totalTokens: Number(session.context_window.totalTokens),
+            modelContextWindow: Number(session.context_window.modelContextWindow),
+          }
+        : undefined,
     search_seq:
       typeof session?.search_seq === "number" ? session.search_seq : undefined,
+    search_target_id:
+      typeof session?.search_target_id === "string"
+        ? session.search_target_id
+        : undefined,
     search_snippet:
       typeof session?.search_snippet === "string"
         ? session.search_snippet
@@ -184,9 +271,12 @@ type Exchange = {
   role: string;
   agent?: string;
   model?: string;
+  model_display_name?: string;
   mode?: string;
   effort?: string;
+  fast_service?: "" | "on" | "off";
   content?: string;
+  thought_id?: string;
   context_window?: {
     totalTokens: number;
     modelContextWindow: number;
@@ -194,6 +284,8 @@ type Exchange = {
   timestamp?: string;
   toolCall?: any;
   todoUpdate?: any;
+  planUpdate?: any;
+  compactNotice?: any;
   pending_ack?: boolean;
 };
 type PendingSend = {
@@ -203,18 +295,22 @@ type PendingSend = {
   model?: string;
   agentMode?: string;
   effort?: string;
+  fastService?: "" | "on" | "off";
+  shell?: string;
   message: string;
   timestamp: string;
   requestId?: string;
   sessionKey?: string;
   tempKey?: string;
 };
+type SessionQueueItem = QueuedUserMessage;
 type ViewerSelection = {
   filePath: string;
   text?: string;
   startLine?: number;
   endLine?: number;
 };
+
 type AttachedFileContext = {
   filePath: string;
   fileName: string;
@@ -239,6 +335,7 @@ type ManagedRootPayload = {
   display_name?: string;
   root_path?: string;
   is_git_repo?: boolean;
+  is_git_worktree?: boolean;
   size?: number;
   mtime?: string;
 };
@@ -252,26 +349,27 @@ type LocalDirItemPayload = {
 type LocalDirsPayload = {
   path?: string;
   parent?: string;
+  volumes?: LocalDirItemPayload[];
   items?: LocalDirItemPayload[];
 };
-type RelayStatusPayload = {
-  relay_bound?: boolean;
-  no_relayer?: boolean;
-  pending_code?: string;
-  node_name?: string;
-  node_id?: string;
-  e2ee_node_id?: string;
-  relay_base_url?: string;
-  node_url?: string;
-  last_error?: string;
-  e2ee_required?: boolean;
-};
+
+function managedDirAddErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (message.includes("root name already exists")) {
+    return "已有同名项目目录，请先重命名后再加入。";
+  }
+  return message || fallback;
+}
+
 const RELAY_LAST_NODE_ID_STORAGE_KEY = "mindfs.relay.last_node_id";
 const PLUGIN_QUERY_STORAGE_PREFIX = "vp-progress:";
 const TREE_SORT_STORAGE_KEY = "mindfs-tree-sort-mode";
 const DIRECTORY_SORT_OVERRIDES_STORAGE_KEY = "mindfs-directory-sort-overrides";
 const FILE_SCROLL_STORAGE_KEY = "mindfs-file-scroll-positions";
 const LAST_ROOT_STORAGE_KEY = "mindfs-last-root-id";
+const SHOW_GIT_HISTORY_BY_ROOT_STORAGE_KEY = "mindfs-show-git-history-by-root";
+const GIT_STATUS_EXPANDED_STORAGE_KEY = "mindfs-git-status-expanded";
+const GIT_HISTORY_EXPANDED_STORAGE_KEY = "mindfs-git-history-expanded";
 const READ_FILE_TOKEN_PATTERN = /\[read file:\s*[^\]]+\]/i;
 
 function normalizeUpdateState(
@@ -432,6 +530,44 @@ function isRelayPWAContext(): boolean {
   );
 }
 
+function isRelayNodesPage(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return (window.location.pathname.replace(/\/+$/, "") || "/") === "/nodes";
+}
+
+function relayNodeURL(rootID: string): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  const trimmed = String(rootID || "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  return new URL(`/n/${encodeURIComponent(trimmed)}/`, window.location.origin).toString();
+}
+
+function syncRelayNodesToNative(dirs: ManagedRootPayload[]): void {
+  if ((!isNativeShellRuntime() && !isRelayPWAContext()) || !isRelayNodesPage()) {
+    return;
+  }
+  const nodes = dirs
+    .map((dir) => {
+      const id = String(dir.id || "").trim();
+      const url = relayNodeURL(id);
+      const name = String(
+        dir.display_name || dir.root_path?.split("/").filter(Boolean).pop() || id,
+      ).trim();
+      if (!id || !url || !name) {
+        return null;
+      }
+      return { name, url };
+    })
+    .filter((node): node is { name: string; url: string } => node !== null);
+  void storeRelayNodes(nodes);
+}
+
 function extractHTTPStatusFromErrorMessage(message: string): number | null {
   const match = /status=(\d{3})|(?:^|:\s)(\d{3})\s[A-Z]/.exec(
     String(message || ""),
@@ -485,6 +621,7 @@ function persistFileScrollPositions(positions: Record<string, number>): void {
 
 function normalizeMode(mode: SessionMode | undefined): SessionMode {
   if (mode === "plugin") return mode;
+  if (mode === "command") return mode;
   return "chat";
 }
 
@@ -653,6 +790,25 @@ function buildMatchInputFromPath(
   };
 }
 
+function formatPluginViewContext(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (value == null) return "";
+  try {
+    return JSON.stringify(value, null, 2).trim();
+  } catch {
+    return String(value).trim();
+  }
+}
+
+function buildMessageWithViewContext(
+  message: string,
+  viewContext: unknown,
+): string {
+  const contextText = formatPluginViewContext(viewContext);
+  if (!contextText) return message;
+  return [contextText, "", message].join("\n");
+}
+
 function normalizePath(value: string): string {
   return String(value || "")
     .replace(/\\/g, "/")
@@ -767,6 +923,41 @@ function loadLastRootId(): string {
   return window.localStorage.getItem(LAST_ROOT_STORAGE_KEY) || "";
 }
 
+function loadBooleanRecord(key: string): Record<string, boolean> {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(key) || "{}") as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => typeof value === "boolean"),
+    ) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+function loadStringBooleanRecord(key: string): Record<string, Record<string, boolean>> {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(key) || "{}") as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).map(([root, value]) => [
+        root,
+        value && typeof value === "object"
+          ? Object.fromEntries(
+              Object.entries(value as Record<string, unknown>).filter(([, expanded]) => typeof expanded === "boolean"),
+            )
+          : {},
+      ]),
+    ) as Record<string, Record<string, boolean>>;
+  } catch {
+    return {};
+  }
+}
+
 function hasExplicitFileContext(message: string): boolean {
   return READ_FILE_TOKEN_PATTERN.test(message);
 }
@@ -790,6 +981,19 @@ type AppProps = {
   onGoHome?: () => void;
 };
 
+const MOBILE_ENTER_KEY_SEND_STORAGE_KEY = "mindfs-mobile-enter-key-sends";
+
+function loadMobileEnterKeySends(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    return window.localStorage.getItem(MOBILE_ENTER_KEY_SEND_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export function App({ onGoHome }: AppProps) {
   const pluginManagerRef = useRef<PluginManager>(new PluginManager());
   const completionAudioContextRef = useRef<AudioContext | null>(null);
@@ -799,11 +1003,15 @@ export function App({ onGoHome }: AppProps) {
   const selectedDirRef = useRef<string | null>(null);
   const fileRef = useRef<FilePayload | null>(null);
   const selectedSessionRef = useRef<SessionItem | null>(null);
+  const sessionSearchTargetCounterRef = useRef(0);
   const currentSessionRef = useRef<SessionItem | null>(null);
   const interactionModeRef = useRef<"main" | "drawer">("main");
   const pendingDraftRef = useRef<PendingSend | null>(null);
   const pendingBySessionRef = useRef<Record<string, PendingSend>>({});
   const pendingRequestRef = useRef<Record<string, PendingSend>>({});
+  const queuedMessagesBySessionRef = useRef<Record<string, SessionQueueItem[]>>({});
+  const queueFrozenBySessionRef = useRef<Record<string, boolean>>({});
+  const optimisticDequeuedIdsRef = useRef<Record<string, Set<string>>>({});
   const cancelRequestedBySessionRef = useRef<Record<string, boolean>>({});
   const sessionCacheRef = useRef<Record<string, Session>>({});
   const loadedSessionRef = useRef<Record<string, boolean>>({});
@@ -822,6 +1030,8 @@ export function App({ onGoHome }: AppProps) {
   const fileScrollPositionsRef = useRef<Record<string, number>>(
     loadPersistedFileScrollPositions(),
   );
+  const pluginContentRef = useRef<HTMLDivElement | null>(null);
+  const lastPluginChapterRef = useRef<string>("");
   const viewerSelectionRef = useRef<ViewerSelection | null>(null);
   const lastViewerSelectionRef = useRef<ViewerSelection | null>(null);
   const dismissedSelectionFileRef = useRef<string | null>(null);
@@ -832,6 +1042,8 @@ export function App({ onGoHome }: AppProps) {
   const pluginsLoadedByRootRef = useRef<Record<string, boolean>>({});
   const pluginsLoadingByRootRef = useRef<Record<string, Promise<void>>>({});
   const didInitRef = useRef(false);
+  const relayWSAuthCheckRef = useRef(false);
+  const managedRootsRequestRef = useRef<Promise<ManagedRootPayload[] | null> | null>(null);
   const handleSelectSessionRef = useRef<
     ((session: any) => Promise<void>) | null
   >(null);
@@ -849,21 +1061,32 @@ export function App({ onGoHome }: AppProps) {
   const [sessionListMode, setSessionListMode] = useState<"local" | "import">(
     "local",
   );
+  const sessionListModeRef = useRef<"local" | "import">("local");
   const [externalSessions, setExternalSessions] = useState<SessionItem[]>([]);
   const externalSessionsRef = useRef<SessionItem[]>([]);
   const [hasMoreExternalSessions, setHasMoreExternalSessions] = useState(false);
   const [loadingOlderExternalSessions, setLoadingOlderExternalSessions] =
     useState(false);
   const [loadingExternalSessions, setLoadingExternalSessions] = useState(false);
+  const [externalSessionsError, setExternalSessionsError] = useState("");
   const [externalSelectedKey, setExternalSelectedKey] = useState("");
   const [externalImportAgent, setExternalImportAgent] = useState("");
+  const externalImportAgentRef = useRef("");
   const [externalFilterBound, setExternalFilterBound] = useState(true);
-  const [importingExternalSessionKey, setImportingExternalSessionKey] =
-    useState("");
+  const [selectedExternalImportKeys, setSelectedExternalImportKeys] = useState<
+    Set<string>
+  >(() => new Set());
+  const [importingExternalSessionKeys, setImportingExternalSessionKeys] =
+    useState<Set<string>>(() => new Set());
+  const [confirmingExternalImport, setConfirmingExternalImport] =
+    useState(false);
   const [importMenuOpen, setImportMenuOpen] = useState(false);
   const importMenuRef = useRef<HTMLDivElement | null>(null);
   const projectAddPopoverRef = useRef<HTMLDivElement | null>(null);
+  const worktreeCreatePopoverRef = useRef<HTMLDivElement | null>(null);
+  const worktreeSwitchPopoverRef = useRef<HTMLDivElement | null>(null);
   const [availableAgents, setAvailableAgents] = useState<AgentStatus[]>([]);
+  const [scheduledAgentDialogOpen, setScheduledAgentDialogOpen] = useState(false);
   const [selectedSession, setSelectedSession] = useState<SessionItem | null>(
     null,
   );
@@ -871,32 +1094,61 @@ export function App({ onGoHome }: AppProps) {
   const [activeBoundSessionKey, setActiveBoundSessionKey] = useState<
     string | null
   >(null);
+  const [pendingPlanMode, setPendingPlanMode] = useState(false);
   const [currentSession, setCurrentSession] = useState<SessionItem | null>(null);
   const [cacheVersion, setCacheVersion] = useState(0);
+  const [queueVersion, setQueueVersion] = useState(0);
   const [interactionMode, setInteractionMode] = useState<"main" | "drawer">(
     "main",
   );
   const [agentsVersion, setAgentsVersion] = useState(0);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const { isMobile } = useResponsive();
+  const [mobileEnterKeySends, setMobileEnterKeySends] = useState(loadMobileEnterKeySends);
   const [isLeftOpen, setIsLeftOpen] = useState(() => window.innerWidth >= 768);
   const [isRightOpen, setIsRightOpen] = useState(
     () => window.innerWidth >= 768,
   );
   const [currentRootId, setCurrentRootId] = useState<string | null>(null);
   const currentRootIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        MOBILE_ENTER_KEY_SEND_STORAGE_KEY,
+        mobileEnterKeySends ? "1" : "0",
+      );
+    } catch {
+      // Ignore storage failures; the setting can still apply for this session.
+    }
+  }, [mobileEnterKeySends]);
+
   const [managedRootIds, setManagedRootIds] = useState<string[]>([]);
   const managedRootByIdRef = useRef<Record<string, ManagedRootPayload>>({});
   const [rootEntries, setRootEntries] = useState<FileEntry[]>([]);
   const [creatingRootName, setCreatingRootName] = useState<string | null>(null);
   const [creatingRootParentPath, setCreatingRootParentPath] = useState<string | null>(null);
+  const [creatingRootKind, setCreatingRootKind] = useState<"root" | "worktree">("root");
   const [creatingRootBusy, setCreatingRootBusy] = useState(false);
+  const [worktreeBranches, setWorktreeBranches] = useState<GitBranchesPayload>({
+    branches: [],
+  });
+  const [worktreeBranchesLoading, setWorktreeBranchesLoading] = useState(false);
+  const [worktreeBranchError, setWorktreeBranchError] = useState("");
+  const [worktreeBranchMode, setWorktreeBranchMode] = useState<"new" | "existing">("new");
+  const [worktreeBranch, setWorktreeBranch] = useState("");
+  const [worktreeSwitchOpen, setWorktreeSwitchOpen] = useState(false);
+  const [worktreeSwitchItems, setWorktreeSwitchItems] = useState<GitWorktreeItem[]>([]);
+  const [worktreeSwitchLoading, setWorktreeSwitchLoading] = useState(false);
+  const [worktreeSwitchError, setWorktreeSwitchError] = useState("");
+  const [switchingWorktreePath, setSwitchingWorktreePath] = useState("");
   const [projectAddMode, setProjectAddMode] = useState<ProjectAddMode | null>(
     null,
   );
   const [localDirState, setLocalDirState] = useState<LocalDirBrowserState>({
     path: "",
     parent: "",
+    volumes: [],
     items: [],
     loading: false,
     selectedPath: "",
@@ -917,12 +1169,19 @@ export function App({ onGoHome }: AppProps) {
   const [relayStatus, setRelayStatus] = useState<RelayStatusPayload | null>(
     null,
   );
+  const [bootstrapState, setBootstrapState] = useState<BootstrapState>(() =>
+    bootstrapService.snapshot(),
+  );
   const [e2eeState, setE2eeState] = useState<E2EEState>(() =>
     e2eeService.snapshot(),
   );
   const [e2eeSecretInput, setE2eeSecretInput] = useState("");
   const [e2eePromptError, setE2eePromptError] = useState("");
   const [e2eePromptBusy, setE2eePromptBusy] = useState(false);
+  const [editDraftRequest, setEditDraftRequest] = useState<{
+    id: number;
+    content: string;
+  } | null>(null);
   const [entriesByPath, setEntriesByPath] = useState<
     Record<string, FileEntry[]>
   >({});
@@ -934,6 +1193,18 @@ export function App({ onGoHome }: AppProps) {
   const [mainDirectoryError, setMainDirectoryError] = useState("");
   const [gitStatus, setGitStatus] = useState<GitStatusPayload | null>(null);
   const [gitStatusLoading, setGitStatusLoading] = useState(false);
+  const [gitHistory, setGitHistory] = useState<GitHistoryPayload | null>(null);
+  const [gitHistoryLoading, setGitHistoryLoading] = useState(false);
+  const [gitHistoryLoadingMore, setGitHistoryLoadingMore] = useState(false);
+  const [showGitHistoryByRoot, setShowGitHistoryByRoot] = useState<Record<string, boolean>>(() =>
+    loadBooleanRecord(SHOW_GIT_HISTORY_BY_ROOT_STORAGE_KEY),
+  );
+  const [gitStatusExpandedByRoot, setGitStatusExpandedByRoot] = useState<Record<string, boolean>>(() =>
+    loadBooleanRecord(GIT_STATUS_EXPANDED_STORAGE_KEY),
+  );
+  const [gitHistoryExpandedByRoot, setGitHistoryExpandedByRoot] = useState<Record<string, Record<string, boolean>>>(() =>
+    loadStringBooleanRecord(GIT_HISTORY_EXPANDED_STORAGE_KEY),
+  );
   const [gitDiff, setGitDiff] = useState<GitDiffPayload | null>(null);
   const [treeSortMode, setTreeSortMode] = useState<DirectorySortMode>(() => {
     if (typeof window === "undefined") {
@@ -965,7 +1236,7 @@ export function App({ onGoHome }: AppProps) {
       return {};
     }
   });
-  const [status, setStatus] = useState("Disconnected");
+  const [status, setStatus] = useState<WSStatus>("disconnected");
   const [file, setFile] = useState<FilePayload | null>(null);
   const [viewerSelection, setViewerSelection] =
     useState<ViewerSelection | null>(null);
@@ -1114,6 +1385,9 @@ export function App({ onGoHome }: AppProps) {
   }, [currentRootId]);
   useEffect(() => {
     let cancelled = false;
+    if (!e2eeState.configured || (e2eeState.required && !e2eeState.unlocked)) {
+      return;
+    }
     fetchAgents(true)
       .then((items) => {
         if (cancelled) return;
@@ -1123,7 +1397,7 @@ export function App({ onGoHome }: AppProps) {
     return () => {
       cancelled = true;
     };
-  }, [agentsVersion]);
+  }, [agentsVersion, e2eeState.configured, e2eeState.required, e2eeState.unlocked]);
   useEffect(() => {
     if (!importMenuOpen) return;
     const handlePointerDown = (event: MouseEvent) => {
@@ -1188,9 +1462,15 @@ export function App({ onGoHome }: AppProps) {
     selectedSessionRef.current = selectedSession;
   }, [selectedSession]);
   useEffect(() => {
+    if (selectedSession || activeBoundSessionKey || interactionMode !== "main") {
+      setPendingPlanMode(false);
+    }
+  }, [selectedSession, activeBoundSessionKey, interactionMode]);
+  useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
   useEffect(() => {
+    sessionListModeRef.current = sessionListMode;
     if (sessionListMode !== "local") {
       setSessionSearchOpen(false);
       setSessionSearchResultsMode(false);
@@ -1208,8 +1488,14 @@ export function App({ onGoHome }: AppProps) {
     setSessionSearchLoading(false);
   }, [currentRootId]);
   useEffect(() => {
+    setPendingPlanMode(false);
+  }, [currentRootId]);
+  useEffect(() => {
     externalSessionsRef.current = externalSessions;
   }, [externalSessions]);
+  useEffect(() => {
+    externalImportAgentRef.current = externalImportAgent;
+  }, [externalImportAgent]);
   useEffect(() => {
     currentSessionRef.current = currentSession;
   }, [currentSession]);
@@ -1222,6 +1508,24 @@ export function App({ onGoHome }: AppProps) {
     }
     window.localStorage.setItem(TREE_SORT_STORAGE_KEY, treeSortMode);
   }, [treeSortMode]);
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(SHOW_GIT_HISTORY_BY_ROOT_STORAGE_KEY, JSON.stringify(showGitHistoryByRoot));
+  }, [showGitHistoryByRoot]);
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(GIT_STATUS_EXPANDED_STORAGE_KEY, JSON.stringify(gitStatusExpandedByRoot));
+  }, [gitStatusExpandedByRoot]);
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(GIT_HISTORY_EXPANDED_STORAGE_KEY, JSON.stringify(gitHistoryExpandedByRoot));
+  }, [gitHistoryExpandedByRoot]);
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -1320,6 +1624,43 @@ export function App({ onGoHome }: AppProps) {
   const redirectToRelayNodes = useCallback(() => {
     window.location.replace("/nodes");
   }, []);
+
+  const handleRelayWebSocketClosed = useCallback(async () => {
+    if (!isRelayNodePage() || relayWSAuthCheckRef.current) {
+      return;
+    }
+    relayWSAuthCheckRef.current = true;
+    try {
+      const response = await fetch("/api/auth/me", { cache: "no-cache" });
+      if (!response.ok) {
+        redirectToRelayLogin();
+        return;
+      }
+      const nodeID = relayNodeIdFromPathname(window.location.pathname);
+      if (!nodeID) {
+        return;
+      }
+      const nodeResponse = await fetch(`/n/${encodeURIComponent(nodeID)}/`, {
+        cache: "no-cache",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+      if (
+        nodeResponse.status === 403 ||
+        nodeResponse.status === 404 ||
+        nodeResponse.status === 502 ||
+        nodeResponse.status === 503
+      ) {
+        redirectToRelayNodes();
+      }
+    } catch {
+      // Network failures and connector outages also close the socket. Keep the
+      // normal reconnect path unless the auth probe can prove the session died.
+    } finally {
+      relayWSAuthCheckRef.current = false;
+    }
+  }, [redirectToRelayLogin, redirectToRelayNodes]);
 
   const handleRelayNavigationFailure = useCallback(
     async (status: number, errorCode?: string | null) => {
@@ -1447,6 +1788,10 @@ export function App({ onGoHome }: AppProps) {
         ...(cached as any),
         ...(drawerSession?.key === key ? (drawerSession as any) : null),
         key,
+        search_seq: (session as any).search_seq,
+        search_target_id: (session as any).search_target_id,
+        search_snippet: (session as any).search_snippet,
+        search_match_type: (session as any).search_match_type,
         exchanges,
         pending,
       } as any;
@@ -1516,6 +1861,60 @@ export function App({ onGoHome }: AppProps) {
     [rootSessionKey],
   );
 
+  const clearLocalPendingForSession = useCallback(
+    (rootID: string | null | undefined, sessionKey: string | null | undefined) => {
+      const resolvedRoot = String(rootID || "");
+      const resolvedKey = String(sessionKey || "");
+      if (!resolvedRoot || !resolvedKey) {
+        return;
+      }
+      const clearPendingAck = <T,>(session: T): T => {
+        const exchanges = (session as any)?.exchanges;
+        if (!Array.isArray(exchanges)) {
+          return session;
+        }
+        return {
+          ...(session as any),
+          exchanges: exchanges.map((exchange: any) =>
+            exchange?.pending_ack === true
+              ? { ...exchange, pending_ack: false }
+              : exchange,
+          ),
+        } as T;
+      };
+      const cacheKey = rootSessionKey(resolvedRoot, resolvedKey);
+      delete pendingBySessionRef.current[cacheKey];
+      const cached = sessionCacheRef.current[cacheKey];
+      if (cached && (cached.key || (cached as any).session_key) === resolvedKey) {
+        sessionCacheRef.current[cacheKey] = clearPendingAck({
+          ...(cached as any),
+          pending: false,
+        } as Session);
+      }
+      setSelectedSession((prev) => {
+        const prevKey = prev?.key || prev?.session_key;
+        const prevRoot =
+          (prev?.root_id as string | undefined) || currentRootIdRef.current;
+        if (!prev || prevKey !== resolvedKey || prevRoot !== resolvedRoot) {
+          return prev;
+        }
+        return clearPendingAck({
+          ...(prev as any),
+          pending: false,
+        } as SessionItem);
+      });
+      const drawer = drawerSessionByRootRef.current[resolvedRoot];
+      if (drawer && (drawer.key || (drawer as any).session_key) === resolvedKey) {
+        setDrawerSessionForRoot(resolvedRoot, clearPendingAck({
+          ...(drawer as any),
+          pending: false,
+        } as Session));
+      }
+      bumpCacheVersion();
+    },
+    [bumpCacheVersion, rootSessionKey, setDrawerSessionForRoot],
+  );
+
   const markSessionStale = useCallback(
     (rootID: string | null | undefined, sessionKey: string | null | undefined) => {
       const resolvedRoot = String(rootID || "");
@@ -1577,11 +1976,17 @@ export function App({ onGoHome }: AppProps) {
       if (!fullSession) {
         return null;
       }
-      const pending = resolvePendingForSession(
-        resolvedRoot,
-        resolvedKey,
-        !!(fullSession as any)?.pending,
-      );
+      const serverPending =
+        typeof (fullSession as any)?.pending === "boolean"
+          ? !!(fullSession as any).pending
+          : undefined;
+      if (serverPending === false) {
+        clearLocalPendingForSession(resolvedRoot, resolvedKey);
+      }
+      const pending =
+        serverPending === false
+          ? false
+          : resolvePendingForSession(resolvedRoot, resolvedKey, !!serverPending);
       sessionCacheRef.current[cacheKey] = {
         ...(fullSession as any),
         key: resolvedKey,
@@ -1595,7 +2000,7 @@ export function App({ onGoHome }: AppProps) {
         pending,
       } as Session;
     },
-    [bumpCacheVersion, resolvePendingForSession, rootSessionKey],
+    [bumpCacheVersion, clearLocalPendingForSession, resolvePendingForSession, rootSessionKey],
   );
 
   const updateSessionRelatedFilesForKey = useCallback(
@@ -1642,6 +2047,8 @@ export function App({ onGoHome }: AppProps) {
       model?: string,
       agentMode?: string,
       effort?: string,
+      fastService?: "" | "on" | "off",
+      shell?: string,
     ) => {
       if (!rootID || !sessionKey || !agent) return;
       const cacheKey = rootSessionKey(rootID, sessionKey);
@@ -1653,6 +2060,7 @@ export function App({ onGoHome }: AppProps) {
           model: model || "",
           mode: agentMode || "",
           effort: effort || "",
+          fast_service: fastService || "",
           updated_at: new Date().toISOString(),
         } as Session;
       }
@@ -1667,6 +2075,7 @@ export function App({ onGoHome }: AppProps) {
           model: model || "",
           mode: agentMode || "",
           effort: effort || "",
+          fast_service: fastService || "",
         } as SessionItem;
       });
       const current = drawerSessionByRootRef.current[rootID];
@@ -1676,7 +2085,8 @@ export function App({ onGoHome }: AppProps) {
         (current.agent !== agent ||
           (current as any).model !== (model || "") ||
           (current as any).mode !== (agentMode || "") ||
-          (current as any).effort !== (effort || ""))
+          (current as any).effort !== (effort || "") ||
+          ((current as any).fast_service || "") !== (fastService || ""))
       ) {
         setDrawerSessionForRoot(rootID, {
           ...(current as any),
@@ -1684,6 +2094,7 @@ export function App({ onGoHome }: AppProps) {
           model: model || "",
           mode: agentMode || "",
           effort: effort || "",
+          fast_service: fastService || "",
         } as Session);
       }
       bumpCacheVersion();
@@ -1745,6 +2156,52 @@ export function App({ onGoHome }: AppProps) {
       syncSessionHeaderFromListItem(rootID, item);
     }
   }, [sessions, syncSessionHeaderFromListItem]);
+
+  const handleSetPlanMode = useCallback(
+    async (enabled: boolean, targetSessionKey?: string, targetRootId?: string) => {
+      const activeRoot = targetRootId || currentRootIdRef.current;
+      const session = currentSessionRef.current || drawerSessionByRootRef.current[activeRoot || ""];
+      const sessionKey = targetSessionKey || session?.key || (session as any)?.session_key;
+      if (!activeRoot) {
+        reportError("session.sync_failed", "请先选择一个会话再切换 Plan 模式");
+        return;
+      }
+      if (!sessionKey || String(sessionKey).startsWith("pending-")) {
+        setPendingPlanMode(enabled);
+        return;
+      }
+      const now = new Date().toISOString();
+      const cacheKey = rootSessionKey(activeRoot, sessionKey);
+      const cached = sessionCacheRef.current[cacheKey];
+      if (cached) {
+        sessionCacheRef.current[cacheKey] = {
+          ...(cached as any),
+          plan_mode: enabled,
+          updated_at: now,
+        } as Session;
+      }
+      setSelectedSession((prev) => {
+        const prevKey = prev?.key || prev?.session_key;
+        const prevRoot = (prev?.root_id as string | undefined) || activeRoot;
+        if (!prev || prevKey !== sessionKey || prevRoot !== activeRoot) return prev;
+        return { ...(prev as any), plan_mode: enabled, updated_at: now } as SessionItem;
+      });
+      const drawer = drawerSessionByRootRef.current[activeRoot];
+      if (drawer?.key === sessionKey) {
+        setDrawerSessionForRoot(activeRoot, {
+          ...(drawer as any),
+          plan_mode: enabled,
+          updated_at: now,
+        } as Session);
+      }
+      bumpCacheVersion();
+      const sent = await sessionService.setPlanMode(activeRoot, sessionKey, enabled);
+      if (!sent) {
+        reportError("network.disconnected", "Plan 模式切换失败：连接未就绪，请稍后重试");
+      }
+    },
+    [rootSessionKey, setDrawerSessionForRoot, bumpCacheVersion],
+  );
 
   const promotePendingSessionForRoot = useCallback(
     (
@@ -1847,21 +2304,67 @@ export function App({ onGoHome }: AppProps) {
     [rootSessionKey, setBoundSessionForRoot, setDrawerSessionForRoot, bumpCacheVersion],
   );
 
-  const resolveAgentForSession = useCallback(
-    (rootID: string, sessionKey: string, fallbackAgent?: string): string => {
-      if (fallbackAgent) return fallbackAgent;
+  const resolveRuntimeMetaForSession = useCallback(
+    (
+      rootID: string,
+      sessionKey: string,
+      fallback?: {
+        agent?: string;
+        model?: string;
+	        mode?: string;
+	        effort?: string;
+	        fast_service?: "" | "on" | "off";
+	      },
+    ) => {
       const cacheKey = rootSessionKey(rootID, sessionKey);
-      const cached = sessionCacheRef.current[cacheKey] as any;
-      if (cached?.agent) return cached.agent;
-      const current = currentSessionRef.current as any;
-      if (current?.key === sessionKey && current?.agent) return current.agent;
-      const selected = selectedSessionRef.current as any;
-      if (
-        (selected?.key || selected?.session_key) === sessionKey &&
-        selected?.agent
-      )
-        return selected.agent;
-      return "";
+      const candidates = [
+        fallback,
+        sessionCacheRef.current[cacheKey] as any,
+        currentSessionRef.current?.key === sessionKey
+          ? (currentSessionRef.current as any)
+          : null,
+        (selectedSessionRef.current?.key ||
+          selectedSessionRef.current?.session_key) === sessionKey
+          ? (selectedSessionRef.current as any)
+          : null,
+      ];
+      const cachedSession = sessionCacheRef.current[cacheKey] as any;
+      const exchanges = Array.isArray(cachedSession?.exchanges)
+        ? ((cachedSession.exchanges || []) as Exchange[])
+        : [];
+      const latestMatchingExchange = [...exchanges]
+        .reverse()
+        .find(
+          (item) =>
+            item?.agent ||
+	            item?.model ||
+	            item?.mode ||
+	            item?.effort ||
+	            item?.fast_service,
+        );
+      candidates.push(latestMatchingExchange as any);
+
+      const pickText = (field: "agent" | "model" | "mode" | "effort") => {
+        for (const item of candidates) {
+          const value = `${item?.[field] || ""}`.trim();
+          if (value) return value;
+        }
+        return "";
+      };
+      const pickFastService = (): "" | "on" | "off" => {
+        for (const item of candidates) {
+          const value = normalizeFastService(item?.fast_service);
+          if (value) return value;
+        }
+        return "";
+      };
+	      return {
+	        agent: pickText("agent"),
+	        model: pickText("model"),
+	        mode: pickText("mode"),
+	        effort: pickText("effort"),
+	        fast_service: pickFastService(),
+	      };
     },
     [rootSessionKey],
   );
@@ -1871,15 +2374,21 @@ export function App({ onGoHome }: AppProps) {
       rootID: string,
       sessionKey: string,
       content: string,
-      agentHint?: string,
+      runtimeHint?: {
+        agent?: string;
+        model?: string;
+	        mode?: string;
+	        effort?: string;
+	        fast_service?: "" | "on" | "off";
+	      },
     ) => {
       if (!content) return;
       const now = new Date().toISOString();
       const cacheKey = rootSessionKey(rootID, sessionKey);
-      const resolvedAgent = resolveAgentForSession(
+      const runtimeMeta = resolveRuntimeMetaForSession(
         rootID,
         sessionKey,
-        agentHint,
+        runtimeHint,
       );
       const updateList = (prevList: Exchange[]) => {
         const list = [...(prevList || [])];
@@ -1887,16 +2396,24 @@ export function App({ onGoHome }: AppProps) {
         if (last && (last.role === "agent" || last.role === "assistant")) {
           list[list.length - 1] = {
             ...last,
-            agent: last.agent || resolvedAgent,
-            content: `${last.content || ""}${content}`,
+            agent: last.agent || runtimeMeta.agent,
+            model: last.model || runtimeMeta.model,
+	            mode: last.mode || runtimeMeta.mode,
+	            effort: last.effort || runtimeMeta.effort,
+	            fast_service: last.fast_service || runtimeMeta.fast_service,
+	            content: `${last.content || ""}${content}`,
             timestamp: now,
           };
           return list;
         }
         list.push({
           role: "agent",
-          agent: resolvedAgent,
-          content,
+          agent: runtimeMeta.agent,
+          model: runtimeMeta.model,
+	          mode: runtimeMeta.mode,
+	          effort: runtimeMeta.effort,
+	          fast_service: runtimeMeta.fast_service,
+	          content,
           timestamp: now,
         });
         return list;
@@ -1907,8 +2424,12 @@ export function App({ onGoHome }: AppProps) {
         ({
           key: sessionKey,
           type: "chat",
-          agent: resolvedAgent,
-          name: "",
+          agent: runtimeMeta.agent,
+          model: runtimeMeta.model,
+	          mode: runtimeMeta.mode,
+	          effort: runtimeMeta.effort,
+	          fast_service: runtimeMeta.fast_service,
+	          name: "",
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
           exchanges: [],
@@ -1918,32 +2439,58 @@ export function App({ onGoHome }: AppProps) {
       );
       sessionCacheRef.current[cacheKey] = {
         ...(base as any),
-        agent: (base as any).agent || resolvedAgent,
-        exchanges: nextList,
+        agent: (base as any).agent || runtimeMeta.agent,
+        model: (base as any).model || runtimeMeta.model,
+	        mode: (base as any).mode || runtimeMeta.mode,
+	        effort: (base as any).effort || runtimeMeta.effort,
+	        fast_service: (base as any).fast_service || runtimeMeta.fast_service,
+	        exchanges: nextList,
         updated_at: new Date().toISOString(),
       } as Session;
       bumpCacheVersion();
     },
-    [rootSessionKey, resolveAgentForSession, bumpCacheVersion],
+    [rootSessionKey, resolveRuntimeMetaForSession, bumpCacheVersion],
   );
 
   const appendThoughtChunkForSession = useCallback(
-    (rootID: string, sessionKey: string, content: string) => {
+    (rootID: string, sessionKey: string, content: string, thoughtID?: string) => {
       if (!content) return;
       const now = new Date().toISOString();
       const cacheKey = rootSessionKey(rootID, sessionKey);
       const updateList = (prevList: Exchange[]) => {
         const list = [...(prevList || [])];
+        if (thoughtID) {
+          const existingIndex = list.findIndex(
+            (item) => item.role === "thought" && item.thought_id === thoughtID,
+          );
+          if (existingIndex >= 0) {
+            const existing = list[existingIndex];
+            const existingContent = existing.content || "";
+            let nextContent = existingContent;
+            if (content.includes(existingContent)) {
+              nextContent = content;
+            } else if (!existingContent.includes(content)) {
+              nextContent = `${existingContent}${content}`;
+            }
+            list[existingIndex] = {
+              ...existing,
+              content: nextContent,
+              timestamp: now,
+            };
+            return list;
+          }
+        }
         const last = list.length > 0 ? list[list.length - 1] : null;
-        if (last && last.role === "thought") {
+        if (last && last.role === "thought" && (!thoughtID || !last.thought_id)) {
           list[list.length - 1] = {
             ...last,
             content: `${last.content || ""}${content}`,
+            thought_id: thoughtID || last.thought_id,
             timestamp: now,
           };
           return list;
         }
-        list.push({ role: "thought", content, timestamp: now });
+        list.push({ role: "thought", content, thought_id: thoughtID, timestamp: now });
         return list;
       };
       const cached = sessionCacheRef.current[cacheKey];
@@ -1978,6 +2525,25 @@ export function App({ onGoHome }: AppProps) {
       const cacheKey = rootSessionKey(rootID, sessionKey);
       const mergeToolCall = (existing: any, incoming: any) => {
         const merged = { ...(existing || {}), ...incoming };
+        const incomingMeta = (incoming?.meta || {}) as Record<string, unknown>;
+        if (existing?.meta || incoming?.meta) {
+          merged.meta = { ...(existing?.meta || {}), ...incomingMeta };
+        }
+        const isUserShellStream =
+          incomingMeta.source === "userShell" && incomingMeta.phase === "stream";
+        if (isUserShellStream) {
+          const mergedContent = [
+            ...((existing?.content || []) as any[]),
+            ...((incoming?.content || []) as any[]),
+          ];
+          const totalText = mergedContent.map((item) => item?.text || "").join("");
+          if (totalText.length > 256 * 1024) {
+            merged.content = [{ type: "text", text: totalText.slice(-256 * 1024) }];
+          } else {
+            merged.content = mergedContent;
+          }
+          merged.meta = { ...(existing?.meta || {}), ...incomingMeta };
+        }
         if (!incoming.kind && existing?.kind) merged.kind = existing.kind;
         if (!incoming.title && existing?.title) merged.title = existing.title;
         const existingStatus = `${existing?.status || ""}`.toLowerCase();
@@ -2088,6 +2654,116 @@ export function App({ onGoHome }: AppProps) {
     [rootSessionKey, bumpCacheVersion],
   );
 
+  const appendPlanUpdateForSession = useCallback(
+    (rootID: string, sessionKey: string, planUpdate: any) => {
+      if (!planUpdate) return;
+      const content = `${planUpdate.content || ""}`;
+      if (!content) return;
+      const now = new Date().toISOString();
+      const cacheKey = rootSessionKey(rootID, sessionKey);
+      const updateList = (prevList: Exchange[]) => {
+        const list = [...(prevList || [])];
+        const planId = `${planUpdate.id || ""}`;
+        if (planId) {
+          for (let i = list.length - 1; i >= 0; i -= 1) {
+            if (list[i]?.role !== "plan") continue;
+            if (`${list[i]?.planUpdate?.id || ""}` !== planId) continue;
+            const existingContent = `${list[i].planUpdate?.content || ""}`;
+            const nextContent = planUpdate.delta
+              ? `${existingContent}${content}`
+              : content;
+            list[i] = {
+              ...list[i],
+              timestamp: now,
+              planUpdate: { ...list[i].planUpdate, ...planUpdate, content: nextContent },
+            };
+            return list;
+          }
+        }
+        const last = list.length > 0 ? list[list.length - 1] : null;
+        if (last?.role === "plan" && !planId) {
+          const existingContent = `${last.planUpdate?.content || ""}`;
+          list[list.length - 1] = {
+            ...last,
+            timestamp: now,
+            planUpdate: {
+              ...last.planUpdate,
+              ...planUpdate,
+              content: planUpdate.delta ? `${existingContent}${content}` : content,
+            },
+          };
+          return list;
+        }
+        list.push({ role: "plan", content: "", timestamp: now, planUpdate });
+        return list;
+      };
+      const cached = sessionCacheRef.current[cacheKey];
+      const base =
+        cached ||
+        ({
+          key: sessionKey,
+          type: "chat",
+          agent: "",
+          name: "",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          exchanges: [],
+        } as any);
+      sessionCacheRef.current[cacheKey] = {
+        ...(base as any),
+        exchanges: updateList(((base as any).exchanges || []) as Exchange[]),
+        updated_at: new Date().toISOString(),
+      } as Session;
+      bumpCacheVersion();
+    },
+    [rootSessionKey, bumpCacheVersion],
+  );
+
+  const appendCompactNoticeForSession = useCallback(
+    (rootID: string, sessionKey: string, compactNotice: any) => {
+      if (!compactNotice) return;
+      const now = new Date().toISOString();
+      const cacheKey = rootSessionKey(rootID, sessionKey);
+      const updateList = (prevList: Exchange[]) => {
+        const list = [...(prevList || [])];
+        const compactId = `${compactNotice.id || ""}`;
+        if (compactId) {
+          for (let i = list.length - 1; i >= 0; i -= 1) {
+            if (list[i]?.role !== "compact") continue;
+            if (`${list[i]?.compactNotice?.id || ""}` !== compactId) continue;
+            list[i] = {
+              ...list[i],
+              timestamp: now,
+              compactNotice: { ...list[i].compactNotice, ...compactNotice },
+            };
+            return list;
+          }
+        }
+        list.push({ role: "compact", content: "", timestamp: now, compactNotice });
+        return list;
+      };
+      const cached = sessionCacheRef.current[cacheKey];
+      const base =
+        cached ||
+        ({
+          key: sessionKey,
+          type: "chat",
+          agent: "",
+          name: "",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          exchanges: [],
+        } as any);
+      sessionCacheRef.current[cacheKey] = {
+        ...(base as any),
+        exchanges: updateList(((base as any).exchanges || []) as Exchange[]),
+        updated_at: new Date().toISOString(),
+      } as Session;
+      bumpCacheVersion();
+    },
+    [rootSessionKey, bumpCacheVersion],
+  );
+
   const attachContextWindowToLatestAssistant = useCallback(
     (
       rootID: string,
@@ -2104,7 +2780,10 @@ export function App({ onGoHome }: AppProps) {
         const list = [...(prevList || [])];
         for (let i = list.length - 1; i >= 0; i -= 1) {
           const item = list[i];
-          if (item?.role === "agent" || item?.role === "assistant") {
+          if (
+            (item?.role === "agent" || item?.role === "assistant") &&
+            String(item?.content || "").trim()
+          ) {
             list[i] = {
               ...item,
               context_window: {
@@ -2123,6 +2802,10 @@ export function App({ onGoHome }: AppProps) {
         sessionCacheRef.current[cacheKey] = {
           ...(cached as any),
           exchanges,
+          context_window: {
+            totalTokens,
+            modelContextWindow,
+          },
           updated_at: new Date().toISOString(),
         } as Session;
       }
@@ -2135,6 +2818,10 @@ export function App({ onGoHome }: AppProps) {
         return {
           ...(prev as any),
           exchanges: stampList((((prev as any).exchanges || []) as Exchange[])),
+          context_window: {
+            totalTokens,
+            modelContextWindow,
+          },
         } as SessionItem;
       });
       const drawer = drawerSessionByRootRef.current[rootID];
@@ -2142,6 +2829,10 @@ export function App({ onGoHome }: AppProps) {
         setDrawerSessionForRoot(rootID, {
           ...(drawer as any),
           exchanges: stampList((((drawer as any).exchanges || []) as Exchange[])),
+          context_window: {
+            totalTokens,
+            modelContextWindow,
+          },
         } as Session);
       }
       bumpCacheVersion();
@@ -2181,14 +2872,9 @@ export function App({ onGoHome }: AppProps) {
   const refreshTreeDir = useCallback(
     async (rootID: string, dirPath: string, syncMain: boolean) => {
       try {
-        const res = await fetch(
-          appURL(
-            "/api/tree",
-            new URLSearchParams({ root: rootID, dir: dirPath }),
-          ),
+        const payload = await apiProtectedJSON<any>(
+          appURL("/api/tree", new URLSearchParams({ root: rootID, dir: dirPath })),
         );
-        if (!res.ok) return;
-        const payload = await res.json();
         const parsed = normalizeTreeResponse(payload);
         invalidTreeCacheKeysRef.current.delete(treeCacheKey(rootID, dirPath));
         setMainDirectoryError("");
@@ -2304,6 +2990,110 @@ export function App({ onGoHome }: AppProps) {
       }
     }
   }, []);
+
+  const refreshGitHistory = useCallback(async (rootID: string, options?: { force?: boolean }) => {
+    if (!rootID) {
+      setGitHistory(null);
+      setGitHistoryLoading(false);
+      return null;
+    }
+    if (!options?.force) {
+      const cachedHead = getCachedGitHistoryHead(rootID);
+      if (cachedHead) {
+        setGitHistory(cachedHead);
+        const newest = cachedHead.items[0]?.hash || "";
+        if (newest) {
+          void fetchGitHistory(rootID, { afterCommit: newest })
+            .then((next) => {
+              if (next.commit_missing) {
+                clearGitHistoryCache(rootID);
+                return fetchGitHistory(rootID, { force: true });
+              }
+              return getCachedGitHistoryHead(rootID) || next;
+            })
+            .then((fresh) => {
+              if (currentRootIdRef.current === rootID) {
+                setGitHistory(fresh);
+              }
+            })
+            .catch((err) => {
+              console.error("[git.history.after] failed", { rootID, afterCommit: newest, err });
+            });
+        }
+        return cachedHead;
+      }
+    }
+    setGitHistoryLoading(true);
+    try {
+      const next = await fetchGitHistory(rootID, { force: options?.force });
+      if (next.commit_missing) {
+        clearGitHistoryCache(rootID);
+        const fresh = await fetchGitHistory(rootID, { force: true });
+        if (currentRootIdRef.current === rootID) {
+          setGitHistory(fresh);
+        }
+        return fresh;
+      }
+      if (currentRootIdRef.current === rootID) {
+        setGitHistory(next);
+      }
+      return next;
+    } catch (err) {
+      console.error("[git.history] failed", { rootID, err });
+      const fallback = { available: false, items: [], has_more: false } as GitHistoryPayload;
+      if (currentRootIdRef.current === rootID) {
+        setGitHistory(fallback);
+      }
+      return fallback;
+    } finally {
+      if (currentRootIdRef.current === rootID) {
+        setGitHistoryLoading(false);
+      }
+    }
+  }, []);
+
+  const loadMoreGitHistory = useCallback(async () => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID || gitHistoryLoadingMore) {
+      return;
+    }
+    const currentItems = gitHistory?.items || [];
+    const beforeCommit = currentItems[currentItems.length - 1]?.hash || "";
+    if (!beforeCommit) {
+      return;
+    }
+    setGitHistoryLoadingMore(true);
+    try {
+      const next = await fetchGitHistory(rootID, { beforeCommit });
+      if (next.commit_missing) {
+        clearGitHistoryCache(rootID);
+        const fresh = await fetchGitHistory(rootID, { force: true });
+        if (currentRootIdRef.current === rootID) {
+          setGitHistory(fresh);
+        }
+        return;
+      }
+      const cached = getCachedGitHistory(rootID);
+      if (currentRootIdRef.current === rootID) {
+        const loadedCount = currentItems.length + next.items.length;
+        if (cached) {
+          setGitHistory({
+            ...cached,
+            items: cached.items.slice(0, loadedCount),
+            has_more: cached.items.length > loadedCount || cached.has_more,
+          });
+        } else {
+          setGitHistory(next);
+        }
+      }
+    } catch (err) {
+      console.error("[git.history.more] failed", { rootID, beforeCommit, err });
+    } finally {
+      if (currentRootIdRef.current === rootID) {
+        setGitHistoryLoadingMore(false);
+      }
+    }
+  }, [gitHistory, gitHistoryLoadingMore]);
 
   const loadSessionsForRoot = useCallback(
     async (
@@ -2428,6 +3218,84 @@ export function App({ onGoHome }: AppProps) {
     [isMobile, replaceURLState, setMainViewPreferenceForRoot],
   );
 
+  const openGitCommitDiff = useCallback(
+    async (rootID: string, commit: GitHistoryItem, item: GitStatusItem) => {
+      if (!rootID || !commit?.hash || !item?.path) {
+        return;
+      }
+      fileOpenRequestRef.current += 1;
+      setMainViewPreferenceForRoot(rootID, "git-diff");
+      setSelectedSession(null);
+      setSelectedSessionLoading(false);
+      setFile(null);
+      setGitDiff(null);
+      replaceURLState({
+        root: rootID,
+        file: "",
+        session: "",
+        cursor: 0,
+        pluginQuery: {},
+      });
+      try {
+        const next = await fetchGitCommitDiff(rootID, commit.hash, item);
+        setGitDiff(next);
+        if (currentRootIdRef.current !== rootID) {
+          setCurrentRootId(rootID);
+        }
+        if (isMobile) {
+          setIsLeftOpen(false);
+        }
+      } catch (err) {
+        console.error("[git.commit.diff] failed", {
+          rootID,
+          commit: commit.hash,
+          path: item.path,
+          err,
+        });
+      }
+    },
+    [isMobile, replaceURLState, setMainViewPreferenceForRoot],
+  );
+
+  const switchGitBranch = useCallback(
+    async (rootID: string, branch: string) => {
+      if (!rootID || !branch) {
+        return;
+      }
+      try {
+        const nextStatus = await checkoutGitBranch(rootID, branch);
+        clearGitHistoryCache(rootID);
+        if (currentRootIdRef.current === rootID) {
+          setGitStatus(nextStatus);
+          setGitDiff(null);
+          setFile(null);
+          await refreshGitHistory(rootID, { force: true });
+          await refreshTreeDir(rootID, selectedDirRef.current || ".", true);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "切换分支失败";
+        console.error("[git.checkout] failed", {
+          rootID,
+          branch,
+          message,
+          payload: err instanceof ProtectedAPIError ? err.payload : undefined,
+          err,
+        });
+        reportError("git.checkout_failed", message, {
+          severity: "error",
+          recoverable: true,
+          details: {
+            root: rootID,
+            branch,
+            payload: err instanceof ProtectedAPIError ? err.payload : undefined,
+          },
+        });
+        throw err;
+      }
+    },
+    [refreshGitHistory, refreshTreeDir],
+  );
+
   const handleTreeUpload = useCallback(
     async (files: File[]) => {
       const rootID = currentRootIdRef.current;
@@ -2486,6 +3354,10 @@ export function App({ onGoHome }: AppProps) {
         currentDrawer?.key === key
           ? !!(currentDrawer as any)?.pending
           : !!(session as any)?.pending;
+      const searchTargetId =
+        typeof session?.search_seq === "number"
+          ? `${key}:${session.search_seq}:${++sessionSearchTargetCounterRef.current}`
+          : undefined;
       replaceURLState({
         root: targetRoot,
         file: "",
@@ -2505,6 +3377,7 @@ export function App({ onGoHome }: AppProps) {
         toSessionItem(targetRoot, {
           ...(session as any),
           pending: preservePending,
+          search_target_id: searchTargetId || session?.search_target_id,
         }),
       );
       setInteractionMode("main");
@@ -2516,11 +3389,14 @@ export function App({ onGoHome }: AppProps) {
         options?: { writeCache?: boolean },
       ) => {
         const shouldWriteCache = options?.writeCache !== false;
-        const pending = resolvePendingForSession(
-          targetRoot,
-          key,
-          !!(fullSession as any)?.pending || preservePending,
-        );
+        const serverPending =
+          typeof (fullSession as any)?.pending === "boolean"
+            ? !!(fullSession as any).pending
+            : undefined;
+        const pending =
+          serverPending !== undefined
+            ? serverPending
+            : resolvePendingForSession(targetRoot, key, preservePending);
         const normalized = {
           ...(fullSession as any),
           key,
@@ -2690,26 +3566,41 @@ export function App({ onGoHome }: AppProps) {
         return;
       }
 
+      const deletedKeys = new Set<string>();
+      const collectDeletedKeys = (key: string) => {
+        if (!key || deletedKeys.has(key)) return;
+        deletedKeys.add(key);
+        for (const item of sessionsRef.current) {
+          const itemKey = item.key || item.session_key || "";
+          if (String(item.parent_session_key || "").trim() === key) {
+            collectDeletedKeys(itemKey);
+          }
+        }
+      };
+      collectDeletedKeys(sessionKey);
+
       setSessions((prev) =>
-        prev.filter((item) => (item.key || item.session_key) !== sessionKey),
+        prev.filter((item) => !deletedKeys.has(item.key || item.session_key || "")),
       );
 
-      const cacheKey = rootSessionKey(rootID, sessionKey);
-      delete sessionCacheRef.current[cacheKey];
-      delete loadedSessionRef.current[cacheKey];
-      delete loadingSessionRef.current[cacheKey];
-      delete pendingBySessionRef.current[cacheKey];
-      delete cancelRequestedBySessionRef.current[cacheKey];
-      staleSessionKeysRef.current.delete(cacheKey);
-      void deleteCachedSession(rootID, sessionKey);
+      for (const deletedKey of deletedKeys) {
+        const cacheKey = rootSessionKey(rootID, deletedKey);
+        delete sessionCacheRef.current[cacheKey];
+        delete loadedSessionRef.current[cacheKey];
+        delete loadingSessionRef.current[cacheKey];
+        delete pendingBySessionRef.current[cacheKey];
+        delete cancelRequestedBySessionRef.current[cacheKey];
+        staleSessionKeysRef.current.delete(cacheKey);
+        void deleteCachedSession(rootID, deletedKey);
+      }
 
-      if (boundSessionByRootRef.current[rootID] === sessionKey) {
+      if (deletedKeys.has(boundSessionByRootRef.current[rootID] || "")) {
         setBoundSessionForRoot(rootID, null);
       }
-      if (selectedSessionByRootRef.current[rootID] === sessionKey) {
+      if (deletedKeys.has(selectedSessionByRootRef.current[rootID] || "")) {
         selectedSessionByRootRef.current[rootID] = null;
       }
-      if (drawerSessionByRootRef.current[rootID]?.key === sessionKey) {
+      if (deletedKeys.has(drawerSessionByRootRef.current[rootID]?.key || "")) {
         setDrawerSessionForRoot(rootID, null);
         setDrawerOpenForRoot(rootID, false);
       }
@@ -2720,7 +3611,7 @@ export function App({ onGoHome }: AppProps) {
       const selectedRoot =
         (selectedSessionRef.current?.root_id as string | undefined) ||
         currentRootIdRef.current;
-      if (selectedKey === sessionKey && selectedRoot === rootID) {
+      if (deletedKeys.has(selectedKey || "") && selectedRoot === rootID) {
         setSelectedSession(null);
         setSelectedSessionLoading(false);
         replaceURLState({
@@ -2879,6 +3770,57 @@ export function App({ onGoHome }: AppProps) {
     ],
   );
 
+  const handleForkAgentMessage = useCallback(
+    async (
+      rootID: string | null | undefined,
+      sessionKey: string | null | undefined,
+      seq: number,
+    ) => {
+      const resolvedRoot = String(rootID || currentRootIdRef.current || "").trim();
+      const resolvedKey = String(sessionKey || "").trim();
+      if (!resolvedRoot || !resolvedKey || seq <= 0) {
+        reportError("session.sync_failed", "无法 fork：缺少会话或消息位置");
+        return;
+      }
+      const result = await sessionService.forkSession(resolvedRoot, resolvedKey, seq);
+      const forked = result?.session;
+      const forkedKey = String(result?.session_key || forked?.key || "").trim();
+      if (!forkedKey) {
+        reportError("session.sync_failed", "fork 会话失败");
+        return;
+      }
+      if (forked) {
+        const normalized = {
+          ...(forked as any),
+          key: forkedKey,
+          session_key: forkedKey,
+          root_id: resolvedRoot,
+        } as Session;
+        const cacheKey = rootSessionKey(resolvedRoot, forkedKey);
+        sessionCacheRef.current[cacheKey] = normalized;
+        loadedSessionRef.current[cacheKey] = true;
+        const item = toSessionItem(resolvedRoot, normalized);
+        if (item) {
+          setSessions((prev) => mergeSessionItems(prev, [item]));
+          await handleSelectSession(item);
+        } else {
+          await handleSelectSession({ key: forkedKey, session_key: forkedKey, root_id: resolvedRoot });
+        }
+      } else {
+        await handleSelectSession({ key: forkedKey, session_key: forkedKey, root_id: resolvedRoot });
+      }
+      void loadSessionsForRoot(resolvedRoot, { replace: true, force: true });
+      bumpCacheVersion();
+    },
+    [
+      bumpCacheVersion,
+      handleSelectSession,
+      loadSessionsForRoot,
+      mergeSessionItems,
+      rootSessionKey,
+    ],
+  );
+
   useEffect(() => {
     handleSelectSessionRef.current = handleSelectSession;
   }, [handleSelectSession]);
@@ -2892,6 +3834,7 @@ export function App({ onGoHome }: AppProps) {
       if (!rootID || !agent) {
         setExternalSessions([]);
         setHasMoreExternalSessions(false);
+        setExternalSessionsError("");
         return;
       }
       try {
@@ -2908,12 +3851,22 @@ export function App({ onGoHome }: AppProps) {
             limit: 50,
           },
         )) as SessionItem[];
+        setExternalSessionsError("");
         setHasMoreExternalSessions(next.length >= 50);
         if (options?.replace || (!options?.beforeTime && !options?.afterTime)) {
           setExternalSessions(next);
           return;
         }
         setExternalSessions((prev) => mergeSessionItems(prev, next));
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : String(err || "加载可导入会话失败");
+        setExternalSessionsError(message || "加载可导入会话失败");
+        if (options?.replace || (!options?.beforeTime && !options?.afterTime)) {
+          setExternalSessions([]);
+          setHasMoreExternalSessions(false);
+        }
+        console.error("[Session] Failed to fetch external sessions:", err);
       } finally {
         setLoadingExternalSessions(false);
       }
@@ -2924,6 +3877,9 @@ export function App({ onGoHome }: AppProps) {
   const exitImportMode = useCallback(() => {
     setSessionListMode("local");
     setExternalSelectedKey("");
+    setExternalSessionsError("");
+    setSelectedExternalImportKeys(new Set());
+    setImportingExternalSessionKeys(new Set());
     setImportMenuOpen(false);
   }, []);
 
@@ -2936,6 +3892,9 @@ export function App({ onGoHome }: AppProps) {
       }
       setExternalImportAgent(trimmedAgent);
       setExternalSelectedKey("");
+      setExternalSessionsError("");
+      setSelectedExternalImportKeys(new Set());
+      setImportingExternalSessionKeys(new Set());
       setSessionListMode("import");
       await loadExternalSessions(rootID, trimmedAgent, { replace: true });
     },
@@ -2965,60 +3924,126 @@ export function App({ onGoHome }: AppProps) {
     }
   }, [externalImportAgent, loadExternalSessions, loadingOlderExternalSessions]);
 
-  const handleImportExternalSession = useCallback(
-    async (session: SessionItem) => {
-      const rootID = currentRootIdRef.current || "";
-      const sessionKey = String(
-        (session as any)?.agent_session_id || session?.key || "",
-      ).trim();
-      if (
-        !rootID ||
-        !externalImportAgent ||
-        !sessionKey ||
-        importingExternalSessionKey
-      ) {
+  const toggleExternalImportSelection = useCallback((session: SessionItem) => {
+    const sessionKey = String(
+      session.agent_session_id || session.key || "",
+    ).trim();
+    if (!sessionKey) {
+      return;
+    }
+    setSelectedExternalImportKeys((current) => {
+      const next = new Set(current);
+      if (next.has(sessionKey)) {
+        next.delete(sessionKey);
+      } else {
+        next.add(sessionKey);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleAllExternalImportSelection = useCallback((checked: boolean) => {
+    const visibleKeys = externalSessionsRef.current
+      .map((session) =>
+        String(session.agent_session_id || session.key || "").trim(),
+      )
+      .filter(Boolean);
+    setSelectedExternalImportKeys((current) => {
+      const next = new Set(current);
+      visibleKeys.forEach((key) => {
+        if (checked) {
+          next.add(key);
+        } else {
+          next.delete(key);
+        }
+      });
+      return next;
+    });
+  }, []);
+
+  const handleConfirmExternalImport = useCallback(async () => {
+    const rootID = currentRootIdRef.current || "";
+    const sessionKeys = [...selectedExternalImportKeys].filter(Boolean);
+    if (
+      !rootID ||
+      !externalImportAgent ||
+      !sessionKeys.length ||
+      confirmingExternalImport
+    ) {
+      return;
+    }
+    setConfirmingExternalImport(true);
+    setImportingExternalSessionKeys(new Set(sessionKeys));
+    try {
+      const imported = await sessionService.importExternalSessionsBatch(
+        rootID,
+        externalImportAgent,
+        sessionKeys,
+      );
+      const results = imported?.items || [];
+      const successItems = results.filter((item) => item.success && item.session_key);
+      if (!imported || !successItems.length) {
+        const firstError = results.find((item) => !item.success)?.error;
+        reportError(
+          "session.import_failed",
+          firstError ? `导入会话失败：${firstError}` : "导入会话失败",
+        );
         return;
       }
-      setImportingExternalSessionKey(sessionKey);
-      try {
-        const imported = await sessionService.importExternalSession(
-          rootID,
-          externalImportAgent,
-          sessionKey,
+      setConfirmingExternalImport(false);
+      setImportingExternalSessionKeys(new Set());
+      const failedKeys = new Set(
+        results
+          .filter((item) => !item.success)
+          .map((item) => String(item.agent_session_id || "").trim())
+          .filter(Boolean),
+      );
+      if (failedKeys.size > 0) {
+        const firstError = results.find((item) => !item.success)?.error;
+        const message = firstError
+          ? `部分会话导入失败：${failedKeys.size} 项。${firstError}`
+          : `部分会话导入失败：${failedKeys.size} 项`;
+        reportError(
+          "session.import_failed",
+          message,
         );
-        if (!imported?.session_key) {
-          reportError("session.import_failed", "导入会话失败");
-          return;
-        }
+      }
+      setSelectedExternalImportKeys(failedKeys);
+      if (failedKeys.size === 0) {
         exitImportMode();
-        const next = (await sessionService.fetchSessions(
-          rootID,
-          {},
-        )) as SessionItem[];
-        setHasMoreSessions(next.length >= 50);
-        setSessions(next);
+      }
+      const next = (await sessionService.fetchSessions(rootID, {})) as SessionItem[];
+      setHasMoreSessions(next.length >= 50);
+      setSessions(next);
+      const firstImported = successItems[0];
+      if (firstImported?.session_key) {
+        const source = externalSessionsRef.current.find((item) =>
+          String(item.agent_session_id || item.key || "").trim() ===
+          String(firstImported.agent_session_id || "").trim(),
+        );
         await handleSelectSession({
-          key: imported.session_key,
+          key: firstImported.session_key,
           root_id: rootID,
           type: "chat",
           agent: externalImportAgent,
-          name: session.name,
+          name: source?.name,
         } as SessionItem);
-        if (isMobile) {
-          setIsRightOpen(false);
-        }
-      } finally {
-        setImportingExternalSessionKey("");
       }
-    },
-    [
-      exitImportMode,
-      externalImportAgent,
-      handleSelectSession,
-      importingExternalSessionKey,
-      isMobile,
-    ],
-  );
+      if (isMobile && failedKeys.size === 0) {
+        setIsRightOpen(false);
+      }
+    } finally {
+      setConfirmingExternalImport(false);
+      setImportingExternalSessionKeys(new Set());
+    }
+  }, [
+    confirmingExternalImport,
+    exitImportMode,
+    externalImportAgent,
+    handleSelectSession,
+    isMobile,
+    selectedExternalImportKeys,
+  ]);
 
   const handleSendMessage = useCallback(
     async (
@@ -3028,16 +4053,11 @@ export function App({ onGoHome }: AppProps) {
       model?: string,
       agentMode?: string,
       effort?: string,
+      fastService?: "" | "on" | "off",
+      shell?: string,
     ) => {
       const activeRoot = currentRootIdRef.current;
       if (!activeRoot) return;
-      if (
-        Object.values(pendingRequestRef.current).some(
-          (pending) => pending.rootId === activeRoot,
-        )
-      ) {
-        return;
-      }
       const selected = selectedSessionRef.current;
       const selectedKey = selected?.key || selected?.session_key;
       const selectedRoot =
@@ -3082,27 +4102,58 @@ export function App({ onGoHome }: AppProps) {
         effectiveAgent = agent,
         effectiveModel = model || "",
         effectiveAgentMode = agentMode || "",
-        effectiveEffort = effort || "";
+        effectiveEffort = effort || "",
+        effectiveFastService = (fastService || "") as "" | "on" | "off",
+        effectiveShell = shell || "";
+      const messageRequestsPlanMode =
+        message.trim().toLowerCase() === "/plan" ||
+        message.trim().toLowerCase().startsWith("/plan ");
+      const isQueueSend =
+        !!sendSessionKey &&
+        !!session &&
+        (((session as any).pending === true) ||
+          (currentSessionRef.current?.key === sendSessionKey &&
+            currentSessionRef.current?.pending === true));
       if (sendSessionKey && session) {
+        const targetSessionKey = sendSessionKey;
         const previousAgent = session.agent || "";
+        const useTargetSessionDefaults =
+          !!currentBoundSessionKey && currentBoundSessionKey !== targetSessionKey;
         effectiveMode = normalizeMode(session.type as any);
-        effectiveAgent = agent || previousAgent || "";
+        effectiveAgent =
+          (useTargetSessionDefaults ? previousAgent : agent) ||
+          previousAgent ||
+          "";
         effectiveModel =
-          model ||
+          (useTargetSessionDefaults ? session.model || "" : model) ||
           (effectiveAgent === previousAgent ? session.model || "" : "");
         effectiveAgentMode =
-          agentMode ||
+          (useTargetSessionDefaults ? (session as any).mode || "" : agentMode) ||
           (effectiveAgent === previousAgent ? (session as any).mode || "" : "");
         effectiveEffort =
-          effort ||
+          (useTargetSessionDefaults ? (session as any).effort || "" : effort) ||
           (effectiveAgent === previousAgent ? (session as any).effort || "" : "");
+        effectiveFastService =
+          (useTargetSessionDefaults
+            ? (((session as any).fast_service || "") as "" | "on" | "off")
+            : ((fastService || "") as "" | "on" | "off")) ||
+          (effectiveAgent === previousAgent
+            ? (((session as any).fast_service || "") as "" | "on" | "off")
+            : "");
+        effectiveShell =
+          effectiveMode === "command"
+            ? ((useTargetSessionDefaults ? (session as any).shell || "" : shell) ||
+                (session as any).shell ||
+                "")
+            : "";
         updateSessionAgentForKey(
           activeRoot,
-          sendSessionKey || undefined,
+          targetSessionKey,
           effectiveAgent,
           effectiveModel,
           effectiveAgentMode,
           effectiveEffort,
+          effectiveFastService,
         );
         session = {
           ...(session as any),
@@ -3110,13 +4161,17 @@ export function App({ onGoHome }: AppProps) {
           model: effectiveModel,
           mode: effectiveAgentMode,
           effort: effectiveEffort,
+          fast_service: effectiveFastService,
+          shell: effectiveShell,
         } as Session;
-        setBoundSessionForRoot(activeRoot, sendSessionKey);
-        setSelectedPendingByKey(sendSessionKey || undefined, true);
-        setDrawerSessionForRoot(activeRoot, {
-          ...(session as any),
-          pending: true,
-        } as Session);
+        setBoundSessionForRoot(activeRoot, targetSessionKey);
+        if (!isQueueSend) {
+          setSelectedPendingByKey(targetSessionKey, true);
+          setDrawerSessionForRoot(activeRoot, {
+            ...(session as any),
+            pending: true,
+          } as Session);
+        }
       } else {
         sendSessionKey = undefined;
         const tempKey = `pending-${Date.now()}`;
@@ -3127,6 +4182,9 @@ export function App({ onGoHome }: AppProps) {
           model: effectiveModel,
           mode: effectiveAgentMode,
           effort: effectiveEffort,
+          fast_service: effectiveFastService,
+          shell: effectiveShell,
+          plan_mode: pendingPlanMode || messageRequestsPlanMode,
           name: "新会话",
           pending: true,
         } as any;
@@ -3141,6 +4199,7 @@ export function App({ onGoHome }: AppProps) {
         model: effectiveModel,
         mode: effectiveAgentMode,
         effort: effectiveEffort,
+        fast_service: effectiveFastService,
         content: message,
         timestamp: now,
         pending_ack: true,
@@ -3152,29 +4211,33 @@ export function App({ onGoHome }: AppProps) {
         model: effectiveModel,
         agentMode: effectiveAgentMode,
         effort: effectiveEffort,
+        fastService: effectiveFastService,
+        shell: effectiveShell,
         message,
         timestamp: now,
         requestId,
         sessionKey: sendSessionKey || undefined,
         tempKey,
       };
-      if (sendSessionKey) {
+      if (sendSessionKey && !isQueueSend) {
         const ck = rootSessionKey(activeRoot, sendSessionKey);
         const cached =
           sessionCacheRef.current[ck] || ({ ...(session as any) } as Session);
         const prevExchanges = Array.isArray((cached as any).exchanges)
           ? ((cached as any).exchanges as Exchange[])
           : [];
-          sessionCacheRef.current[ck] = {
-            ...(cached as any),
-            exchanges: [...prevExchanges, userEx],
-            mode: effectiveAgentMode,
-            effort: effectiveEffort,
-            updated_at: now,
-          } as Session;
+        sessionCacheRef.current[ck] = {
+          ...(cached as any),
+          exchanges: [...prevExchanges, userEx],
+          mode: effectiveAgentMode,
+          effort: effectiveEffort,
+          fast_service: effectiveFastService,
+          shell: effectiveShell,
+          updated_at: now,
+        } as Session;
         session = sessionCacheRef.current[ck];
         bumpCacheVersion();
-      } else {
+      } else if (!sendSessionKey) {
         const tempSessionKey = session?.key || "";
         pendingDraftRef.current = {
           rootId: activeRoot,
@@ -3183,6 +4246,8 @@ export function App({ onGoHome }: AppProps) {
           model: effectiveModel,
           agentMode: effectiveAgentMode,
           effort: effectiveEffort,
+          fastService: effectiveFastService,
+          shell: effectiveShell,
           message,
           timestamp: now,
           requestId,
@@ -3208,10 +4273,12 @@ export function App({ onGoHome }: AppProps) {
         setInteractionMode("drawer");
         setDrawerOpenForRoot(activeRoot, true);
       }
-      setDrawerSessionForRoot(activeRoot, {
-        ...(session as any),
-        pending: true,
-      } as Session);
+      if (!isQueueSend) {
+        setDrawerSessionForRoot(activeRoot, {
+          ...(session as any),
+          pending: true,
+        } as Session);
+      }
       const explicitFileContext = hasExplicitFileContext(message);
       const selection =
         explicitFileContext || !attachedFileContext?.filePath
@@ -3228,18 +4295,43 @@ export function App({ onGoHome }: AppProps) {
         pluginCatalog:
           effectiveMode === "plugin" ? getViewModeSystemPrompt() : undefined,
       });
+      let outgoingMessage = message;
+      const applyPendingPlanPrefix = pendingPlanMode && !sendSessionKey;
+      const currentFile = fileRef.current;
+      if (currentFile && !pluginBypassRef.current) {
+        try {
+          const pluginInput = toPluginInput(currentFile, pluginQueryRef.current);
+          const plugin = pluginManagerRef.current.match(activeRoot, pluginInput);
+          if (plugin?.viewContext) {
+            outgoingMessage = buildMessageWithViewContext(
+              message,
+              pluginManagerRef.current.viewContext(plugin, pluginInput),
+            );
+          }
+        } catch (err) {
+          console.warn("[plugin/view-context] failed", err);
+        }
+      }
+      if (applyPendingPlanPrefix) {
+        outgoingMessage = `/plan ${outgoingMessage}`;
+      }
       const sent = await sessionService.sendMessage(
         activeRoot,
         sendSessionKey || undefined,
-        message,
+        outgoingMessage,
         effectiveMode,
         effectiveAgent,
         effectiveModel || undefined,
         effectiveAgentMode || undefined,
         effectiveEffort || undefined,
+        effectiveFastService,
         context,
+        effectiveShell || undefined,
         requestId,
       );
+      if (sent && applyPendingPlanPrefix) {
+        setPendingPlanMode(false);
+      }
       console.info("[session/send] dispatched", { requestId, rootId: activeRoot, sessionKey: sendSessionKey || null, tempKey: tempKey || null, sent });
       if (!sent) {
         console.warn("[session/send] dispatch_failed", { requestId, rootId: activeRoot, sessionKey: sendSessionKey || null });
@@ -3253,9 +4345,10 @@ export function App({ onGoHome }: AppProps) {
         delete pendingRequestRef.current[requestId];
       }
       if (!sent && sendSessionKey) {
-        setSelectedPendingByKey(sendSessionKey || undefined, false);
+        const failedSessionKey = sendSessionKey;
+        setSelectedPendingByKey(failedSessionKey, false);
         const latest = drawerSessionByRootRef.current[activeRoot];
-        if (latest && latest.key === sendSessionKey) {
+        if (latest && latest.key === failedSessionKey) {
           setDrawerSessionForRoot(activeRoot, {
             ...(latest as any),
             pending: false,
@@ -3272,6 +4365,44 @@ export function App({ onGoHome }: AppProps) {
       setDrawerOpenForRoot,
       setDrawerSessionForRoot,
       updateSessionAgentForKey,
+      pendingPlanMode,
+    ],
+  );
+
+  const handleRunAgentLifecycleCommand = useCallback(
+    async (agentName: string, action: "install" | "update", commands: string[]) => {
+      const activeRoot = currentRootIdRef.current;
+      if (!activeRoot) {
+        throw new Error("当前未选择项目，无法执行命令");
+      }
+      const script = commands.map((command) => command.trim()).filter(Boolean).join("\n");
+      if (!script) {
+        throw new Error("agents.json 未配置命令");
+      }
+      const previousBoundKey = boundSessionByRootRef.current[activeRoot];
+      if (previousBoundKey && !previousBoundKey.startsWith("pending-")) {
+        suppressedAutoBindSessionByRootRef.current[activeRoot] = previousBoundKey;
+      }
+      selectedSessionRef.current = null;
+      currentSessionRef.current = null;
+      setSelectedSession(null);
+      selectedSessionByRootRef.current[activeRoot] = null;
+      setBoundSessionForRoot(activeRoot, null);
+      setDrawerSessionForRoot(activeRoot, null);
+      setInteractionMode("drawer");
+      setDrawerOpenForRoot(activeRoot, true);
+      await handleSendMessage(script, "command", "");
+      console.info("[agent/lifecycle] command dispatched", {
+        agent: agentName,
+        action,
+        commandCount: commands.length,
+      });
+    },
+    [
+      handleSendMessage,
+      setBoundSessionForRoot,
+      setDrawerOpenForRoot,
+      setDrawerSessionForRoot,
     ],
   );
 
@@ -3284,9 +4415,113 @@ export function App({ onGoHome }: AppProps) {
       const sent = await sessionService.cancelMessage(activeRoot, sessionKey);
       if (!sent) {
         delete cancelRequestedBySessionRef.current[cacheKey];
+        return;
+      }
+      clearLocalPendingForSession(activeRoot, sessionKey);
+    },
+    [clearLocalPendingForSession, rootSessionKey],
+  );
+
+  const markSessionPending = useCallback(
+    (rootID: string, sessionKey: string) => {
+      if (!rootID || !sessionKey) return;
+      const now = new Date().toISOString();
+      const cacheKey = rootSessionKey(rootID, sessionKey);
+      const cached = sessionCacheRef.current[cacheKey];
+      if (cached) {
+        sessionCacheRef.current[cacheKey] = {
+          ...(cached as any),
+          pending: true,
+          updated_at: now,
+        } as Session;
+        bumpCacheVersion();
+      }
+      setSelectedPendingByKey(sessionKey, true);
+      const drawer = drawerSessionByRootRef.current[rootID];
+      if (drawer && (drawer.key || (drawer as any).session_key) === sessionKey) {
+        setDrawerSessionForRoot(rootID, {
+          ...(drawer as any),
+          pending: true,
+          updated_at: now,
+        } as Session);
       }
     },
-    [rootSessionKey],
+    [bumpCacheVersion, rootSessionKey, setDrawerSessionForRoot, setSelectedPendingByKey],
+  );
+
+  const handleRemoveQueuedMessage = useCallback(
+    async (queueId: string) => {
+      const activeRoot = currentRootIdRef.current;
+      const selected = selectedSessionRef.current;
+      const selectedRoot =
+        (selected?.root_id as string | undefined) || activeRoot || "";
+      const selectedKey = selected?.key || selected?.session_key || "";
+      const sessionKey =
+        interactionModeRef.current !== "drawer" &&
+        selectedRoot === activeRoot &&
+        selectedKey &&
+        !selectedKey.startsWith("pending-")
+          ? selectedKey
+          : boundSessionByRootRef.current[activeRoot || ""] || "";
+      if (!activeRoot || !sessionKey || !queueId) return;
+      await sessionService.removeQueuedMessage(activeRoot, sessionKey, queueId);
+    },
+    [],
+  );
+
+  const handleUpdateQueuedMessage = useCallback(
+    async (queueId: string, content: string) => {
+      const activeRoot = currentRootIdRef.current;
+      const selected = selectedSessionRef.current;
+      const selectedRoot =
+        (selected?.root_id as string | undefined) || activeRoot || "";
+      const selectedKey = selected?.key || selected?.session_key || "";
+      const sessionKey =
+        interactionModeRef.current !== "drawer" &&
+        selectedRoot === activeRoot &&
+        selectedKey &&
+        !selectedKey.startsWith("pending-")
+          ? selectedKey
+          : boundSessionByRootRef.current[activeRoot || ""] || "";
+      if (!activeRoot || !sessionKey || !queueId || !content.trim()) return;
+      await sessionService.updateQueuedMessage(activeRoot, sessionKey, queueId, content);
+    },
+    [],
+  );
+
+  const handleSendQueuedMessageNow = useCallback(
+    async (queueId: string) => {
+      const activeRoot = currentRootIdRef.current;
+      const selected = selectedSessionRef.current;
+      const selectedRoot =
+        (selected?.root_id as string | undefined) || activeRoot || "";
+      const selectedKey = selected?.key || selected?.session_key || "";
+      const sessionKey =
+        interactionModeRef.current !== "drawer" &&
+        selectedRoot === activeRoot &&
+        selectedKey &&
+        !selectedKey.startsWith("pending-")
+          ? selectedKey
+          : boundSessionByRootRef.current[activeRoot || ""] || "";
+      if (!activeRoot || !sessionKey || !queueId) return;
+      const cacheKey = rootSessionKey(activeRoot, sessionKey);
+      const previousQueue = queuedMessagesBySessionRef.current[cacheKey] || [];
+      const nextQueue = previousQueue.filter((item) => item.id !== queueId);
+      queuedMessagesBySessionRef.current[cacheKey] = nextQueue;
+      if (!optimisticDequeuedIdsRef.current[cacheKey]) {
+        optimisticDequeuedIdsRef.current[cacheKey] = new Set();
+      }
+      optimisticDequeuedIdsRef.current[cacheKey].add(queueId);
+      setQueueVersion((v) => v + 1);
+      markSessionPending(activeRoot, sessionKey);
+      const sent = await sessionService.sendQueuedMessageNow(activeRoot, sessionKey, queueId);
+      if (!sent) {
+        optimisticDequeuedIdsRef.current[cacheKey]?.delete(queueId);
+        queuedMessagesBySessionRef.current[cacheKey] = previousQueue;
+        setQueueVersion((v) => v + 1);
+      }
+    },
+    [markSessionPending, rootSessionKey],
   );
 
   const handleNewSession = useCallback(() => {
@@ -3526,14 +4761,12 @@ export function App({ onGoHome }: AppProps) {
               continue;
             }
             try {
-              const res = await fetch(
+              const payload = await apiProtectedJSON<any>(
                 appURL(
                   "/api/tree",
                   new URLSearchParams({ root: String(root), dir }),
                 ),
               );
-              if (!res.ok) continue;
-              const payload = await res.json();
               const parsed = normalizeTreeResponse(payload);
               invalidTreeCacheKeysRef.current.delete(cacheKey);
               setEntriesByPath((prev) => ({
@@ -3645,12 +4878,23 @@ export function App({ onGoHome }: AppProps) {
         const path = params.path,
           rootParam = params.root || currentRootIdRef.current,
           isToggle = !!params.toggle,
-          forceDirectory = !!params.forceDirectory;
+          forceDirectory = !!params.forceDirectory,
+          suppressTreeExpand = !!params.suppressTreeExpand;
         if (!path || !rootParam) return;
         setGitDiff(null);
         const isActuallyRoot = params.isRoot === true;
         const root = isActuallyRoot ? path : rootParam;
         const expandedKey = isActuallyRoot ? path : `${root}:${path}`;
+        const preserveCollapsedRoot =
+          isActuallyRoot &&
+          suppressTreeExpand &&
+          !expandedRef.current.includes(expandedKey);
+        const restoreSuppressedRootExpansion = () => {
+          if (!preserveCollapsedRoot) {
+            return;
+          }
+          setExpanded((prev) => prev.filter((k) => k !== expandedKey));
+        };
         const preserveQuery = !!params.preservePluginQuery;
         const nextPluginQuery = preserveQuery
           ? parsePluginQuery(window.location.search)
@@ -3701,32 +4945,9 @@ export function App({ onGoHome }: AppProps) {
             return;
           }
           try {
-            const res = await fetch(
+            const payload = await apiProtectedJSON<any>(
               appURL("/api/tree", new URLSearchParams({ root, dir: apiDir })),
             );
-            if (!res.ok) {
-              const payload = await res.json().catch(() => ({}));
-              if (
-                await handleRelayNavigationFailure(
-                  res.status,
-                  typeof payload?.error === "string" ? payload.error : "",
-                )
-              ) {
-                return;
-              }
-              const message = formatDirectoryLoadError(
-                typeof payload?.error === "string" ? payload.error : "",
-              );
-              setSelectedDir(targetPath);
-              setSelectedDirKey(
-                buildDirectorySelectionKey(root, targetPath, targetIsRoot),
-              );
-              setMainEntries([]);
-              setMainDirectoryError(message);
-              reportError("file.read_failed", message);
-              return;
-            }
-            const payload = await res.json();
             const parsed = normalizeTreeResponse(payload);
             invalidTreeCacheKeysRef.current.delete(cacheKey);
             setMainDirectoryError("");
@@ -3745,7 +4966,28 @@ export function App({ onGoHome }: AppProps) {
             fileCursorRef.current = 0;
             setDrawerOpenForRoot(root, false);
             if (isMobile) setIsLeftOpen(false);
-          } catch {
+          } catch (error) {
+            if (error instanceof ProtectedAPIError) {
+              if (
+                await handleRelayNavigationFailure(
+                  error.status,
+                  typeof error.payload?.error === "string" ? error.payload.error : "",
+                )
+              ) {
+                return;
+              }
+              const message = formatDirectoryLoadError(
+                typeof error.payload?.error === "string" ? error.payload.error : "",
+              );
+              setSelectedDir(targetPath);
+              setSelectedDirKey(
+                buildDirectorySelectionKey(root, targetPath, targetIsRoot),
+              );
+              setMainEntries([]);
+              setMainDirectoryError(message);
+              reportError("file.read_failed", message);
+              return;
+            }
             const message = "目录加载失败，请稍后重试。";
             setSelectedDir(targetPath);
             setSelectedDirKey(
@@ -3773,7 +5015,9 @@ export function App({ onGoHome }: AppProps) {
         }
         if (isActuallyRoot) {
           setCurrentRootId(path);
-          setExpanded((prev) => Array.from(new Set([...prev, path])));
+          if (!suppressTreeExpand) {
+            setExpanded((prev) => Array.from(new Set([...prev, path])));
+          }
           if (!forceDirectory) {
             const restored = await tryShowBoundSessionForRoot(path, {
               pluginQuery: nextPluginQuery,
@@ -3782,6 +5026,7 @@ export function App({ onGoHome }: AppProps) {
             if (restored) {
               void loadSessionsForRoot(path, { replace: true, force: true });
               await refreshTreeDir(path, ".", false);
+              restoreSuppressedRootExpansion();
               return;
             }
           }
@@ -3789,6 +5034,7 @@ export function App({ onGoHome }: AppProps) {
           setExpanded((prev) => Array.from(new Set([...prev, expandedKey])));
         }
         await loadDirectoryView(path, isActuallyRoot);
+        restoreSuppressedRootExpansion();
       },
     }),
     [
@@ -3809,22 +5055,45 @@ export function App({ onGoHome }: AppProps) {
     actionHandlersRef.current = actionHandlers;
   }, [actionHandlers]);
 
-  const refreshManagedRoots = useCallback(async () => {
-    const response = await fetch(appPath("/api/dirs"));
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      if (
-        await handleRelayNavigationFailure(
-          response.status,
-          typeof payload?.error === "string" ? payload.error : "",
-        )
-      ) {
-        return;
+  const loadManagedRootPayloads = useCallback(async () => {
+    if (bootstrapService.snapshot().phase !== "ready") {
+      return null;
+    }
+    if (managedRootsRequestRef.current) {
+      return managedRootsRequestRef.current;
+    }
+    const request = (async () => {
+      try {
+        const dirs = await apiProtectedJSON<ManagedRootPayload[]>(appPath("/api/dirs"));
+        return Array.isArray(dirs) ? dirs : [];
+      } catch (error) {
+        if (!(error instanceof ProtectedAPIError)) {
+          return null;
+        }
+        if (
+          await handleRelayNavigationFailure(
+            error.status,
+            typeof error.payload?.error === "string" ? error.payload.error : "",
+          )
+        ) {
+          return null;
+        }
+        return null;
       }
+    })().finally(() => {
+      managedRootsRequestRef.current = null;
+    });
+    managedRootsRequestRef.current = request;
+    return request;
+  }, [bootstrapState.phase, handleRelayNavigationFailure]);
+
+  const refreshManagedRoots = useCallback(async () => {
+    const dirs = await loadManagedRootPayloads();
+    if (!dirs) {
       return;
     }
-    const dirs = (await response.json()) as ManagedRootPayload[];
     const nextDirs = Array.isArray(dirs) ? dirs : [];
+    syncRelayNodesToNative(nextDirs);
     const nextRootIds = nextDirs.map((dir) => dir.id).filter(Boolean);
     managedRootByIdRef.current = Object.fromEntries(
       nextDirs.filter((dir) => !!dir.id).map((dir) => [dir.id, dir]),
@@ -3877,21 +5146,166 @@ export function App({ onGoHome }: AppProps) {
       preservePluginQuery: true,
       isRoot: true,
     });
-  }, [handleRelayNavigationFailure, replaceURLState]);
+  }, [loadManagedRootPayloads, replaceURLState]);
 
-  const refreshRelayStatus = useCallback(async () => {
-    try {
-      const response = await fetch(appPath("/api/relay/status"));
-      if (!response.ok) {
-        return;
+  const applyManagedRootRename = useCallback(
+    (oldRootID: string, rootPayload: ManagedRootPayload | null | undefined) => {
+      const oldID = String(oldRootID || "").trim();
+      const nextID = String(rootPayload?.id || "").trim();
+      if (!oldID || !nextID) {
+        return false;
       }
-      const payload = (await response.json()) as RelayStatusPayload;
-      setRelayStatus(payload);
-      return payload;
-    } catch {
-      return;
-    }
+
+      const previousRoot =
+        managedRootByIdRef.current[oldID] ||
+        managedRootByIdRef.current[nextID] ||
+        ({} as ManagedRootPayload);
+      const nextRoot = {
+        ...previousRoot,
+        ...rootPayload,
+        id: nextID,
+      } as ManagedRootPayload;
+
+      const nextRootById = { ...managedRootByIdRef.current };
+      delete nextRootById[oldID];
+      nextRootById[nextID] = nextRoot;
+      managedRootByIdRef.current = nextRootById;
+
+      const moveRecordKey = <T,>(record: Record<string, T>) => {
+        if (oldID === nextID || !(oldID in record)) {
+          return;
+        }
+        record[nextID] = record[oldID];
+        delete record[oldID];
+      };
+      moveRecordKey(boundSessionByRootRef.current);
+      moveRecordKey(suppressedAutoBindSessionByRootRef.current);
+      moveRecordKey(drawerSessionByRootRef.current);
+      moveRecordKey(selectedSessionByRootRef.current);
+      moveRecordKey(mainViewPreferenceByRootRef.current);
+      moveRecordKey(drawerOpenByRootRef.current);
+      moveRecordKey(pluginsLoadedByRootRef.current);
+      moveRecordKey(pluginsLoadingByRootRef.current);
+
+      const moveStateRecord = <T,>(record: Record<string, T>) => {
+        if (oldID === nextID || !(oldID in record)) {
+          return record;
+        }
+        const next = { ...record, [nextID]: record[oldID] };
+        delete next[oldID];
+        return next;
+      };
+      setShowGitHistoryByRoot((prev) => moveStateRecord(prev));
+      setGitStatusExpandedByRoot((prev) => moveStateRecord(prev));
+      setGitHistoryExpandedByRoot((prev) => moveStateRecord(prev));
+
+      const moveCacheRecord = <T,>(record: Record<string, T>) => {
+        if (oldID === nextID) {
+          return;
+        }
+        const oldPrefix = `${oldID}::`;
+        for (const key of Object.keys(record)) {
+          if (!key.startsWith(oldPrefix)) {
+            continue;
+          }
+          const nextKey = `${nextID}::${key.slice(oldPrefix.length)}`;
+          record[nextKey] = record[key];
+          delete record[key];
+        }
+      };
+      moveCacheRecord(sessionCacheRef.current);
+      moveCacheRecord(loadedSessionRef.current);
+      if (oldID !== nextID) {
+        staleSessionKeysRef.current = new Set(
+          Array.from(staleSessionKeysRef.current).map((key) =>
+            key.startsWith(`${oldID}::`)
+              ? `${nextID}::${key.slice(`${oldID}::`.length)}`
+              : key,
+          ),
+        );
+      }
+
+      const moveTreeRecord = <T,>(record: Record<string, T>) => {
+        if (oldID === nextID) {
+          return record;
+        }
+        const next = { ...record };
+        const oldPrefix = `${oldID}:`;
+        for (const key of Object.keys(record)) {
+          if (!key.startsWith(oldPrefix)) {
+            continue;
+          }
+          const nextKey = `${nextID}:${key.slice(oldPrefix.length)}`;
+          next[nextKey] = record[key];
+          delete next[key];
+        }
+        return next;
+      };
+      entriesByPathRef.current = moveTreeRecord(entriesByPathRef.current);
+      setEntriesByPath((prev) => moveTreeRecord(prev));
+      if (oldID !== nextID) {
+        invalidTreeCacheKeysRef.current = new Set(
+          Array.from(invalidTreeCacheKeysRef.current).map((key) =>
+            key.startsWith(`${oldID}:`)
+              ? `${nextID}:${key.slice(`${oldID}:`.length)}`
+              : key,
+          ),
+        );
+      }
+
+      setManagedRootIds((prev) => {
+        const source = prev.length ? prev : Array.from(managedRootIdsRef.current);
+        let replaced = false;
+        const nextIds = source.map((id) => {
+          if (id !== oldID) {
+            return id;
+          }
+          replaced = true;
+          return nextID;
+        });
+        if (!replaced && !nextIds.includes(nextID)) {
+          nextIds.push(nextID);
+        }
+        const deduped = Array.from(new Set(nextIds.filter(Boolean)));
+        managedRootIdsRef.current = new Set(deduped);
+        setRootEntries(
+          mapManagedRootsToEntries(
+            deduped
+              .map((id) => managedRootByIdRef.current[id])
+              .filter((dir): dir is ManagedRootPayload => !!dir),
+          ),
+        );
+        return deduped;
+      });
+      return true;
+    },
+    [],
+  );
+
+  const startRelayBinding = useCallback(async () => {
+    return bootstrapService.startRelayBinding();
   }, []);
+
+  const normalizeComparableRootPath = useCallback((value: string): string => {
+    let normalized = String(value || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+    if (/^[a-z]:/i.test(normalized)) {
+      normalized = normalized.toLowerCase();
+    }
+    return normalized;
+  }, []);
+
+  const findManagedRootByPath = useCallback((path: string): ManagedRootPayload | null => {
+    const target = normalizeComparableRootPath(path);
+    if (!target) {
+      return null;
+    }
+    for (const root of Object.values(managedRootByIdRef.current)) {
+      if (normalizeComparableRootPath(root.root_path || "") === target) {
+        return root;
+      }
+    }
+    return null;
+  }, [normalizeComparableRootPath]);
 
   const handleCreateRootStart = useCallback((parentPath?: string | null) => {
     if (creatingRootBusy) {
@@ -3907,8 +5321,112 @@ export function App({ onGoHome }: AppProps) {
     setCreatingRootParentPath(
       parentPath && String(parentPath).trim() ? String(parentPath).trim() : null,
     );
+    setCreatingRootKind("root");
     setCreatingRootName(nextName);
   }, [creatingRootBusy]);
+
+  const loadWorktreeBranches = useCallback(async (rootID: string) => {
+    setWorktreeBranchesLoading(true);
+    setWorktreeBranchError("");
+    try {
+      const payload = await fetchGitBranches(rootID);
+      setWorktreeBranches(payload);
+    } catch (error) {
+      setWorktreeBranches({ branches: [] });
+      setWorktreeBranchError(error instanceof Error ? error.message : "加载分支失败");
+    } finally {
+      setWorktreeBranchesLoading(false);
+    }
+  }, []);
+
+  const loadWorktreeList = useCallback(async (rootID: string) => {
+    setWorktreeSwitchLoading(true);
+    setWorktreeSwitchError("");
+    try {
+      const payload = await fetchGitWorktrees(rootID);
+      setWorktreeSwitchItems(payload.items || []);
+    } catch (error) {
+      setWorktreeSwitchItems([]);
+      setWorktreeSwitchError(error instanceof Error ? error.message : "加载 worktree 失败");
+    } finally {
+      setWorktreeSwitchLoading(false);
+    }
+  }, []);
+
+  const handleCreateWorktreeStart = useCallback((parentPath: string) => {
+    if (creatingRootBusy) {
+      return;
+    }
+    const rootID = currentRootIdRef.current;
+    if (!rootID) {
+      return;
+    }
+    const existing = new Set(managedRootIdsRef.current);
+    const baseName = `${rootID}-worktree`;
+    let nextName = baseName;
+    let suffix = 2;
+    while (existing.has(nextName)) {
+      nextName = `${baseName}-${suffix}`;
+      suffix += 1;
+    }
+    setCreatingRootKind("worktree");
+    setCreatingRootParentPath(parentPath);
+    setCreatingRootName(nextName);
+    setWorktreeBranchMode("new");
+    setWorktreeBranch("");
+    setWorktreeBranches({ branches: [] });
+    setWorktreeBranchError("");
+    void loadWorktreeBranches(rootID);
+  }, [creatingRootBusy, loadWorktreeBranches]);
+
+  const handleSwitchWorktreeStart = useCallback(() => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID) {
+      return;
+    }
+    setProjectAddMode(null);
+    setCreatingRootName(null);
+    setWorktreeSwitchOpen(true);
+    setWorktreeSwitchItems([]);
+    setWorktreeSwitchError("");
+    void loadWorktreeList(rootID);
+  }, [loadWorktreeList]);
+
+  const handleSwitchWorktree = useCallback(async (item: GitWorktreeItem) => {
+    const targetPath = String(item.path || "").trim();
+    if (!targetPath || switchingWorktreePath) {
+      return;
+    }
+    setSwitchingWorktreePath(targetPath);
+    try {
+      let targetRoot = findManagedRootByPath(targetPath);
+      if (!targetRoot?.id) {
+        const created = await apiProtectedJSON<ManagedRootPayload>(appPath("/api/dirs"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: targetPath, create: false }),
+        });
+        targetRoot = created;
+        await refreshManagedRoots();
+      }
+      if (targetRoot?.id) {
+        setWorktreeSwitchOpen(false);
+        await actionHandlersRef.current.open_dir({
+          path: targetRoot.id,
+          root: targetRoot.id,
+          isRoot: true,
+          forceDirectory: true,
+        });
+      }
+    } catch (error) {
+      reportError(
+        "git.worktree_switch_failed",
+        managedDirAddErrorMessage(error, "切换 worktree 失败"),
+      );
+    } finally {
+      setSwitchingWorktreePath("");
+    }
+  }, [findManagedRootByPath, refreshManagedRoots, switchingWorktreePath]);
 
   const handleOpenProjectAdd = useCallback(() => {
     if (creatingRootBusy) {
@@ -3936,14 +5454,6 @@ export function App({ onGoHome }: AppProps) {
 
   const loadLocalDirs = useCallback(async (path: string) => {
     const trimmed = String(path || "").trim();
-    if (!trimmed) {
-      setLocalDirState((prev) => ({
-        ...prev,
-        loading: false,
-        error: "目录路径为空",
-      }));
-      return;
-    }
     setLocalDirState((prev) => ({
       ...prev,
       loading: true,
@@ -3952,16 +5462,22 @@ export function App({ onGoHome }: AppProps) {
       selectedPath: "",
     }));
     try {
-      const response = await fetch(
-        appURL("/api/local_dirs", new URLSearchParams({ path: trimmed })),
+      const params = trimmed ? new URLSearchParams({ path: trimmed }) : undefined;
+      const payload = await apiProtectedJSON<LocalDirsPayload>(
+        appURL("/api/local_dirs", params),
       );
-      const payload = (await response.json().catch(() => ({}))) as LocalDirsPayload;
-      if (!response.ok) {
-        throw new Error(String((payload as any)?.message || (payload as any)?.error || "加载目录失败"));
-      }
       setLocalDirState({
         path: String(payload.path || trimmed),
         parent: String(payload.parent || ""),
+        volumes: Array.isArray(payload.volumes)
+          ? payload.volumes.map((item) => ({
+              name: String(item.name || ""),
+              path: String(item.path || ""),
+              is_dir: item.is_dir !== false,
+              is_added_root: item.is_added_root === true,
+              root_id: String(item.root_id || ""),
+            }))
+          : [],
         items: Array.isArray(payload.items)
           ? payload.items.map((item) => ({
               name: String(item.name || ""),
@@ -3993,6 +5509,10 @@ export function App({ onGoHome }: AppProps) {
     const initialPath = rootPath ? inferParentPath(rootPath) : "";
     setProjectAddMode(nextMode);
     if (!initialPath || initialPath === ".") {
+      if (!rootPath) {
+        void loadLocalDirs("");
+        return;
+      }
       setLocalDirState((prev) => ({
         ...prev,
         path: rootPath,
@@ -4031,6 +5551,11 @@ export function App({ onGoHome }: AppProps) {
     }));
   }, [openDirectoryPicker]);
 
+  const handleOpenWorktreeLocation = useCallback(() => {
+    setWorktreeSwitchOpen(false);
+    void openDirectoryPicker("worktree_location");
+  }, [openDirectoryPicker]);
+
   const handleSelectBlankProject = useCallback(() => {
     setProjectAddMode(null);
     handleCreateRootStart();
@@ -4042,7 +5567,40 @@ export function App({ onGoHome }: AppProps) {
     }
     setCreatingRootName(null);
     setCreatingRootParentPath(null);
+    setCreatingRootKind("root");
+    setWorktreeBranchMode("new");
+    setWorktreeBranch("");
+    setWorktreeBranchError("");
+    setWorktreeSwitchOpen(false);
   }, [creatingRootBusy]);
+
+  useEffect(() => {
+    if (creatingRootKind !== "worktree" || creatingRootName === null) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      if (worktreeCreatePopoverRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      handleCreateRootCancel();
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [creatingRootKind, creatingRootName, handleCreateRootCancel]);
+
+  useEffect(() => {
+    if (!worktreeSwitchOpen) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      if (worktreeSwitchPopoverRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setWorktreeSwitchOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [worktreeSwitchOpen]);
 
   const handleCreateRootSubmit = useCallback(async () => {
     const name = String(creatingRootName || "").trim();
@@ -4056,21 +5614,43 @@ export function App({ onGoHome }: AppProps) {
     }
     setCreatingRootBusy(true);
     try {
+      if (creatingRootKind === "worktree") {
+        const rootID = currentRootIdRef.current;
+        const parentPath = String(creatingRootParentPath || "").trim();
+        if (!rootID || !parentPath) {
+          throw new Error("缺少 worktree 创建位置");
+        }
+        const created = await createGitWorktree({
+          rootId: rootID,
+          parentPath,
+          name,
+          branchMode: worktreeBranchMode,
+          branch: worktreeBranchMode === "existing" ? worktreeBranch : "",
+        }) as ManagedRootPayload;
+        setCreatingRootName(null);
+        setCreatingRootParentPath(null);
+        setCreatingRootKind("root");
+        setWorktreeBranchMode("new");
+        setWorktreeBranch("");
+        await refreshManagedRoots();
+        if (created?.id) {
+          await actionHandlersRef.current.open_dir({
+            path: created.id,
+            root: created.id,
+            isRoot: true,
+          });
+        }
+        return;
+      }
       const targetPath =
         creatingRootParentPath && creatingRootParentPath.trim()
           ? `${creatingRootParentPath.replace(/[\\/]+$/, "")}/${name}`
           : name;
-      const response = await fetch(appPath("/api/dirs"), {
+      const payload = await apiProtectedJSON<any>(appPath("/api/dirs"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: targetPath, create: true }),
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(
-          String(payload?.message || payload?.error || "新建项目失败"),
-        );
-      }
       const created = payload as ManagedRootPayload;
       setCreatingRootName(null);
       setCreatingRootParentPath(null);
@@ -4085,12 +5665,60 @@ export function App({ onGoHome }: AppProps) {
     } catch (err) {
       reportError(
         "root.create_failed",
-        String((err as Error)?.message || "新建项目失败"),
+        managedDirAddErrorMessage(err, "新建项目失败"),
       );
     } finally {
       setCreatingRootBusy(false);
     }
-  }, [creatingRootBusy, creatingRootName, creatingRootParentPath, refreshManagedRoots]);
+  }, [
+    creatingRootBusy,
+    creatingRootKind,
+    creatingRootName,
+    creatingRootParentPath,
+    refreshManagedRoots,
+    worktreeBranch,
+    worktreeBranchMode,
+  ]);
+
+  const handleRenameCurrentRoot = useCallback(
+    async (nextName: string) => {
+      const rootID = currentRootIdRef.current;
+      const trimmedName = String(nextName || "").trim();
+      if (!rootID || !trimmedName) {
+        return false;
+      }
+      if (trimmedName === rootID) {
+        return true;
+      }
+      try {
+        const renamed = await apiProtectedJSON<ManagedRootPayload>(
+          appPath(`/api/dirs/${encodeURIComponent(rootID)}/rename`),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: trimmedName }),
+          },
+        );
+        applyManagedRootRename(rootID, renamed);
+        if (renamed?.id) {
+          await actionHandlersRef.current.open_dir({
+            path: renamed.id,
+            root: renamed.id,
+            isRoot: true,
+            forceDirectory: true,
+          });
+        }
+        return true;
+      } catch (err) {
+        reportError(
+          "root.rename_failed",
+          managedDirAddErrorMessage(err, "项目重命名失败"),
+        );
+        return false;
+      }
+    },
+    [applyManagedRootRename],
+  );
 
   const handleLocalDirSelect = useCallback((path: string) => {
     setLocalDirState((prev) => {
@@ -4130,22 +5758,21 @@ export function App({ onGoHome }: AppProps) {
       }));
       return;
     }
+    if (projectAddMode === "worktree_location") {
+      setProjectAddMode(null);
+      handleCreateWorktreeStart(localDirState.path);
+      return;
+    }
     if (!path) {
       return;
     }
     setLocalDirState((prev) => ({ ...prev, adding: true, error: "" }));
     try {
-      const response = await fetch(appPath("/api/dirs"), {
+      const payload = await apiProtectedJSON<any>(appPath("/api/dirs"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path, create: false }),
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(
-          String(payload?.message || payload?.error || "添加目录失败"),
-        );
-      }
       setLocalDirState((prev) => ({
         ...prev,
         adding: false,
@@ -4166,10 +5793,10 @@ export function App({ onGoHome }: AppProps) {
       setLocalDirState((prev) => ({
         ...prev,
         adding: false,
-        error: error instanceof Error ? error.message : "添加目录失败",
+        error: managedDirAddErrorMessage(error, "添加目录失败"),
       }));
     }
-  }, [handleCreateRootStart, loadLocalDirs, localDirState.adding, localDirState.path, localDirState.selectedPath, projectAddMode, refreshManagedRoots]);
+  }, [handleCreateRootStart, handleCreateWorktreeStart, loadLocalDirs, localDirState.adding, localDirState.path, localDirState.selectedPath, projectAddMode, refreshManagedRoots]);
 
   const handleGitHubImportStart = useCallback(async () => {
     const url = String(githubImportState.url || "").trim();
@@ -4192,17 +5819,11 @@ export function App({ onGoHome }: AppProps) {
       message: "",
     }));
     try {
-      const response = await fetch(appPath("/api/imports/github"), {
+      const payload = await apiProtectedJSON<any>(appPath("/api/imports/github"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, parent_path: parentPath }),
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(
-          String(payload?.message || payload?.error || "GitHub 导入失败"),
-        );
-      }
       setGitHubImportState((prev) => ({
         ...prev,
         taskId: String(payload?.task_id || ""),
@@ -4248,7 +5869,8 @@ export function App({ onGoHome }: AppProps) {
         localDisabledAddedRoot={projectAddMode === "local"}
         localBrowseOnly={
           projectAddMode === "blank_location" ||
-          projectAddMode === "github_location"
+          projectAddMode === "github_location" ||
+          projectAddMode === "worktree_location"
         }
         githubState={githubImportState}
         onGitHubUrlChange={(value) =>
@@ -4281,23 +5903,36 @@ export function App({ onGoHome }: AppProps) {
       return;
     }
     try {
-      const response = await fetch(
+      await apiProtectedJSON<any>(
         appURL("/api/dirs", new URLSearchParams({ path: rootPath })),
         {
           method: "DELETE",
         },
       );
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(
-          String(payload?.message || payload?.error || "移除项目失败"),
-        );
-      }
       await refreshManagedRoots();
     } catch (err) {
       reportError(
         "root.delete_failed",
         String((err as Error)?.message || "移除项目失败"),
+      );
+    }
+  }, [refreshManagedRoots]);
+
+  const handleRemoveCurrentWorktree = useCallback(async () => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID) {
+      return;
+    }
+    if (!window.confirm(`确认移除 worktree“${rootID}”？\n这会删除该 worktree 目录，并从 MindFS 项目列表中移除。`)) {
+      return;
+    }
+    try {
+      await removeGitWorktree(rootID);
+      await refreshManagedRoots();
+    } catch (err) {
+      reportError(
+        "git.worktree_remove_failed",
+        String((err as Error)?.message || "移除 worktree 失败"),
       );
     }
   }, [refreshManagedRoots]);
@@ -4465,6 +6100,28 @@ export function App({ onGoHome }: AppProps) {
     [file, sessions, handleSelectSession],
   );
 
+  useEffect(() => {
+    function openReplySession(detail: any) {
+      const rootId = typeof detail?.rootId === "string" ? detail.rootId.trim() : "";
+      const sessionKey = typeof detail?.sessionKey === "string" ? detail.sessionKey.trim() : "";
+      if (!rootId || !sessionKey) {
+        return;
+      }
+      handleSessionChipClick(sessionKey, rootId);
+    }
+
+    function handleOpenReplySession(event: Event) {
+      openReplySession((event as CustomEvent).detail);
+    }
+
+    window.addEventListener("mindfs:open-reply-session", handleOpenReplySession);
+    openReplySession((window as any).__mindfsPendingReplySession);
+    delete (window as any).__mindfsPendingReplySession;
+    return () => {
+      window.removeEventListener("mindfs:open-reply-session", handleOpenReplySession);
+    };
+  }, [handleSessionChipClick]);
+
   const handleFileViewerPathClick = useCallback(
     (path: string) => {
       if (!file) return;
@@ -4474,6 +6131,7 @@ export function App({ onGoHome }: AppProps) {
         path: path === "." ? root : path,
         root,
         isRoot: path === ".",
+        suppressTreeExpand: path === ".",
       });
     },
     [file, actionHandlers],
@@ -4498,6 +6156,7 @@ export function App({ onGoHome }: AppProps) {
         path: path === "." ? root : path,
         root,
         isRoot: path === ".",
+        suppressTreeExpand: path === ".",
       });
     },
     [actionHandlers],
@@ -4511,6 +6170,7 @@ export function App({ onGoHome }: AppProps) {
         path: path === "." ? root : path,
         root,
         isRoot: path === ".",
+        suppressTreeExpand: path === ".",
       });
     },
     [actionHandlers],
@@ -4566,13 +6226,13 @@ export function App({ onGoHome }: AppProps) {
   useEffect(() => {
     if (!currentRootId) return;
     sessionService.connect(currentRootId);
-    setStatus("Connected");
   }, [currentRootId]);
 
   useEffect(() => {
     if (sessionListMode !== "import") return;
     const rootID = currentRootIdRef.current || "";
     if (!rootID || !externalImportAgent) return;
+    setSelectedExternalImportKeys(new Set());
     void loadExternalSessions(rootID, externalImportAgent, { replace: true });
   }, [
     sessionListMode,
@@ -4584,7 +6244,7 @@ export function App({ onGoHome }: AppProps) {
   useEffect(
     () => () => {
       sessionService.disconnect();
-      setStatus("Disconnected");
+      setStatus("disconnected");
     },
     [],
   );
@@ -4592,6 +6252,7 @@ export function App({ onGoHome }: AppProps) {
   useEffect(() => {
     if (!currentRootId) {
       setGitStatus(null);
+      setGitHistory(null);
       setGitDiff(null);
       setSessionListMode("local");
       setExternalSessions([]);
@@ -4599,8 +6260,9 @@ export function App({ onGoHome }: AppProps) {
       return;
     }
     void refreshGitStatus(currentRootId);
+    void refreshGitHistory(currentRootId);
     setGitDiff(null);
-  }, [currentRootId, refreshGitStatus]);
+  }, [currentRootId, refreshGitHistory, refreshGitStatus]);
 
   useEffect(() => {
     if (!currentRootId) return;
@@ -4711,12 +6373,36 @@ export function App({ onGoHome }: AppProps) {
         delete cancelRequestedBySessionRef.current[cacheKey];
       }
       delete pendingBySessionRef.current[cacheKey];
+      const clearPendingAck = <T,>(session: T): T => {
+        const exchanges = (session as any)?.exchanges;
+        if (!wasCanceled || !Array.isArray(exchanges)) {
+          return session;
+        }
+        return {
+          ...(session as any),
+          exchanges: exchanges.map((exchange: any) =>
+            exchange?.pending_ack === true
+              ? { ...exchange, pending_ack: false }
+              : exchange,
+          ),
+        } as T;
+      };
+      const queued = queuedMessagesBySessionRef.current[cacheKey] || [];
+      const queueFrozen = !!queueFrozenBySessionRef.current[cacheKey];
+      const hiddenQueued = optimisticDequeuedIdsRef.current[cacheKey];
+      const hasQueuedContinuation =
+        (queued.length > 0 && !queueFrozen) ||
+        !!(hiddenQueued && hiddenQueued.size > 0);
+      if (hasQueuedContinuation && !wasCanceled) {
+        markSessionPending(rootID, sessionKey);
+        return;
+      }
       const cached = sessionCacheRef.current[cacheKey];
       if (cached && cached.key === sessionKey) {
-        sessionCacheRef.current[cacheKey] = {
+        sessionCacheRef.current[cacheKey] = clearPendingAck({
           ...(cached as any),
           pending: false,
-        } as Session;
+        } as Session);
       }
       setSelectedPendingByKey(sessionKey, false);
       setSelectedSession((prev) => {
@@ -4731,20 +6417,20 @@ export function App({ onGoHome }: AppProps) {
         ) {
           return prev;
         }
-        return {
+        return clearPendingAck({
           ...(prev as any),
           pending: false,
-        } as SessionItem;
+        } as SessionItem);
       });
       const drawer = drawerSessionByRootRef.current[rootID];
       if (drawer && drawer.key === sessionKey) {
         const latest = wasCanceled
           ? sessionCacheRef.current[cacheKey] || drawer
           : drawer;
-        setDrawerSessionForRoot(rootID, {
+        setDrawerSessionForRoot(rootID, clearPendingAck({
           ...(latest as any),
           pending: false,
-        } as Session);
+        } as Session));
       }
       bumpCacheVersion();
     };
@@ -4806,8 +6492,10 @@ export function App({ onGoHome }: AppProps) {
             content: pending.message,
             timestamp: pending.timestamp,
             model: pending.model,
-            mode: pending.agentMode,
-            effort: pending.effort,
+	            mode: pending.agentMode,
+	            effort: pending.effort,
+	            fast_service: pending.fastService || "",
+	            shell: pending.shell || "",
           };
           const cached =
             sessionCacheRef.current[ck] ||
@@ -4816,8 +6504,10 @@ export function App({ onGoHome }: AppProps) {
               type: pending.mode,
               agent: pending.agent,
               model: pending.model,
-              mode: pending.agentMode,
-              effort: pending.effort,
+	              mode: pending.agentMode,
+	              effort: pending.effort,
+	              fast_service: pending.fastService || "",
+	              shell: pending.shell || "",
               name: pendingName,
               created_at: pending.timestamp,
               updated_at: pending.timestamp,
@@ -4852,6 +6542,10 @@ export function App({ onGoHome }: AppProps) {
       }
       const event = payload.event;
       if (!event?.type) return;
+      const markStreamPending = () => {
+        if (event.type === "message_done" || event.type === "error") return;
+        markSessionPending(activeRoot, streamKey);
+      };
       const updateDrawerIfShowingStream = () => {
         const drawerKey = drawerSessionByRootRef.current[activeRoot]?.key || "";
         if (
@@ -4868,13 +6562,22 @@ export function App({ onGoHome }: AppProps) {
           } as Session);
         }
       };
+      markStreamPending();
       switch (event.type) {
         case "message_chunk":
           appendAgentChunkForSession(
             activeRoot,
             streamKey,
             event.data?.content || "",
-            pending?.agent,
+            pending
+              ? {
+                  agent: pending.agent,
+                  model: pending.model,
+	                  mode: pending.agentMode,
+	                  effort: pending.effort,
+	                  fast_service: pending.fastService || "",
+	                }
+              : undefined,
           );
           updateDrawerIfShowingStream();
           break;
@@ -4883,6 +6586,7 @@ export function App({ onGoHome }: AppProps) {
             activeRoot,
             streamKey,
             event.data?.content || "",
+            event.data?.id || "",
           );
           updateDrawerIfShowingStream();
           break;
@@ -4912,14 +6616,28 @@ export function App({ onGoHome }: AppProps) {
           );
           updateDrawerIfShowingStream();
           break;
+        case "plan_update":
+          appendPlanUpdateForSession(
+            activeRoot,
+            streamKey,
+            event.data || {},
+          );
+          updateDrawerIfShowingStream();
+          break;
+        case "compact_notice":
+          appendCompactNoticeForSession(
+            activeRoot,
+            streamKey,
+            event.data || {},
+          );
+          updateDrawerIfShowingStream();
+          break;
         case "message_done":
           attachContextWindowToLatestAssistant(
             activeRoot,
             streamKey,
             event.data?.contextWindow,
           );
-          playCompletionSound();
-          handleSessionStreamDone(activeRoot, streamKey);
           break;
         case "error":
           reportError(
@@ -5060,7 +6778,11 @@ export function App({ onGoHome }: AppProps) {
     const unsubscribeEvents = sessionService.subscribeEvents((event) => {
       const payload = (event.payload || {}) as any;
       switch (event.type) {
+        case "ws.connecting":
+          setStatus("connecting");
+          break;
         case "ws.connected":
+          setStatus("connected");
           void refreshManagedRoots();
           if (currentRootIdRef.current) {
             const newest = sessionsRef.current[0]?.updated_at || "";
@@ -5070,8 +6792,12 @@ export function App({ onGoHome }: AppProps) {
             );
           }
           replayTargetsForAllRoots();
+          break;
+        case "ws.reconnecting":
+          setStatus("reconnecting");
           break;
         case "ws.reconnected":
+          setStatus("connected");
           void refreshManagedRoots();
           if (currentRootIdRef.current) {
             const newest = sessionsRef.current[0]?.updated_at || "";
@@ -5082,16 +6808,86 @@ export function App({ onGoHome }: AppProps) {
           }
           replayTargetsForAllRoots();
           break;
+        case "ws.closed":
+          setStatus(currentRootIdRef.current ? "reconnecting" : "disconnected");
+          void handleRelayWebSocketClosed();
+          break;
         case "root.changed":
+          if (
+            payload?.action === "renamed" &&
+            typeof payload?.old_root_id === "string" &&
+            typeof payload?.root_id === "string"
+          ) {
+            const rootPayload =
+              payload?.root && typeof payload.root === "object"
+                ? ({ ...(payload.root as ManagedRootPayload), id: payload.root_id } as ManagedRootPayload)
+                : null;
+            if (!rootPayload) {
+              break;
+            }
+            applyManagedRootRename(payload.old_root_id, rootPayload);
+            if (currentRootIdRef.current === payload.old_root_id) {
+              void actionHandlersRef.current.open_dir({
+                path: payload.root_id,
+                root: payload.root_id,
+                isRoot: true,
+                forceDirectory: true,
+                preservePluginQuery: true,
+              });
+            }
+            break;
+          }
           void refreshManagedRoots();
           break;
         case "session.imported": {
           const rootID =
             typeof payload?.root_id === "string" ? payload.root_id : "";
+          const agentName =
+            typeof payload?.agent === "string" ? payload.agent : "";
+          const agentSessionID =
+            typeof payload?.agent_session_id === "string"
+              ? payload.agent_session_id.trim()
+              : "";
           if (!rootID) {
             break;
           }
           if (rootID === currentRootIdRef.current) {
+            void loadSessionsForRoot(rootID, { replace: true });
+            if (
+              sessionListModeRef.current === "import" &&
+              agentSessionID &&
+              (!agentName || agentName === externalImportAgentRef.current)
+            ) {
+              setImportingExternalSessionKeys((current) => {
+                if (!current.has(agentSessionID)) {
+                  return current;
+                }
+                const next = new Set(current);
+                next.delete(agentSessionID);
+                return next;
+              });
+              setSelectedExternalImportKeys((current) => {
+                if (!current.has(agentSessionID)) {
+                  return current;
+                }
+                const next = new Set(current);
+                next.delete(agentSessionID);
+                return next;
+              });
+              setConfirmingExternalImport(false);
+              if (externalImportAgentRef.current) {
+                void loadExternalSessions(rootID, externalImportAgentRef.current, {
+                  replace: true,
+                });
+              }
+            }
+          }
+          break;
+        }
+        case "session.created": {
+          const rootID =
+            typeof payload?.root_id === "string" ? payload.root_id : "";
+          if (rootID && rootID === currentRootIdRef.current) {
             void loadSessionsForRoot(rootID, { replace: true });
           }
           break;
@@ -5099,6 +6895,42 @@ export function App({ onGoHome }: AppProps) {
         case "session.stream":
           handleSessionStream(payload);
           break;
+        case "session.queue.updated": {
+          const rootID =
+            typeof payload?.root_id === "string" ? payload.root_id : "";
+          const sessionKey =
+            typeof payload?.session_key === "string" ? payload.session_key : "";
+          if (!rootID || !sessionKey) {
+            break;
+          }
+          const incomingQueue = Array.isArray(payload?.queue)
+            ? (payload.queue.filter(
+                (item: any) =>
+                  item &&
+                  typeof item.id === "string" &&
+                  typeof item.content === "string",
+              ) as SessionQueueItem[])
+            : [];
+          const cacheKey = rootSessionKey(rootID, sessionKey);
+          const hidden = optimisticDequeuedIdsRef.current[cacheKey];
+          const queue = hidden && hidden.size > 0
+            ? incomingQueue.filter((item) => !hidden.has(item.id))
+            : incomingQueue;
+          queueFrozenBySessionRef.current[cacheKey] = payload?.queue_frozen === true;
+          if (hidden) {
+            for (const queueId of Array.from(hidden)) {
+              if (!incomingQueue.some((item) => item.id === queueId)) {
+                hidden.delete(queueId);
+              }
+            }
+            if (hidden.size === 0) {
+              delete optimisticDequeuedIdsRef.current[cacheKey];
+            }
+          }
+          queuedMessagesBySessionRef.current[cacheKey] = queue;
+          setQueueVersion((v) => v + 1);
+          break;
+        }
         case "session.accepted": {
           const requestId =
             typeof payload?.request_id === "string" ? payload.request_id : "";
@@ -5128,7 +6960,7 @@ export function App({ onGoHome }: AppProps) {
             );
           }
           const markAccepted = (
-            sess: Session | null | undefined,
+            sess: Session | SessionItem | null | undefined,
           ): Session | null => {
             if (!sess) return null;
             const exchanges = Array.isArray((sess as any).exchanges)
@@ -5203,7 +7035,6 @@ export function App({ onGoHome }: AppProps) {
         case "session.done": {
           const sessionKey =
             typeof payload?.session_key === "string" ? payload.session_key : "";
-          console.info("[session/ws] done", { rootId: typeof payload?.root_id === "string" ? payload.root_id : null, sessionKey: sessionKey || null });
           const rootID =
             typeof payload?.root_id === "string" && payload.root_id
               ? payload.root_id
@@ -5211,6 +7042,7 @@ export function App({ onGoHome }: AppProps) {
                 currentRootIdRef.current ||
                 "";
           if (rootID && sessionKey) {
+            playCompletionSound();
             handleSessionStreamDone(rootID, sessionKey);
             const newest = sessionsRef.current[0]?.updated_at || "";
             void loadSessionsForRoot(
@@ -5246,6 +7078,13 @@ export function App({ onGoHome }: AppProps) {
                 model: sessionMeta?.model || exchange?.model || "",
                 mode: sessionMeta?.mode || exchange?.mode || "",
                 effort: sessionMeta?.effort || exchange?.effort || "",
+                fast_service:
+                  normalizeFastService(sessionMeta?.fast_service) ||
+                  normalizeFastService(exchange?.fast_service),
+	                plan_mode:
+	                  typeof sessionMeta?.plan_mode === "boolean"
+	                    ? sessionMeta.plan_mode
+	                    : false,
                 name: sessionMeta?.name || "新会话",
                 created_at:
                   sessionMeta?.created_at ||
@@ -5290,6 +7129,14 @@ export function App({ onGoHome }: AppProps) {
                 exchange?.effort ||
                 (cached as any).effort ||
                 "",
+              fast_service:
+                normalizeFastService(sessionMeta?.fast_service) ||
+                normalizeFastService(exchange?.fast_service) ||
+                normalizeFastService((cached as any).fast_service),
+	              plan_mode:
+	                typeof sessionMeta?.plan_mode === "boolean"
+	                  ? sessionMeta.plan_mode
+	                  : !!(cached as any).plan_mode,
               exchanges: duplicate
                 ? prevExchanges
                 : [
@@ -5298,9 +7145,10 @@ export function App({ onGoHome }: AppProps) {
                       role: "user",
                       agent: exchange?.agent || "",
                       model: exchange?.model || "",
-                      mode: exchange?.mode || "",
-                      effort: exchange?.effort || "",
-                      content: exchange?.content || "",
+	                      mode: exchange?.mode || "",
+	                      effort: exchange?.effort || "",
+	                      fast_service: exchange?.fast_service || "",
+	                      content: exchange?.content || "",
                       timestamp:
                         exchange?.timestamp || new Date().toISOString(),
                       pending_ack: false,
@@ -5347,6 +7195,25 @@ export function App({ onGoHome }: AppProps) {
                   typeof payload.session.effort === "string"
                     ? payload.session.effort
                     : (cached as any).effort,
+                fast_service:
+                  normalizeFastService(payload.session.fast_service) ||
+                  normalizeFastService((cached as any).fast_service),
+                plan_mode:
+                  typeof payload.session.plan_mode === "boolean"
+                    ? payload.session.plan_mode
+                    : !!(cached as any).plan_mode,
+                parent_session_key:
+                  typeof payload.session.parent_session_key === "string"
+                    ? payload.session.parent_session_key
+                    : (cached as any).parent_session_key,
+                parent_tool_call_id:
+                  typeof payload.session.parent_tool_call_id === "string"
+                    ? payload.session.parent_tool_call_id
+                    : (cached as any).parent_tool_call_id,
+                source:
+                  typeof payload.session.source === "string"
+                    ? payload.session.source
+                    : (cached as any).source,
                 updated_at: payload.session.updated_at || cached.updated_at,
               } as Session;
               bumpCacheVersion();
@@ -5375,6 +7242,25 @@ export function App({ onGoHome }: AppProps) {
                         typeof payload.session.effort === "string"
                           ? payload.session.effort
                           : (prev as any).effort,
+                      fast_service:
+                        normalizeFastService(payload.session.fast_service) ||
+                        normalizeFastService((prev as any).fast_service),
+                      plan_mode:
+                        typeof payload.session.plan_mode === "boolean"
+                          ? payload.session.plan_mode
+                          : !!(prev as any).plan_mode,
+                      parent_session_key:
+                        typeof payload.session.parent_session_key === "string"
+                          ? payload.session.parent_session_key
+                          : (prev as any).parent_session_key,
+                      parent_tool_call_id:
+                        typeof payload.session.parent_tool_call_id === "string"
+                          ? payload.session.parent_tool_call_id
+                          : (prev as any).parent_tool_call_id,
+                      source:
+                        typeof payload.session.source === "string"
+                          ? payload.session.source
+                          : (prev as any).source,
                       updated_at: payload.session.updated_at || prev.updated_at,
                     } as SessionItem)
                   : prev,
@@ -5462,7 +7348,7 @@ export function App({ onGoHome }: AppProps) {
     };
   }, [
     currentRootId,
-    gitDiff?.path,
+    loadExternalSessions,
     loadSessionsForRoot,
     rootSessionKey,
     resolveRootForSessionKey,
@@ -5471,13 +7357,17 @@ export function App({ onGoHome }: AppProps) {
     appendThoughtChunkForSession,
     appendToolCallForSession,
     appendTodoUpdateForSession,
+    appendPlanUpdateForSession,
+    appendCompactNoticeForSession,
     clearSessionStale,
+    markSessionPending,
     markSessionStale,
     resolvePendingForSession,
     setSelectedPendingByKey,
     setBoundSessionForRoot,
     setDrawerSessionForRoot,
     refreshManagedRoots,
+    handleRelayWebSocketClosed,
     refreshTreeDir,
     refreshCurrentFileContent,
     refreshGitStatus,
@@ -5527,31 +7417,22 @@ export function App({ onGoHome }: AppProps) {
         return;
       }
     }
-    fetch(appPath("/api/dirs"))
-      .then(async (r) => {
-        if (!r.ok) {
-          const payload = await r.json().catch(() => ({}));
-          if (
-            await handleRelayNavigationFailure(
-              r.status,
-              typeof payload?.error === "string" ? payload.error : "",
-            )
-          ) {
-            return null;
-          }
-          return null;
+    void (async () => {
+      try {
+        const bootstrap = await bootstrapService.start();
+        if (bootstrap.phase !== "ready") {
+          didInitRef.current = false;
+          return;
         }
-        return r.json();
-      })
-      .then(async (dirs) => {
+        const dirs = await loadManagedRootPayloads();
         if (!dirs) {
           return;
         }
-        void refreshRelayStatus();
         if (cancelled || !dirs.length) {
           return;
         }
         const nextDirs = dirs as ManagedRootPayload[];
+        syncRelayNodesToNative(nextDirs);
         const ids = nextDirs.map((d) => d.id);
         managedRootByIdRef.current = Object.fromEntries(
           nextDirs.filter((dir) => !!dir.id).map((dir) => [dir.id, dir]),
@@ -5604,8 +7485,7 @@ export function App({ onGoHome }: AppProps) {
             await refreshTreeDir(preferredRoot, ".", false);
           }
         }
-      })
-      .catch((err) => {
+      } catch (err) {
         if (cancelled) {
           return;
         }
@@ -5613,11 +7493,10 @@ export function App({ onGoHome }: AppProps) {
           "app.init_failed",
           String((err as Error)?.message || err || "初始化失败"),
         );
-      })
-      .finally(() => {
+      } finally {
         settled = true;
-      })
-    ;
+      }
+    })();
     return () => {
       cancelled = true;
       if (!settled) {
@@ -5627,11 +7506,20 @@ export function App({ onGoHome }: AppProps) {
   }, [
     ensurePluginsLoaded,
     handleRelayNavigationFailure,
+    loadManagedRootPayloads,
     loadSessionsForRoot,
-    refreshRelayStatus,
     refreshTreeDir,
     tryShowBoundSessionForRoot,
+    bootstrapState.phase,
   ]);
+
+  useEffect(() => {
+    return bootstrapService.subscribe((state) => {
+      setBootstrapState(state);
+      setRelayStatus(state.relayStatus);
+      setE2eeState(state.e2ee);
+    });
+  }, []);
 
   useEffect(() => {
     return e2eeService.subscribe((state) => {
@@ -5640,10 +7528,10 @@ export function App({ onGoHome }: AppProps) {
   }, []);
 
   useEffect(() => {
-    const nodeId = String(relayStatus?.e2ee_node_id || relayStatus?.node_id || "").trim();
-    const required = relayStatus?.e2ee_required === true;
-    e2eeService.configure(required, nodeId);
-  }, [relayStatus?.e2ee_required, relayStatus?.e2ee_node_id, relayStatus?.node_id]);
+    void syncNativeReplyPollerE2EE().catch((err) => {
+      console.warn("[ReplyPoller] Failed to sync E2EE state:", err);
+    });
+  }, [e2eeState.nodeId, e2eeState.required, e2eeState.unlocked]);
 
   useEffect(() => {
     if (!e2eeState.required) {
@@ -5651,6 +7539,13 @@ export function App({ onGoHome }: AppProps) {
       setE2eePromptError("");
     }
   }, [e2eeState.required, e2eeState.secretPresent]);
+
+  useEffect(() => {
+    if (bootstrapState.phase !== "ready") {
+      return;
+    }
+    setAgentsVersion((v) => v + 1);
+  }, [bootstrapState.phase]);
 
   const describeE2EEPromptError = useCallback((err: unknown) => {
     const code = err instanceof Error ? String(err.message || "").trim() : "";
@@ -5681,15 +7576,10 @@ export function App({ onGoHome }: AppProps) {
     setE2eePromptBusy(true);
     setE2eePromptError("");
     try {
-      e2eeService.setSecret(trimmed);
-      await e2eeService.ensureSession();
+      await bootstrapService.submitPairingSecret(trimmed);
+      didInitRef.current = false;
       setE2eeSecretInput("");
     } catch (err) {
-      if (err instanceof Error && err.message === "e2ee_proof_invalid") {
-        e2eeService.clearSecret();
-      } else {
-        e2eeService.clearSession();
-      }
       setE2eePromptError(describeE2EEPromptError(err));
     } finally {
       setE2eePromptBusy(false);
@@ -5794,22 +7684,39 @@ export function App({ onGoHome }: AppProps) {
           rootSessionKey(currentRootId, activeBoundSessionKey)
         ] as any)
       : null;
+  const isDetachedMainSessionTarget =
+    !!activeBoundSessionKey &&
+    selectedInCurrentRoot &&
+    !!selectedKey &&
+    selectedKey !== activeBoundSessionKey &&
+    interactionMode !== "drawer";
   const actionBarSession = activeBoundSessionKey
-    ? (currentSession as any) || boundFromCache || boundFromSelected
+    ? isDetachedMainSessionTarget
+      ? (selectedSession as any)
+      : (currentSession as any) || boundFromCache || boundFromSelected
     : selectedInCurrentRoot
       ? (selectedSession as any)
       : null;
+  const actionBarSessionKey =
+    (actionBarSession as any)?.key ||
+    (actionBarSession as any)?.session_key ||
+    "";
   const isBoundSessionInMain =
     !!activeBoundSessionKey &&
     selectedKey === activeBoundSessionKey &&
     interactionMode !== "drawer";
   const canOpenSessionDrawer = !!activeBoundSessionKey && !isBoundSessionInMain;
   const detachedBoundSession =
-    !!activeBoundSessionKey &&
-    selectedInCurrentRoot &&
-    !!selectedKey &&
-    selectedKey !== activeBoundSessionKey &&
-    !isDrawerOpen;
+    isDetachedMainSessionTarget && !isDrawerOpen;
+  const actionBarQueuedMessages = useMemo(() => {
+    void queueVersion;
+    if (!currentRootId || !actionBarSessionKey) return [];
+    return (
+      queuedMessagesBySessionRef.current[
+        rootSessionKey(currentRootId, actionBarSessionKey)
+      ] || []
+    );
+  }, [actionBarSessionKey, currentRootId, queueVersion, rootSessionKey]);
 
   const matchedPlugin = useMemo(() => {
     if (!currentRootId || !file) return null;
@@ -5856,6 +7763,59 @@ export function App({ onGoHome }: AppProps) {
       };
     }
   }, [file, pluginBypass, matchedPlugin, pluginQuery]);
+
+  useEffect(() => {
+    if (!file || pluginBypass || !pluginRender?.output) {
+      return;
+    }
+    const handleSelectionChange = () => {
+      const root = pluginContentRef.current;
+      const selection = window.getSelection();
+      if (!root || !selection || selection.rangeCount === 0 || selection.isCollapsed) {
+        handleViewerSelectionChange(null);
+        return;
+      }
+      const range = selection.getRangeAt(0);
+      const commonAncestor = range.commonAncestorContainer;
+      if (!root.contains(commonAncestor)) {
+        handleViewerSelectionChange(null);
+        return;
+      }
+      const text = selection.toString();
+      if (!text.trim()) {
+        handleViewerSelectionChange(null);
+        return;
+      }
+      handleViewerSelectionChange({
+        filePath: file.path,
+        text,
+      });
+    };
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => {
+      document.removeEventListener("selectionchange", handleSelectionChange);
+      handleViewerSelectionChange(null);
+    };
+  }, [file, pluginBypass, pluginRender?.output, handleViewerSelectionChange]);
+
+  useEffect(() => {
+    if (!file || pluginBypass || !pluginRender?.output) {
+      lastPluginChapterRef.current = "";
+      return;
+    }
+    const chapterKey = `${file.path}:${pluginQuery.chapter || "1"}`;
+    if (!lastPluginChapterRef.current) {
+      lastPluginChapterRef.current = chapterKey;
+      return;
+    }
+    if (lastPluginChapterRef.current === chapterKey) {
+      return;
+    }
+    lastPluginChapterRef.current = chapterKey;
+    requestAnimationFrame(() => {
+      pluginContentRef.current?.scrollTo({ top: 0, behavior: "auto" });
+    });
+  }, [file, pluginBypass, pluginRender?.output, pluginQuery.chapter]);
 
   const pluginRendererKey = `${currentRootId || ""}:${file?.path || ""}:${fileCursorRef.current}:${JSON.stringify(pluginQuery)}`;
   const pluginThemeVars = useMemo(() => {
@@ -6075,6 +8035,13 @@ export function App({ onGoHome }: AppProps) {
     [],
   );
 
+  const handleEditUserMessage = useCallback((content: string) => {
+    setEditDraftRequest((prev) => ({
+      id: (prev?.id || 0) + 1,
+      content,
+    }));
+  }, []);
+
   const currentFileScrollKey = buildFileScrollKey(
     file?.root || currentRootId,
     file?.path,
@@ -6082,7 +8049,9 @@ export function App({ onGoHome }: AppProps) {
   const sessionView = (
     <SessionViewer
       session={selectedSessionSnapshot}
+      agents={availableAgents}
       targetSeq={selectedSession?.search_seq}
+      targetSeqRequestKey={selectedSession?.search_target_id}
       loading={selectedSessionLoading}
       rootId={selectedSession?.root_id || currentRootId}
       rootPath={
@@ -6098,6 +8067,7 @@ export function App({ onGoHome }: AppProps) {
           root,
           isRoot: true,
           forceDirectory: true,
+          suppressTreeExpand: true,
         });
       }}
       onRemoveRelatedFile={(path) =>
@@ -6108,16 +8078,297 @@ export function App({ onGoHome }: AppProps) {
         )
       }
       onAskUserAnswer={handleAskUserAnswer}
+      onEditUserMessage={handleEditUserMessage}
+      onForkAgentMessage={(seq) =>
+        void handleForkAgentMessage(
+          selectedSession?.root_id || currentRootId,
+          selectedSessionSnapshot?.key || selectedSessionSnapshot?.session_key,
+          seq,
+        )
+      }
     />
   );
 
+  const worktreeBranchSelector =
+    creatingRootKind === "worktree" ? (
+      <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+        <select
+          value={worktreeBranchMode === "new" ? "__new__" : worktreeBranch}
+          disabled={creatingRootBusy}
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === "__new__") {
+              setWorktreeBranchMode("new");
+              setWorktreeBranch("");
+              return;
+            }
+            setWorktreeBranchMode("existing");
+            setWorktreeBranch(value);
+          }}
+          style={{
+            width: "100%",
+            borderRadius: "7px",
+            border: "1px solid var(--border-color)",
+            background: "var(--menu-bg)",
+            color: "var(--text-primary)",
+            fontSize: "12px",
+            padding: "6px 8px",
+            outline: "none",
+          }}
+        >
+          <option value="__new__">创建新分支</option>
+          {worktreeBranches.branches.map((branch) => (
+            <option key={branch.name} value={branch.name}>
+              {branch.current ? `${branch.name} 当前` : branch.name}
+            </option>
+          ))}
+        </select>
+        {worktreeBranchesLoading ? (
+          <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>加载分支中...</span>
+        ) : worktreeBranchError ? (
+          <span style={{ fontSize: "11px", color: "#b45309" }}>{worktreeBranchError}</span>
+        ) : null}
+      </div>
+    ) : null;
+
+  const worktreeCreateOverlay =
+    creatingRootKind === "worktree" && creatingRootName !== null ? (
+      <div
+        ref={worktreeCreatePopoverRef}
+        style={{
+          width: "248px",
+          maxWidth: "calc(100vw - 32px)",
+          padding: "10px",
+          borderRadius: "12px",
+          border: "1px solid var(--border-color)",
+          background: "var(--menu-bg)",
+          boxShadow: "0 12px 30px rgba(15, 23, 42, 0.14)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "10px",
+        }}
+      >
+        <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-primary)" }}>
+          worktree
+        </div>
+        <input
+          value={creatingRootName}
+          disabled={creatingRootBusy}
+          autoFocus
+          onChange={(event) => setCreatingRootName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void handleCreateRootSubmit();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              handleCreateRootCancel();
+            }
+          }}
+          style={{
+            width: "100%",
+            borderRadius: "8px",
+            border: "1px solid var(--border-color)",
+            background: "transparent",
+            color: "var(--text-primary)",
+            fontSize: "12px",
+            padding: "8px 10px",
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
+        {worktreeBranchSelector}
+        <div style={{ display: "flex" }}>
+          <button
+            type="button"
+            disabled={creatingRootBusy || !String(creatingRootName || "").trim()}
+            onClick={() => {
+              void handleCreateRootSubmit();
+            }}
+            style={{
+              width: "100%",
+              border: "none",
+              background: creatingRootBusy || !String(creatingRootName || "").trim()
+                ? "rgba(59, 130, 246, 0.65)"
+                : "var(--accent-color)",
+              color: "#fff",
+              borderRadius: "8px",
+              padding: "8px 10px",
+              fontSize: "12px",
+              fontWeight: 600,
+              cursor: creatingRootBusy || !String(creatingRootName || "").trim()
+                ? "not-allowed"
+                : "pointer",
+            }}
+          >
+            {creatingRootBusy ? "处理中..." : "创建"}
+          </button>
+        </div>
+      </div>
+    ) : null;
+
+  const worktreeSwitchOverlay =
+    worktreeSwitchOpen ? (
+      <div
+        ref={worktreeSwitchPopoverRef}
+        style={{
+          width: "248px",
+          maxWidth: "calc(100vw - 32px)",
+          maxHeight: "360px",
+          padding: "8px",
+          borderRadius: "12px",
+          border: "1px solid var(--border-color)",
+          background: "var(--menu-bg)",
+          boxShadow: "0 12px 30px rgba(15, 23, 42, 0.14)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "6px",
+          overflow: "auto",
+        }}
+      >
+        <div style={{ padding: "4px 6px 6px", fontSize: "12px", fontWeight: 600, color: "var(--text-primary)" }}>
+          切换 worktree
+        </div>
+        {worktreeSwitchLoading ? (
+          <div style={{ padding: "8px 6px", fontSize: "12px", color: "var(--text-secondary)" }}>加载中...</div>
+        ) : worktreeSwitchError ? (
+          <div style={{ padding: "8px 6px", fontSize: "12px", color: "#b45309" }}>{worktreeSwitchError}</div>
+        ) : worktreeSwitchItems.length === 0 ? (
+          <div style={{ padding: "8px 6px", fontSize: "12px", color: "var(--text-secondary)" }}>没有可切换的 worktree</div>
+        ) : worktreeSwitchItems.map((item) => {
+          const managed = findManagedRootByPath(item.path);
+          const active = item.current || managed?.id === currentRootId;
+          const busy = switchingWorktreePath === item.path;
+          const name = String(item.path || "").replace(/[\\/]+$/, "").split(/[\\/]/).filter(Boolean).pop() || item.path;
+          return (
+            <button
+              key={item.path}
+              type="button"
+              disabled={active || !!switchingWorktreePath}
+              onClick={() => {
+                void handleSwitchWorktree(item);
+              }}
+              style={{
+                width: "100%",
+                border: "none",
+                background: active ? "var(--selection-bg)" : "transparent",
+                color: active ? "var(--accent-color)" : "var(--text-primary)",
+                borderRadius: "8px",
+                padding: "8px 10px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+                textAlign: "left",
+                cursor: active || switchingWorktreePath ? "default" : "pointer",
+                opacity: switchingWorktreePath && !busy ? 0.56 : 1,
+              }}
+            >
+              <span style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: "2px" }}>
+                <span style={{ fontSize: "12px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {name}
+                </span>
+                <span style={{ fontSize: "11px", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {item.branch || item.head?.slice(0, 8) || item.path}
+                </span>
+              </span>
+              <span style={{ fontSize: "11px", color: active ? "var(--accent-color)" : "var(--text-secondary)", flexShrink: 0 }}>
+                {busy ? "..." : active ? "当前" : managed ? "切换" : "加入"}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    ) : null;
+
   let workspaceView: React.ReactNode;
   const showGitStatusPanel = !gitDiff && !file && !!currentRootId;
+  const isRootDirectoryView = !selectedDir || selectedDir === currentRootId || selectedDir === ".";
   const gitStatusAvailable = filteredGitStatus?.available === true;
+  const gitHistoryAvailable = gitHistory?.available === true;
+  const showGitHistory = currentRootId ? showGitHistoryByRoot[currentRootId] !== false : true;
+  const gitStatusExpanded = currentRootId ? gitStatusExpandedByRoot[currentRootId] !== false : true;
+  const gitHistoryExpandedCommits = currentRootId ? gitHistoryExpandedByRoot[currentRootId] || {} : {};
   const shouldRenderGitPanel =
     showGitStatusPanel &&
     gitStatusAvailable &&
     (gitStatusLoading || (filteredGitStatus?.items.length || 0) > 0);
+  const shouldRenderGitHistoryPanel =
+    showGitStatusPanel &&
+    isRootDirectoryView &&
+    showGitHistory &&
+    (gitHistoryLoading || (gitHistoryAvailable && (gitHistory?.items.length || 0) > 0));
+  const gitRootTopContent =
+    shouldRenderGitPanel || shouldRenderGitHistoryPanel ? (
+      <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+        {shouldRenderGitPanel ? (
+          <GitStatusPanel
+            rootId={currentRootId || undefined}
+            status={filteredGitStatus}
+            loading={gitStatusLoading}
+            isFiltered={!!selectedDir && selectedDir !== currentRootId}
+            expanded={gitStatusExpanded}
+            onExpandedChange={(expanded) => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              setGitStatusExpandedByRoot((prev) => ({ ...prev, [root]: expanded }));
+            }}
+            onSelectItem={(item) => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              void openGitDiff(root, item);
+            }}
+            onSwitchBranch={(branch) => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              return switchGitBranch(root, branch);
+            }}
+          />
+        ) : null}
+        {shouldRenderGitHistoryPanel && currentRootId ? (
+          <GitHistoryPanel
+            rootId={currentRootId}
+            items={gitHistory?.items || []}
+            loading={gitHistoryLoading}
+            loadingMore={gitHistoryLoadingMore}
+            hasMore={gitHistory?.has_more === true}
+            expandedCommits={gitHistoryExpandedCommits}
+            onToggleCommit={(hash) => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              setGitHistoryExpandedByRoot((prev) => {
+                const current = prev[root] || {};
+                return {
+                  ...prev,
+                  [root]: {
+                    ...current,
+                    [hash]: current[hash] !== true,
+                  },
+                };
+              });
+            }}
+            onLoadMore={() => {
+              void loadMoreGitHistory();
+            }}
+            onSelectFile={(commit, item) => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              void openGitCommitDiff(root, commit, item);
+            }}
+          />
+        ) : null}
+      </div>
+    ) : null;
   if (gitDiff) {
     workspaceView = (
       <GitDiffViewer
@@ -6155,7 +8406,7 @@ export function App({ onGoHome }: AppProps) {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span>🧩</span>
+              <ModeIcon type="plugin" size={16} />
               <span>{pluginRender.plugin.name}</span>
               {pluginLoading ? (
                 <span style={{ opacity: 0.7 }}>加载中...</span>
@@ -6180,6 +8431,7 @@ export function App({ onGoHome }: AppProps) {
             </button>
           </div>
           <div
+            ref={pluginContentRef}
             className="plugin-shadcn-sandbox"
             style={{
               ...pluginThemeVars,
@@ -6305,22 +8557,7 @@ export function App({ onGoHome }: AppProps) {
         path={selectedDir || ""}
         entries={visibleMainEntries}
         errorMessage={mainDirectoryError}
-        topContent={
-          shouldRenderGitPanel ? (
-            <GitStatusPanel
-              status={filteredGitStatus}
-              loading={gitStatusLoading}
-              isFiltered={!!selectedDir && selectedDir !== currentRootId}
-              onSelectItem={(item) => {
-                const root = currentRootIdRef.current;
-                if (!root) {
-                  return;
-                }
-                void openGitDiff(root, item);
-              }}
-            />
-          ) : null
-        }
+        topContent={gitRootTopContent}
         showHiddenFiles={showHiddenFiles}
         sortMode={currentDirectorySortMode}
         sortControlValue={currentDirectorySortOverride || "inherit"}
@@ -6343,7 +8580,29 @@ export function App({ onGoHome }: AppProps) {
           });
         }}
         onUploadFiles={handleTreeUpload}
+        onRenameRoot={handleRenameCurrentRoot}
         onRemoveRoot={handleRemoveCurrentRoot}
+        isGitRepo={managedRootByIdRef.current[currentRootId || ""]?.is_git_repo === true}
+        isGitWorktree={managedRootByIdRef.current[currentRootId || ""]?.is_git_worktree === true}
+        showGitHistory={showGitHistory}
+        onToggleGitHistory={() => {
+          const root = currentRootIdRef.current;
+          if (!root) {
+            return;
+          }
+          setShowGitHistoryByRoot((prev) => ({ ...prev, [root]: prev[root] === false }));
+        }}
+        onCreateWorktree={handleOpenWorktreeLocation}
+        onSwitchWorktree={handleSwitchWorktreeStart}
+        onRemoveWorktree={handleRemoveCurrentWorktree}
+        onOpenScheduledAgentTasks={() => setScheduledAgentDialogOpen(true)}
+        menuOverlay={
+          projectAddMode === "worktree_location"
+            ? projectAddOverlay
+            : worktreeSwitchOpen
+              ? worktreeSwitchOverlay
+              : worktreeCreateOverlay
+        }
         onItemClick={(e) =>
           e.is_dir
             ? actionHandlers.open_dir({ path: e.path })
@@ -6431,7 +8690,7 @@ export function App({ onGoHome }: AppProps) {
       return;
     }
     const pendingPopup = openPendingPopup();
-    const latestStatus = await refreshRelayStatus();
+    const latestStatus = await startRelayBinding();
     const nextStatus = latestStatus || relayStatus;
     if (!nextStatus) {
       pendingPopup?.close();
@@ -6458,7 +8717,7 @@ export function App({ onGoHome }: AppProps) {
       target.searchParams.set("node_name", nodeName);
     }
     navigatePopup(pendingPopup, target.toString());
-  }, [currentRootId, refreshRelayStatus, relayStatus]);
+  }, [currentRootId, startRelayBinding, relayStatus]);
 
   const relayActionLabel = useMemo(() => {
     if (isRelayNodePage()) {
@@ -6473,7 +8732,7 @@ export function App({ onGoHome }: AppProps) {
   const relayActionDisabled =
     !currentRootId ||
     (!relayStatus?.relay_bound &&
-      (!relayStatus?.pending_code || !relayStatus?.relay_base_url));
+      !relayStatus?.relay_base_url);
   const showUpdateButton = shouldShowUpdateButton(updateState);
   const updateBusy =
     updateSubmitting ||
@@ -6539,87 +8798,24 @@ export function App({ onGoHome }: AppProps) {
         >
           <div
             style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: "4px",
-              maxHeight: "180px",
-              overflow: "auto",
+              fontSize: "12px",
+              fontWeight: 700,
+              color: "var(--text-primary)",
             }}
           >
-            {availableAgents.map((item) => {
-              const selected = item.name === externalImportAgent;
-              return (
-                <button
-                  key={item.name}
-                  type="button"
-                  onClick={() => {
-                    setImportMenuOpen(false);
-                    setExternalImportAgent(item.name);
-                    setExternalSelectedKey("");
-                    void enterImportMode(item.name);
-                  }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    width: "100%",
-                    border: "1px solid transparent",
-                    background: selected
-                      ? "rgba(59, 130, 246, 0.1)"
-                      : "transparent",
-                    color: selected
-                      ? "var(--accent-color)"
-                      : "var(--text-primary)",
-                    borderRadius: "8px",
-                    padding: "8px 10px",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    opacity: 1,
-                  }}
-                >
-                  <AgentIcon
-                    agentName={item.name}
-                    style={{
-                      width: "14px",
-                      height: "14px",
-                      display: "block",
-                    }}
-                  />
-                  <span
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      fontSize: "12px",
-                      fontWeight: 500,
-                    }}
-                  >
-                    {item.name}
-                  </span>
-                  {!item.available ? (
-                    <span
-                      aria-label="当前未就绪"
-                      title="当前未就绪"
-                      style={{
-                        minWidth: "11px",
-                        height: "11px",
-                        padding: "0 2px",
-                        borderRadius: "50%",
-                        background: "#d97706",
-                        color: "#fff",
-                        fontSize: "9px",
-                        lineHeight: "11px",
-                        textAlign: "center",
-                        flexShrink: 0,
-                        fontWeight: 700,
-                      }}
-                    >
-                      !
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
+            选择要导入会话的 agent
           </div>
+          <AgentMenuList
+            agents={availableAgents}
+            selectedAgent={externalImportAgent}
+            maxHeight="180px"
+            onSelect={(agentName) => {
+              setImportMenuOpen(false);
+              setExternalImportAgent(agentName);
+              setExternalSelectedKey("");
+              void enterImportMode(agentName);
+            }}
+          />
           <label
             style={{
               display: "flex",
@@ -6647,11 +8843,14 @@ export function App({ onGoHome }: AppProps) {
         sessions={externalSessions}
         selectedKey={externalSelectedKey}
         selectedAgent={externalImportAgent}
-        importingKey={importingExternalSessionKey}
+        importingKeys={importingExternalSessionKeys}
+        selectedImportKeys={selectedExternalImportKeys}
         filterBound={externalFilterBound}
         headerAction={sessionImportMenu}
         loading={loadingExternalSessions}
+        error={externalSessionsError}
         loadingOlder={loadingOlderExternalSessions}
+        confirmingImport={confirmingExternalImport}
         hasMore={hasMoreExternalSessions}
         onBack={exitImportMode}
         onSelect={(session) =>
@@ -6659,8 +8858,10 @@ export function App({ onGoHome }: AppProps) {
             String(session.key || session.session_key || ""),
           )
         }
-        onImport={(session) => {
-          void handleImportExternalSession(session);
+        onToggleImport={toggleExternalImportSelection}
+        onToggleSelectAllImport={toggleAllExternalImportSelection}
+        onConfirmImport={() => {
+          void handleConfirmExternalImport();
         }}
         onLoadOlder={() => {
           void handleLoadOlderExternalSessions();
@@ -6684,7 +8885,14 @@ export function App({ onGoHome }: AppProps) {
             ? "未找到匹配会话"
             : sessionSearchOpen
               ? ""
-            : "暂无会话记录"
+            : (
+              <span>
+                这里是空的，
+                <strong style={{ color: "var(--text-primary)", fontWeight: 800 }}>
+                  如果项目中已有会话，请点击上方导入按钮，导入后会话可以继续
+                </strong>
+              </span>
+            )
         }
         onSearchToggle={() => {
           setSessionSearchOpen((prev) => {
@@ -6756,6 +8964,8 @@ export function App({ onGoHome }: AppProps) {
         rightOpen={isRightOpen}
         onCloseLeft={() => setIsLeftOpen(false)}
         onCloseRight={() => setIsRightOpen(false)}
+        onOpenLeft={() => setIsLeftOpen(true)}
+        onOpenRight={() => setIsRightOpen(true)}
         sidebar={
           <FileTree
             entries={rootEntries}
@@ -6769,7 +8979,9 @@ export function App({ onGoHome }: AppProps) {
             selectedPath={file?.path}
             rootId={currentRootId}
             rootSessionIndicators={rootSessionIndicators}
-            creatingRootName={creatingRootName}
+            creatingRootName={
+              creatingRootKind === "worktree" ? null : creatingRootName
+            }
             creatingRootBusy={creatingRootBusy}
             onOpenProjectAdd={handleOpenProjectAdd}
             onCreateRootStart={handleCreateRootStart}
@@ -6778,11 +8990,21 @@ export function App({ onGoHome }: AppProps) {
               void handleCreateRootSubmit();
             }}
             onCreateRootCancel={handleCreateRootCancel}
-            projectAddOverlay={projectAddOverlay}
+            projectAddOverlay={
+              projectAddMode === "worktree_location" ? null : projectAddOverlay
+            }
             onSelectFile={(e, r) => {
               actionHandlers.open({ path: e.path, root: r });
               if (isMobile) setIsLeftOpen(false);
             }}
+            onSelectRoot={(e, r) =>
+              actionHandlers.open_dir({
+                path: e.path,
+                root: r,
+                isRoot: e.is_root === true,
+                suppressTreeExpand: true,
+              })
+            }
             onToggleDir={(e, r) =>
               actionHandlers.open_dir({
                 path: e.path,
@@ -6795,6 +9017,9 @@ export function App({ onGoHome }: AppProps) {
             relayActionDisabled={relayActionDisabled}
             relayActionHelp={null}
             onRelayAction={handleRelayAction}
+            relayNodeId={relayStatus?.node_id || ""}
+            relayBaseURL={relayStatus?.relay_base_url || ""}
+            relayNoRelayer={relayStatus?.no_relayer === true}
             updateActionLabel={showUpdateButton ? updateLabel : null}
             updateActionDisabled={updateBusy}
             updateActionHelp={showUpdateButton ? updateHelp : ""}
@@ -6803,6 +9028,10 @@ export function App({ onGoHome }: AppProps) {
             onUpdateAction={() => {
               void handleStartUpdate();
             }}
+            showEnterKeySendOption={isMobile}
+            enterKeySends={mobileEnterKeySends}
+            onEnterKeySendsChange={setMobileEnterKeySends}
+            onRunAgentLifecycleCommand={handleRunAgentLifecycleCommand}
             onGoHome={onGoHome}
           />
         }
@@ -6819,57 +9048,6 @@ export function App({ onGoHome }: AppProps) {
               position: "relative",
             }}
           >
-            {!isMobile && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: "10px",
-                  left: isMobile ? "10px" : isLeftOpen ? "-40px" : "10px",
-                  right: isMobile ? "10px" : isRightOpen ? "-40px" : "10px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  pointerEvents: "none",
-                  zIndex: 100,
-                }}
-              >
-                <button
-                  onClick={() => setIsLeftOpen(!isLeftOpen)}
-                  style={{
-                    pointerEvents: "auto",
-                    background: "var(--content-bg)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "8px",
-                    width: "32px",
-                    height: "32px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: "pointer",
-                    opacity: isLeftOpen && !isMobile ? 0 : 1,
-                  }}
-                >
-                  📁
-                </button>
-                <button
-                  onClick={() => setIsRightOpen(!isRightOpen)}
-                  style={{
-                    pointerEvents: "auto",
-                    background: "var(--content-bg)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "8px",
-                    width: "32px",
-                    height: "32px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: "pointer",
-                    opacity: isRightOpen && !isMobile ? 0 : 1,
-                  }}
-                >
-                  🕒
-                </button>
-              </div>
-            )}
             <div
               style={{
                 flex: 1,
@@ -6910,11 +9088,20 @@ export function App({ onGoHome }: AppProps) {
             agentsVersion={agentsVersion}
             currentRootId={currentRootId}
             currentSession={actionBarSession}
+            pendingPlanMode={pendingPlanMode}
             attachedFileContext={attachedFileContext}
             canOpenSessionDrawer={canOpenSessionDrawer}
+            sessionDrawerOpen={isDrawerOpen}
             detachedBoundSession={detachedBoundSession}
-            onSendMessage={handleSendMessage}
-            onCancelCurrentTurn={handleCancelCurrentTurn}
+            editDraftRequest={editDraftRequest}
+	            queuedMessages={actionBarQueuedMessages}
+	            onSendMessage={handleSendMessage}
+	            onSetPlanMode={handleSetPlanMode}
+	            onCancelCurrentTurn={handleCancelCurrentTurn}
+            onRemoveQueuedMessage={handleRemoveQueuedMessage}
+            onUpdateQueuedMessage={handleUpdateQueuedMessage}
+            onSendQueuedMessageNow={handleSendQueuedMessageNow}
+            mobileEnterKeySends={mobileEnterKeySends}
             onNewSession={handleNewSession}
             onRequestFileContext={handleRequestFileContext}
             onClearFileContext={handleClearFileContext}
@@ -6929,20 +9116,27 @@ export function App({ onGoHome }: AppProps) {
                 selectedKey === activeBoundSessionKey &&
                 interactionMode !== "drawer";
               if (isBoundSessionInMain) return;
+              const isDrawerCurrentlyOpen =
+                !!drawerOpenByRootRef.current[rootID || ""];
+              if (isDrawerCurrentlyOpen) {
+                interactionModeRef.current = "main";
+                setInteractionMode("main");
+                setDrawerOpenForRoot(rootID, false);
+                return;
+              }
               setInteractionMode("drawer");
-              setDrawerOpenForRoot(
-                rootID,
-                !(drawerOpenByRootRef.current[rootID || ""] || false),
-              );
+              setDrawerOpenForRoot(rootID, true);
             }}
           />
         }
         drawer={
           <BottomSheet
             isOpen={isDrawerOpen}
-            onClose={() =>
-              setDrawerOpenForRoot(currentRootIdRef.current, false)
-            }
+            onClose={() => {
+              interactionModeRef.current = "main";
+              setInteractionMode("main");
+              setDrawerOpenForRoot(currentRootIdRef.current, false);
+            }}
             onExpand={() => {
               handleSelectSession(currentSession);
               setDrawerOpenForRoot(currentRootIdRef.current, false);
@@ -6951,7 +9145,9 @@ export function App({ onGoHome }: AppProps) {
             {drawerSessionSnapshot ? (
               <SessionViewer
                 session={drawerSessionSnapshot}
+                agents={availableAgents}
                 targetSeq={currentSession?.search_seq}
+                targetSeqRequestKey={currentSession?.search_target_id}
                 loading={false}
                 rootId={currentRootId}
                 rootPath={
@@ -6967,6 +9163,7 @@ export function App({ onGoHome }: AppProps) {
                     root,
                     isRoot: true,
                     forceDirectory: true,
+                    suppressTreeExpand: true,
                   });
                 }}
                 onRemoveRelatedFile={(path) =>
@@ -6977,6 +9174,14 @@ export function App({ onGoHome }: AppProps) {
                   )
                 }
                 onAskUserAnswer={handleAskUserAnswer}
+                onEditUserMessage={handleEditUserMessage}
+                onForkAgentMessage={(seq) =>
+                  void handleForkAgentMessage(
+                    currentRootId,
+                    drawerSessionSnapshot?.key || drawerSessionSnapshot?.session_key,
+                    seq,
+                  )
+                }
               />
             ) : (
               <div style={{ padding: "40px", textAlign: "center" }}>
@@ -6986,7 +9191,9 @@ export function App({ onGoHome }: AppProps) {
           </BottomSheet>
         }
       />
-      {e2eeState.required && !e2eeState.secretPresent ? (
+      {bootstrapState.phase === "needs_pairing" &&
+        e2eeState.required &&
+        !e2eeState.unlocked ? (
         <div
           style={{
             position: "fixed",
@@ -7082,6 +9289,12 @@ export function App({ onGoHome }: AppProps) {
           </div>
         </div>
       ) : null}
+      <ScheduledAgentTaskDialog
+        open={scheduledAgentDialogOpen}
+        rootId={currentRootId}
+        agents={availableAgents}
+        onClose={() => setScheduledAgentDialogOpen(false)}
+      />
       <ToastContainer />
     </>
   );

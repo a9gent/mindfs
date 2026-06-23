@@ -1,0 +1,9 @@
+{
+  "name": "entry",
+  "version": "0.1.0",
+  "description": "MindFS HarmonyOS entry module",
+  "main": "",
+  "author": "MindFS",
+  "license": "MIT",
+  "dependencies": {}
+}

@@ -5,6 +5,7 @@ import { ImageViewer } from "./ImageViewer";
 import { BinaryViewer } from "./BinaryViewer";
 import { rootBadgeStyle } from "./rootBadgeStyle";
 import { downloadFile } from "../services/download";
+import { isNativeShellRuntime } from "../services/runtime";
 
 type FilePayload = {
   name: string;
@@ -324,10 +325,7 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onS
         path: file.path,
         name: file.name,
       });
-      // Android：DownloadManager 接管，通知栏会显示进度和完成，给个简单提示
-      // 浏览器端：下载已触发
-      const isAndroid = typeof window !== "undefined" && !!(window as Window & { Capacitor?: unknown }).Capacitor;
-      showToast(isAndroid ? "已加入系统下载队列，请查看通知栏或下载目录" : "下载已开始，请查看浏览器下载栏", true);
+      showToast(isNativeShellRuntime() ? "已保存到系统下载目录" : "下载已开始，请查看浏览器下载栏", true);
     } catch (error) {
       const message = error instanceof Error ? error.message : "下载失败";
       showToast(message, false);
@@ -362,15 +360,15 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onS
       <header style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "10px", background: "var(--mindfs-topbar-bg, transparent)", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", overflow: "hidden", flex: 1, minWidth: 0 }}>
           <Breadcrumbs root={file.root} path={file.path} onPathClick={onPathClick} />
-          
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flexShrink: 0 }}>
-            {relatedSessions.length > 0 && (
+
+          {relatedSessions.length > 0 && (
             <div style={{ 
+              marginLeft: "16px",
               display: "flex", 
               alignItems: "center", 
               gap: "6px", 
               minWidth: 0, 
-              flexShrink: 1
+              flexShrink: 0
             }}>
               {/* 替换文字为图标 */}
               <svg 
@@ -431,6 +429,7 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onS
               </div>
             </div>
           )}
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flexShrink: 0 }}>
             <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px", flexShrink: 0, opacity: 0.7 }}>{(file.size / 1024).toFixed(1)} KB</div>
             <button
               type="button"

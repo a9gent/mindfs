@@ -1,0 +1,11 @@
+{
+  "addr": "127.0.0.1:7331",
+  "no-relayer": false,
+  "e2ee": false,
+  "web-push": true,
+  "foreground": false,
+  "tls": false,
+  "cert": "",
+  "key": "",
+  "agent-config": ""
+}

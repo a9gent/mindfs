@@ -1,21 +1,101 @@
 #!/usr/bin/env bash
 # MindFS installer for macOS and Linux.
 # Downloads the correct release from GitHub and installs it.
-# Usage:  bash install.sh [--version VERSION] [--prefix PREFIX]
+# Usage:  bash install.sh [--version VERSION] [--prefix PREFIX] [--uninstall] [--purge]
 set -euo pipefail
 
 REPO="a9gent/mindfs"
+RELEASE_NOTES_URL="https://raw.githubusercontent.com/${REPO}/main/release-notes.md"
+RELAY_DOWNLOAD_BASE="https://relay.a9gent.com/mindfs-downloads"
 VERSION=""
 PREFIX="${HOME}/.local"
+UNINSTALL=0
+PURGE=0
 
 # ── Parse arguments ────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version)  VERSION="$2";  shift 2 ;;
     --prefix)   PREFIX="$2";   shift 2 ;;
+    --uninstall) UNINSTALL=1; shift ;;
+    --purge) PURGE=1; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
+
+if [[ "$PURGE" -eq 1 && "$UNINSTALL" -ne 1 ]]; then
+  echo "Error: --purge can only be used with --uninstall." >&2
+  exit 1
+fi
+
+config_dir() {
+  case "$(uname -s)" in
+    Darwin) printf '%s\n' "${HOME}/Library/Application Support/mindfs" ;;
+    *) printf '%s\n' "${XDG_CONFIG_HOME:-${HOME}/.config}/mindfs" ;;
+  esac
+}
+
+state_dir() {
+  printf '%s\n' "${HOME}/.local/share/mindfs"
+}
+
+remove_path_entry() {
+  local bin_dir="$1"
+  local shell_name rc_file line tmp
+  shell_name="$(basename "${SHELL:-}")"
+  line="export PATH=\"${bin_dir}:\$PATH\""
+
+  case "$shell_name" in
+    zsh) rc_file="${HOME}/.zshrc" ;;
+    bash)
+      if [[ "$(uname -s)" == "Darwin" ]]; then
+        rc_file="${HOME}/.bash_profile"
+      else
+        rc_file="${HOME}/.bashrc"
+      fi
+      ;;
+    *) return 0 ;;
+  esac
+
+  if [[ ! -f "$rc_file" ]] || ! grep -Fqs "$line" "$rc_file"; then
+    return 0
+  fi
+  tmp="$(mktemp)"
+  grep -Fvx "$line" "$rc_file" >"$tmp" || true
+  cat "$tmp" >"$rc_file"
+  rm -f "$tmp"
+  echo "  PATH    -> removed ${bin_dir} from ${rc_file}"
+}
+
+uninstall_mindfs() {
+  local bin_path="${PREFIX}/bin/mindfs"
+  local share_dir="${PREFIX}/share/mindfs"
+
+  echo "Uninstalling mindfs"
+  echo "  Prefix: ${PREFIX}"
+  rm -f "$bin_path"
+  echo "  Removed binary: ${bin_path}"
+  rm -rf "$share_dir"
+  echo "  Removed shared files: ${share_dir}"
+  rmdir "${PREFIX}/bin" "${PREFIX}/share" "$PREFIX" 2>/dev/null || true
+  remove_path_entry "${PREFIX}/bin"
+
+  if [[ "$PURGE" -eq 1 ]]; then
+    rm -rf "$(config_dir)" "$(state_dir)"
+    echo "  Removed user config: $(config_dir)"
+    echo "  Removed user state:  $(state_dir)"
+    echo "  Project .mindfs directories were not removed."
+  else
+    echo "  User config and project .mindfs data were kept."
+    echo "  Re-run with --uninstall --purge to remove user-level MindFS config and logs."
+  fi
+  echo "Done."
+}
+
+if [[ "$UNINSTALL" -eq 1 ]]; then
+  uninstall_mindfs
+  exit 0
+fi
 
 # ── Detect OS ──────────────────────────────────────────────────────────────
 detect_os() {
@@ -41,25 +121,23 @@ detect_arch() {
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
 
-extract_tag_name() {
-  sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1
-}
-
 normalize_tag() {
   local value="${1:-}"
   value="${value#v}"
   printf 'v%s' "$value"
 }
 
-# ── Resolve version from GitHub API if not specified ───────────────────────
+extract_version() {
+  sed -nE '1s/^[[:space:]]*#[[:space:]]+MindFS[[:space:]]+(v?[0-9]+(\.[0-9]+){1,3}[^[:space:]]*).*$/\1/p'
+}
+
+# ── Resolve version from raw metadata if not specified ─────────────────────
 if [[ -z "$VERSION" ]]; then
   echo "Fetching latest release version..."
   if command -v curl &>/dev/null; then
-    VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-      | extract_tag_name)"
+    VERSION="$(curl -fsSL "$RELEASE_NOTES_URL" | extract_version)"
   elif command -v wget &>/dev/null; then
-    VERSION="$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" \
-      | extract_tag_name)"
+    VERSION="$(wget -qO- "$RELEASE_NOTES_URL" | extract_version)"
   else
     echo "Error: curl or wget is required." >&2; exit 1
   fi
@@ -76,14 +154,25 @@ echo "  Prefix: ${PREFIX}"
 # ── Download ────────────────────────────────────────────────────────────────
 FILENAME="mindfs_${VERSION}_${OS}_${ARCH}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
+FALLBACK_URL="${RELAY_DOWNLOAD_BASE}/${FILENAME}"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
+download_file() {
+  local url="$1"
+  local dst="$2"
+  if command -v curl &>/dev/null; then
+    curl -fsSL "$url" -o "$dst"
+  else
+    wget -qO "$dst" "$url"
+  fi
+}
+
 echo "  Downloading ${URL}"
-if command -v curl &>/dev/null; then
-  curl -fsSL "$URL" -o "${TMPDIR}/${FILENAME}"
-else
-  wget -qO "${TMPDIR}/${FILENAME}" "$URL"
+if ! download_file "$URL" "${TMPDIR}/${FILENAME}"; then
+  echo "  GitHub download failed; trying ${FALLBACK_URL}"
+  rm -f "${TMPDIR}/${FILENAME}"
+  download_file "$FALLBACK_URL" "${TMPDIR}/${FILENAME}"
 fi
 
 # ── Extract ─────────────────────────────────────────────────────────────────

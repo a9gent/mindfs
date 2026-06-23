@@ -34,6 +34,7 @@ type Service struct {
 	localAddr string
 	localURL  string
 	store     *CredentialsStore
+	services  *ServiceStore
 	client    *http.Client
 	useTLS    bool
 }
@@ -64,6 +65,10 @@ func NewService(localAddr string, useTLS bool) (*Service, error) {
 	if _, err := getOrCreateDeviceID(); err != nil {
 		return nil, err
 	}
+	services, err := NewServiceStore()
+	if err != nil {
+		return nil, err
+	}
 
 	var client *http.Client
 	if useTLS {
@@ -87,6 +92,7 @@ func NewService(localAddr string, useTLS bool) (*Service, error) {
 		localAddr: localAddr,
 		localURL:  addrToURL(localAddr, "", useTLS),
 		store:     store,
+		services:  services,
 		client:    client,
 		useTLS:    useTLS,
 	}, nil
@@ -268,14 +274,40 @@ func (s *Service) handleStream(ctx context.Context, stream net.Conn) error {
 		return err
 	}
 	req = req.WithContext(ctx)
+	serviceSlug := NormalizeServiceSlug(req.Header.Get(serviceSlugHeader))
+	req.Header.Del(serviceSlugHeader)
+	if serviceSlug != "" {
+		return s.handleServiceStream(req, stream, serviceSlug)
+	}
 	if websocket.IsWebSocketUpgrade(req) {
 		return s.proxyWebSocket(req, stream)
 	}
 	return s.proxyHTTP(req, stream)
 }
 
+func (s *Service) handleServiceStream(req *http.Request, stream net.Conn, slug string) error {
+	service, ok, err := s.services.Get(slug)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return writeSimpleHTTPError(stream, http.StatusNotFound, "service_not_found")
+	}
+	if !service.Enabled {
+		return writeSimpleHTTPError(stream, http.StatusForbidden, "service_disabled")
+	}
+	if websocket.IsWebSocketUpgrade(req) {
+		return s.proxyWebSocketToBase(req, stream, service.LocalURL, true)
+	}
+	return s.proxyHTTPToBase(req, stream, service.LocalURL, true)
+}
+
 func (s *Service) proxyHTTP(req *http.Request, stream io.Writer) error {
-	targetURL, err := localTargetURL(s.localURL, req.URL)
+	return s.proxyHTTPToBase(req, stream, s.localURL, false)
+}
+
+func (s *Service) proxyHTTPToBase(req *http.Request, stream io.Writer, baseURL string, stripRelayInternalHeaders bool) error {
+	targetURL, err := localTargetURL(baseURL, req.URL)
 	if err != nil {
 		return err
 	}
@@ -283,17 +315,23 @@ func (s *Service) proxyHTTP(req *http.Request, stream io.Writer) error {
 	outbound.URL = targetURL
 	outbound.RequestURI = ""
 	outbound.Host = targetURL.Host
+	prepareLocalProxyHeaders(outbound, req, targetURL, stripRelayInternalHeaders)
 
 	resp, err := s.client.Do(outbound)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	rewriteLocalProxyResponse(resp, req, targetURL)
 	return resp.Write(stream)
 }
 
 func (s *Service) proxyWebSocket(req *http.Request, stream io.ReadWriter) error {
-	targetURL, err := websocketTargetURL(s.localURL, req.URL)
+	return s.proxyWebSocketToBase(req, stream, s.localURL, false)
+}
+
+func (s *Service) proxyWebSocketToBase(req *http.Request, stream io.ReadWriter, baseURL string, stripRelayInternalHeaders bool) error {
+	targetURL, err := websocketTargetURL(baseURL, req.URL)
 	if err != nil {
 		return err
 	}
@@ -303,6 +341,14 @@ func (s *Service) proxyWebSocket(req *http.Request, stream io.ReadWriter) error 
 	headers.Del("Sec-WebSocket-Key")
 	headers.Del("Sec-WebSocket-Version")
 	headers.Del("Sec-WebSocket-Extensions")
+	headers.Del("Origin")
+	if stripRelayInternalHeaders {
+		headers.Del("X-MindFS-Relay-Service-Slug")
+		headers.Del("X-MindFS-Relayed")
+	}
+	if localOrigin := originFromBaseURL(baseURL); localOrigin != "" {
+		headers.Set("Origin", localOrigin)
+	}
 
 	dialer := *websocket.DefaultDialer
 	if s.useTLS {
@@ -411,6 +457,97 @@ func websocketTargetURL(base string, requestURL *url.URL) (string, error) {
 		return "", fmt.Errorf("unsupported websocket target scheme: %s", target.Scheme)
 	}
 	return target.String(), nil
+}
+
+func prepareLocalProxyHeaders(outbound, original *http.Request, targetURL *url.URL, stripRelayInternalHeaders bool) {
+	if stripRelayInternalHeaders {
+		outbound.Header.Del("X-MindFS-Relay-Service-Slug")
+		outbound.Header.Del("X-MindFS-Relayed")
+	}
+	if original.Host != "" {
+		outbound.Header.Set("X-Forwarded-Host", original.Host)
+	}
+	if original.URL != nil && original.URL.Scheme != "" {
+		outbound.Header.Set("X-Forwarded-Proto", original.URL.Scheme)
+	}
+	if origin := strings.TrimSpace(original.Header.Get("Origin")); origin != "" {
+		outbound.Header.Set("X-Forwarded-Origin", origin)
+		if localOrigin := originFromURL(targetURL); localOrigin != "" {
+			outbound.Header.Set("Origin", localOrigin)
+		}
+	}
+}
+
+func rewriteLocalProxyResponse(resp *http.Response, original *http.Request, targetURL *url.URL) {
+	if resp == nil || original == nil || targetURL == nil {
+		return
+	}
+	publicBase := publicBaseFromRequest(original)
+	localBase := originFromURL(targetURL)
+	if publicBase != "" && localBase != "" {
+		if location := strings.TrimSpace(resp.Header.Get("Location")); strings.HasPrefix(location, localBase) {
+			resp.Header.Set("Location", publicBase+strings.TrimPrefix(location, localBase))
+		}
+	}
+	cookies := resp.Header.Values("Set-Cookie")
+	if len(cookies) == 0 {
+		return
+	}
+	resp.Header.Del("Set-Cookie")
+	for _, cookie := range cookies {
+		parts := strings.Split(cookie, ";")
+		filtered := parts[:0]
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if strings.HasPrefix(strings.ToLower(trimmed), "domain=") {
+				continue
+			}
+			filtered = append(filtered, part)
+		}
+		resp.Header.Add("Set-Cookie", strings.Join(filtered, ";"))
+	}
+}
+
+func publicBaseFromRequest(req *http.Request) string {
+	if req == nil || req.Host == "" {
+		return ""
+	}
+	proto := "https"
+	if req.TLS == nil {
+		proto = "http"
+	}
+	if forwarded := strings.TrimSpace(req.Header.Get("X-Forwarded-Proto")); forwarded != "" {
+		proto = strings.Split(forwarded, ",")[0]
+	}
+	return proto + "://" + req.Host
+}
+
+func originFromBaseURL(baseURL string) string {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return ""
+	}
+	return originFromURL(u)
+}
+
+func originFromURL(u *url.URL) string {
+	if u == nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+func writeSimpleHTTPError(w io.Writer, status int, code string) error {
+	resp := &http.Response{
+		StatusCode: status,
+		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header:     http.Header{"Content-Type": []string{"application/json; charset=utf-8"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":"` + code + `"}`)),
+	}
+	return resp.Write(w)
 }
 
 func splitHeaderValues(value string) []string {

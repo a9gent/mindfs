@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "entry_app_name",
+      "value": "MindFS"
+    },
+    {
+      "name": "module_desc",
+      "value": "MindFS HarmonyOS entry module"
+    },
+    {
+      "name": "entry_desc",
+      "value": "MindFS"
+    }
+  ]
+}

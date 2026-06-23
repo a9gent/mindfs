@@ -1,5 +1,43 @@
 apply plugin: 'com.android.application'
 
+def mindfsGitVersion() {
+    try {
+        def stdout = new ByteArrayOutputStream()
+        exec {
+            commandLine 'git', 'describe', '--tags', '--always', '--dirty'
+            standardOutput = stdout
+            ignoreExitValue = true
+        }
+        def value = stdout.toString().trim()
+        return value ?: 'dev'
+    } catch (Exception ignored) {
+        return 'dev'
+    }
+}
+
+def mindfsVersionCodeFromName(String versionName) {
+    def matcher = (versionName ?: '') =~ /^v?(\d+)\.(\d+)\.(\d+)(?:-(\d+)-g[0-9a-f]+.*)?$/
+    if (!matcher.matches()) {
+        return 1
+    }
+    def major = matcher.group(1).toInteger()
+    def minor = matcher.group(2).toInteger()
+    def patch = matcher.group(3).toInteger()
+    def commits = matcher.group(4) ? matcher.group(4).toInteger() : 0
+    return Math.max(1, major * 1000000 + minor * 10000 + patch * 100 + commits + 1)
+}
+
+def mindfsVersionName = (
+    findProperty('mindfsVersion') ?:
+    System.getenv('VERSION') ?:
+    mindfsGitVersion()
+).toString().trim()
+def mindfsVersionCode = (
+    findProperty('mindfsVersionCode') ?:
+    System.getenv('ANDROID_VERSION_CODE') ?:
+    mindfsVersionCodeFromName(mindfsVersionName)
+).toString().toInteger()
+
 android {
     namespace = "com.mindfs.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +45,8 @@ android {
         applicationId "com.mindfs.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode mindfsVersionCode
+        versionName mindfsVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

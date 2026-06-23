@@ -2,7 +2,7 @@ import React, { memo, useEffect, useRef, useState } from "react";
 import { useSessionStream, type TimelineItem } from "../hooks/useSessionStream";
 import type { TodoUpdate } from "../services/session";
 import { ThinkingBlock } from "./stream/ThinkingBlock";
-import { ToolCallCard } from "./stream/ToolCallCard";
+import { ToolCallCard, renderToolIcon } from "./stream/ToolCallCard";
 import { AgentIcon } from "./AgentIcon";
 import { InlineTokenText } from "./InlineTokenText";
 import { MarkdownViewer } from "./MarkdownViewer";
@@ -12,6 +12,7 @@ import { savePrompt } from "../services/prompts";
 import { reportError } from "../services/error";
 import { rootBadgeButtonStyle } from "./rootBadgeStyle";
 import { copyText } from "../services/clipboard";
+import type { AgentStatus } from "../services/agents";
 
 type SessionItem = {
   key?: string;
@@ -30,6 +31,10 @@ type SessionItem = {
     seq?: number;
     role?: string;
     agent?: string;
+    model?: string;
+    model_display_name?: string;
+    effort?: string;
+    fast_service?: string;
     content?: string;
     timestamp?: string;
     context_window?: {
@@ -38,6 +43,7 @@ type SessionItem = {
     };
   }>;
   closed_at?: string;
+  source?: string;
   related_files?: RelatedFile[];
   exchange_aux?: Record<string, ExchangeAux[]>;
 };
@@ -63,6 +69,10 @@ type SessionViewerProps = {
     toolUseId: string;
     answers: Record<string, string>;
   }) => void | Promise<void>;
+  onEditUserMessage?: (content: string) => void;
+  onForkAgentMessage?: (seq: number) => void | Promise<void>;
+  targetSeqRequestKey?: string | number;
+  agents?: AgentStatus[];
 };
 
 type AskUserQuestionOption = {
@@ -222,6 +232,42 @@ function formatCompactTokenCount(value: number) {
   return String(Math.round(value));
 }
 
+function modelDisplayName(
+  agents: AgentStatus[] | undefined,
+  agentName?: string,
+  modelID?: string,
+): string {
+  const model = `${modelID || ""}`.trim();
+  if (!model) {
+    return "";
+  }
+  const agent = (agents || []).find(
+    (item) => item.name === `${agentName || ""}`.trim(),
+  );
+  const match = (agent?.models || []).find((item) => item.id === model);
+  return `${match?.name || ""}`.trim() || model;
+}
+
+function formatAssistantExchangeMeta(
+  item: TimelineItem,
+  agents?: AgentStatus[],
+): string {
+  if (item.type !== "assistant_text") {
+    return "";
+  }
+  const parts = [
+    `${item.modelDisplayName || ""}`.trim() ||
+      modelDisplayName(agents, item.agent, item.model),
+    item.effort,
+  ]
+    .map((value) => `${value || ""}`.trim())
+    .filter(Boolean);
+  if (`${item.fastService || ""}`.trim().toLowerCase() === "on") {
+    parts.push("fast");
+  }
+  return parts.join(" · ");
+}
+
 function ContextWindowBadge({
   contextWindow,
 }: {
@@ -338,7 +384,74 @@ const formatTodoToolCallInput = (rawInput: string): string => {
 
 function isAuxiliaryTimelineItem(item: TimelineItem | null): boolean {
   return (
-    item?.type === "tool" || item?.type === "thought" || item?.type === "todo"
+    item?.type === "tool" ||
+    item?.type === "thought" ||
+    item?.type === "todo" ||
+    item?.type === "plan" ||
+    item?.type === "compact"
+  );
+}
+
+function PlanUpdateCard({ content, rootId }: { content: string; rootId?: string | null }) {
+  return (
+    <div
+      style={{
+        width: "100%",
+        minWidth: 0,
+        borderRadius: "10px",
+        border: "1px solid rgba(59, 130, 246, 0.24)",
+        background: "linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.03))",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          padding: "6px 8px",
+          fontSize: "12px",
+          fontWeight: 600,
+          color: "var(--text-primary)",
+          borderBottom: "1px solid var(--border-color)",
+        }}
+      >
+        Plan
+      </div>
+      <div style={{ padding: "10px" }}>
+        <MarkdownViewer content={content || ""} root={rootId || undefined} />
+      </div>
+    </div>
+  );
+}
+
+function CompactNoticeCard({
+  status,
+  summary,
+}: {
+  status?: string;
+  summary?: string;
+}) {
+  const normalizedStatus = `${status || ""}`.toLowerCase();
+  const label =
+    normalizedStatus === "running"
+      ? "Compacting context"
+      : normalizedStatus === "error"
+        ? "Context compaction failed"
+        : "Context compacted";
+  return (
+    <div
+      style={{
+        width: "100%",
+        minWidth: 0,
+        borderRadius: "10px",
+        border: "1px solid rgba(148, 163, 184, 0.28)",
+        background: "rgba(148, 163, 184, 0.08)",
+        padding: "10px",
+        color: "var(--text-secondary)",
+        fontSize: "13px",
+      }}
+    >
+      <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{label}</div>
+      {summary ? <div style={{ marginTop: "6px" }}>{summary}</div> : null}
+    </div>
   );
 }
 
@@ -421,6 +534,22 @@ function getAskUserQuestions(toolCall: Partial<ToolCall>): AskUserQuestionItem[]
   }
 }
 
+function getAskUserAnswers(toolCall: Partial<ToolCall>): Record<string, string> {
+  const raw = toolCall.meta?.answers;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {};
+  }
+  const answers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const cleanKey = `${key || ""}`.trim();
+    const cleanValue = `${value || ""}`.trim();
+    if (cleanKey && cleanValue) {
+      answers[cleanKey] = cleanValue;
+    }
+  }
+  return answers;
+}
+
 function AskUserIcon() {
   return (
     <svg
@@ -443,6 +572,29 @@ function AskUserIcon() {
   );
 }
 
+function ForkIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+      style={{ transform: "rotate(180deg) scaleX(-1)" }}
+    >
+      <path d="M0 0h24v24H0z" fill="none" />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+        d="M17 7a2 2 0 1 0 0-4a2 2 0 0 0 0 4M7 7a2 2 0 1 0 0-4a2 2 0 0 0 0 4m0 14a2 2 0 1 0 0-4a2 2 0 0 0 0 4M7 7v10M17 7v1c0 2.5-2 3-2 3l-6 2s-2 .5-2 3v1"
+      />
+    </svg>
+  );
+}
+
 function AskUserQuestionCard({
   toolCall,
   rootId,
@@ -459,9 +611,8 @@ function AskUserQuestionCard({
   onAnswer?: SessionViewerProps["onAskUserAnswer"];
 }) {
   const questions = getAskUserQuestions(toolCall);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [focusedCustomAnswerKey, setFocusedCustomAnswerKey] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
   const status = `${toolCall.status || ""}`.toLowerCase();
   const isCurrent =
     status === "running" || status === "pending" || status === "in_progress";
@@ -469,6 +620,11 @@ function AskUserQuestionCard({
   const toolUseId =
     toolCall.callId ||
     (typeof toolCall.meta?.toolUseId === "string" ? toolCall.meta.toolUseId : "");
+  const persistedAnswers = getAskUserAnswers(toolCall);
+  const persistedAnswersKey = JSON.stringify(persistedAnswers);
+  const hasPersistedAnswers = Object.keys(persistedAnswers).length > 0;
+  const [answers, setAnswers] = useState<Record<string, string>>(persistedAnswers);
+  const [submitted, setSubmitted] = useState(hasPersistedAnswers);
   const firstQuestion = questions[0] || {};
   const questionTitle = `${firstQuestion.question || ""}`.trim();
   const questionHeader = `${firstQuestion.header || ""}`.trim();
@@ -491,6 +647,17 @@ function AskUserQuestionCard({
     !submitted;
 
   useEffect(() => {
+    if (hasPersistedAnswers) {
+      setAnswers(persistedAnswers);
+      setSubmitted(true);
+      setExpanded(false);
+      return;
+    }
+    setAnswers({});
+    setSubmitted(false);
+  }, [toolUseId, persistedAnswersKey, hasPersistedAnswers]);
+
+  useEffect(() => {
     if (submitted) {
       setExpanded(false);
       return;
@@ -501,13 +668,13 @@ function AskUserQuestionCard({
   const setAnswer = (index: number, value: string) => {
     setAnswers((prev) => ({ ...prev, [`q_${index}`]: value }));
   };
-  const toggleMultiAnswer = (index: number, label: string) => {
+  const toggleMultiAnswer = (index: number, label: string, validLabels: string[]) => {
     const key = `q_${index}`;
     setAnswers((prev) => {
       const current = (prev[key] || "")
         .split(",")
         .map((item) => item.trim())
-        .filter(Boolean);
+        .filter((item) => item && validLabels.includes(item));
       const next = current.includes(label)
         ? current.filter((item) => item !== label)
         : [...current, label];
@@ -586,85 +753,117 @@ function AskUserQuestionCard({
       </button>
       {expanded ? (
         <div style={{ padding: "10px", display: "flex", flexDirection: "column", gap: "12px" }}>
-        {questions.map((question, index) => {
-          const key = `q_${index}`;
-          const options = Array.isArray(question.options) ? question.options : [];
-          const selected = answers[key] || "";
-          const selectedSet = new Set(
-            selected
-              .split(",")
-              .map((item) => item.trim())
-              .filter(Boolean),
-          );
-          return (
-            <div key={key} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              {options.length > 0 ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                  {options.map((option) => {
-                    const label = `${option.label || ""}`.trim();
-                    if (!label) return null;
-                    const checked = question.multiSelect
-                      ? selectedSet.has(label)
-                      : selected === label;
-                    return (
-                      <label
-                        key={label}
-                        style={{
-                          display: "flex",
-                          gap: "8px",
-                          alignItems: "flex-start",
-                          padding: "7px 8px",
-                          borderRadius: "8px",
-                          border: checked
-                            ? "1px solid rgba(239, 68, 68, 0.42)"
-                            : "1px solid var(--border-color)",
-                          background: checked ? "rgba(239, 68, 68, 0.10)" : "var(--content-bg)",
-                          cursor: submitted ? "default" : "pointer",
-                        }}
-                      >
-                        <input
-                          type={question.multiSelect ? "checkbox" : "radio"}
-                          name={`${toolUseId}-${key}`}
-                          checked={checked}
-                          disabled={submitted}
-                          onChange={() =>
-                            question.multiSelect
-                              ? toggleMultiAnswer(index, label)
-                              : setAnswer(index, label)
-                          }
-                          style={{ marginTop: "2px" }}
-                        />
-                        <span style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                          <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>{label}</span>
-                          {option.description ? (
-                            <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                              {option.description}
-                            </span>
-                          ) : null}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              ) : (
-                <textarea
-                  value={selected}
-                  disabled={submitted}
-                  onChange={(event) => setAnswer(index, event.target.value)}
-                  placeholder="输入回答..."
-                  rows={3}
-                  style={{
-                    width: "100%",
-                    resize: "vertical",
-                    borderRadius: "8px",
-                    border: "1px solid var(--border-color)",
-                    background: "var(--content-bg)",
-                    color: "var(--text-primary)",
-                    padding: "8px",
-                    fontSize: "13px",
-                    boxSizing: "border-box",
-                  }}
-                />
+          {questions.map((question, index) => {
+            const key = `q_${index}`;
+            const options = Array.isArray(question.options) ? question.options : [];
+            const selected = answers[key] || "";
+            const optionLabels = options
+              .map((option) => `${option.label || ""}`.trim())
+              .filter(Boolean);
+            const selectedSet = new Set(
+              selected
+                .split(",")
+                .map((item) => item.trim())
+                .filter(Boolean),
+            );
+            const hasOptionSelection = question.multiSelect
+              ? optionLabels.some((label) => selectedSet.has(label))
+              : optionLabels.includes(selected);
+            const customAnswer = hasOptionSelection ? "" : selected;
+            const customAnswerActive =
+              customAnswer.trim() !== "" || focusedCustomAnswerKey === key;
+            return (
+              <div key={key} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {options.length > 0 ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    {options.map((option) => {
+                      const label = `${option.label || ""}`.trim();
+                      if (!label) return null;
+                      const checked = question.multiSelect
+                        ? selectedSet.has(label)
+                        : selected === label;
+                      return (
+                        <label
+                          key={label}
+                          style={{
+                            display: "flex",
+                            gap: "8px",
+                            alignItems: "flex-start",
+                            padding: "7px 8px",
+                            borderRadius: "8px",
+                            border: checked
+                              ? "1px solid rgba(239, 68, 68, 0.42)"
+                              : "1px solid var(--border-color)",
+                            background: checked ? "rgba(239, 68, 68, 0.10)" : "var(--content-bg)",
+                            cursor: submitted ? "default" : "pointer",
+                          }}
+                        >
+                          <input
+                            type={question.multiSelect ? "checkbox" : "radio"}
+                            name={`${toolUseId}-${key}`}
+                            checked={checked}
+                            disabled={submitted}
+                            onChange={() =>
+                              question.multiSelect
+                                ? toggleMultiAnswer(index, label, optionLabels)
+                                : setAnswer(index, label)
+                            }
+                            style={{ marginTop: "2px" }}
+                          />
+                          <span style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                            <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>{label}</span>
+                            {option.description ? (
+                              <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                                {option.description}
+                              </span>
+                            ) : null}
+                          </span>
+                        </label>
+                      );
+                    })}
+                    <textarea
+                      value={customAnswer}
+                      disabled={submitted}
+                      onFocus={() => setFocusedCustomAnswerKey(key)}
+                      onBlur={() => setFocusedCustomAnswerKey((current) => (current === key ? "" : current))}
+                      onChange={(event) => setAnswer(index, event.target.value)}
+                      placeholder="输入自定义回答..."
+                      rows={2}
+                      style={{
+                        width: "100%",
+                        resize: "vertical",
+                        borderRadius: "8px",
+                        border: customAnswerActive
+                          ? "1px solid rgba(239, 68, 68, 0.42)"
+                          : "1px solid var(--border-color)",
+                        outline: "none",
+                        background: "var(--content-bg)",
+                        color: "var(--text-primary)",
+                        padding: "8px",
+                        fontSize: "13px",
+                        boxSizing: "border-box",
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <textarea
+                    value={selected}
+                    disabled={submitted}
+                    onChange={(event) => setAnswer(index, event.target.value)}
+                    placeholder="输入回答..."
+                    rows={3}
+                    style={{
+                      width: "100%",
+                      resize: "vertical",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      background: "var(--content-bg)",
+                      color: "var(--text-primary)",
+                      padding: "8px",
+                      fontSize: "13px",
+                      boxSizing: "border-box",
+                    }}
+                  />
               )}
             </div>
           );
@@ -762,11 +961,15 @@ function SessionViewerInner({
   rootPath,
   interactionMode = "main",
   targetSeq = 0,
+  targetSeqRequestKey = "",
   gitFileStatsByPath = {},
   onFileClick,
   onRootClick,
   onRemoveRelatedFile,
   onAskUserAnswer,
+  onEditUserMessage,
+  onForkAgentMessage,
+  agents,
 }: SessionViewerProps) {
   const [showAllFiles, setShowAllFiles] = useState(false);
   const [relatedFilesCollapsed, setRelatedFilesCollapsed] = useState(false);
@@ -790,16 +993,29 @@ function SessionViewerInner({
   const relatedFilesDefaultStateRef = useRef<string>("");
   const sessionKey = session?.key || session?.session_key || null;
   const exchanges = Array.isArray(session?.exchanges) ? session.exchanges : [];
+  const isAwaiting = !!(session as any)?.pending;
   const { timeline, isStreaming, streamVersion, streamStatusText } = useSessionStream(
     sessionKey,
     exchanges,
     session?.exchange_aux || {},
     session?.context_window,
+    isAwaiting,
   );
-  const isAwaiting = !!(session as any)?.pending;
   const shouldStickToBottomRef = useRef(true);
   const lastSessionKeyRef = useRef<string | null>(null);
+  const targetSeqScrollKeyRef = useRef("");
+  const targetSeqFrameRef = useRef<number | null>(null);
+  const targetSeqTimerRefs = useRef<number[]>([]);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+
+  const cancelTargetSeqScroll = () => {
+    if (targetSeqFrameRef.current !== null) {
+      window.cancelAnimationFrame(targetSeqFrameRef.current);
+      targetSeqFrameRef.current = null;
+    }
+    targetSeqTimerRefs.current.forEach((timer) => window.clearTimeout(timer));
+    targetSeqTimerRefs.current = [];
+  };
 
   useEffect(() => {
     onFileClickRef.current = onFileClick;
@@ -836,6 +1052,12 @@ function SessionViewerInner({
         window.clearTimeout(timer),
       );
       copyResetTimersRef.current = {};
+      if (targetSeqFrameRef.current !== null) {
+        window.cancelAnimationFrame(targetSeqFrameRef.current);
+        targetSeqFrameRef.current = null;
+      }
+      targetSeqTimerRefs.current.forEach((timer) => window.clearTimeout(timer));
+      targetSeqTimerRefs.current = [];
     };
   }, []);
 
@@ -894,6 +1116,11 @@ if (useInnerScrollContainer && !container) {
 
   useEffect(() => {
     if (!targetSeq) {
+      targetSeqScrollKeyRef.current = "";
+      return;
+    }
+    const scrollKey = `${sessionKey || ""}:${targetSeq}:${targetSeqRequestKey}`;
+    if (targetSeqScrollKeyRef.current === scrollKey) {
       return;
     }
     const container = scrollRef.current;
@@ -906,10 +1133,45 @@ if (useInnerScrollContainer && !container) {
     if (!node) {
       return;
     }
-    window.requestAnimationFrame(() => {
-      node.scrollIntoView({ block: "center", behavior: "smooth" });
+    targetSeqScrollKeyRef.current = scrollKey;
+    shouldStickToBottomRef.current = false;
+    cancelTargetSeqScroll();
+    const scrollToNode = () => {
+      const latestContainer = scrollRef.current;
+      const latestNode = latestContainer?.querySelector<HTMLElement>(
+        `[data-session-seq="${targetSeq}"]`,
+      );
+      if (!latestContainer || !latestNode) {
+        return;
+      }
+      shouldStickToBottomRef.current = false;
+      const nextTop = Math.max(
+        0,
+        latestNode.offsetTop -
+          latestContainer.clientHeight / 2 +
+          latestNode.offsetHeight / 2,
+      );
+      latestContainer.scrollTo({ top: nextTop, behavior: "auto" });
+    };
+    targetSeqFrameRef.current = window.requestAnimationFrame(() => {
+      targetSeqFrameRef.current = window.requestAnimationFrame(() => {
+        targetSeqFrameRef.current = null;
+        scrollToNode();
+      });
     });
-  }, [targetSeq, timeline]);
+    [80, 220, 480].forEach((delay) => {
+      const timer = window.setTimeout(() => {
+        targetSeqTimerRefs.current = targetSeqTimerRefs.current.filter(
+          (item) => item !== timer,
+        );
+        if (targetSeqScrollKeyRef.current !== scrollKey) {
+          return;
+        }
+        scrollToNode();
+      }, delay);
+      targetSeqTimerRefs.current.push(timer);
+    });
+  }, [sessionKey, targetSeq, targetSeqRequestKey, timeline]);
 
   const rawRelated = session?.related_files || (session as any)?.outputs || [];
   const relatedFiles = (Array.isArray(rawRelated) ? rawRelated : [])
@@ -1009,7 +1271,9 @@ if (useInnerScrollContainer && !container) {
     flexShrink: 0,
   };
 
-  const makePromptKey = (item: TimelineItem): string =>
+  const makePromptKey = (
+    item: Extract<TimelineItem, { type: "user_text" | "assistant_text" }>,
+  ): string =>
     `${item.id}\n${item.timestamp || ""}\n${item.content || ""}`;
 
   const renderTimelineItem = (
@@ -1029,8 +1293,10 @@ if (useInnerScrollContainer && !container) {
       const tc = item.toolCall || {};
       const isAskUser =
         `${tc.kind || ""}`.toLowerCase() === "ask_user" &&
-        `${tc.status || ""}`.toLowerCase() !== "complete" &&
         getAskUserQuestions(tc).length > 0;
+      const isUserShell =
+        `${tc.kind || ""}`.toLowerCase() === "execute" &&
+        tc.meta?.source === "userShell";
       const toolUseId =
         tc.callId ||
         (typeof tc.meta?.toolUseId === "string" ? tc.meta.toolUseId : "");
@@ -1059,8 +1325,11 @@ if (useInnerScrollContainer && !container) {
               content={tc.content}
               result={formatToolCallFallbackResult(tc)}
               locations={tc.locations}
+              meta={tc.meta}
               rootPath={rootPath || undefined}
-              defaultExpanded={false}
+              rootId={rootId}
+              sessionKey={sessionKey}
+              defaultExpanded={isUserShell}
             />
           )}
         </div>
@@ -1070,6 +1339,23 @@ if (useInnerScrollContainer && !container) {
       return (
         <div key={timelineItemKey} style={{ marginTop: spacing }}>
           <TodoUpdateCard todoUpdate={item.todoUpdate} />
+        </div>
+      );
+    }
+    if (item.type === "plan") {
+      return (
+        <div key={timelineItemKey} style={{ marginTop: spacing }}>
+          <PlanUpdateCard content={item.planUpdate?.content || ""} rootId={rootId} />
+        </div>
+      );
+    }
+    if (item.type === "compact") {
+      return (
+        <div key={timelineItemKey} style={{ marginTop: spacing }}>
+          <CompactNoticeCard
+            status={item.compactNotice?.status}
+            summary={item.compactNotice?.summary}
+          />
         </div>
       );
     }
@@ -1103,6 +1389,10 @@ if (useInnerScrollContainer && !container) {
     const assistantMarkdownContent = !isUser
       ? collectAssistantFlowMarkdown(timeline, idx)
       : "";
+    const assistantExchangeMeta = !isUser
+      ? formatAssistantExchangeMeta(item, agents)
+      : "";
+    const canForkAgentMessage = !isUser && Number(item.seq || 0) > 0 && !!onForkAgentMessage;
     return (
       <div
         key={timelineItemKey}
@@ -1256,6 +1546,17 @@ if (useInnerScrollContainer && !container) {
                 />
               ) : null}
               <span>{time}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  onEditUserMessage?.(item.content || "");
+                }}
+                style={userMetaButtonStyle}
+                aria-label="编辑消息"
+                title="编辑消息"
+              >
+                {renderToolIcon("edit")}
+              </button>
               {promptSaved ? (
                 <span
                   aria-label="已添加提示词"
@@ -1318,11 +1619,14 @@ if (useInnerScrollContainer && !container) {
                 type="button"
                 onClick={() => {
                   if (!promptSaveContent) {
-                    reportError("file.write_failed", "消息内容为空，无法复制");
+                    reportError("clipboard.write_failed", "消息内容为空，无法复制");
                     return;
-                    }
-                    const markCopied = () => {
-                      setCopiedMessageKeys((prev) => ({ ...prev, [promptKey]: true }));
+                  }
+                  const markCopied = () => {
+                    setCopiedMessageKeys((prev) => ({
+                      ...prev,
+                      [promptKey]: true,
+                    }));
                     if (copyResetTimersRef.current[promptKey]) {
                       window.clearTimeout(copyResetTimersRef.current[promptKey]);
                     }
@@ -1333,13 +1637,13 @@ if (useInnerScrollContainer && !container) {
                         return next;
                       });
                       delete copyResetTimersRef.current[promptKey];
-                     }, 1000);
-                   };
-                   void copyText(promptSaveContent)
-                     .then(markCopied)
-                     .catch((err) => {
+                    }, 1000);
+                  };
+                  void copyText(promptSaveContent)
+                    .then(markCopied)
+                    .catch((err) => {
                       reportError(
-                        "file.write_failed",
+                        "clipboard.write_failed",
                         String((err as Error)?.message || "复制失败"),
                       );
                     });
@@ -1397,6 +1701,7 @@ if (useInnerScrollContainer && !container) {
             >
               <MarkdownViewer
                 content={item.content || ""}
+                root={rootId || undefined}
                 onFileClick={onFileClickRef.current}
               />
             </div>
@@ -1419,7 +1724,7 @@ if (useInnerScrollContainer && !container) {
                   onClick={() => {
                     if (!assistantMarkdownContent) {
                       reportError(
-                        "file.write_failed",
+                        "clipboard.write_failed",
                         "消息内容为空，无法复制",
                       );
                       return;
@@ -1447,7 +1752,7 @@ if (useInnerScrollContainer && !container) {
                       })
                       .catch((err) => {
                         reportError(
-                          "file.write_failed",
+                          "clipboard.write_failed",
                           String((err as Error)?.message || "复制失败"),
                         );
                       });
@@ -1486,10 +1791,29 @@ if (useInnerScrollContainer && !container) {
                     </svg>
                   )}
                 </button>
+                {canForkAgentMessage ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const seq = Number(item.seq || 0);
+                      if (seq > 0) {
+                        void onForkAgentMessage?.(seq);
+                      }
+                    }}
+                    style={userMetaButtonStyle}
+                    aria-label="从此消息 fork"
+                    title="从此消息 fork"
+                  >
+                    <ForkIcon />
+                  </button>
+                ) : null}
                 <AgentIcon
                   agentName={item.agent || ""}
                   style={{ width: "12px", height: "12px" }}
                 />
+                {assistantExchangeMeta ? (
+                  <span>{assistantExchangeMeta}</span>
+                ) : null}
                 <span>{time}</span>
                 <ContextWindowBadge contextWindow={item.contextWindow} />
               </span>
@@ -1573,7 +1897,7 @@ if (useInnerScrollContainer && !container) {
             padding: "24px 16px",
             boxSizing: "border-box",
             overflowX: "hidden",
-          }}>
+          }} data-mindfs-session-content-width="1">
           <div style={{ width: "100%", minWidth: 0, margin: "0", display: "flex", flexDirection: "column" }}>
             {loading && !hasVisibleTimeline ? (
               <div
@@ -1876,6 +2200,10 @@ if (useInnerScrollContainer && !container) {
           <button
             type="button"
             onClick={() => {
+              cancelTargetSeqScroll();
+              if (targetSeq) {
+                targetSeqScrollKeyRef.current = `${sessionKey || ""}:${targetSeq}:${targetSeqRequestKey}`;
+              }
               shouldStickToBottomRef.current = true;
               setShowJumpToLatest(false);
               scrollEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -1949,6 +2277,8 @@ export const SessionViewer = memo(
     prev.rootId === next.rootId &&
     prev.rootPath === next.rootPath &&
     prev.interactionMode === next.interactionMode &&
+    prev.targetSeq === next.targetSeq &&
+    prev.targetSeqRequestKey === next.targetSeqRequestKey &&
     prev.gitFileStatsByPath === next.gitFileStatsByPath &&
     prev.onRootClick === next.onRootClick,
 );

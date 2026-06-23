@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"mindfs/server/internal/apperr"
 )
 
 type ListLocalDirsInput struct {
@@ -23,9 +25,10 @@ type LocalDirItem struct {
 }
 
 type ListLocalDirsOutput struct {
-	Path   string         `json:"path"`
-	Parent string         `json:"parent,omitempty"`
-	Items  []LocalDirItem `json:"items"`
+	Path    string         `json:"path"`
+	Parent  string         `json:"parent,omitempty"`
+	Volumes []LocalDirItem `json:"volumes,omitempty"`
+	Items   []LocalDirItem `json:"items"`
 }
 
 func (s *Service) ListLocalDirs(_ context.Context, in ListLocalDirsInput) (ListLocalDirsOutput, error) {
@@ -34,7 +37,11 @@ func (s *Service) ListLocalDirs(_ context.Context, in ListLocalDirsInput) (ListL
 	}
 	cleaned := strings.TrimSpace(in.Path)
 	if cleaned == "" {
-		return ListLocalDirsOutput{}, errors.New("path required")
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return ListLocalDirsOutput{}, err
+		}
+		cleaned = homeDir
 	}
 	absPath, err := filepath.Abs(filepath.Clean(cleaned))
 	if err != nil {
@@ -42,22 +49,15 @@ func (s *Service) ListLocalDirs(_ context.Context, in ListLocalDirsInput) (ListL
 	}
 	info, err := os.Stat(absPath)
 	if err != nil {
-		return ListLocalDirsOutput{}, err
+		return ListLocalDirsOutput{}, apperr.Wrap("stat", absPath, err)
 	}
 	if !info.IsDir() {
 		return ListLocalDirsOutput{}, errors.New("path is not a directory")
 	}
-	rootPathMap := make(map[string]string)
-	for _, root := range s.Registry.ListRoots() {
-		normalized := normalizeLocalDirPath(root.RootPath)
-		if normalized == "" {
-			continue
-		}
-		rootPathMap[normalized] = root.ID
-	}
+	rootPathMap := s.localDirRootPathMap()
 	entries, err := os.ReadDir(absPath)
 	if err != nil {
-		return ListLocalDirsOutput{}, err
+		return ListLocalDirsOutput{}, apperr.Wrap("list", absPath, err)
 	}
 	items := make([]LocalDirItem, 0, len(entries))
 	for _, entry := range entries {
@@ -89,10 +89,23 @@ func (s *Service) ListLocalDirs(_ context.Context, in ListLocalDirsInput) (ListL
 		parent = ""
 	}
 	return ListLocalDirsOutput{
-		Path:   absPath,
-		Parent: parent,
-		Items:  items,
+		Path:    absPath,
+		Parent:  parent,
+		Volumes: listLocalDirVolumes(rootPathMap),
+		Items:   items,
 	}, nil
+}
+
+func (s *Service) localDirRootPathMap() map[string]string {
+	rootPathMap := make(map[string]string)
+	for _, root := range s.Registry.ListRoots() {
+		normalized := normalizeLocalDirPath(root.RootPath)
+		if normalized == "" {
+			continue
+		}
+		rootPathMap[normalized] = root.ID
+	}
+	return rootPathMap
 }
 
 func normalizeLocalDirPath(path string) string {

@@ -16,6 +16,8 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"mindfs/server/internal/apperr"
+
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
@@ -23,6 +25,7 @@ const (
 	metaDirName         = ".mindfs"
 	stateFileName       = "state.json"
 	defaultMaxReadBytes = 64 * 1024
+	maxFullReadBytes    = 128 << 20
 )
 
 var (
@@ -155,7 +158,7 @@ func (r RootInfo) StatRoot() (os.FileInfo, error) {
 	}
 	info, err := os.Stat(rootAbs)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap("stat", rootAbs, err)
 	}
 	if !info.IsDir() {
 		return nil, errors.New("root is not a directory")
@@ -169,7 +172,7 @@ func (r RootInfo) EnsureMetaDir() (string, error) {
 		return "", errors.New("root required")
 	}
 	if err := os.MkdirAll(metaDir, 0o755); err != nil {
-		return "", err
+		return "", apperr.Wrap("mkdir", metaDir, err)
 	}
 	return metaDir, nil
 }
@@ -187,7 +190,8 @@ func (r RootInfo) ListMetaEntries(path string) ([]os.DirEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return os.ReadDir(resolved)
+	entries, err := os.ReadDir(resolved)
+	return entries, apperr.Wrap("list", resolved, err)
 }
 
 func (r RootInfo) OpenMetaFile(path string) (*os.File, error) {
@@ -195,7 +199,8 @@ func (r RootInfo) OpenMetaFile(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	return os.Open(resolved)
+	file, err := os.Open(resolved)
+	return file, apperr.Wrap("open", resolved, err)
 }
 
 func (r RootInfo) OpenMetaFileAppend(path string) (*os.File, error) {
@@ -204,9 +209,10 @@ func (r RootInfo) OpenMetaFileAppend(path string) (*os.File, error) {
 		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
-		return nil, err
+		return nil, apperr.Wrap("mkdir", filepath.Dir(resolved), err)
 	}
-	return os.OpenFile(resolved, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(resolved, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	return file, apperr.Wrap("write", resolved, err)
 }
 
 func (r RootInfo) ReadMetaFile(path string) ([]byte, error) {
@@ -214,7 +220,8 @@ func (r RootInfo) ReadMetaFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return os.ReadFile(resolved)
+	data, err := os.ReadFile(resolved)
+	return data, apperr.Wrap("read", resolved, err)
 }
 
 func (r RootInfo) WriteMetaFile(path string, data []byte) error {
@@ -223,11 +230,11 @@ func (r RootInfo) WriteMetaFile(path string, data []byte) error {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
-		return err
+		return apperr.Wrap("mkdir", filepath.Dir(resolved), err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(resolved), filepath.Base(resolved)+".tmp-*")
 	if err != nil {
-		return err
+		return apperr.Wrap("create", filepath.Dir(resolved), err)
 	}
 	tmpName := tmp.Name()
 	cleanup := true
@@ -238,17 +245,17 @@ func (r RootInfo) WriteMetaFile(path string, data []byte) error {
 	}()
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
-		return err
+		return apperr.Wrap("write", tmpName, err)
 	}
 	if err := tmp.Chmod(0o644); err != nil {
 		_ = tmp.Close()
-		return err
+		return apperr.Wrap("write", tmpName, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return apperr.Wrap("write", tmpName, err)
 	}
 	if err := os.Rename(tmpName, resolved); err != nil {
-		return err
+		return apperr.Wrap("rename", resolved, err)
 	}
 	cleanup = false
 	return nil
@@ -256,11 +263,12 @@ func (r RootInfo) WriteMetaFile(path string, data []byte) error {
 
 // Entry represents a filesystem entry for UI listings.
 type Entry struct {
-	Name  string `json:"name"`
-	Path  string `json:"path"`
-	IsDir bool   `json:"is_dir"`
-	Size  int64  `json:"size"`
-	MTime string `json:"mtime"`
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	IsDir     bool   `json:"is_dir"`
+	IsSymlink bool   `json:"is_symlink,omitempty"`
+	Size      int64  `json:"size"`
+	MTime     string `json:"mtime"`
 }
 
 func (r RootInfo) ListEntries(dirRelPath string) ([]Entry, error) {
@@ -270,7 +278,7 @@ func (r RootInfo) ListEntries(dirRelPath string) ([]Entry, error) {
 	}
 	entries, err := os.ReadDir(dirAbs)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap("list", dirAbs, err)
 	}
 	result := make([]Entry, 0, len(entries))
 	for _, entry := range entries {
@@ -286,12 +294,21 @@ func (r RootInfo) ListEntries(dirRelPath string) ([]Entry, error) {
 			// Skip those children so one unreadable item doesn't blank the whole view.
 			continue
 		}
+		isDir := entry.IsDir()
+		isSymlink := info.Mode()&os.ModeSymlink != 0
+		if isSymlink {
+			if targetInfo, err := os.Stat(absPath); err == nil {
+				info = targetInfo
+				isDir = targetInfo.IsDir()
+			}
+		}
 		result = append(result, Entry{
-			Name:  name,
-			Path:  relPath,
-			IsDir: entry.IsDir(),
-			Size:  info.Size(),
-			MTime: info.ModTime().UTC().Format(time.RFC3339Nano),
+			Name:      name,
+			Path:      relPath,
+			IsDir:     isDir,
+			IsSymlink: isSymlink,
+			Size:      info.Size(),
+			MTime:     info.ModTime().UTC().Format(time.RFC3339Nano),
 		})
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -341,14 +358,14 @@ func (r RootInfo) ReadFile(pathRel string, maxBytes int64, cursor int64, readMod
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return ReadResult{}, err
+		return ReadResult{}, apperr.Wrap("stat", resolved, err)
 	}
 	if info.IsDir() {
 		return ReadResult{}, errors.New("path is a directory")
 	}
 	file, err := os.Open(resolved)
 	if err != nil {
-		return ReadResult{}, err
+		return ReadResult{}, apperr.Wrap("open", resolved, err)
 	}
 	defer file.Close()
 	ext := filepath.Ext(resolved)
@@ -357,7 +374,7 @@ func (r RootInfo) ReadFile(pathRel string, maxBytes int64, cursor int64, readMod
 	if cursor > 0 {
 		readOffset = alignReadOffsetForDecoding(file, info, ext, cursor, bom)
 		if _, err := file.Seek(readOffset, io.SeekStart); err != nil {
-			return ReadResult{}, err
+			return ReadResult{}, apperr.Wrap("read", resolved, err)
 		}
 	}
 
@@ -366,16 +383,22 @@ func (r RootInfo) ReadFile(pathRel string, maxBytes int64, cursor int64, readMod
 		n   int
 	)
 	if readMode == "full" {
-		buf, err = io.ReadAll(file)
+		if info.Size() > maxFullReadBytes {
+			return ReadResult{}, errors.New("file is too large for full read")
+		}
+		buf, err = io.ReadAll(io.LimitReader(file, maxFullReadBytes+1))
 		if err != nil {
-			return ReadResult{}, err
+			return ReadResult{}, apperr.Wrap("read", resolved, err)
+		}
+		if len(buf) > maxFullReadBytes {
+			return ReadResult{}, errors.New("file is too large for full read")
 		}
 		n = len(buf)
 	} else {
 		buf = make([]byte, maxBytes)
 		n, err = io.ReadFull(file, buf)
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-			return ReadResult{}, err
+			return ReadResult{}, apperr.Wrap("read", resolved, err)
 		}
 		buf = buf[:n]
 	}
@@ -385,7 +408,7 @@ func (r RootInfo) ReadFile(pathRel string, maxBytes int64, cursor int64, readMod
 	encoding := "utf-8"
 	content := string(buf)
 	if !utf8.Valid(buf) {
-		if decoded, detectedEncoding, ok := tryDecodeText(buf, ext); ok {
+		if decoded, detectedEncoding, ok := TryDecodeText(buf, ext); ok {
 			encoding = detectedEncoding
 			content = decoded
 		} else {
@@ -603,7 +626,7 @@ func trimTailForDecoding(buf []byte, ext string, bom string) []byte {
 	return buf
 }
 
-func tryDecodeText(buf []byte, ext string) (string, string, bool) {
+func TryDecodeText(buf []byte, ext string) (string, string, bool) {
 	// Only attempt legacy decoding for common text file types.
 	if !isTextLikeExt(ext) {
 		return "", "", false
@@ -702,14 +725,14 @@ func (r RootInfo) OpenFile(pathRel string) (*os.File, os.FileInfo, string, error
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", apperr.Wrap("stat", resolved, err)
 	}
 	if info.IsDir() {
 		return nil, nil, "", errors.New("path is a directory")
 	}
 	file, err := os.Open(resolved)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", apperr.Wrap("open", resolved, err)
 	}
 	return file, info, relPath, nil
 }
@@ -725,7 +748,7 @@ func (r RootInfo) StatFile(pathRel string) (os.FileInfo, string, error) {
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return nil, "", err
+		return nil, "", apperr.Wrap("stat", resolved, err)
 	}
 	if info.IsDir() {
 		return nil, "", errors.New("path is a directory")
@@ -742,7 +765,7 @@ type State struct {
 func (r RootInfo) LoadState() (State, error) {
 	payload, err := r.ReadMetaFile(stateFileName)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return State{}, nil
 		}
 		return State{}, err
@@ -768,7 +791,7 @@ type FileMeta map[string][]FileMetaEntry
 func (r RootInfo) LoadFileMeta() (FileMeta, error) {
 	payload, err := r.ReadMetaFile("file-meta.json")
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return FileMeta{}, nil
 		}
 		return nil, err

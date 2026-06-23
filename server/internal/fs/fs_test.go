@@ -1,13 +1,44 @@
 package fs
 
 import (
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
+
+func TestRegistryUpsertRejectsSameNameDifferentPath(t *testing.T) {
+	registry := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
+	first := filepath.Join(t.TempDir(), "project")
+	second := filepath.Join(t.TempDir(), "project")
+	if err := os.Mkdir(first, 0o755); err != nil {
+		t.Fatalf("Mkdir first returned error: %v", err)
+	}
+	if err := os.Mkdir(second, 0o755); err != nil {
+		t.Fatalf("Mkdir second returned error: %v", err)
+	}
+
+	created, err := registry.Upsert(first)
+	if err != nil {
+		t.Fatalf("first Upsert returned error: %v", err)
+	}
+	again, err := registry.Upsert(first)
+	if err != nil {
+		t.Fatalf("same-path Upsert returned error: %v", err)
+	}
+	if again.RootPath != created.RootPath {
+		t.Fatalf("same-path Upsert RootPath = %q, want %q", again.RootPath, created.RootPath)
+	}
+
+	_, err = registry.Upsert(second)
+	if !errors.Is(err, ErrRootNameConflict) {
+		t.Fatalf("different-path Upsert error = %v, want ErrRootNameConflict", err)
+	}
+}
 
 func TestRootInfoNormalizePathAcceptsAbsolutePathWithoutLeadingSlash(t *testing.T) {
 	root := NewRootInfo("mindfs", "mindfs", "/Users/bixin/project/mindfs")
@@ -67,6 +98,50 @@ func TestRootInfoListEntriesIncludesSizeAndMTime(t *testing.T) {
 	}
 }
 
+func TestRootInfoListEntriesTreatsDirectorySymlinkAsDirectory(t *testing.T) {
+	rootDir := t.TempDir()
+	targetDir := filepath.Join(rootDir, "target")
+	if err := os.Mkdir(targetDir, 0o755); err != nil {
+		t.Fatalf("Mkdir returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "child.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.Symlink("target", filepath.Join(rootDir, "linked")); err != nil {
+		t.Skipf("Symlink unavailable: %v", err)
+	}
+
+	root := NewRootInfo("mindfs", "mindfs", rootDir)
+	entries, err := root.ListEntries(".")
+	if err != nil {
+		t.Fatalf("ListEntries returned error: %v", err)
+	}
+	var linked Entry
+	for _, entry := range entries {
+		if entry.Name == "linked" {
+			linked = entry
+			break
+		}
+	}
+	if linked.Name == "" {
+		t.Fatalf("linked entry not found: %#v", entries)
+	}
+	if !linked.IsDir {
+		t.Fatalf("linked entry IsDir = false, want true")
+	}
+	if !linked.IsSymlink {
+		t.Fatalf("linked entry IsSymlink = false, want true")
+	}
+
+	children, err := root.ListEntries("linked")
+	if err != nil {
+		t.Fatalf("ListEntries linked returned error: %v", err)
+	}
+	if len(children) != 1 || children[0].Name != "child.txt" {
+		t.Fatalf("linked children = %#v, want child.txt", children)
+	}
+}
+
 func TestSharedFileWatcherShouldIgnoreLargeGeneratedDirectories(t *testing.T) {
 	rootDir := t.TempDir()
 	root := NewRootInfo("mindfs", "mindfs", rootDir)
@@ -93,42 +168,79 @@ func TestSharedFileWatcherShouldIgnoreLargeGeneratedDirectories(t *testing.T) {
 	}
 }
 
-func TestSharedFileWatcherSkipsRecursiveWatchForHighFanoutDirectory(t *testing.T) {
+func TestSharedFileWatcherWatchesOnlyRequestedDirectory(t *testing.T) {
 	rootDir := t.TempDir()
-	wideDir := filepath.Join(rootDir, "wide")
-	if err := os.Mkdir(wideDir, 0o755); err != nil {
-		t.Fatalf("Mkdir returned error: %v", err)
-	}
-	for i := 0; i <= maxDirectChildDirsRecursiveWatch; i++ {
-		if err := os.Mkdir(filepath.Join(wideDir, fmt.Sprintf("dir-%03d", i)), 0o755); err != nil {
-			t.Fatalf("Mkdir child %d returned error: %v", i, err)
-		}
-	}
-
-	root := NewRootInfo("mindfs", "mindfs", rootDir)
-	watcher := &SharedFileWatcher{root: root}
-	if !watcher.shouldSkipRecursiveWatch(wideDir) {
-		t.Fatalf("shouldSkipRecursiveWatch(%q) = false, want true", wideDir)
-	}
-}
-
-func TestSharedFileWatcherDoesNotCountIgnoredChildrenForFanoutLimit(t *testing.T) {
-	rootDir := t.TempDir()
-	dir := filepath.Join(rootDir, "deps")
-	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(rootDir, "a", "b", "c"), 0o755); err != nil {
 		t.Fatalf("MkdirAll returned error: %v", err)
 	}
-	for i := 0; i < maxDirectChildDirsRecursiveWatch; i++ {
-		if err := os.Mkdir(filepath.Join(dir, fmt.Sprintf("dir-%03d", i)), 0o755); err != nil {
-			t.Fatalf("Mkdir child %d returned error: %v", i, err)
+
+	root := NewRootInfo("mindfs", "mindfs", rootDir)
+	watcher, err := NewSharedFileWatcher(root, nil)
+	if err != nil {
+		t.Fatalf("NewSharedFileWatcher returned error: %v", err)
+	}
+	defer watcher.Close()
+
+	assertWatched := func(path string, want bool) {
+		t.Helper()
+		watcher.mu.RLock()
+		_, got := watcher.watchedDirs[filepath.Clean(path)]
+		watcher.mu.RUnlock()
+		if got != want {
+			t.Fatalf("watchedDirs[%q] = %v, want %v", path, got, want)
 		}
 	}
 
-	root := NewRootInfo("mindfs", "mindfs", rootDir)
-	watcher := &SharedFileWatcher{root: root}
-	if watcher.shouldSkipRecursiveWatch(dir) {
-		t.Fatalf("shouldSkipRecursiveWatch(%q) = true, want false", dir)
+	assertWatched(rootDir, true)
+	assertWatched(filepath.Join(rootDir, "a"), false)
+	assertWatched(filepath.Join(rootDir, "a", "b"), false)
+	assertWatched(filepath.Join(rootDir, "a", "b", "c"), false)
+
+	if err := watcher.WatchDir("a"); err != nil {
+		t.Fatalf("WatchDir returned error: %v", err)
 	}
+	assertWatched(filepath.Join(rootDir, "a"), true)
+	assertWatched(filepath.Join(rootDir, "a", "b"), false)
+	assertWatched(filepath.Join(rootDir, "a", "b", "c"), false)
+}
+
+func TestSharedFileWatcherConcurrentWatchDirAndEvents(t *testing.T) {
+	rootDir := t.TempDir()
+	root := NewRootInfo("mindfs", "mindfs", rootDir)
+	watcher, err := NewSharedFileWatcher(root, nil)
+	if err != nil {
+		t.Fatalf("NewSharedFileWatcher returned error: %v", err)
+	}
+	defer watcher.Close()
+
+	const dirCount = 16
+	var wg sync.WaitGroup
+	for i := 0; i < dirCount; i++ {
+		dirName := filepath.Join("dir", string(rune('a'+i)))
+		dirPath := filepath.Join(rootDir, dirName)
+		if err := os.MkdirAll(dirPath, 0o755); err != nil {
+			t.Fatalf("MkdirAll returned error: %v", err)
+		}
+
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := watcher.WatchDir(dirName); err != nil {
+				t.Errorf("WatchDir returned error: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 8; j++ {
+				path := filepath.Join(dirPath, "file.txt")
+				if err := os.WriteFile(path, []byte("changed"), 0o644); err != nil {
+					t.Errorf("WriteFile returned error: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestRootInfoReadFileDecodesGB18030CodeFile(t *testing.T) {
@@ -152,5 +264,30 @@ func TestRootInfoReadFileDecodesGB18030CodeFile(t *testing.T) {
 	}
 	if got.Content != source {
 		t.Fatalf("ReadFile content = %q, want %q", got.Content, source)
+	}
+}
+
+func TestRootInfoReadFileFullRejectsFilesLargerThanLimit(t *testing.T) {
+	rootDir := t.TempDir()
+	path := filepath.Join(rootDir, "large.txt")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if err := file.Truncate(maxFullReadBytes + 1); err != nil {
+		file.Close()
+		t.Fatalf("Truncate returned error: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	root := NewRootInfo("mindfs", "mindfs", rootDir)
+	_, err = root.ReadFile("large.txt", 0, 0, "full")
+	if err == nil {
+		t.Fatal("expected full read of large file to fail")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("ReadFile error = %v, want too large", err)
 	}
 }

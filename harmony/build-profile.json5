@@ -1,0 +1,50 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "material": {
+          "storeFile": "/Volumes/Extention/Users/csdc/Documents/mindfs-cert/mindfs.p12",
+          "storePassword": "0000001C5459BC28F381F600FF15CB9E7A7A28B4DE6C3D87C875B5266E3A08C7B08B6313942B458E7E3B9EC2",
+          "keyAlias": "mindfs-release",
+          "keyPassword": "0000001CFCD0D5FFD525C6BE646BC056B6E3BB8A783BAE1842457DAD173AB5BADC94D762FBE29CD5DF5B77CD",
+          "signAlg": "SHA256withECDSA",
+          "profile": "/Volumes/Extention/Users/csdc/Documents/mindfs-cert/mindfs-releaseRelease.p7b",
+          "certpath": "/Volumes/Extention/Users/csdc/Documents/mindfs-cert/mindfs-release.cer"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "compileSdkVersion": 23,
+        "compatibleSdkVersion": 23,
+        "targetSdkVersion": 23,
+        "runtimeOS": "OpenHarmony"
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug"
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

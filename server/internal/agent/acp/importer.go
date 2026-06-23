@@ -49,28 +49,39 @@ func (i *Importer) AgentName() string {
 }
 
 func (i *Importer) ListExternalSessions(ctx context.Context, in agenttypes.ListExternalSessionsInput) (agenttypes.ListExternalSessionsResult, error) {
-	proc, cwd, err := i.openProcess(ctx, in.RootPath)
-	if err != nil {
-		return agenttypes.ListExternalSessionsResult{}, err
-	}
-	defer proc.Close()
-
 	limit := in.Limit
 	if limit <= 0 {
 		limit = 20
 	}
 	items := make([]agenttypes.ExternalSessionSummary, 0, limit)
+	err := i.ScanExternalSessions(ctx, in, func(item agenttypes.ExternalSessionSummary) (bool, error) {
+		items = append(items, item)
+		return len(items) < limit, nil
+	})
+	if err != nil {
+		return agenttypes.ListExternalSessionsResult{}, err
+	}
+	return agenttypes.ListExternalSessionsResult{Items: items}, nil
+}
+
+func (i *Importer) ScanExternalSessions(ctx context.Context, in agenttypes.ListExternalSessionsInput, visit agenttypes.ExternalSessionVisitFunc) error {
+	proc, cwd, err := i.openProcess(ctx, in.RootPath)
+	if err != nil {
+		return err
+	}
+	defer proc.Close()
+
 	var cursor *string
 	for {
-		resp, err := proc.conn.UnstableListSessions(ctx, acpsdk.UnstableListSessionsRequest{
+		resp, err := proc.conn.ListSessions(ctx, acpsdk.ListSessionsRequest{
 			Cursor: cursor,
 			Cwd:    &cwd,
 		})
 		if err != nil {
 			if isUnsupportedACPListSessions(err) {
-				return agenttypes.ListExternalSessionsResult{Items: nil}, nil
+				return nil
 			}
-			return agenttypes.ListExternalSessionsResult{}, err
+			return err
 		}
 		for _, item := range resp.Sessions {
 			if normalizeComparablePath(item.Cwd) != normalizeComparablePath(cwd) {
@@ -87,15 +98,18 @@ func (i *Importer) ListExternalSessions(ctx context.Context, in agenttypes.ListE
 			if item.Title != nil {
 				firstUserText = strings.TrimSpace(*item.Title)
 			}
-			items = append(items, agenttypes.ExternalSessionSummary{
+			shouldContinue, err := visit(agenttypes.ExternalSessionSummary{
 				Agent:          i.agentName,
 				AgentSessionID: string(item.SessionId),
 				Cwd:            item.Cwd,
 				FirstUserText:  firstUserText,
 				UpdatedAt:      updatedAt,
 			})
-			if len(items) >= limit {
-				return agenttypes.ListExternalSessionsResult{Items: items}, nil
+			if err != nil {
+				return err
+			}
+			if !shouldContinue {
+				return nil
 			}
 		}
 		if resp.NextCursor == nil || strings.TrimSpace(*resp.NextCursor) == "" {
@@ -104,7 +118,7 @@ func (i *Importer) ListExternalSessions(ctx context.Context, in agenttypes.ListE
 		next := strings.TrimSpace(*resp.NextCursor)
 		cursor = &next
 	}
-	return agenttypes.ListExternalSessionsResult{Items: items}, nil
+	return nil
 }
 
 func isUnsupportedACPListSessions(err error) bool {

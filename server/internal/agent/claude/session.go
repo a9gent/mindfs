@@ -25,16 +25,26 @@ const (
 	deltaTypeThinking deltaType = "thinking"
 )
 
+type subagentMeta struct {
+	ParentToolUseID string
+	TaskID          string
+	SubagentType    string
+	TaskDescription string
+}
+
 type OpenOptions struct {
 	AgentName       string
 	SessionKey      string
 	Model           string
 	Effort          string
+	PlanMode        bool
 	RootPath        string
 	Command         string
 	Args            []string
 	Env             map[string]string
 	ResumeSessionID string
+	ForkSessionID   string
+	ResumeMessageID string
 }
 
 type Runtime struct{}
@@ -51,6 +61,7 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 	s := &session{
 		sessionKey:    opts.SessionKey,
 		model:         strings.TrimSpace(opts.Model),
+		planMode:      opts.PlanMode,
 		agentDebugLog: logs.NewAgentLogger(opts.RootPath, opts.SessionKey, opts.AgentName),
 		questionWaits: make(map[string]chan askUserAnswerResult),
 	}
@@ -60,19 +71,44 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 		claudeagent.WithEnv(opts.Env),
 		claudeagent.WithVerbose(true),
 		claudeagent.WithIncludePartialMessages(true),
+		claudeagent.WithAgentProgressSummaries(true),
+		claudeagent.WithForwardSubagentText(true),
 		claudeagent.WithCanUseTool(s.handleCanUseTool),
 	}
 	if strings.TrimSpace(opts.Command) != "" {
 		optionList = append(optionList, claudeagent.WithCLIPath(opts.Command))
 	}
-	if strings.TrimSpace(opts.ResumeSessionID) != "" {
+	forkSessionID := strings.TrimSpace(opts.ForkSessionID)
+	resumeMessageID := strings.TrimSpace(opts.ResumeMessageID)
+	explicitSessionID := ""
+	if forkSessionID != "" && resumeMessageID != "" {
+		forked, err := claudeagent.ForkSession(forkSessionID, &claudeagent.ForkSessionOptions{
+			UpToMessageID: resumeMessageID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("fork claude session at message: %w", err)
+		}
+		if forked == nil || strings.TrimSpace(forked.SessionID) == "" {
+			return nil, errors.New("fork claude session did not return session id")
+		}
+		explicitSessionID = strings.TrimSpace(forked.SessionID)
+		optionList = append(optionList, claudeagent.WithResume(explicitSessionID))
+	} else if forkSessionID != "" {
+		optionList = append(optionList, claudeagent.WithForkSession(forkSessionID))
+	} else if strings.TrimSpace(opts.ResumeSessionID) != "" {
 		optionList = append(optionList, claudeagent.WithResume(strings.TrimSpace(opts.ResumeSessionID)))
+	}
+	if resumeMessageID != "" && forkSessionID == "" {
+		optionList = append(optionList, claudeagent.WithResumeSessionAt(resumeMessageID))
 	}
 	if strings.TrimSpace(opts.Model) != "" {
 		optionList = append(optionList, claudeagent.WithModel(strings.TrimSpace(opts.Model)))
 	}
 	if strings.TrimSpace(opts.Effort) != "" {
-		optionList = append(optionList, claudeagent.WithEffort(claudeagent.Effort(strings.TrimSpace(opts.Effort))))
+		optionList = append(optionList, claudeagent.WithEffort(claudeagent.EffortLevel(strings.TrimSpace(opts.Effort))))
+	}
+	if opts.PlanMode {
+		optionList = append(optionList, claudeagent.WithPermissionMode(claudeagent.PermissionModePlan))
 	}
 
 	client, err := claudeagent.NewClient(optionList...)
@@ -97,10 +133,19 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 			return nil, err
 		}
 	}
+	if opts.PlanMode {
+		if err := stream.SetPermissionMode(ctx, claudeagent.PermissionModePlan); err != nil {
+			client.Close()
+			return nil, err
+		}
+	}
 
 	s.client = client
 	s.stream = stream
 	s.sessionID = stream.SessionID()
+	if strings.TrimSpace(s.sessionID) == "" {
+		s.sessionID = explicitSessionID
+	}
 	s.model = selectedModel
 	go s.consumeMessages()
 	return s, nil
@@ -131,11 +176,13 @@ type session struct {
 	sessionID  string
 	sessionKey string
 	model      string
+	planMode   bool
 	context    types.ContextWindow
 
-	sendMu sync.Mutex
-	turnMu sync.Mutex
-	turns  []chan error
+	sendMu          sync.Mutex
+	turnMu          sync.Mutex
+	turns           []chan error
+	turnInterrupted bool
 
 	closeOnce sync.Once
 	turn      types.TurnCanceler
@@ -149,6 +196,7 @@ type session struct {
 
 	pendingToolMu    sync.Mutex
 	pendingToolCalls map[string]types.ToolCall
+	taskTypes        map[string]string
 
 	questionMu    sync.Mutex
 	questionWaits map[string]chan askUserAnswerResult
@@ -181,7 +229,7 @@ func (s *session) SendMessage(ctx context.Context, content string) error {
 
 	select {
 	case err := <-waiter:
-		if err != nil {
+		if err != nil && !isTurnCanceledError(err) {
 			log.Printf("[agent/claude] send.error session=%s err=%v", s.sessionKey, err)
 		}
 		return err
@@ -256,13 +304,47 @@ func (s *session) handleCanUseTool(ctx context.Context, req claudeagent.ToolPerm
 	if err := json.Unmarshal(req.Arguments, &updatedInput); err != nil {
 		updatedInput["questions"] = input.Questions
 	}
-	updatedAnswers := make(map[string]string, len(answers))
-	for key, value := range answers {
-		updatedAnswers[key] = value
-	}
-	updatedInput["answers"] = updatedAnswers
+	updatedInput["answers"] = normalizeAskUserAnswers(input.Questions, answers)
 
 	return claudeagent.PermissionAllow{UpdatedInput: updatedInput}
+}
+
+func normalizeAskUserAnswers(questions []claudeagent.QuestionItem, answers claudeagent.Answers) map[string]string {
+	normalized := make(map[string]string, len(answers))
+
+	for key, value := range answers {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" || askUserQuestionTextForKey(key, questions) != "" {
+			continue
+		}
+		normalized[key] = value
+	}
+	for key, value := range answers {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		questionText := askUserQuestionTextForKey(key, questions)
+		if questionText == "" {
+			questionText = key
+		}
+		if _, exists := normalized[questionText]; !exists {
+			normalized[questionText] = value
+		}
+	}
+
+	return normalized
+}
+
+func askUserQuestionTextForKey(key string, questions []claudeagent.QuestionItem) string {
+	for index, question := range questions {
+		if key == fmt.Sprintf("q_%d", index) {
+			return strings.TrimSpace(question.Question)
+		}
+	}
+	return ""
 }
 
 func (s *session) CurrentModel() string {
@@ -288,6 +370,23 @@ func (s *session) SetModel(ctx context.Context, model string) error {
 	return nil
 }
 
+func (s *session) SetPlanMode(ctx context.Context, enabled bool) error {
+	if s == nil || s.stream == nil {
+		return errors.New("claude session not initialized")
+	}
+	mode := claudeagent.PermissionModeDefault
+	if enabled {
+		mode = claudeagent.PermissionModePlan
+	}
+	if err := s.stream.SetPermissionMode(ctx, mode); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.planMode = enabled
+	s.mu.Unlock()
+	return nil
+}
+
 func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 	_ = ctx
 	if s.client == nil {
@@ -295,7 +394,7 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 	}
 	supported := s.client.SupportedModelsFromInit()
 	models := make([]types.ModelInfo, 0, len(supported))
-	for _, model := range supported {
+	for index, model := range supported {
 		name := strings.TrimSpace(model.DisplayName)
 		if name == "" {
 			name = strings.TrimSpace(model.Value)
@@ -304,7 +403,7 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 			ID:            model.Value,
 			Name:          name,
 			Description:   model.Description,
-			SupportEffort: claudeModelSupportsEffort(model.Value, name),
+			SupportEffort: claudeModelSupportsEffortAt(supported, index),
 		})
 	}
 	log.Printf("[agent/claude] models.cached session=%s count=%d", s.sessionKey, len(models))
@@ -323,8 +422,28 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 	}, nil
 }
 
-func claudeModelSupportsEffort(id, name string) bool {
-	joined := strings.ToLower(strings.TrimSpace(id) + " " + strings.TrimSpace(name))
+func claudeModelSupportsEffortAt(models []claudeagent.ModelInfo, index int) bool {
+	if index < 0 || index >= len(models) {
+		return false
+	}
+	model := models[index]
+	if claudeModelSupportsEffort(model.Value, model.DisplayName, model.Description) {
+		return true
+	}
+	if !strings.EqualFold(strings.TrimSpace(model.Value), "default") {
+		return false
+	}
+	for _, candidate := range models {
+		if strings.EqualFold(strings.TrimSpace(candidate.Value), "default") {
+			continue
+		}
+		return claudeModelSupportsEffort(candidate.Value, candidate.DisplayName, candidate.Description)
+	}
+	return false
+}
+
+func claudeModelSupportsEffort(id, name, description string) bool {
+	joined := strings.ToLower(strings.TrimSpace(id) + " " + strings.TrimSpace(name) + " " + strings.TrimSpace(description))
 	return strings.Contains(joined, "sonnet") || strings.Contains(joined, "opus")
 }
 
@@ -383,6 +502,7 @@ func (s *session) CancelCurrentTurn() error {
 		return nil
 	}
 	if err := s.stream.Interrupt(context.Background()); err == nil {
+		s.markTurnInterrupted()
 		return nil
 	}
 	s.turn.Cancel()
@@ -461,7 +581,9 @@ func (s *session) consumeMessages() {
 		case claudeagent.PartialAssistantMessage:
 			// Incremental text / thinking tokens. Buffer and coalesce them into
 			// larger readable chunks before emitting UI updates.
-			s.handlePartialAssistantMessage(m.Event)
+			s.handlePartialAssistantMessage(m.Event, subagentMetaFromPartial(m))
+		case claudeagent.StreamEvent:
+			s.handleStreamEvent(m)
 		case claudeagent.AssistantMessage:
 			// Finalized assistant message. Flush pending deltas first so finalized
 			// blocks do not interleave with previously buffered streaming output.
@@ -479,7 +601,28 @@ func (s *session) consumeMessages() {
 		case claudeagent.ToolProgressMessage:
 			// Lightweight progress heartbeat for a tool call that is still running.
 			s.flushAllDeltas()
-			s.emitToolUpdate(m.ToolUseID, m.ToolName)
+			s.emitToolUpdate(m.ToolUseID, m.ToolName, subagentMetaFromToolProgress(m))
+		case claudeagent.CompactBoundaryMessage:
+			s.flushAllDeltas()
+			s.handleCompactBoundaryMessage(m)
+		case claudeagent.AuthStatusMessage:
+			s.flushAllDeltas()
+			s.handleAuthStatusMessage(m)
+		case claudeagent.SubagentResultMessage:
+			s.flushAllDeltas()
+			s.handleSubagentResultMessage(m)
+		case claudeagent.TaskStartedMessage:
+			s.flushAllDeltas()
+			s.handleTaskStartedMessage(m)
+		case claudeagent.TaskProgressMessage:
+			s.flushAllDeltas()
+			s.handleTaskProgressMessage(m)
+		case claudeagent.TaskUpdatedMessage:
+			s.flushAllDeltas()
+			s.handleTaskUpdatedMessage(m)
+		case claudeagent.TaskNotificationMessage:
+			s.flushAllDeltas()
+			s.handleTaskNotificationMessage(m)
 		case claudeagent.ResultMessage:
 			// End-of-turn boundary. Claude may place the final text here when no
 			// incremental tokens were streamed, so emit it as a last fallback.
@@ -506,7 +649,7 @@ func (s *session) consumeMessages() {
 	s.failPendingTurns(errors.New("response stream ended unexpectedly"))
 }
 
-func (s *session) handlePartialAssistantMessage(rawEvent json.RawMessage) {
+func (s *session) handlePartialAssistantMessage(rawEvent json.RawMessage, meta subagentMeta) {
 	if contextTokens := contextTokensFromPartialEvent(rawEvent); contextTokens > 0 {
 		s.mu.Lock()
 		s.context.TotalTokens = contextTokens
@@ -515,6 +658,16 @@ func (s *session) handlePartialAssistantMessage(rawEvent json.RawMessage) {
 	textDelta, thinkingDelta := extractDeltas(rawEvent)
 	if textDelta == "" && thinkingDelta == "" && len(rawEvent) > 0 {
 		log.Printf("[agent/claude] output.unhandled.partial session=%s raw=%s", s.sessionKey, truncateRaw(rawEvent))
+	}
+	if meta.hasSubagentRef() {
+		s.flushAllDeltas()
+		if thinkingDelta != "" {
+			s.emitThoughtChunkWithMeta(thinkingDelta, meta)
+		}
+		if textDelta != "" {
+			s.emitMessageChunkWithMeta(textDelta, meta)
+		}
+		return
 	}
 	// Thinking and visible text are rendered in separate UI lanes, so flush the
 	// other lane before appending to the current one.
@@ -568,14 +721,25 @@ func (s *session) appendDelta(kind deltaType, delta string) {
 }
 
 func (s *session) emitThoughtChunk(content string) {
+	s.emitThoughtChunkWithMeta(content, subagentMeta{})
+}
+
+func (s *session) emitThoughtChunkWithMeta(content string, meta subagentMeta) {
 	s.emit(types.Event{
 		Type:      types.EventTypeThoughtChunk,
 		SessionID: s.SessionID(),
-		Data:      types.ThoughtChunk{Content: content},
+		Data: types.ThoughtChunk{
+			Content:         content,
+			ParentToolUseID: meta.ParentToolUseID,
+			TaskID:          meta.TaskID,
+			SubagentType:    meta.SubagentType,
+			TaskDescription: meta.TaskDescription,
+		},
 	})
 }
 
 func (s *session) handleAssistantMessage(msg claudeagent.AssistantMessage, sawDelta bool) {
+	meta := subagentMetaFromAssistant(msg)
 	for _, block := range msg.Message.Content {
 		switch block.Type {
 		case "text":
@@ -584,14 +748,15 @@ func (s *session) handleAssistantMessage(msg claudeagent.AssistantMessage, sawDe
 			if sawDelta {
 				continue
 			}
-			s.emitMessageChunk(block.Text)
+			s.emitMessageChunkWithMeta(block.Text, meta)
 		case "thinking":
-			s.emitThoughtChunk(block.Text)
+			s.emitThoughtChunkWithMeta(block.Text, meta)
 		case "tool_use":
 			// tool_use is the structured tool invocation request. Its completion
 			// arrives later as UserMessage + ToolUseResult.
 			s.logRawToolCallBlock(block)
 			toolCall := newRunningToolCall(block.ID, block.Name, block.Type, block.Input)
+			toolCall.Meta = mergeToolCallMeta(toolCall.Meta, meta.toMap())
 			s.trackPendingToolCall(toolCall)
 			s.emit(types.Event{
 				Type:      types.EventTypeToolCall,
@@ -630,6 +795,167 @@ func (s *session) handleTodoUpdateMessage(msg claudeagent.TodoUpdateMessage) {
 		SessionID: s.SessionID(),
 		Data:      types.TodoUpdate{Items: items},
 	})
+}
+
+func (s *session) handleStreamEvent(msg claudeagent.StreamEvent) {
+	if msg.Delta != "" {
+		s.emitMessageChunk(msg.Delta)
+		return
+	}
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		return
+	}
+	s.handlePartialAssistantMessage(raw, subagentMeta{})
+}
+
+func (s *session) handleCompactBoundaryMessage(msg claudeagent.CompactBoundaryMessage) {
+	s.emit(types.Event{
+		Type:      types.EventTypeCompact,
+		SessionID: s.SessionID(),
+		Data: types.CompactNotice{
+			ID:      firstNonEmpty(msg.UUID, msg.SessionID),
+			Status:  strings.TrimSpace(msg.CompactMetadata.Trigger),
+			Summary: compactBoundarySummary(msg),
+		},
+	})
+}
+
+func (s *session) handleAuthStatusMessage(msg claudeagent.AuthStatusMessage) {
+	status := "success"
+	if msg.IsAuthenticating {
+		status = "running"
+	}
+	if strings.TrimSpace(msg.Error) != "" {
+		status = "failed"
+	}
+	lines := append([]string(nil), msg.Output...)
+	if errText := strings.TrimSpace(msg.Error); errText != "" {
+		lines = append(lines, errText)
+	}
+	callID := firstNonEmpty(msg.UUID, "auth-"+msg.SessionID, "auth-status")
+	s.emit(types.Event{
+		Type:      types.EventTypeToolUpdate,
+		SessionID: s.SessionID(),
+		Data: types.ToolCall{
+			CallID:  callID,
+			Title:   "authentication",
+			Status:  status,
+			Kind:    types.ToolKindOther,
+			RawType: "auth_status",
+			Content: []types.ToolCallContentItem{{Type: "text", Text: strings.Join(lines, "\n")}},
+			Meta: map[string]any{
+				"rawType":          "auth_status",
+				"isAuthenticating": msg.IsAuthenticating,
+			},
+		},
+	})
+}
+
+func (s *session) handleSubagentResultMessage(msg claudeagent.SubagentResultMessage) {
+	agentName := strings.TrimSpace(msg.AgentName)
+	title := firstNonEmpty(agentName, "subagent")
+	status := "complete"
+	if strings.EqualFold(strings.TrimSpace(msg.Status), "error") {
+		status = "failed"
+	}
+	callID := "subagent-result-" + strings.ToLower(strings.ReplaceAll(title, " ", "-"))
+	s.emit(types.Event{
+		Type:      types.EventTypeToolUpdate,
+		SessionID: s.SessionID(),
+		Data: types.ToolCall{
+			CallID:  callID,
+			Title:   title,
+			Status:  status,
+			Kind:    types.ToolKindTask,
+			RawType: "subagent_result",
+			Content: []types.ToolCallContentItem{{Type: "text", Text: strings.TrimSpace(msg.Result)}},
+			Meta: map[string]any{
+				"rawType":      "subagent_result",
+				"subagentType": agentName,
+				"status":       strings.TrimSpace(msg.Status),
+			},
+		},
+	})
+}
+
+func (s *session) handleTaskStartedMessage(msg claudeagent.TaskStartedMessage) {
+	s.trackTaskType(msg.TaskID, msg.TaskType)
+	if isIgnoredClaudeTaskType(msg.TaskType) {
+		return
+	}
+	toolCall := claudeTaskToolCall(
+		firstNonEmpty(msg.ToolUseID, msg.TaskID),
+		"running",
+		msg.Description,
+		msg.Prompt,
+		subagentMeta{
+			ParentToolUseID: msg.ToolUseID,
+			TaskID:          msg.TaskID,
+			SubagentType:    msg.SubagentType,
+			TaskDescription: msg.Description,
+		},
+		map[string]any{
+			"subtype":      msg.Subtype,
+			"taskType":     msg.TaskType,
+			"workflowName": msg.WorkflowName,
+		},
+	)
+	if strings.TrimSpace(toolCall.CallID) != "" {
+		s.trackPendingToolCall(toolCall)
+	}
+	s.emit(types.Event{Type: types.EventTypeToolCall, SessionID: s.SessionID(), Data: toolCall})
+}
+
+func (s *session) handleTaskProgressMessage(msg claudeagent.TaskProgressMessage) {
+	if isIgnoredClaudeTaskType(s.taskType(msg.TaskID)) {
+		return
+	}
+	callID := firstNonEmpty(msg.ToolUseID, msg.TaskID)
+	toolCall := claudeTaskToolCall(
+		callID,
+		"running",
+		msg.Description,
+		msg.Summary,
+		subagentMeta{
+			ParentToolUseID: msg.ToolUseID,
+			TaskID:          msg.TaskID,
+			SubagentType:    msg.SubagentType,
+			TaskDescription: msg.Description,
+		},
+		map[string]any{
+			"subtype":      msg.Subtype,
+			"lastToolName": msg.LastToolName,
+			"progress":     firstNonEmpty(msg.Summary, msg.Description),
+		},
+	)
+	if s.hasPendingToolCall(callID) {
+		toolCall.Title = ""
+	}
+	s.emit(types.Event{Type: types.EventTypeToolUpdate, SessionID: s.SessionID(), Data: toolCall})
+}
+
+func (s *session) handleTaskUpdatedMessage(msg claudeagent.TaskUpdatedMessage) {
+	if isIgnoredClaudeTaskType(s.taskType(msg.TaskID)) {
+		return
+	}
+	toolCall := claudeTaskToolCall(
+		msg.TaskID,
+		claudeTaskRunStatus(string(msg.Patch.Status)),
+		msg.Patch.Description,
+		msg.Patch.Error,
+		subagentMeta{TaskID: msg.TaskID, TaskDescription: msg.Patch.Description},
+		map[string]any{
+			"subtype":        msg.Subtype,
+			"error":          msg.Patch.Error,
+			"isBackgrounded": boolPtrValue(msg.Patch.IsBackgrounded),
+		},
+	)
+	s.emit(types.Event{Type: types.EventTypeToolUpdate, SessionID: s.SessionID(), Data: toolCall})
+}
+
+func (s *session) handleTaskNotificationMessage(msg claudeagent.TaskNotificationMessage) {
+	_ = msg
 }
 
 func (s *session) awaitAskUserQuestion(ctx context.Context, qs claudeagent.QuestionSet) (claudeagent.Answers, error) {
@@ -1073,6 +1399,176 @@ func cloneToolMeta(meta map[string]any) map[string]any {
 	return out
 }
 
+func subagentMetaFromPartial(msg claudeagent.PartialAssistantMessage) subagentMeta {
+	meta := subagentMeta{}
+	if msg.ParentToolUseID != nil {
+		meta.ParentToolUseID = strings.TrimSpace(*msg.ParentToolUseID)
+	}
+	return meta
+}
+
+func subagentMetaFromAssistant(msg claudeagent.AssistantMessage) subagentMeta {
+	meta := subagentMeta{
+		SubagentType:    strings.TrimSpace(msg.SubagentType),
+		TaskDescription: strings.TrimSpace(msg.TaskDescription),
+	}
+	if msg.ParentToolUseID != nil {
+		meta.ParentToolUseID = strings.TrimSpace(*msg.ParentToolUseID)
+	}
+	return meta
+}
+
+func subagentMetaFromToolProgress(msg claudeagent.ToolProgressMessage) subagentMeta {
+	meta := subagentMeta{}
+	if msg.ParentToolUseID != nil {
+		meta.ParentToolUseID = strings.TrimSpace(*msg.ParentToolUseID)
+	}
+	if msg.TaskID != nil {
+		meta.TaskID = strings.TrimSpace(*msg.TaskID)
+	}
+	return meta
+}
+
+func (m subagentMeta) hasSubagentRef() bool {
+	return strings.TrimSpace(m.ParentToolUseID) != "" || strings.TrimSpace(m.TaskID) != ""
+}
+
+func (m subagentMeta) toMap() map[string]any {
+	out := map[string]any{}
+	if value := strings.TrimSpace(m.ParentToolUseID); value != "" {
+		out["parentToolUseId"] = value
+	}
+	if value := strings.TrimSpace(m.TaskID); value != "" {
+		out["taskId"] = value
+	}
+	if value := strings.TrimSpace(m.SubagentType); value != "" {
+		out["subagentType"] = value
+	}
+	if value := strings.TrimSpace(m.TaskDescription); value != "" {
+		out["taskDescription"] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func claudeTaskToolCall(callID, status, description, text string, meta subagentMeta, extra map[string]any) types.ToolCall {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		callID = strings.TrimSpace(meta.TaskID)
+	}
+	if callID == "" {
+		callID = "claude-task"
+	}
+	title := strings.TrimSpace(description)
+	if title == "" {
+		title = strings.TrimSpace(text)
+	}
+	if title == "" {
+		title = firstNonEmpty(meta.SubagentType, meta.TaskID, callID, "task")
+	}
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = "running"
+	}
+	content := []types.ToolCallContentItem(nil)
+	if body := strings.TrimSpace(text); body != "" && body != title {
+		content = []types.ToolCallContentItem{{Type: "text", Text: body}}
+	}
+	merged := mergeToolCallMeta(meta.toMap(), map[string]any{
+		"rawType": "claude_task",
+	})
+	merged = mergeToolCallMeta(merged, extra)
+	return types.ToolCall{
+		CallID:  callID,
+		Title:   title,
+		Status:  status,
+		Kind:    types.ToolKindTask,
+		RawType: "claude_task",
+		Content: content,
+		Meta:    merged,
+	}
+}
+
+func claudeTaskRunStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed":
+		return "complete"
+	case "failed", "killed":
+		return "failed"
+	case "paused":
+		return "running"
+	case "pending", "running":
+		return "running"
+	default:
+		return "running"
+	}
+}
+
+func compactBoundarySummary(msg claudeagent.CompactBoundaryMessage) string {
+	parts := make([]string, 0, 2)
+	if trigger := strings.TrimSpace(msg.CompactMetadata.Trigger); trigger != "" {
+		parts = append(parts, "trigger: "+trigger)
+	}
+	if msg.CompactMetadata.PreTokens > 0 {
+		parts = append(parts, fmt.Sprintf("tokens before compact: %d", msg.CompactMetadata.PreTokens))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func boolPtrValue(value *bool) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func isIgnoredClaudeTaskType(taskType string) bool {
+	switch strings.ToLower(strings.TrimSpace(taskType)) {
+	case "local_bash":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *session) trackTaskType(taskID, taskType string) {
+	taskID = strings.TrimSpace(taskID)
+	taskType = strings.TrimSpace(taskType)
+	if taskID == "" || taskType == "" {
+		return
+	}
+	s.pendingToolMu.Lock()
+	defer s.pendingToolMu.Unlock()
+	if s.taskTypes == nil {
+		s.taskTypes = make(map[string]string)
+	}
+	s.taskTypes[taskID] = taskType
+}
+
+func (s *session) taskType(taskID string) string {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return ""
+	}
+	s.pendingToolMu.Lock()
+	defer s.pendingToolMu.Unlock()
+	if s.taskTypes == nil {
+		return ""
+	}
+	return s.taskTypes[taskID]
+}
+
 func (s *session) trackPendingToolCall(toolCall types.ToolCall) {
 	s.pendingToolMu.Lock()
 	defer s.pendingToolMu.Unlock()
@@ -1083,6 +1579,17 @@ func (s *session) trackPendingToolCall(toolCall types.ToolCall) {
 		s.pendingToolCalls = make(map[string]types.ToolCall)
 	}
 	s.pendingToolCalls[toolCall.CallID] = toolCall
+}
+
+func (s *session) hasPendingToolCall(callID string) bool {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return false
+	}
+	s.pendingToolMu.Lock()
+	defer s.pendingToolMu.Unlock()
+	_, ok := s.pendingToolCalls[callID]
+	return ok
 }
 
 func (s *session) cancelPendingToolCall(callID, reason string) (types.ToolCall, bool) {
@@ -1112,16 +1619,26 @@ func (s *session) toolResultUpdate(msg claudeagent.UserMessage) (types.ToolCall,
 	if msg.ToolUseResult == nil {
 		return types.ToolCall{}, false
 	}
-	if msg.ParentToolUseID == nil || strings.TrimSpace(*msg.ParentToolUseID) == "" {
-		return types.ToolCall{}, false
-	}
 
-	base, ok := s.popPendingToolCall(*msg.ParentToolUseID)
+	callID := ""
+	if msg.ParentToolUseID != nil {
+		callID = strings.TrimSpace(*msg.ParentToolUseID)
+	}
+	if callID == "" {
+		callID = extractToolResultCallID(msg.ToolUseResult)
+	}
+	base, ok := s.popPendingToolCall(callID)
+	if !ok && callID == "" {
+		base, ok = s.popOnlyPendingToolCall()
+	}
 	if !ok {
 		return types.ToolCall{}, false
 	}
 
 	result := summarizeToolResult(base.Kind, msg.ToolUseResult)
+	if result == "" {
+		result = summarizeUserToolResultMessage(msg)
+	}
 	update := base
 	update.Status = "complete"
 	if result != "" {
@@ -1163,6 +1680,20 @@ func (s *session) popPendingToolCall(callID string) (types.ToolCall, bool) {
 	return toolCall, true
 }
 
+func (s *session) popOnlyPendingToolCall() (types.ToolCall, bool) {
+	s.pendingToolMu.Lock()
+	defer s.pendingToolMu.Unlock()
+
+	if len(s.pendingToolCalls) != 1 {
+		return types.ToolCall{}, false
+	}
+	for callID, toolCall := range s.pendingToolCalls {
+		delete(s.pendingToolCalls, callID)
+		return toolCall, true
+	}
+	return types.ToolCall{}, false
+}
+
 func summarizeToolResult(kind types.ToolKind, raw any) string {
 	switch kind {
 	case types.ToolKindExecute:
@@ -1179,26 +1710,25 @@ func summarizeExecuteToolResult(raw any) string {
 		Stdout string `json:"stdout"`
 		Stderr string `json:"stderr"`
 	}
-	if !decodeToolResult(raw, &payload) {
-		return ""
+	if decodeToolResult(raw, &payload) {
+		if strings.TrimSpace(payload.Stdout) != "" {
+			return payload.Stdout
+		}
+		if strings.TrimSpace(payload.Stderr) != "" {
+			return payload.Stderr
+		}
 	}
-	if strings.TrimSpace(payload.Stdout) != "" {
-		return payload.Stdout
-	}
-	if strings.TrimSpace(payload.Stderr) != "" {
-		return payload.Stderr
-	}
-	return ""
+	return summarizeGenericToolResult(raw)
 }
 
 func summarizeEditToolResult(raw any) string {
 	var payload struct {
 		Content string `json:"content"`
 	}
-	if !decodeToolResult(raw, &payload) {
-		return ""
+	if decodeToolResult(raw, &payload) && strings.TrimSpace(payload.Content) != "" {
+		return payload.Content
 	}
-	return payload.Content
+	return summarizeGenericToolResult(raw)
 }
 
 func decodeToolResult(raw any, out any) bool {
@@ -1212,23 +1742,109 @@ func decodeToolResult(raw any, out any) bool {
 	return true
 }
 
+func extractToolResultCallID(raw any) string {
+	var payload map[string]any
+	if !decodeToolResult(raw, &payload) {
+		return ""
+	}
+	for _, key := range []string{"parent_tool_use_id", "tool_use_id", "toolUseId", "id"} {
+		if value, ok := payload[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func summarizeUserToolResultMessage(msg claudeagent.UserMessage) string {
+	for _, block := range msg.Message.Content {
+		if strings.TrimSpace(block.Text) == "" {
+			continue
+		}
+		if block.Type == "tool_result" || len(msg.Message.Content) == 1 {
+			if text := summarizeGenericToolResult(block.Text); strings.TrimSpace(text) != "" {
+				return text
+			}
+			return block.Text
+		}
+	}
+	return ""
+}
+
+func summarizeGenericToolResult(raw any) string {
+	var payload any
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return ""
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		if text, ok := raw.(string); ok {
+			return strings.TrimSpace(text)
+		}
+		return ""
+	}
+	return summarizeGenericToolResultValue(payload)
+}
+
+func summarizeGenericToolResultValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return ""
+		}
+		var nested any
+		if err := json.Unmarshal([]byte(trimmed), &nested); err == nil {
+			if text := summarizeGenericToolResultValue(nested); text != "" {
+				return text
+			}
+		}
+		return v
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			if text := summarizeGenericToolResultValue(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	case map[string]any:
+		for _, key := range []string{"stdout", "stderr", "output", "content", "text", "error"} {
+			if text := summarizeGenericToolResultValue(v[key]); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
 func (s *session) emitMessageChunk(content string) {
-	if strings.TrimSpace(content) != "" {
+	s.emitMessageChunkWithMeta(content, subagentMeta{})
+}
+
+func (s *session) emitMessageChunkWithMeta(content string, meta subagentMeta) {
+	if strings.TrimSpace(content) != "" && !meta.hasSubagentRef() {
 		s.sawMessageText = true
 	}
 	s.emit(types.Event{
 		Type:      types.EventTypeMessageChunk,
 		SessionID: s.SessionID(),
-		Data:      types.MessageChunk{Content: content},
+		Data: types.MessageChunk{
+			Content:         content,
+			ParentToolUseID: meta.ParentToolUseID,
+			TaskID:          meta.TaskID,
+			SubagentType:    meta.SubagentType,
+			TaskDescription: meta.TaskDescription,
+		},
 	})
 }
 
-func (s *session) emitToolUpdate(callID, name string) {
+func (s *session) emitToolUpdate(callID, name string, meta subagentMeta) {
 	toolCall := types.ToolCall{
 		CallID: callID,
 		Title:  name,
 		Status: "running",
 		Kind:   mapToolKind(name),
+		Meta:   meta.toMap(),
 	}
 	s.emit(types.Event{
 		Type:      types.EventTypeToolUpdate,
@@ -1282,6 +1898,18 @@ func (s *session) updateSessionID(msg any) {
 		s.setSessionID(m.SessionID)
 	case claudeagent.PartialAssistantMessage:
 		s.setSessionID(m.SessionID)
+	case claudeagent.CompactBoundaryMessage:
+		s.setSessionID(m.SessionID)
+	case claudeagent.AuthStatusMessage:
+		s.setSessionID(m.SessionID)
+	case claudeagent.TaskStartedMessage:
+		s.setSessionID(m.SessionID)
+	case claudeagent.TaskProgressMessage:
+		s.setSessionID(m.SessionID)
+	case claudeagent.TaskUpdatedMessage:
+		s.setSessionID(m.SessionID)
+	case claudeagent.TaskNotificationMessage:
+		s.setSessionID(m.SessionID)
 	}
 }
 
@@ -1328,6 +1956,18 @@ func (s *session) enqueueTurn(waiter chan error) {
 	s.turnMu.Unlock()
 }
 
+func (s *session) markTurnInterrupted() {
+	s.turnMu.Lock()
+	s.turnInterrupted = true
+	s.turnMu.Unlock()
+}
+
+func (s *session) consumeTurnInterruptedLocked() bool {
+	interrupted := s.turnInterrupted
+	s.turnInterrupted = false
+	return interrupted
+}
+
 func (s *session) dequeueTurn(waiter chan error) {
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
@@ -1336,12 +1976,16 @@ func (s *session) dequeueTurn(waiter chan error) {
 			continue
 		}
 		s.turns = append(s.turns[:i], s.turns[i+1:]...)
+		if len(s.turns) == 0 {
+			s.turnInterrupted = false
+		}
 		return
 	}
 }
 
 func (s *session) completeTurn(err error) {
 	s.turnMu.Lock()
+	interrupted := s.consumeTurnInterruptedLocked()
 	if len(s.turns) == 0 {
 		s.turnMu.Unlock()
 		return
@@ -1350,6 +1994,9 @@ func (s *session) completeTurn(err error) {
 	s.turns = s.turns[1:]
 	s.turnMu.Unlock()
 
+	if interrupted && err != nil {
+		err = errors.New("turn canceled")
+	}
 	waiter <- err
 }
 
@@ -1357,6 +2004,7 @@ func (s *session) failPendingTurns(err error) {
 	s.turnMu.Lock()
 	pending := s.turns
 	s.turns = nil
+	s.turnInterrupted = false
 	s.turnMu.Unlock()
 	for _, ch := range pending {
 		ch <- err
@@ -1379,6 +2027,14 @@ func resultErr(msg claudeagent.ResultMessage) error {
 		return errors.New("claude result: " + msg.Subtype)
 	}
 	return errors.New("claude turn failed")
+}
+
+func isTurnCanceledError(err error) bool {
+	if err == nil {
+		return false
+	}
+	value := strings.ToLower(strings.TrimSpace(err.Error()))
+	return value == "turn canceled" || value == "turn cancelled" || strings.Contains(value, "context canceled")
 }
 
 func contextTokensFromPartialEvent(raw json.RawMessage) int {

@@ -171,7 +171,7 @@ function displayLineNumber(line: DiffLine): string {
 function normalizeRelatedSessions(raw: unknown): RelatedSession[] {
   if (!raw) return [];
   const list = Array.isArray(raw) ? raw : [raw];
-  const normalized = list.map((item) => {
+  const normalized = list.map((item): RelatedSession | null => {
     if (!item || typeof item !== "object") return null;
     const value = item as Record<string, unknown>;
     const source = (typeof value.source_session === "string" && value.source_session)
@@ -210,8 +210,22 @@ function normalizeRelatedSessions(raw: unknown): RelatedSession[] {
 export function GitDiffViewer({ diff, root, onPathClick, onSessionClick, onSelectionChange }: GitDiffViewerProps) {
   const lines = React.useMemo(() => buildDiffLines(diff.content), [diff.content]);
   const relatedSessions = React.useMemo(() => normalizeRelatedSessions(diff.file_meta), [diff.file_meta]);
-  const visibleRelatedSessions = relatedSessions.slice(0, 3);
   const contentRootRef = React.useRef<HTMLDivElement | null>(null);
+  const [isMobile, setIsMobile] = React.useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth <= 768;
+  });
+
+  const visibleRelatedSessions = relatedSessions.slice(0, isMobile ? 2 : 3);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const media = window.matchMedia("(max-width: 768px)");
+    const update = () => setIsMobile(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   React.useEffect(() => {
     const updateSelection = () => {
@@ -273,6 +287,7 @@ export function GitDiffViewer({ diff, root, onPathClick, onSessionClick, onSelec
       <header style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "10px", background: "var(--mindfs-topbar-bg, transparent)", boxSizing: "border-box", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", overflow: "hidden", flex: 1, minWidth: 0 }}>
           <Breadcrumbs root={root} path={diff.path} onPathClick={onPathClick} />
+
           {relatedSessions.length > 0 ? (
             <div style={{ marginLeft: "16px", display: "flex", alignItems: "center", gap: "6px", minWidth: 0, flexShrink: 0 }}>
               <svg
@@ -326,7 +341,7 @@ export function GitDiffViewer({ diff, root, onPathClick, onSessionClick, onSelec
                     <span
                       style={{
                         display: "inline-block",
-                        maxWidth: "120px",
+                        maxWidth: isMobile ? "72px" : "120px",
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
@@ -341,11 +356,11 @@ export function GitDiffViewer({ diff, root, onPathClick, onSessionClick, onSelec
               </div>
             </div>
           ) : null}
-        </div>
-        <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>
-          <span>{renderStatusLabel(diff.status)}</span>
-          {renderLineStat(diff.additions, "+")}
-          {renderLineStat(diff.deletions, "-")}
+          <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-secondary)", minWidth: 0, flexShrink: 0 }}>
+            <span>{renderStatusLabel(diff.status)}</span>
+            {renderLineStat(diff.additions, "+")}
+            {renderLineStat(diff.deletions, "-")}
+          </div>
         </div>
       </header>
 
@@ -360,7 +375,7 @@ export function GitDiffViewer({ diff, root, onPathClick, onSessionClick, onSelec
           }}
         >
           <div ref={contentRootRef} style={{ position: "relative" }}>
-            <div style={{ padding: "24px 8px 24px 16px" }}>
+            <div style={{ padding: "24px 8px 24px 4px" }}>
               <div style={{ color: "var(--text-primary)" }}>
                 {lines.map((line, index) => (
                   <div
@@ -368,7 +383,7 @@ export function GitDiffViewer({ diff, root, onPathClick, onSessionClick, onSelec
                     data-line-number={line.kind === "add" && typeof line.newLine === "number" ? line.newLine : undefined}
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "48px 18px minmax(0, 1fr)",
+                      gridTemplateColumns: "34px 14px minmax(0, 1fr)",
                       alignItems: "stretch",
                       background: lineBackground(line.kind),
                       color: lineColor(line.kind),
@@ -376,7 +391,7 @@ export function GitDiffViewer({ diff, root, onPathClick, onSessionClick, onSelec
                   >
                     <div
                       style={{
-                        padding: "0 8px 0 0",
+                        padding: "0 4px 0 0",
                         textAlign: "right",
                         color: "var(--text-secondary)",
                         opacity: 0.55,
@@ -386,10 +401,10 @@ export function GitDiffViewer({ diff, root, onPathClick, onSessionClick, onSelec
                     >
                       {line.kind === "add" ? displayLineNumber(line) : ""}
                     </div>
-                    <div style={{ padding: "0 0 0 2px", userSelect: "none", fontWeight: 700 }}>
+                    <div style={{ padding: "0", userSelect: "none", fontWeight: 700 }}>
                       {line.kind === "add" ? "+" : line.kind === "del" ? "-" : line.kind === "ctx" ? " " : ""}
                     </div>
-                    <div style={{ padding: "0 16px 0 8px", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                    <div style={{ padding: "0 12px 0 4px", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                       {line.text || " "}
                     </div>
                   </div>

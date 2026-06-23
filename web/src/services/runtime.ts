@@ -1,5 +1,19 @@
 import { getStoredApiBaseURL, getStoredWsBaseURL } from "./storage";
 
+export type NativePlatform = "web" | "android" | "harmony" | "native";
+
+type NativeRuntimeWindow = Window & {
+  __MIND_FS_NATIVE_PLATFORM__?: string;
+  Capacitor?: {
+    getPlatform?: () => string;
+    isNativePlatform?: () => boolean;
+  };
+  MindFSNative?: {
+    platform?: string;
+  };
+  MindFSHarmony?: unknown;
+};
+
 export function isBrowserRuntime(): boolean {
   return typeof window !== "undefined";
 }
@@ -16,6 +30,46 @@ export function isCapacitorRuntime(): boolean {
   }
   const protocol = window.location.protocol;
   return protocol === "capacitor:" || protocol === "ionic:";
+}
+
+export function getNativePlatform(): NativePlatform {
+  if (!isBrowserRuntime()) {
+    return "web";
+  }
+  const envPlatform = String(import.meta.env.VITE_NATIVE_PLATFORM || "").toLowerCase();
+  if (envPlatform === "harmony" || envPlatform === "android") {
+    return envPlatform;
+  }
+
+  const win = window as NativeRuntimeWindow;
+  const injectedPlatform = String(win.__MIND_FS_NATIVE_PLATFORM__ || "").toLowerCase();
+  if (injectedPlatform === "harmony" || injectedPlatform === "android") {
+    return injectedPlatform;
+  }
+  const bridgePlatform = String(win.MindFSNative?.platform || "").toLowerCase();
+  if (bridgePlatform === "harmony" || bridgePlatform === "android") {
+    return bridgePlatform;
+  }
+  if (win.MindFSHarmony) {
+    return "harmony";
+  }
+  if (isCapacitorRuntime()) {
+    const capacitorPlatform = String(win.Capacitor?.getPlatform?.() || "").toLowerCase();
+    return capacitorPlatform === "android" ? "android" : "native";
+  }
+  return "web";
+}
+
+export function isNativeShellRuntime(): boolean {
+  return getNativePlatform() !== "web";
+}
+
+export function isAndroidRuntime(): boolean {
+  return getNativePlatform() === "android";
+}
+
+export function isHarmonyRuntime(): boolean {
+  return getNativePlatform() === "harmony";
 }
 
 function sanitizeBaseURL(value: string | null | undefined): string {
@@ -62,7 +116,7 @@ export function getApiBaseURL(): string {
   if (configured) {
     return configured;
   }
-  if (isCapacitorRuntime()) {
+  if (isNativeShellRuntime()) {
     return "";
   }
   return deriveOriginBaseURL();
@@ -87,9 +141,9 @@ export function getWsBaseURL(): string {
 }
 
 export function shouldRegisterServiceWorker(): boolean {
-  return !isCapacitorRuntime();
+  return !isNativeShellRuntime();
 }
 
 export function shouldEnablePWAInstall(): boolean {
-  return !isCapacitorRuntime();
+  return !isNativeShellRuntime();
 }

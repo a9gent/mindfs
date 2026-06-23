@@ -19,11 +19,31 @@ module.exports = {
     success: "#16a34a",
   },
 
+  viewContext(file) {
+    const content = normalizeContent(file.content);
+    const query = file.query || {};
+    const chapterPattern = createChapterPattern();
+    const chapters = extractChapters(content, chapterPattern, file.name);
+    const total = chapters.length;
+    const chapterIdx = clamp(
+      safeInt(query.chapter, 1) - 1,
+      0,
+      Math.max(0, total - 1),
+    );
+    const current = chapters[chapterIdx];
+
+    return [
+      `文件：${file.path || file.name || ""}`,
+      `当前章节：${current.title}`,
+      `章节进度：${chapterIdx + 1} / ${total}`,
+    ].join("\n");
+  },
+
   process(file) {
     const content = normalizeContent(file.content);
     const query = file.query || {};
 
-    const chapterPattern = /^(?:\s*)(第[\d一二三四五六七八九十百千万零〇两]+[章节回卷篇部][^\n]*|(?:正文\s*)?第\s*[\d一二三四五六七八九十百千万零〇两]+\s*[章节回卷篇部][^\n]*|Chapter\s+\d+[^\n]*|CHAPTER\s+\d+[^\n]*|\d+\s*[.、]\s*[^\n]{1,120})$/i;
+    const chapterPattern = createChapterPattern();
     const chapters = extractChapters(content, chapterPattern, file.name);
     const total = chapters.length;
 
@@ -41,7 +61,7 @@ module.exports = {
     const tocPage = clamp(safeInt(query.tocPage, tocPageDefault), 1, tocPageCount);
 
     const mergeQuery = (patch) => ({ ...query, ...patch });
-    const elements = createReaderElements(current.title, chapterIdx, total, tocPage, tocPageCount, mergeQuery);
+    const elements = createReaderElements(current.title, chapterIdx, total, mergeQuery);
     addNavButtons(elements, "t", chapterIdx, total, nextTocValue, mergeQuery);
     addNavButtons(elements, "b", chapterIdx, total, nextTocValue, mergeQuery);
     appendParagraphElements(elements, paragraphs, 500);
@@ -53,7 +73,7 @@ module.exports = {
       { tocPage: tocPage - 1 },
       tocPage <= 1,
       mergeQuery,
-      "outline",
+      "secondary",
     );
     addButton(
       elements,
@@ -62,7 +82,7 @@ module.exports = {
       { tocPage: tocPage + 1 },
       tocPage >= tocPageCount,
       mergeQuery,
-      "outline",
+      "secondary",
     );
 
     appendTocElements(elements, chapters, chapterIdx, tocPage, tocPageSize, mergeQuery);
@@ -73,6 +93,10 @@ module.exports = {
     };
   },
 };
+
+function createChapterPattern() {
+  return /^(?:\s*)(第[\d一二三四五六七八九十百千万零〇两]+[章节回卷篇部][^\n]*|(?:正文\s*)?第\s*[\d一二三四五六七八九十百千万零〇两]+\s*[章节回卷篇部][^\n]*|Chapter\s+\d+[^\n]*|CHAPTER\s+\d+[^\n]*|\d+\s*[.、]\s*[^\n]{1,120})$/i;
+}
 
 function normalizeContent(value) {
   return typeof value === "string" ? value.replace(/\r\n?/g, "\n") : "";
@@ -143,7 +167,7 @@ function extractParagraphs(content, chapter, chapterPattern) {
     .filter(Boolean);
 }
 
-function createReaderElements(currentTitle, chapterIdx, total, tocPage, tocPageCount, mergeQuery) {
+function createReaderElements(currentTitle, chapterIdx, total, mergeQuery) {
   return {
     root: {
       type: "Stack",
@@ -231,7 +255,14 @@ function addButton(elements, id, label, queryPatch, disabled, mergeQuery, varian
 }
 
 function addNavButtons(elements, suffix, chapterIdx, total, nextTocValue, mergeQuery) {
-  addButton(elements, `prev-${suffix}`, "上一章", { chapter: chapterIdx, toc: "0" }, chapterIdx <= 0, mergeQuery);
+  addButton(
+    elements,
+    `prev-${suffix}`,
+    "上一章",
+    { chapter: chapterIdx, toc: "0" },
+    chapterIdx <= 0,
+    mergeQuery,
+  );
   elements[`toc-${suffix}`] = {
     type: "Button",
     props: { label: "目录", variant: "secondary", disabled: false },

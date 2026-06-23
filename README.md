@@ -1,6 +1,6 @@
 # MindFS
 
-[English](./README.md) | [简体中文](./README.zh.md)
+[English](./README.md) | [简体中文](./README.zh.md) | [Official Site](https://relay.a9gent.com/) | [Discord](https://discord.gg/YPJMqeWSn) | [Twitter](https://x.com/yandc18) | [【wechat group】](#wechat-group)
 
 > **AI Agent Remote Access Gateway · Result Visualization**
 
@@ -23,7 +23,7 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 
 ### Agent Sessions
 
-- **Multi-Agent support**: Claude Code · OpenAI Codex · Gemini CLI · Cursor · GitHub Copilot · Cline · Augment · Kimi · Kiro · Qwen · Qoder · Pi · OpenCode · OpenClaw — installed agents are detected automatically.
+- **Multi-Agent support**: Claude Code · OpenAI Codex · Gemini CLI · Cursor · GitHub Copilot · Cline · Augment · Kimi · Kiro · Qwen · Qoder · OMP · Pi · Hermes · Reasonix · OpenCode · OpenClaw — installed agents are detected automatically.
 - **Real-time streaming**: Token-by-token output pushed to the browser; tool calls, thought traces, permission prompts, and remaining context-window capacity are rendered live as structured, collapsible cards.
 - **Flexible switching**: Switch agents or models mid-session; all agents share the same context — no need to re-explain the background.
 - **Session search**: Search by session title or conversation content, then jump straight to the matched session and snippet.
@@ -31,6 +31,10 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 - **Binding persistence and recovery**: MindFS persists the mapping between its internal session and the underlying agent session, so the link can be restored after service restarts and follow-up messages continue on the same agent session when available.
 - **Rich media input**: Attach files and images directly in your messages.
 - **Multi-device sync**: Access the same instance from multiple devices simultaneously with live session sync.
+- **Configuration backup and switching**: Agent configurations can be backed up and switched with one click, making it easier to move between multiple accounts or API keys.
+- **Subagents**: Codex subagents are automatically discovered and displayed.
+- **session fork**: Session can forked from historical replies.
+- **Scheduled tasks**: Trigger agents to run tasks at specified times.
 
 ### File Access
 
@@ -46,6 +50,7 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 - **Bidirectional file–session linking**: Jump from a file to the session that created it, or from a session to all files it touched.
 - **Android, Browser app (PWA)**: Install to desktop or mobile home screen for a native-like experience — no app store required.
 - **Mobile-optimized UI**: Bottom action bar within thumb reach, independent panel swipe navigation, input box adapts to the soft keyboard.
+- **Notification Push**: Notifications are delivered via Web Push upon session status changes (iOS requires adding the page to the home screen).
 
 ### Access Modes
 
@@ -59,6 +64,18 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 - **Custom views**: A plugin is a custom view for a file, following the pattern: receive file content → parse → render UI.
 - **Agent-generated plugins**: Tell the agent "implement a txt novel reader" and it generates the plugin — all txt files are then displayed as a reading experience.
 - **Interaction loop**: Plugins can register action buttons that send structured commands to the agent, completing the loop: customize plugin → browse file → agent interaction.
+
+### Command Execution
+
+- **Card output**: Command results are displayed as cards for clearer reading.
+- **History suggestions**: Matching previous commands automatically appear as suggestions for quick input.
+- **Screen-width adaptation**: Command output adapts to the screen width for a friendlier result view.
+- **Selectable shell type**: Choose the shell used for command execution, so Windows users do not need to worry about shell type mismatches.
+- **Session persistence**: Each session gets a long-lived shell, making tmux-like command continuity easier.
+
+### Remote Access to Local Services
+- **One-Click Exposure**: In Relay mode, configure the address of your local service in MindFS to expose it to the public network with one click.
+- **Public Domain Name**: Access local services directly via a unique public domain name.
 
 ### Installation
 
@@ -89,7 +106,12 @@ MindFS does not include any AI model — you need at least one Agent CLI install
 | **Kimi** | https://www.kimi.com/code/docs/kimi-cli/guides/getting-started.html |
 | **Qwen** | https://qwen.ai/qwencode |
 | **Qoder** | https://docs.qoder.com/cli/quick-start |
+| **OMP** | https://github.com/can1357/oh-my-pi (`omp acp`) |
 | **Pi** | https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent, and acp adatper: https://github.com/svkozak/pi-acp |
+| **Hermes** | https://hermes-agent.nousresearch.com/docs/user-guide/features/acp |
+| **Reasonix** | https://github.com/esengine/DeepSeek-Reasonix |
+
+MindFS also collects commonly used agents in the local UI. Open the file-tree menu, choose **Agent Install & Update**, then use the generated install/update commands for your platform. The commands are launched in MindFS command mode so you can review and run them from the same workspace.
 
 Once an agent is installed, start MindFS and interact with it through the browser.
 
@@ -110,7 +132,27 @@ curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.
 irm https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.ps1 | iex
 ```
 
-The install script auto-detects your OS and architecture, then downloads the matching binary from [GitHub Releases](https://github.com/a9gent/mindfs/releases).
+The install script auto-detects your OS and architecture, reads the latest version from the first line of [`release-notes.md`](https://raw.githubusercontent.com/a9gent/mindfs/main/release-notes.md), then downloads the matching binary from [GitHub Releases](https://github.com/a9gent/mindfs/releases). `release-notes.md` keeps release history with the newest entry at the top; `make release TAG=v1.2.3` commits and pushes it when changed, then uses only the top entry as the GitHub release notes.
+
+### Uninstall
+
+The uninstall command removes the installed binary, bundled web assets, bundled default `agents.json`, and the PATH entry added by the installer. User config and project `.mindfs/` data are kept by default.
+
+**macOS / Linux**
+```bash
+installer="${TMPDIR:-/tmp}/mindfs-install.sh"
+curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh -o "$installer"
+bash "$installer" --uninstall
+```
+
+**Windows (PowerShell)**
+```powershell
+$Installer = Join-Path $env:TEMP "mindfs-install.ps1"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.ps1" -OutFile $Installer
+& $Installer -Uninstall
+```
+
+To also remove user-level MindFS config and logs, add `--purge` on macOS/Linux or `-Purge` on Windows. Project `.mindfs/` directories are never removed automatically.
 
 **Build from source** (requires Go 1.22+, Node.js 20+)
 ```bash
@@ -154,19 +196,81 @@ MindFS automatically detects the availability of installed agents. This usually 
 2. Log in to [a9gent.com](https://a9gent.com) and confirm the binding.
 3. Open your node — it is now accessible from any device.
 
+
+### Custom ACP Agents
+
+MindFS can load an extra `agents.json` for agent CLIs that speak the ACP protocol. This is useful when you are testing a new agent or want to keep project-specific agent definitions outside the bundled defaults.
+
+```json
+{
+  "agents": [
+    {
+      "name": "my-agent",
+      "brief": "Short description shown in the install/update list.",
+      "command": "my-agent",
+      "protocol": "acp",
+      "args": ["--acp"]
+    }
+  ]
+}
+```
+
+Start MindFS with the extra config:
+
+```bash
+mindfs -agent-config /path/to/agents.json
+```
+
+The extra file can add new agents or override a bundled definition with the same `name`.
+
 ### CLI Reference
 
-```
+```bash
 mindfs [flags] [root]
-
-Flags:
-  -addr string   Listen address (default "127.0.0.1:7331")
-  -no-relayer    Disable relay integration
-  -remove        Unregister a managed directory from a running server
-  -tls           Enable HTTPS (auto-generates self-signed cert if -cert/-key not provided)
-  -cert string   TLS certificate file (PEM); requires -tls
-  -key string    TLS private key file (PEM); requires -tls
 ```
+
+`root` is the directory to manage. If omitted, MindFS opens without adding a directory.
+
+By default, `mindfs` starts or reuses a background service and opens the browser. Pass `root` to register a directory; if a service is already running on the selected address, the command reuses it and adds that directory.
+
+#### Common Commands
+
+```bash
+mindfs
+mindfs /path/to/project
+mindfs -addr :9000 /path/to/project
+mindfs -foreground /path/to/project
+mindfs -status
+mindfs -version
+mindfs -update
+mindfs -uninstall
+mindfs -stop
+mindfs -restart
+mindfs -remove /path/to/project
+mindfs -agent-config /path/to/agents.json
+```
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-addr string` | `127.0.0.1:7331` | Listen address. Use `:7331` or `0.0.0.0:7331` to allow LAN access. |
+| `-foreground` | `false` | Run the server in the foreground instead of starting a background service. |
+| `-status` | `false` | Show background service status, PID, URL, and log file path. |
+| `-version` | `false` | Show the current MindFS version. |
+| `-update` | `false` | Check for and install the latest MindFS release. Restart MindFS manually after updating. |
+| `-uninstall` | `false` | Print the uninstall command for the current platform. |
+| `-stop` | `false` | Stop the background service for the selected address. |
+| `-restart` | `false` | Stop the background service if present, then start it again. |
+| `-remove` | `false` | Remove `root` from the managed directory list. If the server is running, it is removed through the local API; otherwise it is removed from the local registry. |
+| `-config string` | empty | Read startup options from a JSON file. See [`config.json`](./config.json) for a template. Explicit command-line flags override file values. |
+| `-agent-config string` | empty | Load one extra `agents.json` file. |
+| `-no-relayer` | `false` | Disable relay integration. Local and private-network access still work. |
+| `-e2ee` | `false` | Enable end-to-end encryption for sensitive data. The pairing code can also be used as an authentication mechanism: unpaired frontends cannot access node content. LAN access requires `-tls` to work correctly. On first enablement, the CLI prints the pairing secret. |
+| `-web-push` | `true` | Enable PWA Web Push notifications. VAPID keys are generated automatically on first start. |
+| `-tls` | `false` | Enable HTTPS. If `-cert` and `-key` are not provided, MindFS generates and reuses a local self-signed certificate. |
+| `-cert string` | empty | TLS certificate file in PEM format. Used with `-tls`; auto-generated when empty. |
+| `-key string` | empty | TLS private key file in PEM format. Used with `-tls`; auto-generated when empty. |
 
 ---
 
@@ -174,9 +278,17 @@ Flags:
 
 Pull requests are welcome. For larger changes, please open an issue first to discuss the approach.
 
+## wechat-group
+
+<p align="center">
+  <img src="docs/images/mindfs-wechat-group.webp" alt="MindFS 微信群" width="360" />
+</p>
 
 ---
 
 ## License
 
 [AGPL v3](LICENSE)
+
+## Friend Links
+<a href="https://linux.do">Linux.do</a>

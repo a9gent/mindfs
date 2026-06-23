@@ -7,6 +7,7 @@ export const PROOF_HEADER = "X-MindFS-Proof";
 export const TS_HEADER = "X-MindFS-TS";
 
 type E2EEState = {
+  configured: boolean;
   required: boolean;
   nodeId: string;
   secretPresent: boolean;
@@ -32,7 +33,20 @@ type SessionContext = {
   transportKeyBytes: Uint8Array;
 };
 
+type ProtectedRequest = {
+  init: RequestInit;
+  session: SessionContext;
+};
+
+export type NativeE2EESession = {
+  required: boolean;
+  nodeId: string;
+  clientId: string;
+  transportKey: string;
+};
+
 class E2EEService {
+  private configured = false;
   private required = false;
   private nodeId = "";
   private clientId = "";
@@ -51,11 +65,12 @@ class E2EEService {
   configure(required: boolean, nodeId: string) {
     const nextRequired = required === true;
     const nextNodeId = String(nodeId || "").trim();
-    const changed = this.required !== nextRequired || this.nodeId !== nextNodeId;
+    const changed = !this.configured || this.required !== nextRequired || this.nodeId !== nextNodeId;
+    this.configured = true;
     this.required = nextRequired;
     if (this.nodeId !== nextNodeId) {
+      this.zeroSession();
       this.nodeId = nextNodeId;
-      this.session = null;
       this.openingPromise = null;
     }
     if (changed) {
@@ -68,14 +83,15 @@ class E2EEService {
     if (this.clientId === nextClientId) {
       return;
     }
+    this.zeroSession();
     this.clientId = nextClientId;
-    this.session = null;
     this.openingPromise = null;
     this.emit();
   }
 
   snapshot(): E2EEState {
     return {
+      configured: this.configured,
       required: this.required,
       nodeId: this.nodeId,
       secretPresent: this.hasSecret(),
@@ -112,10 +128,12 @@ class E2EEService {
     this.emit();
   }
 
-  clearSession() {
-    this.session = null;
+  clearSession(options: { silent?: boolean } = {}) {
+    this.zeroSession();
     this.openingPromise = null;
-    this.emit();
+    if (!options.silent) {
+      this.emit();
+    }
   }
 
   clearSecret() {
@@ -185,6 +203,20 @@ class E2EEService {
     return this.decodeProtectedJSON<T>(raw);
   }
 
+  async wsProofParams(method: string, path: string): Promise<URLSearchParams> {
+    const session = await this.ensureSession();
+    if (!session) {
+      throw new Error("e2ee_required");
+    }
+    const ts = new Date().toISOString();
+    const proofPath = canonicalProofPath(path);
+    const proof = await buildRequestProof(session.transportKeyBytes, method, proofPath, ts, this.clientId);
+    return new URLSearchParams({
+      e2ee_ts: ts,
+      e2ee_proof: proof,
+    });
+  }
+
   sessionProtectedHeaders(headers?: HeadersInit): Headers {
     const next = new Headers(headers);
     next.set(E2EE_HEADER, "1");
@@ -207,6 +239,17 @@ class E2EEService {
     return next;
   }
 
+  private async requestProofHeaders(session: SessionContext, method: string, input: RequestInfo | URL, headers?: HeadersInit): Promise<Headers> {
+    const ts = new Date().toISOString();
+    const requestURL = input instanceof Request ? input.url : String(input);
+    const proofPath = canonicalProofPath(requestURL);
+    const proof = await buildRequestProof(session.transportKeyBytes, method, proofPath, ts, this.clientId);
+    const next = this.sessionProtectedHeaders(headers);
+    next.set(TS_HEADER, ts);
+    next.set(PROOF_HEADER, proof);
+    return next;
+  }
+
   isProtectedJSONResponse(response: Response): boolean {
     return String(response.headers.get(E2EE_HEADER) || "").trim() === "1";
   }
@@ -218,12 +261,97 @@ class E2EEService {
     return this.decodeProtectedJSON<T>(await response.text());
   }
 
+  async protectedFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+    if (!this.required) {
+      return fetch(input, init);
+    }
+    let request = await this.buildProtectedRequest(input, init);
+    let response = await fetch(input, request.init);
+    if (response.status === 401) {
+      const payload = (await response.clone().json().catch(() => ({}))) as { error?: string };
+      if (await this.recoverProtectedSession(String(payload.error || ""), request.session)) {
+        request = await this.buildProtectedRequest(input, init);
+        response = await fetch(input, request.init);
+      }
+    }
+    return response;
+  }
+
+  private async buildProtectedRequest(input: RequestInfo | URL, init: RequestInit): Promise<ProtectedRequest> {
+    const session = await this.ensureSession();
+    if (!session) {
+      throw new Error("e2ee_required");
+    }
+    const method = String(init.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+    const headers = await this.requestProofHeaders(session, method, input, init.headers || (input instanceof Request ? input.headers : undefined));
+    const next: RequestInit = { ...init, method, headers };
+    if (init.body !== undefined && init.body !== null && method !== "GET" && method !== "HEAD") {
+      const plaintext = protectedBodyText(init.body);
+      const envelope = await encryptBytes(session.transportKey, new TextEncoder().encode(plaintext));
+      next.body = JSON.stringify(envelope);
+      headers.set("Content-Type", "application/json");
+    }
+    return { init: next, session };
+  }
+
+  private async recoverProtectedSession(code: string, failedSession: SessionContext): Promise<boolean> {
+    const normalized = String(code || "").trim();
+    if (!normalized) {
+      return false;
+    }
+    if (
+      this.session &&
+      this.session !== failedSession &&
+      (
+        normalized === "e2ee_session_missing" ||
+        normalized === "e2ee_session_expired" ||
+        normalized === "e2ee_proof_invalid"
+      )
+    ) {
+      return true;
+    }
+    if (
+      normalized === "e2ee_session_missing" ||
+      normalized === "e2ee_session_expired"
+    ) {
+      this.session = null;
+      if (!this.hasSecret()) {
+        this.emit();
+      }
+      await this.ensureSession();
+      return true;
+    }
+    if (normalized === "e2ee_proof_invalid") {
+      this.clearSecret();
+      return true;
+    }
+    return false;
+  }
+
+  async protectedJSON<T>(input: RequestInfo | URL, init: RequestInit = {}): Promise<T> {
+    const response = await this.protectedFetch(input, init);
+    if (!response.ok) {
+      const payload = await this.parseProtectedJSONResponse<{ error?: string; message?: string }>(response.clone()).catch(() => ({}));
+      throw new Error(String(payload.message || payload.error || `request failed: ${response.status}`));
+    }
+    return this.parseProtectedJSONResponse<T>(response);
+  }
+
   isRequired(): boolean {
     return this.required;
   }
 
   currentClientId(): string {
     return this.clientId;
+  }
+
+  nativeSession(): NativeE2EESession {
+    return {
+      required: this.required,
+      nodeId: this.nodeId,
+      clientId: this.required && this.session ? this.clientId : "",
+      transportKey: this.required && this.session ? encodeBase64(this.session.transportKeyBytes) : "",
+    };
   }
 
   handleServerError(code: string): boolean {
@@ -235,7 +363,7 @@ class E2EEService {
       normalized === "e2ee_session_missing" ||
       normalized === "e2ee_session_expired"
     ) {
-      this.clearSession();
+      this.clearSession({ silent: this.hasSecret() });
       return true;
     }
     if (normalized === "e2ee_proof_invalid") {
@@ -340,6 +468,13 @@ class E2EEService {
 
   private secretStorageKey(): string {
     return `${SECRET_STORAGE_PREFIX}${this.nodeId}`;
+  }
+
+  private zeroSession() {
+    if (this.session) {
+      this.session.transportKeyBytes.fill(0);
+      this.session = null;
+    }
   }
 
   private emit() {
@@ -477,6 +612,16 @@ function canonicalProofPath(path: string): string {
   const target = new URL(raw, typeof window !== "undefined" ? window.location.origin : "http://localhost");
   const pathname = target.pathname.replace(/^\/n\/[^/]+/, "") || "/";
   return target.search ? `${pathname}${target.search}` : pathname;
+}
+
+function protectedBodyText(body: BodyInit): string {
+  if (typeof body === "string") {
+    return body;
+  }
+  if (body instanceof URLSearchParams) {
+    return body.toString();
+  }
+  throw new Error("e2ee_unsupported_body");
 }
 
 export const e2eeService = new E2EEService();

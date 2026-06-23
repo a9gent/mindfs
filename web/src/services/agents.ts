@@ -1,9 +1,11 @@
 import { appPath } from "./base";
+import { protectedAPIReady, protectedJSON } from "./api";
 
 // Agent status service
 
 export type AgentStatus = {
   name: string;
+  brief?: string;
   installed: boolean;
   available: boolean;
   version?: string;
@@ -13,6 +15,8 @@ export type AgentStatus = {
   current_mode_id?: string;
   default_model_id?: string;
   default_effort?: string;
+  default_fast_service?: string;
+  supports_fast_service?: boolean;
   efforts?: string[];
   models?: AgentModelInfo[];
   modes?: AgentModeInfo[];
@@ -20,6 +24,8 @@ export type AgentStatus = {
   modes_error?: string;
   commands?: AgentCommandInfo[];
   commands_error?: string;
+  install_commands?: string[];
+  update_commands?: string[];
 };
 
 export type AgentModelInfo = {
@@ -42,8 +48,17 @@ export type AgentCommandInfo = {
   argument_hint?: string;
 };
 
-const VALID_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+export type ShellStatus = {
+  id: string;
+  name?: string;
+  label: string;
+  command: string;
+  resolved_command?: string;
+  args?: string[];
+  default?: boolean;
+};
 
+const VALID_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 function normalizeEfforts(input: unknown): string[] | undefined {
   if (!Array.isArray(input)) {
     return undefined;
@@ -72,32 +87,117 @@ function normalizeAgentStatus(input: unknown): AgentStatus | null {
   return {
     ...agent,
     efforts: normalizeEfforts(agent.efforts),
+    default_fast_service:
+      typeof agent.default_fast_service === "string"
+        ? agent.default_fast_service
+        : "",
+    supports_fast_service: !!agent.supports_fast_service,
   };
 }
 
 let cachedAgents: AgentStatus[] = [];
+let cachedAgentCatalog: AgentStatus[] = [];
+let cachedShells: ShellStatus[] = [];
 let lastFetch = 0;
+let lastCatalogFetch = 0;
+let inFlightAgents: Promise<{ agents: AgentStatus[]; shells: ShellStatus[] }> | null = null;
+let inFlightCatalog: Promise<{ agents: AgentStatus[]; shells: ShellStatus[] }> | null = null;
 const CACHE_TTL = 30000; // 30 seconds
 
-export async function fetchAgents(force = false): Promise<AgentStatus[]> {
+function normalizeShellStatus(input: unknown): ShellStatus | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+  const shell = input as ShellStatus;
+  const id = String(shell.id || shell.command || "").trim();
+  const command = String(shell.command || id).trim();
+  if (!id || !command) {
+    return null;
+  }
+  return {
+    id,
+    command,
+    name: typeof shell.name === "string" ? shell.name : undefined,
+    resolved_command: typeof shell.resolved_command === "string" ? shell.resolved_command : undefined,
+    label: String(shell.name || shell.label || id).trim() || id,
+    args: Array.isArray(shell.args) ? shell.args.map((item) => String(item)) : undefined,
+    default: !!shell.default,
+  };
+}
+
+async function fetchAgentRuntime(force = false, includeAll = false): Promise<{ agents: AgentStatus[]; shells: ShellStatus[] }> {
   const now = Date.now();
-  if (!force && cachedAgents.length > 0 && now - lastFetch < CACHE_TTL) {
-    return cachedAgents;
+  const agentCache = includeAll ? cachedAgentCatalog : cachedAgents;
+  const agentLastFetch = includeAll ? lastCatalogFetch : lastFetch;
+  const inFlight = includeAll ? inFlightCatalog : inFlightAgents;
+  if (!force && agentCache.length > 0 && now - agentLastFetch < CACHE_TTL) {
+    if (includeAll) {
+      return { agents: cachedAgentCatalog, shells: cachedShells };
+    }
+    return { agents: cachedAgents, shells: cachedShells };
+  }
+  if (inFlight) {
+    return inFlight;
+  }
+  if (!protectedAPIReady()) {
+    return { agents: agentCache, shells: cachedShells };
   }
 
-  try {
-    const res = await fetch(appPath("/api/agents"));
-    if (!res.ok) {
-      throw new Error("Failed to fetch agents");
-    }
-    const data = await res.json();
-    cachedAgents = Array.isArray(data)
-      ? data.map(normalizeAgentStatus).filter((item): item is AgentStatus => item !== null)
+  const request = (async () => {
+    const data = await protectedJSON<any>(appPath(includeAll ? "/api/agents?all=1" : "/api/agents"));
+    const agentItems: unknown[] = Array.isArray(data) ? data : Array.isArray(data?.agents) ? data.agents : [];
+    const shellItems: unknown[] = Array.isArray(data?.shells) ? data.shells : [];
+    const nextAgents = agentItems
+      ? agentItems.map(normalizeAgentStatus).filter((item): item is AgentStatus => item !== null)
       : [];
-    lastFetch = now;
-    return cachedAgents;
+    if (includeAll) {
+      cachedAgentCatalog = nextAgents;
+      lastCatalogFetch = now;
+    } else {
+      cachedAgents = nextAgents;
+      lastFetch = now;
+    }
+    cachedShells = shellItems.map(normalizeShellStatus).filter((item): item is ShellStatus => item !== null);
+    return { agents: nextAgents, shells: cachedShells };
+  })();
+  if (includeAll) {
+    inFlightCatalog = request;
+  } else {
+    inFlightAgents = request;
+  }
+  try {
+    return await request;
   } catch (err) {
     console.error("Failed to fetch agents:", err);
-    return cachedAgents;
+    return { agents: agentCache, shells: cachedShells };
+  } finally {
+    if (includeAll) {
+      inFlightCatalog = null;
+    } else {
+      inFlightAgents = null;
+    }
   }
+}
+
+export async function fetchAgents(force = false): Promise<AgentStatus[]> {
+  const data = await fetchAgentRuntime(force);
+  return data.agents;
+}
+
+export async function fetchAgentCatalog(force = false): Promise<AgentStatus[]> {
+  const data = await fetchAgentRuntime(force, true);
+  return data.agents;
+}
+
+export async function restartAgent(agent: string): Promise<{ restarting: boolean; agent: string }> {
+  return protectedJSON<{ restarting: boolean; agent: string }>(appPath("/api/agents/restart"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent }),
+  });
+}
+
+export async function fetchShells(force = false): Promise<ShellStatus[]> {
+  const data = await fetchAgentRuntime(force);
+  return data.shells;
 }

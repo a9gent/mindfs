@@ -14,6 +14,8 @@ export type ErrorCode =
   // Root/project errors
   | "root.create_failed"
   | "root.delete_failed"
+  | "root.rename_failed"
+  | "git.checkout_failed"
   // Agent errors
   | "agent.unavailable"
   | "agent.timeout"
@@ -26,6 +28,8 @@ export type ErrorCode =
   | "file.not_found"
   | "file.read_failed"
   | "file.write_failed"
+  // Clipboard errors
+  | "clipboard.write_failed"
   // Skill errors
   | "skill.not_found"
   | "skill.execute_failed"
@@ -159,6 +163,16 @@ class ErrorService {
         severity: "error",
         recoverable: true,
       },
+      "root.rename_failed": {
+        message: "重命名项目失败",
+        severity: "error",
+        recoverable: true,
+      },
+      "git.checkout_failed": {
+        message: "切换分支失败",
+        severity: "error",
+        recoverable: true,
+      },
       "agent.unavailable": {
         message: "Agent 不可用",
         severity: "error",
@@ -202,6 +216,11 @@ class ErrorService {
       "file.write_failed": {
         message: "写入文件失败",
         severity: "error",
+        recoverable: true,
+      },
+      "clipboard.write_failed": {
+        message: "复制失败",
+        severity: "warning",
         recoverable: true,
       },
       "skill.not_found": {

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import { ModeIcon } from "./ModeIcon";
 
-export type SessionMode = "chat" | "plugin";
+export type SessionMode = "chat" | "plugin" | "command";
 
 type ModeSelectorProps = {
   mode: SessionMode;
@@ -10,13 +11,9 @@ type ModeSelectorProps = {
 };
 
 const modeLabels: Record<SessionMode, string> = {
-  chat: "对话",
+  chat: "agent 对话",
   plugin: "视图插件",
-};
-
-const modeIcons: Record<SessionMode, string> = {
-  chat: "💬",
-  plugin: "🧩",
+  command: "命令执行",
 };
 
 export function ModeSelector({
@@ -85,8 +82,8 @@ export function ModeSelector({
           if (compact) e.currentTarget.style.background = "transparent";
         }}
       >
-        <div style={{ width: '16px', height: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <span>{modeIcons[mode]}</span>
+        <div style={{ width: "18px", height: "18px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <ModeIcon type={mode} size={18} />
         </div>
       </button>
 
@@ -118,7 +115,7 @@ export function ModeSelector({
           >
             模式
           </div>
-          {(["chat", "plugin"] as SessionMode[]).map((m) => (
+          {(["chat", "plugin", "command"] as SessionMode[]).map((m) => (
             <button
               key={m}
               type="button"
@@ -139,7 +136,11 @@ export function ModeSelector({
                 whiteSpace: "nowrap",
               }}
             >
-              <span>{modeIcons[m]}</span>
+              <ModeIcon
+                type={m}
+                size={18}
+                style={m === "chat" && m !== mode ? { color: "#64748b" } : undefined}
+              />
               <span>{modeLabels[m]}</span>
             </button>
           ))}

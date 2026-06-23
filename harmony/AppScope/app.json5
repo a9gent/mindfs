@@ -1,0 +1,10 @@
+{
+  "app": {
+    "bundleName": "com.mindfs.app",
+    "vendor": "MindFS",
+    "versionCode": 20801,
+    "versionName": "0.2.8",
+    "icon": "$media:app_icon",
+    "label": "$string:app_name"
+  }
+}

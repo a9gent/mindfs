@@ -1,0 +1,11 @@
+{
+  "modelVersion": "5.0.0",
+  "name": "mindfs-harmony",
+  "version": "0.1.0",
+  "description": "MindFS HarmonyOS NEXT shell",
+  "main": "",
+  "author": "MindFS",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {}
+}

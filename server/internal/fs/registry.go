@@ -3,13 +3,19 @@ package fs
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
+	"mindfs/server/internal/apperr"
 	configpkg "mindfs/server/internal/config"
 )
+
+var ErrRootNameConflict = errors.New("root name already exists")
 
 type Registry struct {
 	mu    sync.Mutex
@@ -39,7 +45,7 @@ func (r *Registry) Load() error {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return err
+		return apperr.Wrap("read", r.path, err)
 	}
 	var stored struct {
 		Dirs  []RootInfo `json:"dirs"`
@@ -56,17 +62,21 @@ func (r *Registry) Load() error {
 		if name == "" {
 			name = filepath.Base(info.RootPath)
 		}
-		if name == "" || name == "." || name == string(filepath.Separator) {
+		id := info.ID
+		if id == "" {
+			id = name
+		}
+		if id == "" || id == "." || id == string(filepath.Separator) {
 			continue
 		}
-		if _, exists := seen[name]; exists {
+		if _, exists := seen[id]; exists {
 			continue
 		}
-		seen[name] = struct{}{}
+		seen[id] = struct{}{}
 		info.Name = name
-		info.ID = name
-		r.dirs[name] = info
-		r.order = append(r.order, name)
+		info.ID = id
+		r.dirs[id] = info
+		r.order = append(r.order, id)
 	}
 	return nil
 }
@@ -82,7 +92,7 @@ func (r *Registry) saveLocked() error {
 		return errors.New("registry path required")
 	}
 	if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
-		return err
+		return apperr.Wrap("mkdir", filepath.Dir(r.path), err)
 	}
 	recs := make([]RootInfo, 0, len(r.dirs))
 	for _, id := range r.order {
@@ -94,7 +104,7 @@ func (r *Registry) saveLocked() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(r.path, payload, 0o644)
+	return apperr.Wrap("write", r.path, os.WriteFile(r.path, payload, 0o644))
 }
 
 func (r *Registry) List() []RootInfo {
@@ -132,10 +142,30 @@ func (r *Registry) Upsert(root string) (RootInfo, error) {
 		dir = NewRootInfo(name, name, root)
 		dir.CreatedAt = now
 		r.order = append(r.order, name)
+	} else if !sameRegistryPath(dir.RootPath, root) {
+		return RootInfo{}, fmt.Errorf("%w: %q is already managed at %s; rename the directory before adding %s", ErrRootNameConflict, name, dir.RootPath, root)
 	}
 	dir.UpdatedAt = now
 	r.dirs[name] = dir
 	return dir, r.saveLocked()
+}
+
+func sameRegistryPath(a, b string) bool {
+	left := cleanRegistryPath(a)
+	right := cleanRegistryPath(b)
+	if runtime.GOOS == "windows" {
+		left = strings.ToLower(left)
+		right = strings.ToLower(right)
+	}
+	return left == right
+}
+
+func cleanRegistryPath(path string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(path))
+	if abs, err := filepath.Abs(cleaned); err == nil {
+		return abs
+	}
+	return cleaned
 }
 
 func (r *Registry) Remove(root string) (RootInfo, error) {
@@ -165,6 +195,54 @@ func (r *Registry) Remove(root string) (RootInfo, error) {
 	}
 	r.order = nextOrder
 	if err := r.saveLocked(); err != nil {
+		return RootInfo{}, err
+	}
+	return dir, nil
+}
+
+func (r *Registry) Rename(id, name, rootPath string) (RootInfo, error) {
+	id = strings.TrimSpace(id)
+	name = strings.TrimSpace(name)
+	if id == "" {
+		return RootInfo{}, errors.New("root id required")
+	}
+	if name == "" {
+		return RootInfo{}, errors.New("root name required")
+	}
+	if rootPath == "" {
+		return RootInfo{}, errors.New("root required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	dir, ok := r.dirs[id]
+	if !ok {
+		return RootInfo{}, errors.New("root not found")
+	}
+	if existing, exists := r.dirs[name]; exists && existing.ID != id {
+		return RootInfo{}, fmt.Errorf("%w: %q is already managed at %s", ErrRootNameConflict, name, existing.RootPath)
+	}
+
+	previousDirs := make(map[string]RootInfo, len(r.dirs))
+	for key, value := range r.dirs {
+		previousDirs[key] = value
+	}
+	previousOrder := append([]string(nil), r.order...)
+
+	dir.ID = name
+	dir.Name = name
+	dir.RootPath = filepath.Clean(rootPath)
+	dir.UpdatedAt = time.Now().UTC()
+	delete(r.dirs, id)
+	r.dirs[name] = dir
+	for i, item := range r.order {
+		if item == id {
+			r.order[i] = name
+			break
+		}
+	}
+	if err := r.saveLocked(); err != nil {
+		r.dirs = previousDirs
+		r.order = previousOrder
 		return RootInfo{}, err
 	}
 	return dir, nil

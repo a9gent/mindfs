@@ -33,7 +33,6 @@ var errBrowserUnavailable = errors.New("browser auto-open unavailable")
 const (
 	daemonEnvKey          = "MINDFS_DAEMON"
 	internalRestartEnvKey = "MINDFS_INTERNAL_RESTART"
-	staticDirEnvKey       = "MINDFS_STATIC_DIR"
 	maxLogSizeBytes       = 10 * 1024 * 1024
 	maxLogBackups         = 3
 )
@@ -44,7 +43,7 @@ func main() {
 		fmt.Fprintf(out, "Usage:\n")
 		fmt.Fprintf(out, "  mindfs [flags] [root]\n\n")
 		fmt.Fprintf(out, "Arguments:\n")
-		fmt.Fprintf(out, "  root    Directory to manage. Defaults to the current directory.\n\n")
+		fmt.Fprintf(out, "  root    Directory to manage. If omitted, MindFS opens without adding a directory.\n\n")
 		fmt.Fprintf(out, "Flags:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(out, "\nExamples:\n")
@@ -52,6 +51,9 @@ func main() {
 		fmt.Fprintf(out, "  mindfs /path/to/project\n")
 		fmt.Fprintf(out, "  mindfs --foreground\n")
 		fmt.Fprintf(out, "  mindfs --status\n")
+		fmt.Fprintf(out, "  mindfs --version\n")
+		fmt.Fprintf(out, "  mindfs --update\n")
+		fmt.Fprintf(out, "  mindfs --uninstall\n")
 		fmt.Fprintf(out, "  mindfs --stop\n")
 		fmt.Fprintf(out, "  mindfs -addr :9000 /path/to/project\n")
 		fmt.Fprintf(out, "  mindfs -remove /path/to/project\n")
@@ -60,30 +62,49 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:7331", "listen address")
 	noRelayer := flag.Bool("no-relayer", false, "disable relay integration")
 	e2eeFlag := flag.Bool("e2ee", false, "enable end-to-end encryption for sensitive data")
+	webPushFlag := flag.Bool("web-push", true, "enable PWA Web Push notifications")
 	foreground := flag.Bool("foreground", false, "run in the foreground instead of as a background service")
 	stop := flag.Bool("stop", false, "stop the background mindfs service")
 	restart := flag.Bool("restart", false, "restart the background mindfs service")
 	statusFlag := flag.Bool("status", false, "show background service status")
+	versionFlag := flag.Bool("version", false, "show version")
+	updateFlag := flag.Bool("update", false, "check for and install the latest MindFS release")
+	uninstallFlag := flag.Bool("uninstall", false, "print the MindFS uninstall command")
+	bindRelay := flag.Bool("bind-relay", false, "start relay binding and print the relayer bind URL")
+	configFlag := flag.String("config", "", "mindfs startup config file; command-line flags override file values")
+	agentConfigFlag := flag.String("agent-config", "", "extra agents.json file for customizable agent(ACP-protocol) and shell")
 	remove := flag.Bool("remove", false, "remove the managed directory")
 	tlsFlag := flag.Bool("tls", false, "enable HTTPS (auto-generates self-signed cert if -cert/-key not provided)")
 	certFlag := flag.String("cert", "", "TLS certificate file (PEM); auto-generated if empty with -tls")
 	keyFlag := flag.String("key", "", "TLS private key file (PEM); auto-generated if empty with -tls")
 	flag.Parse()
+	explicitFlags := visitedFlags(flag.CommandLine)
+	startupCfg, err := loadStartupConfig(*configFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+	applyStartupConfig(startupCfg, explicitFlags, addr, noRelayer, e2eeFlag, webPushFlag, foreground, bindRelay, tlsFlag, certFlag, keyFlag, agentConfigFlag)
+	if *versionFlag {
+		printVersion()
+		return
+	}
+	if *uninstallFlag {
+		printUninstallCommand()
+		return
+	}
 	internalRestart := os.Getenv(internalRestartEnvKey) == "1"
 	daemonMode := os.Getenv(daemonEnvKey) == "1"
 	if internalRestart {
 		log.Printf("[mindfs] internal restart detected addr=%s root_arg_count=%d", *addr, flag.NArg())
 	}
 
+	hasRootArg := flag.NArg() > 0
 	root := "."
-	if flag.NArg() > 0 {
+	if hasRootArg {
 		root = flag.Arg(0)
 	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
-		os.Exit(1)
-	}
+	absRoot := ""
 	stateDir, err := ensureStateDir()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
@@ -93,6 +114,14 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
+	}
+
+	if *updateFlag {
+		if err := handleUpdateCommand(context.Background(), *addr, *tlsFlag); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		return
 	}
 
 	if *statusFlag {
@@ -122,6 +151,11 @@ func main() {
 	}
 
 	if *remove {
+		absRoot, err = filepath.Abs(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
 		if err := handleRemoveRoot(*addr, *tlsFlag, absRoot); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
@@ -142,13 +176,27 @@ func main() {
 
 	if !internalRestart && !*restart && serverRunning(*addr, *tlsFlag) {
 		fmt.Fprintf(os.Stdout, "server already running on %s, reusing existing process\n", *addr)
-		rootInfo, err := addManagedDir(*addr, *tlsFlag, absRoot)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
-			os.Exit(1)
+		rootID := ""
+		if hasRootArg {
+			absRoot, err = filepath.Abs(root)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err.Error())
+				os.Exit(1)
+			}
+			rootInfo, err := addManagedDir(*addr, *tlsFlag, absRoot)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err.Error())
+				os.Exit(1)
+			}
+			rootID = rootInfo.ID
+			fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
 		}
-		fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
-		if err := openTarget(*addr, *tlsFlag, rootInfo.ID); err != nil {
+		if *bindRelay {
+			if err := printRelayBindTarget(os.Stdout, *addr, *tlsFlag, rootID); err != nil {
+				fmt.Fprintln(os.Stderr, err.Error())
+				os.Exit(1)
+			}
+		} else if err := openTarget(*addr, *tlsFlag, rootID); err != nil {
 			reportOpenTargetError(os.Stderr, err)
 		}
 		return
@@ -173,14 +221,28 @@ func main() {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
-		rootInfo, err := addManagedDir(*addr, *tlsFlag, absRoot)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
-			os.Exit(1)
-		}
+		rootID := ""
 		fmt.Fprintln(os.Stdout, "mindfs service started")
-		fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
-		if err := openTarget(*addr, *tlsFlag, rootInfo.ID); err != nil {
+		if hasRootArg {
+			absRoot, err = filepath.Abs(root)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err.Error())
+				os.Exit(1)
+			}
+			rootInfo, err := addManagedDir(*addr, *tlsFlag, absRoot)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err.Error())
+				os.Exit(1)
+			}
+			rootID = rootInfo.ID
+			fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
+		}
+		if *bindRelay {
+			if err := printRelayBindTarget(os.Stdout, *addr, *tlsFlag, rootID); err != nil {
+				fmt.Fprintln(os.Stderr, err.Error())
+				os.Exit(1)
+			}
+		} else if err := openTarget(*addr, *tlsFlag, rootID); err != nil {
 			reportOpenTargetError(os.Stderr, err)
 		}
 		fmt.Fprintf(os.Stdout, "logs: %s\n", logPath)
@@ -198,13 +260,15 @@ func main() {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- app.Start(ctx, *addr, app.StartOptions{
-			NoRelayer:  *noRelayer,
-			Version:    version,
-			Args:       os.Args[1:],
-			E2EEConfig: e2eeResult.Config,
-			UseTLS:     *tlsFlag,
-			CertFile:   resolvedCert,
-			KeyFile:    resolvedKey,
+			NoRelayer:       *noRelayer,
+			Version:         version,
+			Args:            os.Args[1:],
+			AgentConfigPath: *agentConfigFlag,
+			E2EEConfig:      e2eeResult.Config,
+			WebPushEnabled:  *webPushFlag,
+			UseTLS:          *tlsFlag,
+			CertFile:        resolvedCert,
+			KeyFile:         resolvedKey,
 		})
 	}()
 	if err := waitForServer(*addr, *tlsFlag, 8*time.Second); err != nil {
@@ -212,16 +276,32 @@ func main() {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
-	rootInfo, err := addManagedDir(*addr, *tlsFlag, absRoot)
-	if err != nil {
-		cancel()
-		fmt.Fprintln(os.Stderr, err.Error())
-		os.Exit(1)
+	rootID := ""
+	if hasRootArg {
+		absRoot, err = filepath.Abs(root)
+		if err != nil {
+			cancel()
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		rootInfo, err := addManagedDir(*addr, *tlsFlag, absRoot)
+		if err != nil {
+			cancel()
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		rootID = rootInfo.ID
+		fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
 	}
-	fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
 
 	if !internalRestart && (*foreground || !daemonMode) {
-		if err := openTarget(*addr, *tlsFlag, rootInfo.ID); err != nil {
+		if *bindRelay {
+			if err := printRelayBindTarget(os.Stdout, *addr, *tlsFlag, rootID); err != nil {
+				cancel()
+				fmt.Fprintln(os.Stderr, err.Error())
+				os.Exit(1)
+			}
+		} else if err := openTarget(*addr, *tlsFlag, rootID); err != nil {
 			reportOpenTargetError(os.Stderr, err)
 		}
 	}
@@ -277,6 +357,101 @@ func sanitizeAddrForFile(addr string) string {
 	return b.String()
 }
 
+type startupConfig struct {
+	Addr          *string `json:"addr"`
+	NoRelayer     *bool   `json:"noRelayer"`
+	NoRelayerFlag *bool   `json:"no-relayer"`
+	E2EE          *bool   `json:"e2ee"`
+	WebPush       *bool   `json:"webPush"`
+	WebPushFlag   *bool   `json:"web-push"`
+	Foreground    *bool   `json:"foreground"`
+	BindRelay     *bool   `json:"bindRelay"`
+	BindRelayFlag *bool   `json:"bind-relay"`
+	TLS           *bool   `json:"tls"`
+	Cert          *string `json:"cert"`
+	Key           *string `json:"key"`
+	AgentConfig   *string `json:"agent-config"`
+}
+
+func loadStartupConfig(path string) (startupConfig, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return startupConfig{}, nil
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return startupConfig{}, fmt.Errorf("read config %s: %w", path, err)
+	}
+	var cfg startupConfig
+	if err := json.Unmarshal(payload, &cfg); err != nil {
+		return startupConfig{}, fmt.Errorf("decode config %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+func visitedFlags(flags *flag.FlagSet) map[string]bool {
+	visited := make(map[string]bool)
+	flags.Visit(func(f *flag.Flag) {
+		visited[f.Name] = true
+	})
+	return visited
+}
+
+func applyStartupConfig(
+	cfg startupConfig,
+	explicit map[string]bool,
+	addr *string,
+	noRelayer *bool,
+	e2ee *bool,
+	webPush *bool,
+	foreground *bool,
+	bindRelay *bool,
+	tlsFlag *bool,
+	cert *string,
+	key *string,
+	agentConfig *string,
+) {
+	if cfg.Addr != nil && !explicit["addr"] {
+		*addr = strings.TrimSpace(*cfg.Addr)
+	}
+	if value := firstBool(cfg.NoRelayer, cfg.NoRelayerFlag); value != nil && !explicit["no-relayer"] {
+		*noRelayer = *value
+	}
+	if cfg.E2EE != nil && !explicit["e2ee"] {
+		*e2ee = *cfg.E2EE
+	}
+	if value := firstBool(cfg.WebPush, cfg.WebPushFlag); value != nil && !explicit["web-push"] {
+		*webPush = *value
+	}
+	if cfg.Foreground != nil && !explicit["foreground"] {
+		*foreground = *cfg.Foreground
+	}
+	if value := firstBool(cfg.BindRelay, cfg.BindRelayFlag); value != nil && !explicit["bind-relay"] {
+		*bindRelay = *value
+	}
+	if cfg.TLS != nil && !explicit["tls"] {
+		*tlsFlag = *cfg.TLS
+	}
+	if cfg.Cert != nil && !explicit["cert"] {
+		*cert = strings.TrimSpace(*cfg.Cert)
+	}
+	if cfg.Key != nil && !explicit["key"] {
+		*key = strings.TrimSpace(*cfg.Key)
+	}
+	if cfg.AgentConfig != nil && !explicit["agent-config"] {
+		*agentConfig = strings.TrimSpace(*cfg.AgentConfig)
+	}
+}
+
+func firstBool(values ...*bool) *bool {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
 func startBackgroundProcess(logPath string) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -291,9 +466,6 @@ func startBackgroundProcess(logPath string) error {
 	}
 	cmd := exec.Command(exe, os.Args[1:]...)
 	cmd.Env = append(cmd.Environ(), daemonEnvKey+"=1")
-	if staticDir := resolveDevelopmentStaticDir(); staticDir != "" {
-		cmd.Env = append(cmd.Env, staticDirEnvKey+"="+staticDir)
-	}
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Stdin = nil
@@ -303,25 +475,6 @@ func startBackgroundProcess(logPath string) error {
 		return err
 	}
 	return logFile.Close()
-}
-
-func resolveDevelopmentStaticDir() string {
-	if len(os.Args) == 0 {
-		return ""
-	}
-	arg0 := strings.TrimSpace(os.Args[0])
-	if arg0 == "" || !strings.HasPrefix(arg0, "."+string(os.PathSeparator)) {
-		return ""
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	candidate := filepath.Join(cwd, "web", "dist")
-	if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-		return candidate
-	}
-	return ""
 }
 
 func rotateLogIfNeeded(path string, maxSize int64, backups int) error {
@@ -412,11 +565,69 @@ func stopService(addr string, useTLS bool, pidPath string) error {
 	return fmt.Errorf("timed out stopping process %d", pid)
 }
 
+func printVersion() {
+	fmt.Fprintf(os.Stdout, "mindfs version: %s\n", version)
+}
+
+func printUninstallCommand() {
+	if runtime.GOOS == "windows" {
+		fmt.Fprintln(os.Stdout, "Run one of the following commands manually:")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "Uninstall MindFS, keeping user config and project data:")
+		fmt.Fprintln(os.Stdout, "Download scripts/install.ps1 from https://github.com/a9gent/mindfs, then run it with -Uninstall.")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "Purge MindFS, including user config and logs:")
+		fmt.Fprintln(os.Stdout, "Download scripts/install.ps1 from https://github.com/a9gent/mindfs, then run it with -Uninstall -Purge.")
+		return
+	}
+	fmt.Fprintln(os.Stdout, "Run one of the following commands manually:")
+	fmt.Fprintln(os.Stdout, "")
+	fmt.Fprintln(os.Stdout, "Uninstall MindFS, keeping user config and project data:")
+	fmt.Fprintln(os.Stdout, `installer="${TMPDIR:-/tmp}/mindfs-install.sh"`)
+	fmt.Fprintln(os.Stdout, `curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh -o "$installer"`)
+	fmt.Fprintln(os.Stdout, `bash "$installer" --uninstall`)
+	fmt.Fprintln(os.Stdout, "")
+	fmt.Fprintln(os.Stdout, "Purge MindFS, including user config and logs:")
+	fmt.Fprintln(os.Stdout, `installer="${TMPDIR:-/tmp}/mindfs-install.sh"`)
+	fmt.Fprintln(os.Stdout, `curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh -o "$installer"`)
+	fmt.Fprintln(os.Stdout, `bash "$installer" --uninstall --purge`)
+}
+
+func handleUpdateCommand(ctx context.Context, addr string, useTLS bool) error {
+	if runtime.GOOS == "windows" && serverRunning(addr, useTLS) {
+		return errors.New("mindfs service is running. Stop it before updating:\n  mindfs -stop\n  mindfs -update\n  mindfs")
+	}
+	fmt.Fprintln(os.Stdout, "Checking for updates...")
+	result, err := app.UpdateNow(ctx, app.UpdateOptions{
+		Version:  version,
+		Progress: os.Stdout,
+	})
+	if strings.TrimSpace(result.CurrentVersion) != "" {
+		fmt.Fprintf(os.Stdout, "current version: %s\n", result.CurrentVersion)
+	}
+	if strings.TrimSpace(result.LatestVersion) != "" {
+		fmt.Fprintf(os.Stdout, "latest version: %s\n", result.LatestVersion)
+	}
+	if err != nil {
+		return err
+	}
+	if !result.HasUpdate {
+		fmt.Fprintln(os.Stdout, "mindfs is already up to date")
+		return nil
+	}
+	if result.Installed {
+		fmt.Fprintln(os.Stdout, "Restart MindFS to use the new version:")
+		fmt.Fprintln(os.Stdout, "  mindfs -restart")
+	}
+	return nil
+}
+
 func printServiceStatus(addr string, useTLS bool, pidPath, logPath string) error {
 	pid, err := resolveServicePID(addr, useTLS, pidPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintln(os.Stdout, "mindfs status: stopped")
+			fmt.Fprintf(os.Stdout, "version: %s\n", version)
 			return nil
 		}
 		return err
@@ -425,6 +636,7 @@ func printServiceStatus(addr string, useTLS bool, pidPath, logPath string) error
 	fmt.Fprintf(os.Stdout, "pid: %d\n", pid)
 	fmt.Fprintf(os.Stdout, "addr: %s\n", addrToURL(addr, "", useTLS))
 	fmt.Fprintf(os.Stdout, "log file: %s\n", logPath)
+	fmt.Fprintf(os.Stdout, "version: %s\n", version)
 	return nil
 }
 
@@ -439,7 +651,7 @@ func resolveServicePID(addr string, useTLS bool, pidPath string) (int, error) {
 		return 0, err
 	}
 
-	if strings.TrimSpace(addr) == "" || !serverRunning(addr, useTLS) {
+	if strings.TrimSpace(addr) == "" {
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return 0, err
 		}
@@ -449,6 +661,9 @@ func resolveServicePID(addr string, useTLS bool, pidPath string) (int, error) {
 	pid, err = findListeningMindfsPID(addr)
 	if err != nil {
 		return 0, err
+	}
+	if pid <= 0 && !serverRunning(addr, useTLS) {
+		return 0, os.ErrNotExist
 	}
 	if pid <= 0 {
 		return 0, os.ErrNotExist
@@ -499,12 +714,17 @@ type relayStatusResponse struct {
 	Bound        bool   `json:"relay_bound"`
 	NoRelayer    bool   `json:"no_relayer"`
 	PendingCode  string `json:"pending_code"`
+	NodeName     string `json:"node_name"`
 	NodeID       string `json:"node_id"`
 	RelayBaseURL string `json:"relay_base_url"`
 	NodeURL      string `json:"node_url"`
 }
 
 func addManagedDir(addr string, useTLS bool, path string) (managedDirResponse, error) {
+	token, err := app.ReadLocalCLIToken(addr)
+	if err != nil {
+		return managedDirResponse{}, err
+	}
 	url := addrToURL(addr, "/api/dirs", useTLS)
 	body, err := json.Marshal(map[string]any{"path": path})
 	if err != nil {
@@ -515,6 +735,7 @@ func addManagedDir(addr string, useTLS bool, path string) (managedDirResponse, e
 		return managedDirResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-MindFS-Local-CLI-Token", token)
 	client := newHTTPClient(useTLS, 3*time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -532,15 +753,20 @@ func addManagedDir(addr string, useTLS bool, path string) (managedDirResponse, e
 		return out, nil
 	}
 	message := httpErrorMessage(resp)
-	return managedDirResponse{}, fmt.Errorf("failed to add managed directory: %s", message)
+	return managedDirResponse{}, fmt.Errorf("failed to add managed directory:\n%s", message)
 }
 
 func removeManagedDir(addr string, useTLS bool, path string) error {
+	token, err := app.ReadLocalCLIToken(addr)
+	if err != nil {
+		return err
+	}
 	endpoint := addrToURL(addr, "/api/dirs?path="+url.QueryEscape(path), useTLS)
 	req, err := http.NewRequest(http.MethodDelete, endpoint, nil)
 	if err != nil {
 		return err
 	}
+	req.Header.Set("X-MindFS-Local-CLI-Token", token)
 	client := newHTTPClient(useTLS, 3*time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -603,6 +829,83 @@ func fetchRelayStatus(addr string, useTLS bool) (relayStatusResponse, error) {
 	return out, nil
 }
 
+func startRelayBinding(addr string, useTLS bool) (relayStatusResponse, error) {
+	token, err := app.ReadLocalCLIToken(addr)
+	if err != nil {
+		return relayStatusResponse{}, err
+	}
+	endpoint := addrToURL(addr, "/api/relay/bind/start", useTLS)
+	client := newHTTPClient(useTLS, 3*time.Second)
+	req, err := http.NewRequest(http.MethodPost, endpoint, nil)
+	if err != nil {
+		return relayStatusResponse{}, err
+	}
+	req.Header.Set("X-MindFS-Local-CLI-Token", token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return relayStatusResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		message := strings.TrimSpace(string(payload))
+		if message == "" {
+			message = resp.Status
+		}
+		return relayStatusResponse{}, fmt.Errorf("failed to start relay binding: %s", message)
+	}
+	var out relayStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return relayStatusResponse{}, err
+	}
+	return out, nil
+}
+
+func printRelayBindTarget(w io.Writer, addr string, useTLS bool, rootID string) error {
+	status, err := startRelayBinding(addr, useTLS)
+	if err != nil {
+		return err
+	}
+	if status.NoRelayer {
+		return errors.New("relay integration is disabled")
+	}
+	if status.Bound && strings.TrimSpace(status.NodeURL) != "" {
+		u, err := url.Parse(status.NodeURL)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(rootID) != "" {
+			q := u.Query()
+			q.Set("root", rootID)
+			u.RawQuery = q.Encode()
+		}
+		fmt.Fprintln(w, "Relay already bound:")
+		fmt.Fprintln(w, u.String())
+		return nil
+	}
+	pendingCode := strings.TrimSpace(status.PendingCode)
+	relayBaseURL := strings.TrimSpace(status.RelayBaseURL)
+	if pendingCode == "" || relayBaseURL == "" {
+		return errors.New("relay bind URL unavailable")
+	}
+	u, err := url.Parse(strings.TrimSuffix(relayBaseURL, "/") + "/bind")
+	if err != nil {
+		return err
+	}
+	q := u.Query()
+	q.Set("code", pendingCode)
+	if strings.TrimSpace(rootID) != "" {
+		q.Set("root", rootID)
+	}
+	if nodeName := strings.TrimSpace(status.NodeName); nodeName != "" {
+		q.Set("node_name", nodeName)
+	}
+	u.RawQuery = q.Encode()
+	fmt.Fprintln(w, "Open this URL in a browser to bind relay:")
+	fmt.Fprintln(w, u.String())
+	return nil
+}
+
 func openTarget(addr string, useTLS bool, rootID string) error {
 	status, err := fetchRelayStatus(addr, useTLS)
 	if err != nil {
@@ -656,7 +959,7 @@ func openBrowser(target string) error {
 		return nil
 	}
 	if runtime.GOOS == "linux" && strings.TrimSpace(os.Getenv("DISPLAY")) == "" && strings.TrimSpace(os.Getenv("WAYLAND_DISPLAY")) == "" {
-		return fmt.Errorf("%w; open this URL manually: %s", errBrowserUnavailable, target)
+		return fmt.Errorf("%w; open this URL manually: %s; you can run `mindfs -bind-relay` to get a relay binding URL and access MindFS from the public internet after binding", errBrowserUnavailable, target)
 	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {

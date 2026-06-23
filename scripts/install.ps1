@@ -1,14 +1,23 @@
 # MindFS installer for Windows (PowerShell)
 # Downloads the correct release from GitHub and installs it.
-# Usage:  .\install.ps1 [-Version VERSION] [-Prefix PATH]
+# Usage:  .\install.ps1 [-Version VERSION] [-Prefix PATH] [-Uninstall] [-Purge]
 [CmdletBinding()]
 param(
     [string]$Version = "",
-    [string]$Prefix  = "$env:LOCALAPPDATA\Programs\mindfs"
+    [string]$Prefix  = "$env:LOCALAPPDATA\Programs\mindfs",
+    [switch]$Uninstall,
+    [switch]$Purge
 )
 
 $ErrorActionPreference = "Stop"
 $Repo = "a9gent/mindfs"
+$ReleaseNotesUrl = "https://raw.githubusercontent.com/$Repo/main/release-notes.md"
+$RelayDownloadBase = "https://relay.a9gent.com/mindfs-downloads"
+
+if ($Purge -and -not $Uninstall) {
+    Write-Error "-Purge can only be used with -Uninstall."
+    exit 1
+}
 
 function Add-ToCurrentSessionPath([string]$Dir) {
     if (-not $Dir) { return }
@@ -17,6 +26,53 @@ function Add-ToCurrentSessionPath([string]$Dir) {
         return
     }
     $env:Path = "$Dir;$env:Path"
+}
+
+function Remove-FromUserPath([string]$Dir) {
+    if (-not $Dir) { return }
+    $current = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($null -eq $current) { return }
+    $target = $Dir.TrimEnd('\')
+    $segments = @(
+        $current -split ';' |
+            Where-Object { $_ -and $_.Trim() -ne "" } |
+            Where-Object { $_.TrimEnd('\') -ine $target }
+    )
+    $next = ($segments -join ';')
+    if ($next -ne $current) {
+        [Environment]::SetEnvironmentVariable("Path", $next, "User")
+        $env:Path = (($env:Path -split ';' | Where-Object { $_ -and $_.TrimEnd('\') -ine $target }) -join ';')
+        Broadcast-EnvironmentChange
+        Write-Host "  Removed $Dir from your user PATH."
+    }
+}
+
+function Uninstall-MindFS {
+    $BinDir = Join-Path $Prefix "bin"
+    $BinPath = Join-Path $BinDir "mindfs.exe"
+    $ShareDir = Join-Path $Prefix "share\mindfs"
+
+    Write-Host "Uninstalling mindfs"
+    Write-Host "  Prefix: $Prefix"
+    Remove-Item -Force $BinPath -ErrorAction SilentlyContinue
+    Write-Host "  Removed binary: $BinPath"
+    Remove-Item -Recurse -Force $ShareDir -ErrorAction SilentlyContinue
+    Write-Host "  Removed shared files: $ShareDir"
+    Remove-Item -Force $BinDir -ErrorAction SilentlyContinue
+    Remove-Item -Force (Join-Path $Prefix "share") -ErrorAction SilentlyContinue
+    Remove-Item -Force $Prefix -ErrorAction SilentlyContinue
+    Remove-FromUserPath $BinDir
+
+    if ($Purge) {
+        $ConfigDir = Join-Path $env:APPDATA "mindfs"
+        Remove-Item -Recurse -Force $ConfigDir -ErrorAction SilentlyContinue
+        Write-Host "  Removed user config: $ConfigDir"
+        Write-Host "  Project .mindfs directories were not removed."
+    } else {
+        Write-Host "  User config and project .mindfs data were kept."
+        Write-Host "  Re-run with -Uninstall -Purge to remove user-level MindFS config and logs."
+    }
+    Write-Host "Done."
 }
 
 function Broadcast-EnvironmentChange {
@@ -55,6 +111,11 @@ public static class MindFSEnvBroadcast {
     }
 }
 
+if ($Uninstall) {
+    Uninstall-MindFS
+    exit 0
+}
+
 # ── Detect architecture ────────────────────────────────────────────────────
 function Get-Arch {
     $a = $env:PROCESSOR_ARCHITECTURE
@@ -77,12 +138,14 @@ function Normalize-Tag([string]$Tag) {
     return "v" + ($Tag -replace '^v', '')
 }
 
-# ── Resolve version from GitHub API if not specified ───────────────────────
+# ── Resolve version from raw metadata if not specified ─────────────────────
 if (-not $Version) {
     Write-Host "Fetching latest release version..."
-    $apiUrl  = "https://api.github.com/repos/$Repo/releases/latest"
-    $release = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing
-    $Version = $release.tag_name
+    $metadata = Invoke-WebRequest -Uri $ReleaseNotesUrl -UseBasicParsing
+    $firstLine = (($metadata.Content -split "`r?`n") | Select-Object -First 1).Trim()
+    if ($firstLine -match '^#\s+MindFS\s+(v?[0-9]+(\.[0-9]+){1,3}[^\s]*)') {
+        $Version = $Matches[1]
+    }
     if (-not $Version) {
         Write-Error "Could not determine latest version. Use -Version to specify."
         exit 1
@@ -97,13 +160,20 @@ Write-Host "  Prefix: $Prefix"
 # ── Download ────────────────────────────────────────────────────────────────
 $Filename = "mindfs_${Version}_${OS}_${Arch}.zip"
 $Url      = "https://github.com/$Repo/releases/download/$Version/$Filename"
+$FallbackUrl = "$RelayDownloadBase/$Filename"
 $TmpDir   = Join-Path $env:TEMP ("mindfs_install_" + [System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
 
 try {
     $ZipPath = Join-Path $TmpDir $Filename
     Write-Host "  Downloading $Url"
-    Invoke-WebRequest -Uri $Url -OutFile $ZipPath -UseBasicParsing
+    try {
+        Invoke-WebRequest -Uri $Url -OutFile $ZipPath -UseBasicParsing
+    } catch {
+        Write-Host "  GitHub download failed; trying $FallbackUrl"
+        Remove-Item -Force $ZipPath -ErrorAction SilentlyContinue
+        Invoke-WebRequest -Uri $FallbackUrl -OutFile $ZipPath -UseBasicParsing
+    }
 
     # ── Extract ─────────────────────────────────────────────────────────────
     Expand-Archive -Path $ZipPath -DestinationPath $TmpDir -Force

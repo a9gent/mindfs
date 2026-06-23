@@ -1,10 +1,11 @@
 import React from "react";
+import { ModeIcon } from "./ModeIcon";
 import { InlineTokenText } from "./InlineTokenText";
 
 type SessionInfo = {
   key: string;
   name: string;
-  type: "chat" | "plugin";
+  type: "chat" | "plugin" | "command";
   agent: string;
   model?: string;
   mode?: string;
@@ -30,6 +31,7 @@ type SessionHistoryProps = {
 const typeLabels: Record<string, string> = {
   chat: "对话",
   plugin: "视图插件",
+  command: "命令执行",
   skill: "对话",
 };
 
@@ -64,9 +66,7 @@ export function SessionHistory({
           background: "rgba(0,0,0,0.02)",
         }}
       >
-        <span style={{ fontSize: "20px" }}>
-          {session.type === "plugin" ? "🧩" : "💬"}
-        </span>
+        <ModeIcon type={session.type || "chat"} size={20} />
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: "16px", fontWeight: 600 }}>
             {session.name || `Session ${session.key.slice(0, 8)}`}

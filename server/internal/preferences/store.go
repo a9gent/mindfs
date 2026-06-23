@@ -25,8 +25,9 @@ type UserPreferences struct {
 }
 
 type AgentDefaults struct {
-	Model  string `json:"model,omitempty"`
-	Effort string `json:"effort,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Effort      string `json:"effort,omitempty"`
+	FastService string `json:"fast_service,omitempty"`
 }
 
 func NewStore() (*Store, error) {
@@ -69,7 +70,7 @@ func (s *Store) load() error {
 	return nil
 }
 
-func (s *Store) UpdateAgentDefaultsIfChanged(agentName, model, effort string) (bool, error) {
+func (s *Store) UpdateAgentDefaultsIfChanged(agentName, model, effort, fastService string) (bool, error) {
 	if s == nil {
 		return false, nil
 	}
@@ -79,10 +80,7 @@ func (s *Store) UpdateAgentDefaultsIfChanged(agentName, model, effort string) (b
 	}
 	model = strings.TrimSpace(model)
 	effort = strings.TrimSpace(effort)
-	if model == "" && effort == "" {
-		return false, nil
-	}
-
+	fastService = strings.TrimSpace(fastService)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -95,6 +93,9 @@ func (s *Store) UpdateAgentDefaultsIfChanged(agentName, model, effort string) (b
 	}
 	if effort != "" {
 		next.Effort = effort
+	}
+	if fastService != "" {
+		next.FastService = fastService
 	}
 	if s.data.Agents[agentName] == next {
 		return false, nil
@@ -123,6 +124,9 @@ func (s *Store) ApplyAgentDefaults(statuses []agent.Status) []agent.Status {
 		}
 		if defaults.Effort != "" {
 			out[i].DefaultEffort = defaults.Effort
+		}
+		if defaults.FastService != "" {
+			out[i].DefaultFastService = defaults.FastService
 		}
 	}
 	return out

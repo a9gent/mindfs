@@ -3,7 +3,6 @@
 package main
 
 import (
-	"encoding/csv"
 	"errors"
 	"fmt"
 	"os"
@@ -108,14 +107,5 @@ func processNameForPID(pid int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	line := strings.TrimSpace(string(output))
-	if line == "" || strings.HasPrefix(line, "INFO:") {
-		return "", os.ErrProcessDone
-	}
-	reader := csv.NewReader(strings.NewReader(line))
-	record, err := reader.Read()
-	if err != nil || len(record) == 0 {
-		return "", os.ErrProcessDone
-	}
-	return strings.TrimSpace(record[0]), nil
+	return parseTasklistImageName(output, pid)
 }

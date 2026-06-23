@@ -20,6 +20,7 @@ type OpenOptions struct {
 	SessionKey      string
 	Model           string
 	Mode            string
+	Effort          string
 	RootPath        string
 	Command         string
 	Args            []string
@@ -74,33 +75,17 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 			return nil, err
 		}
 	}
+	if strings.TrimSpace(opts.Effort) != "" {
+		if err := proc.SetThoughtLevel(ctx, opts.SessionKey, opts.Effort); err != nil {
+			proc.CloseSession(opts.SessionKey)
+			return nil, err
+		}
+	}
 	return &session{
 		proc:          proc,
 		sessionKey:    opts.SessionKey,
 		agentDebugLog: logs.NewAgentLogger(opts.RootPath, opts.SessionKey, opts.AgentName),
 	}, nil
-}
-
-func mapModelState(state *acpsdk.SessionModelState) types.ModelList {
-	if state == nil {
-		return types.ModelList{}
-	}
-	models := make([]types.ModelInfo, 0, len(state.AvailableModels))
-	for _, model := range state.AvailableModels {
-		description := ""
-		if model.Description != nil {
-			description = *model.Description
-		}
-		models = append(models, types.ModelInfo{
-			ID:          string(model.ModelId),
-			Name:        model.Name,
-			Description: description,
-		})
-	}
-	return types.ModelList{
-		CurrentModelID: string(state.CurrentModelId),
-		Models:         models,
-	}
 }
 
 func mapCommandState(commands []acpsdk.AvailableCommand) types.CommandList {
@@ -284,7 +269,7 @@ func (s *session) CurrentModel() string {
 	if s == nil || s.proc == nil {
 		return ""
 	}
-	return strings.TrimSpace(mapModelState(s.proc.SessionModelState(s.sessionKey)).CurrentModelID)
+	return strings.TrimSpace(mapModelConfigOptions(s.proc.SessionConfigOptions(s.sessionKey)).CurrentModelID)
 }
 
 func (s *session) SetModel(ctx context.Context, model string) error {
@@ -298,7 +283,7 @@ func (s *session) ListModels(_ context.Context) (types.ModelList, error) {
 	if s == nil || s.proc == nil {
 		return types.ModelList{}, errors.New("acp session not initialized")
 	}
-	return mapModelState(s.proc.SessionModelState(s.sessionKey)), nil
+	return mapModelConfigOptions(s.proc.SessionConfigOptions(s.sessionKey)), nil
 }
 
 func (s *session) SetMode(ctx context.Context, mode string) error {
@@ -308,9 +293,16 @@ func (s *session) SetMode(ctx context.Context, mode string) error {
 	return s.proc.SetMode(ctx, s.sessionKey, mode)
 }
 
+func (s *session) SetPlanMode(_ context.Context, _ bool) error {
+	return nil
+}
+
 func (s *session) ListModes(_ context.Context) (types.ModeList, error) {
 	if s == nil || s.proc == nil {
 		return types.ModeList{}, errors.New("acp session not initialized")
+	}
+	if modes := mapModeConfigOptions(s.proc.SessionConfigOptions(s.sessionKey)); len(modes.Modes) > 0 || modes.CurrentModeID != "" {
+		return modes, nil
 	}
 	return mapModeState(s.proc.SessionModeState(s.sessionKey)), nil
 }
@@ -356,6 +348,17 @@ func (s *session) ContextWindow(_ context.Context) (types.ContextWindow, error) 
 		return types.ContextWindow{}, errors.New("acp session not initialized")
 	}
 	return s.proc.SessionContextWindow(s.sessionKey), nil
+}
+
+func (s *session) RuntimeDefaults(context.Context) (types.RuntimeDefaults, error) {
+	if s == nil || s.proc == nil {
+		return types.RuntimeDefaults{}, errors.New("acp session not initialized")
+	}
+	options := s.proc.SessionConfigOptions(s.sessionKey)
+	return types.RuntimeDefaults{
+		Model:  configOptionCurrentValue(options, acpsdk.SessionConfigOptionCategoryModel),
+		Effort: configOptionCurrentValue(options, acpsdk.SessionConfigOptionCategoryThoughtLevel),
+	}, nil
 }
 
 func (s *session) Close() error {

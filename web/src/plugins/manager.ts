@@ -1,5 +1,6 @@
 import { fetchFile } from "../services/file";
 import { appURL } from "../services/base";
+import { protectedJSON } from "../services/api";
 
 export type MatchRule = {
   ext?: string;
@@ -32,6 +33,8 @@ export type PluginOutput = {
   tree: UITree;
 };
 
+export type PluginViewContext = unknown;
+
 export type ViewPlugin = {
   name: string;
   match: MatchRule;
@@ -53,6 +56,7 @@ export type ViewPlugin = {
     success: string;
   };
   process: (file: PluginInput) => PluginOutput;
+  viewContext?: (file: PluginInput) => PluginViewContext;
 };
 
 function splitCSV(value: string): string[] {
@@ -154,7 +158,8 @@ function isValidPlugin(value: unknown): value is ViewPlugin {
     !!plugin.match &&
     (plugin.fileLoadMode === "incremental" || plugin.fileLoadMode === "full") &&
     hasValidTheme &&
-    typeof plugin.process === "function"
+    typeof plugin.process === "function" &&
+    (plugin.viewContext === undefined || typeof plugin.viewContext === "function")
   );
 }
 
@@ -186,6 +191,11 @@ export class PluginManager {
   run(plugin: ViewPlugin, file: PluginInput): PluginOutput {
     return plugin.process(file);
   }
+
+  viewContext(plugin: ViewPlugin, file: PluginInput): PluginViewContext {
+    if (typeof plugin.viewContext !== "function") return null;
+    return plugin.viewContext(file);
+  }
 }
 
 export async function loadPlugin(code: string): Promise<ViewPlugin> {
@@ -200,18 +210,14 @@ export async function loadPlugin(code: string): Promise<ViewPlugin> {
 }
 
 export async function loadAllPlugins(rootId: string): Promise<ViewPlugin[]> {
-  let treeResp: Response;
+  let treePayload: any;
   try {
-    treeResp = await fetch(
+    treePayload = await protectedJSON<any>(
       appURL("/api/tree", new URLSearchParams({ root: rootId, dir: ".mindfs/plugins" })),
     );
   } catch {
     return [];
   }
-  if (!treeResp.ok) {
-    return [];
-  }
-  const treePayload = await treeResp.json();
   const entries = Array.isArray(treePayload?.entries) ? treePayload.entries : [];
   const pluginFiles = entries.filter(
     (entry: any) =>

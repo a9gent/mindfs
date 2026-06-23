@@ -14,13 +14,16 @@ const ICON_URLS: Record<string, { src: string; alt: string }> = {
   copilot: { src: appPath('/assets/agents/copilot.svg'), alt: 'Copilot' },
   cursor: { src: appPath('/assets/agents/cursor.svg'), alt: 'Cursor' },
   gemini: { src: appPath('/assets/agents/gemini.svg'), alt: 'Gemini' },
+  hermes: { src: appPath('/assets/agents/hermes.webp'), alt: 'Hermes' },
   kiro: { src: appPath('/assets/agents/kiro.svg'), alt: 'Kiro' },
   kimi: { src: appPath('/assets/agents/kimi.svg'), alt: 'Kimi' },
   openclaw: { src: appPath('/assets/agents/openclaw.svg'), alt: 'OpenClaw' },
   opencode: { src: appPath('/assets/agents/opencode.svg'), alt: 'OpenCode' },
+  omp: { src: appPath('/assets/agents/omp.svg'), alt: 'OMP' },
   pi: { src: appPath('/assets/agents/pi.svg'), alt: 'Pi' },
   qoder: { src: appPath('/assets/agents/qoder.svg'), alt: 'Qoder' },
   qwen: { src: appPath('/assets/agents/qwen.svg'), alt: 'Qwen' },
+  reasonix: { src: appPath('/assets/agents/reasonix.svg'), alt: 'Reasonix' },
 };
 
 const iconCache = new Map<string, string>();
@@ -58,6 +61,7 @@ async function loadIconOnce(url: string): Promise<string> {
 function useCachedIcon(url?: string): string | undefined {
   const [src, setSrc] = useState<string | undefined>(() => {
     if (!url) return undefined;
+    if (!url.endsWith('.svg')) return url;
     return iconCache.get(url) ?? undefined;
   });
 
@@ -65,6 +69,10 @@ function useCachedIcon(url?: string): string | undefined {
     let cancelled = false;
     if (!url) {
       setSrc(undefined);
+      return;
+    }
+    if (!url.endsWith('.svg')) {
+      setSrc(url);
       return;
     }
     const cached = iconCache.get(url);
@@ -87,6 +95,18 @@ function useCachedIcon(url?: string): string | undefined {
   return src;
 }
 
+function fallbackIconText(agentName: string): string {
+  const trimmed = agentName.trim();
+  if (!trimmed) return 'AI';
+  return trimmed.slice(0, 2).toUpperCase();
+}
+
+function cssSize(value: unknown, fallback: number): string {
+  if (typeof value === 'number' && Number.isFinite(value)) return `${value}px`;
+  if (typeof value === 'string' && value.trim()) return value;
+  return `${fallback}px`;
+}
+
 export function AgentIcon({ agentName, ...props }: AgentIconProps) {
   const lowerAgentName = agentName.toLowerCase();
   const agentTokens = lowerAgentName.split(/[^a-z0-9]+/).filter(Boolean);
@@ -102,6 +122,8 @@ export function AgentIcon({ agentName, ...props }: AgentIconProps) {
     icon = ICON_URLS.openclaw;
   } else if (lowerAgentName.includes('opencode')) {
     icon = ICON_URLS.opencode;
+  } else if (lowerAgentName === 'omp' || lowerAgentName.includes('oh-my-pi')) {
+    icon = ICON_URLS.omp;
   } else if (lowerAgentName.includes('copilot')) {
     icon = ICON_URLS.copilot;
   } else if (agentTokens.includes('pi') || lowerAgentName === 'pi') {
@@ -110,6 +132,8 @@ export function AgentIcon({ agentName, ...props }: AgentIconProps) {
     icon = ICON_URLS.qoder;
   } else if (lowerAgentName.includes('qwen')) {
     icon = ICON_URLS.qwen;
+  } else if (lowerAgentName.includes('reasonix')) {
+    icon = ICON_URLS.reasonix;
   } else if (lowerAgentName.includes('kiro')) {
     icon = ICON_URLS.kiro;
   } else if (lowerAgentName.includes('kimi')) {
@@ -122,6 +146,8 @@ export function AgentIcon({ agentName, ...props }: AgentIconProps) {
     icon = ICON_URLS.claude;
   } else if (lowerAgentName.includes('gemini')) {
     icon = ICON_URLS.gemini;
+  } else if (lowerAgentName.includes('hermes')) {
+    icon = ICON_URLS.hermes;
   }
   const iconSrc = useCachedIcon(icon?.src);
 
@@ -150,5 +176,30 @@ export function AgentIcon({ agentName, ...props }: AgentIconProps) {
     );
   }
 
-  return <span {...props}>🤖</span>;
+  const fallbackWidth = cssSize(width, 16);
+  const fallbackHeight = cssSize(height, 16);
+  return (
+    <span
+      {...props}
+      aria-label={agentName}
+      style={{
+        ...style,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: fallbackWidth,
+        height: fallbackHeight,
+        minWidth: fallbackWidth,
+        borderRadius: '4px',
+        background: 'rgba(148, 163, 184, 0.18)',
+        color: 'var(--muted, #64748b)',
+        fontSize: '9px',
+        fontWeight: 700,
+        lineHeight: 1,
+        letterSpacing: 0,
+      }}
+    >
+      {fallbackIconText(agentName)}
+    </span>
+  );
 }

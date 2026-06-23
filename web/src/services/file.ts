@@ -73,6 +73,7 @@ type FileResponse = {
 const DB_NAME = "mindfs-file-cache";
 const DB_VERSION = 1;
 const STORE_NAME = "files";
+const GIT_DIFF_CACHE_VERSION = "v2";
 const MAX_CACHE_ENTRIES = 200;
 const LS_RECORD_PREFIX = "mindfs-file-cache-record:";
 const LS_MAX_RECORD_BYTES = 256 * 1024;
@@ -87,11 +88,11 @@ function buildCacheKey(rootId: string, path: string, readMode: ReadMode, cursor:
 }
 
 function buildGitDiffCacheKey(rootId: string, path: string, signature?: string): string {
-  return ["git-diff", rootId, path, signature || ""].join("::");
+  return ["git-diff", GIT_DIFF_CACHE_VERSION, rootId, path, signature || ""].join("::");
 }
 
 function buildGitDiffCacheKeyPrefix(rootId: string, path: string): string {
-  return `git-diff::${rootId}::${path}::`;
+  return `git-diff::${GIT_DIFF_CACHE_VERSION}::${rootId}::${path}::`;
 }
 
 function buildCacheKeyPrefix(rootId: string, path: string): string {
@@ -473,7 +474,7 @@ export function invalidateFileCache(rootId: string, path: string): void {
 
 export function clearFileCacheForRoot(rootId: string): void {
   const prefix = `${rootId}::`;
-  const diffPrefix = `git-diff::${rootId}::`;
+  const diffPrefix = `git-diff::${GIT_DIFF_CACHE_VERSION}::${rootId}::`;
   for (const key of memoryCache.keys()) {
     if (key.startsWith(prefix)) {
       memoryCache.delete(key);
@@ -579,7 +580,7 @@ export async function fetchFile(params: FetchFileParams): Promise<FilePayload | 
       if (!retry.ok) {
         throw new Error(`open file failed after 304 retry: status=${retry.status}`);
       }
-      const retryPayload = (await retry.json()) as FileResponse;
+      const retryPayload = await e2eeService.parseProtectedJSONResponse<FileResponse>(retry);
       const retryFile = await unwrapFileResponse(retryPayload);
       if (!retryFile) {
         return null;
@@ -598,7 +599,7 @@ export async function fetchFile(params: FetchFileParams): Promise<FilePayload | 
       throw new Error(`open file failed: status=${response.status}`);
     }
 
-    const payload = (await response.json()) as FileResponse;
+    const payload = await e2eeService.parseProtectedJSONResponse<FileResponse>(response);
     const file = await unwrapFileResponse(payload);
     if (!file) {
       return null;

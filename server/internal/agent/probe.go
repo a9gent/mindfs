@@ -19,25 +19,30 @@ import (
 )
 
 type Status struct {
-	Name           string                   `json:"name"`
-	Installed      bool                     `json:"installed"`
-	Available      bool                     `json:"available"`
-	Version        string                   `json:"version,omitempty"`
-	Error          string                   `json:"error,omitempty"`
-	RuntimeError   string                   `json:"-"`
-	ProbeError     string                   `json:"-"`
-	LastProbe      time.Time                `json:"last_probe"`
-	CurrentModelID string                   `json:"current_model_id,omitempty"`
-	CurrentModeID  string                   `json:"current_mode_id,omitempty"`
-	DefaultModelID string                   `json:"default_model_id,omitempty"`
-	DefaultEffort  string                   `json:"default_effort,omitempty"`
-	Efforts        []string                 `json:"efforts,omitempty"`
-	Models         []agenttypes.ModelInfo   `json:"models,omitempty"`
-	Modes          []agenttypes.ModeInfo    `json:"modes"`
-	ModelsError    string                   `json:"models_error,omitempty"`
-	ModesError     string                   `json:"modes_error,omitempty"`
-	Commands       []agenttypes.CommandInfo `json:"commands,omitempty"`
-	CommandsError  string                   `json:"commands_error,omitempty"`
+	Name                string                   `json:"name"`
+	Installed           bool                     `json:"installed"`
+	Available           bool                     `json:"available"`
+	Version             string                   `json:"version,omitempty"`
+	Error               string                   `json:"error,omitempty"`
+	RuntimeError        string                   `json:"-"`
+	ProbeError          string                   `json:"-"`
+	LastProbe           time.Time                `json:"last_probe"`
+	CurrentModelID      string                   `json:"current_model_id,omitempty"`
+	CurrentModeID       string                   `json:"current_mode_id,omitempty"`
+	DefaultModelID      string                   `json:"default_model_id,omitempty"`
+	DefaultEffort       string                   `json:"default_effort,omitempty"`
+	DefaultFastService  string                   `json:"default_fast_service,omitempty"`
+	SupportsFastService bool                     `json:"supports_fast_service"`
+	Models              []agenttypes.ModelInfo   `json:"models,omitempty"`
+	Modes               []agenttypes.ModeInfo    `json:"modes"`
+	Efforts             []string                 `json:"efforts,omitempty"`
+	ModelsError         string                   `json:"models_error,omitempty"`
+	ModesError          string                   `json:"modes_error,omitempty"`
+	Commands            []agenttypes.CommandInfo `json:"commands,omitempty"`
+	CommandsError       string                   `json:"commands_error,omitempty"`
+	Brief               string                   `json:"brief,omitempty"`
+	InstallCommands     []string                 `json:"install_commands,omitempty"`
+	UpdateCommands      []string                 `json:"update_commands,omitempty"`
 }
 
 const (
@@ -247,17 +252,22 @@ func (s *probeSessionStore) saveLocked() error {
 // Start 启动定期探测
 func (p *Prober) Start(ctx context.Context) {
 	// 首次全量探测放到后台，避免阻塞服务启动和请求处理。
-	go p.ProbeAll(ctx)
+	go p.safeProbeAll(ctx)
 
-	// 启动定期探测：分别重试未安装命令和已安装但不可用的 Agent。
+	// 启动定期探测：只重试未安装命令。运行时失败不做主动恢复探测，
+	// 避免周期性打开 agent probe session。
 	ticker := time.NewTicker(p.probeInterval)
 	go func() {
 		defer ticker.Stop()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[agent/probe] ticker.panic recovered=%v", r)
+			}
+		}()
 		for {
 			select {
 			case <-ticker.C:
 				p.probeMissingCommands()
-				p.probeFailedInstalledOnly(ctx)
 			case <-p.stopCh:
 				return
 			case <-ctx.Done():
@@ -277,30 +287,94 @@ func (p *Prober) Stop() {
 	}
 }
 
-// ProbeAll 探测所有配置的 Agent
-func (p *Prober) ProbeAll(ctx context.Context) {
-	if p.cfg == nil {
+func (p *Prober) UpdateConfig(ctx context.Context, cfg *Config) {
+	if p == nil || cfg == nil {
 		return
 	}
-	p.probeConfiguredAgents(ctx, p.cfg.Agents)
+	now := time.Now().UTC()
+	var installed []Definition
+	p.mu.Lock()
+	p.cfg = cfg
+	for _, def := range cfg.Agents {
+		if _, ok := p.statuses[def.Name]; ok {
+			continue
+		}
+		status := normalizeStatus(probeInstallStatus(def.Name, def, now))
+		p.statuses[def.Name] = status
+		if status.Installed {
+			installed = append(installed, def)
+		}
+	}
+	p.mu.Unlock()
+	if len(installed) > 0 {
+		go p.probeInstalledAgents(ctx, installed)
+	}
+}
+
+// ProbeAll 探测所有配置的 Agent
+func (p *Prober) ProbeAll(ctx context.Context) {
+	defs := p.configuredDefinitions()
+	if len(defs) == 0 {
+		return
+	}
+	p.probeConfiguredAgents(ctx, defs)
+}
+
+func (p *Prober) safeProbeAll(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[agent/probe] probe_all.panic recovered=%v", r)
+		}
+	}()
+	p.ProbeAll(ctx)
 }
 
 // ProbeOne probes a single configured agent with recovery-style timeout control.
 func (p *Prober) ProbeOne(ctx context.Context, name string) Status {
-	if p == nil || p.cfg == nil {
+	if p == nil {
 		return unavailableStatus(strings.TrimSpace(name), false, "config not loaded", time.Now().UTC())
 	}
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return unavailableStatus("", false, "agent required", time.Now().UTC())
 	}
-	def, ok := p.cfg.GetAgent(trimmed)
+	def, ok := p.configuredDefinition(trimmed)
 	if !ok {
 		return unavailableStatus(trimmed, false, "agent not configured", time.Now().UTC())
 	}
-	status := probeConfiguredAgentWithPool(ctx, trimmed, def, p.pool, p.probeSessions, probePhaseRecovery)
+	status := safeProbeConfiguredAgentWithPool(ctx, trimmed, def, p.pool, p.probeSessions, probePhaseRecovery)
 	p.setStatus(status)
 	return status
+}
+
+func (p *Prober) SetAgentEnv(agentName string, env map[string]string) error {
+	if p == nil {
+		return errors.New("prober not configured")
+	}
+	agentName = strings.TrimSpace(agentName)
+	if agentName == "" {
+		return errors.New("agent required")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cfg == nil {
+		return errors.New("config not loaded")
+	}
+	for i := range p.cfg.Agents {
+		if p.cfg.Agents[i].Name != agentName {
+			continue
+		}
+		p.cfg.Agents[i].Env = cloneEnv(env)
+		return nil
+	}
+	return errors.New("agent not configured: " + agentName)
+}
+
+func (p *Prober) ClearProbeSession(agentName string) error {
+	if p == nil {
+		return nil
+	}
+	return clearProbeSessionBinding(p.probeSessions, agentName)
 }
 
 // ReportRuntimeFailure marks an agent as unavailable due to a real user-facing runtime failure.
@@ -314,7 +388,14 @@ func (p *Prober) ReportRuntimeFailure(name string, err error) {
 	if ok {
 		installed = current.Installed
 	}
-	status := unavailableStatus(name, installed, current.ProbeError, time.Now().UTC())
+	status := current
+	if !ok {
+		status = unavailableStatus(name, installed, "", time.Now().UTC())
+	}
+	status.Name = name
+	status.Installed = installed
+	status.Available = false
+	status.LastProbe = time.Now().UTC()
 	status.RuntimeError = msg
 	p.setStatus(status)
 }
@@ -330,8 +411,15 @@ func (p *Prober) ReportProbeFailure(name string, err error) {
 	if ok {
 		installed = current.Installed
 	}
-	status := unavailableStatus(name, installed, msg, time.Now().UTC())
-	status.RuntimeError = current.RuntimeError
+	status := current
+	if !ok {
+		status = unavailableStatus(name, installed, msg, time.Now().UTC())
+	}
+	status.Name = name
+	status.Installed = installed
+	status.Available = false
+	status.ProbeError = msg
+	status.LastProbe = time.Now().UTC()
 	p.setStatus(status)
 }
 
@@ -388,6 +476,26 @@ func (p *Prober) GetAllStatuses() []Status {
 	return statuses
 }
 
+// GetConfiguredStatuses returns statuses for agents declared in agents.json.
+func (p *Prober) GetConfiguredStatuses() []Status {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if p.cfg == nil {
+		return nil
+	}
+	statuses := make([]Status, 0, len(p.cfg.Agents))
+	now := time.Now().UTC()
+	for _, def := range p.cfg.Agents {
+		if st, ok := p.statuses[def.Name]; ok {
+			statuses = append(statuses, st)
+			continue
+		}
+		statuses = append(statuses, normalizeStatus(probeInstallStatus(def.Name, def, now)))
+	}
+	return statuses
+}
+
 // GetInstalledStatuses returns configured statuses filtered to installed agents.
 func (p *Prober) GetInstalledStatuses() []Status {
 	all := p.GetAllStatuses()
@@ -418,6 +526,9 @@ func probeConfiguredAgentWithPool(ctx context.Context, name string, def Definiti
 }
 
 func probeInstalledAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, probeSessions *probeSessionStore, status Status, phase probePhase) Status {
+	if !status.Installed {
+		return status
+	}
 	status.Installed = true
 
 	tmpRoot, err := EnsureStableWorkDir("agent-probe", name)
@@ -481,21 +592,6 @@ func probeInstalledAgentWithPool(ctx context.Context, name string, def Definitio
 		return status
 	}
 
-	interactionCtx := ctx
-	interactionCancel := func() {}
-	if timeout, ok := probeInteractionTimeoutForPhase(phase); ok {
-		interactionCtx, interactionCancel = context.WithTimeout(ctx, timeout)
-	}
-	defer interactionCancel()
-	if err := VerifySessionInteraction(interactionCtx, sess); err != nil {
-		if hint, ok := pool.KillAgentProcess(name, 750*time.Millisecond); ok {
-			status.ProbeError = hint
-			return status
-		}
-		status.ProbeError = err.Error()
-		return status
-	}
-
 	status.Available = true
 	status.Error = ""
 	status.ProbeError = ""
@@ -516,17 +612,6 @@ func (p *Prober) probeMissingCommands() {
 	})
 	log.Printf("[agent/probe] probe_missing_commands count=%d agents=%s", len(defs), definitionNames(defs))
 	p.probeInstallOnly(defs)
-}
-
-func (p *Prober) probeFailedInstalledOnly(ctx context.Context) {
-	if p.cfg == nil {
-		return
-	}
-	defs := p.collectDefinitions(func(st Status, ok bool) bool {
-		return ok && st.Installed && !st.Available
-	})
-	log.Printf("[agent/probe] probe_failed_installed count=%d agents=%s", len(defs), definitionNames(defs))
-	p.probeInstalledAgents(ctx, defs)
 }
 
 // AddListener registers a callback invoked when an agent status changes.
@@ -567,6 +652,18 @@ func statusChanged(prev Status, next Status) bool {
 	if prev.CurrentModeID != next.CurrentModeID {
 		return true
 	}
+	if prev.DefaultModelID != next.DefaultModelID {
+		return true
+	}
+	if prev.DefaultEffort != next.DefaultEffort {
+		return true
+	}
+	if prev.DefaultFastService != next.DefaultFastService {
+		return true
+	}
+	if prev.SupportsFastService != next.SupportsFastService {
+		return true
+	}
 	if len(prev.Efforts) != len(next.Efforts) {
 		return true
 	}
@@ -583,6 +680,25 @@ func statusChanged(prev Status, next Status) bool {
 	}
 	if prev.CommandsError != next.CommandsError {
 		return true
+	}
+	if prev.Brief != next.Brief {
+		return true
+	}
+	if len(prev.InstallCommands) != len(next.InstallCommands) {
+		return true
+	}
+	for i := range prev.InstallCommands {
+		if prev.InstallCommands[i] != next.InstallCommands[i] {
+			return true
+		}
+	}
+	if len(prev.UpdateCommands) != len(next.UpdateCommands) {
+		return true
+	}
+	for i := range prev.UpdateCommands {
+		if prev.UpdateCommands[i] != next.UpdateCommands[i] {
+			return true
+		}
 	}
 	if len(prev.Models) != len(next.Models) {
 		return true
@@ -616,9 +732,12 @@ func statusChanged(prev Status, next Status) bool {
 }
 
 func (p *Prober) setStatus(status Status) {
-	status = normalizeStatus(status)
 	p.mu.Lock()
 	prev, hadPrev := p.statuses[status.Name]
+	if hadPrev {
+		status = preserveKnownCapabilities(prev, status)
+	}
+	status = normalizeStatus(status)
 	p.statuses[status.Name] = status
 	listeners := append([]func(Status){}, p.listeners...)
 	p.mu.Unlock()
@@ -644,6 +763,9 @@ func unavailableStatus(name string, installed bool, errMsg string, ts time.Time)
 
 func probeInstallStatus(name string, def Definition, ts time.Time) Status {
 	status := unavailableStatus(name, false, "", ts)
+	status.Brief = strings.TrimSpace(def.Brief)
+	status.InstallCommands = append([]string(nil), def.InstallCommands...)
+	status.UpdateCommands = append([]string(nil), def.UpdateCommands...)
 	if def.Command == "" {
 		status.ProbeError = "command required"
 		return status
@@ -698,14 +820,29 @@ func populateProbeModels(ctx context.Context, sess agenttypes.Session, status *S
 	status.CurrentModelID = models.CurrentModelID
 	status.Models = models.Models
 	status.Efforts = inferAgentEfforts(models.Models)
+	status.SupportsFastService = supportsAgentFastService(status.Name)
 
 	modes, err := sess.ListModes(modelsCtx)
 	if err != nil {
 		status.ModesError = err.Error()
-		return
+	} else {
+		status.CurrentModeID = modes.CurrentModeID
+		status.Modes = modes.Modes
 	}
-	status.CurrentModeID = modes.CurrentModeID
-	status.Modes = modes.Modes
+	if defaultsReader, ok := sess.(agenttypes.DefaultsReader); ok {
+		defaults, defaultsErr := defaultsReader.RuntimeDefaults(modelsCtx)
+		if defaultsErr != nil {
+			log.Printf("[agent/probe] defaults.error agent=%s err=%v", status.Name, defaultsErr)
+		}
+
+		if value := strings.TrimSpace(defaults.Model); value != "" {
+			status.DefaultModelID = value
+		}
+		if value := strings.TrimSpace(defaults.Effort); value != "" {
+			status.DefaultEffort = value
+		}
+		status.DefaultFastService = defaults.FastService
+	}
 }
 
 func populateProbeCommands(ctx context.Context, sess agenttypes.Session, status *Status) {
@@ -731,19 +868,53 @@ func normalizeStatus(status Status) Status {
 	default:
 		status.Error = strings.TrimSpace(status.Error)
 	}
-	if status.Available {
-		return status
-	}
-	status.CurrentModelID = ""
-	status.CurrentModeID = ""
-	status.Efforts = nil
-	status.Models = nil
-	status.Modes = nil
-	status.ModelsError = ""
-	status.ModesError = ""
-	status.Commands = nil
-	status.CommandsError = ""
 	return status
+}
+
+func preserveKnownCapabilities(prev Status, next Status) Status {
+	if next.Available || !next.Installed {
+		return next
+	}
+	if next.CurrentModelID == "" {
+		next.CurrentModelID = prev.CurrentModelID
+	}
+	if next.CurrentModeID == "" {
+		next.CurrentModeID = prev.CurrentModeID
+	}
+	if next.DefaultModelID == "" {
+		next.DefaultModelID = prev.DefaultModelID
+	}
+	if next.DefaultEffort == "" {
+		next.DefaultEffort = prev.DefaultEffort
+	}
+	if next.DefaultFastService == "" {
+		next.DefaultFastService = prev.DefaultFastService
+	}
+	if !next.SupportsFastService {
+		next.SupportsFastService = prev.SupportsFastService
+	}
+	if len(next.Efforts) == 0 {
+		next.Efforts = prev.Efforts
+	}
+	if len(next.Models) == 0 {
+		next.Models = prev.Models
+	}
+	if len(next.Modes) == 0 {
+		next.Modes = prev.Modes
+	}
+	if len(next.Commands) == 0 {
+		next.Commands = prev.Commands
+	}
+	if next.Brief == "" {
+		next.Brief = prev.Brief
+	}
+	if len(next.InstallCommands) == 0 {
+		next.InstallCommands = prev.InstallCommands
+	}
+	if len(next.UpdateCommands) == 0 {
+		next.UpdateCommands = prev.UpdateCommands
+	}
+	return next
 }
 
 func inferAgentEfforts(models []agenttypes.ModelInfo) []string {
@@ -763,14 +934,19 @@ func inferAgentEfforts(models []agenttypes.ModelInfo) []string {
 		return nil
 	}
 	if looksLikeClaude {
-		return []string{"low", "medium", "high"}
+		return []string{"low", "medium", "high", "xhigh", "max"}
 	}
 	return []string{"low", "medium", "high", "xhigh"}
 }
 
+func supportsAgentFastService(agentName string) bool {
+	return strings.TrimSpace(agentName) == "codex"
+}
+
 func (p *Prober) collectDefinitions(include func(Status, bool) bool) []Definition {
-	defs := make([]Definition, 0, len(p.cfg.Agents))
-	for _, def := range p.cfg.Agents {
+	all := p.configuredDefinitions()
+	defs := make([]Definition, 0, len(all))
+	for _, def := range all {
 		status, ok := p.GetStatus(def.Name)
 		if !include(status, ok) {
 			continue
@@ -780,12 +956,32 @@ func (p *Prober) collectDefinitions(include func(Status, bool) bool) []Definitio
 	return defs
 }
 
+func (p *Prober) configuredDefinition(name string) (Definition, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.cfg == nil {
+		return Definition{}, false
+	}
+	return p.cfg.GetAgent(name)
+}
+
+func (p *Prober) configuredDefinitions() []Definition {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.cfg == nil {
+		return nil
+	}
+	defs := make([]Definition, len(p.cfg.Agents))
+	copy(defs, p.cfg.Agents)
+	return defs
+}
+
 func (p *Prober) probeConfiguredAgents(ctx context.Context, defs []Definition) {
 	if len(defs) == 0 {
 		return
 	}
 	p.runDefinitionsConcurrently(defs, func(_ int, def Definition) {
-		status := probeConfiguredAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions, probePhaseInitial)
+		status := safeProbeConfiguredAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions, probePhaseInitial)
 		p.setStatus(status)
 	})
 }
@@ -807,9 +1003,33 @@ func (p *Prober) probeInstalledAgents(ctx context.Context, defs []Definition) {
 	}
 
 	p.runDefinitionsConcurrently(defs, func(_ int, def Definition) {
-		status := probeInstalledAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions, probeInstallStatus(def.Name, def, time.Now().UTC()), probePhaseBackground)
+		status := unavailableStatus(def.Name, true, "probe pending", time.Now().UTC())
+		status = safeProbeInstalledAgentWithPool(ctx, def.Name, def, p.pool, p.probeSessions, status, probePhaseBackground)
 		p.setStatus(status)
 	})
+}
+
+func safeProbeConfiguredAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, probeSessions *probeSessionStore, phase probePhase) (status Status) {
+	defer func() {
+		if r := recover(); r != nil {
+			status = unavailableStatus(name, true, fmt.Sprintf("probe panic: %v", r), time.Now().UTC())
+			log.Printf("[agent/probe] probe.panic agent=%s phase=%s recovered=%v", name, phase, r)
+		}
+	}()
+	return probeConfiguredAgentWithPool(ctx, name, def, pool, probeSessions, phase)
+}
+
+func safeProbeInstalledAgentWithPool(ctx context.Context, name string, def Definition, pool *Pool, probeSessions *probeSessionStore, status Status, phase probePhase) (out Status) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = status
+			out.Available = false
+			out.ProbeError = fmt.Sprintf("probe panic: %v", r)
+			out.LastProbe = time.Now().UTC()
+			log.Printf("[agent/probe] probe_installed.panic agent=%s phase=%s recovered=%v", name, phase, r)
+		}
+	}()
+	return probeInstalledAgentWithPool(ctx, name, def, pool, probeSessions, status, phase)
 }
 
 func loadProbeSessionBinding(store *probeSessionStore, agentName string) (ProbeSessionBinding, bool) {
@@ -872,6 +1092,11 @@ func (p *Prober) runDefinitionsConcurrently(defs []Definition, fn func(i int, de
 
 		go func(i int, def Definition) {
 			defer func() {
+				if r := recover(); r != nil {
+					status := unavailableStatus(def.Name, true, fmt.Sprintf("probe panic: %v", r), time.Now().UTC())
+					p.setStatus(status)
+					log.Printf("[agent/probe] worker.panic agent=%s recovered=%v", def.Name, r)
+				}
 				p.mu.Lock()
 				delete(p.inFlight, def.Name)
 				p.mu.Unlock()

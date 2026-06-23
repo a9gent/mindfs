@@ -17,7 +17,6 @@ export function BottomSheet({
 }: BottomSheetProps) {
   const [isAnimating, setIsAnimating] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-  const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -72,7 +71,8 @@ export function BottomSheet({
       {/* Drawer Panel */}
       <div
         style={{
-          background: isDark ? "#111827" : "#ffffff",
+          background: "var(--panel-bg, #ffffff)",
+          color: "var(--text-primary)",
           boxShadow: "0 -4px 24px rgba(0,0,0,0.08)",
           borderTop: "1px solid rgba(148, 163, 184, 0.22)",
           zIndex: 1001,
@@ -100,7 +100,7 @@ export function BottomSheet({
           }}
           onClick={onExpand}
         >
-          <div style={{ width: "64px", height: "3px", background: isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.28)", borderRadius: "999px" }} />
+          <div style={{ width: "64px", height: "3px", background: "#2563eb", borderRadius: "999px" }} />
         </div>
 
         {/* Content */}
@@ -110,7 +110,7 @@ export function BottomSheet({
 
         {/* Optional Footer */}
         {footer && (
-          <div style={{ borderTop: "1px solid var(--border-color)", background: "rgba(255,255,255,0.5)" }}>
+          <div style={{ borderTop: "1px solid var(--border-color)", background: "var(--panel-bg, #ffffff)" }}>
             {footer}
           </div>
         )}

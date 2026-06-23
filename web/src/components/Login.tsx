@@ -4,7 +4,19 @@ import {
   setStoredLauncherNodes,
   type LauncherNode,
 } from "../services/storage";
-import { consumePendingRelayNodes } from "../services/launcherNodeSync";
+import {
+  consumePendingRelayNodes,
+  getNativeLauncherNodes,
+  setNativeLauncherNodes,
+} from "../services/launcherNodeSync";
+import {
+  appPackageLabel,
+  fetchAppUpdateState,
+  isUpdatableNativeRuntime,
+  normalizeAppUpdateState,
+  type AppUpdateState,
+} from "../services/appUpdate";
+import { downloadURL } from "../services/download";
 
 type LoginProps = {
   onOpenNode: (nodeURL: string) => void;
@@ -50,6 +62,64 @@ function buildNodeID(): string {
   return `node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function normalizeLauncherNodes(nodes: LauncherNode[]): LauncherNode[] {
+  return nodes
+    .map((item) => {
+      const id = String(item?.id || "").trim();
+      const name = String(item?.name || "").trim();
+      const url = normalizeNodeURL(String(item?.url || ""));
+      const createdAt = String(item?.createdAt || "").trim();
+      const lastOpenedAt = String(item?.lastOpenedAt || "").trim();
+      if (!id || !name || !url || !createdAt) {
+        return null;
+      }
+      return {
+        id,
+        name,
+        url,
+        createdAt,
+        ...(lastOpenedAt ? { lastOpenedAt } : {}),
+      };
+    })
+    .filter((item): item is LauncherNode => item !== null);
+}
+
+function mergeLauncherNodes(...groups: LauncherNode[][]): LauncherNode[] {
+  const seenURLs = new Set<string>();
+  const merged: LauncherNode[] = [];
+  for (const group of groups) {
+    for (const node of normalizeLauncherNodes(group)) {
+      if (seenURLs.has(node.url)) {
+        continue;
+      }
+      seenURLs.add(node.url);
+      merged.push(node);
+    }
+  }
+  return sortNodes(merged);
+}
+
+function shouldShowAppUpdate(state: AppUpdateState): boolean {
+  const status = (state.status || "idle").toLowerCase();
+  return (
+    state.has_update === true ||
+    status === "downloading" ||
+    status === "downloaded" ||
+    status === "failed"
+  );
+}
+
+function appUpdateSummary(state: AppUpdateState): string {
+  const notes = String(state.notes || "").trim();
+  if (notes) {
+    return notes;
+  }
+  if (state.latest_version) {
+    return `发现 ${appPackageLabel(state.platform)} ${state.latest_version} 新版本`;
+  }
+  return "";
+}
+
 export function Login({ onOpenNode }: LoginProps): ReactElement {
   const [nodes, setNodes] = useState<LauncherNode[]>(() => sortNodes(getStoredLauncherNodes()));
   const [composerOpen, setComposerOpen] = useState(false);
@@ -58,11 +128,16 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
   const [formError, setFormError] = useState("");
   const [editingNodeID, setEditingNodeID] = useState("");
   const [editingNodeName, setEditingNodeName] = useState("");
+  const [appUpdateState, setAppUpdateState] =
+    useState<AppUpdateState>(() => normalizeAppUpdateState(null));
+  const [appUpdateNotesOpen, setAppUpdateNotesOpen] = useState(false);
+  const [appUpdateBusy, setAppUpdateBusy] = useState(false);
 
   function persistNodes(nextNodes: LauncherNode[]): void {
     const sorted = sortNodes(nextNodes);
     setNodes(sorted);
     setStoredLauncherNodes(sorted);
+    void setNativeLauncherNodes(sorted);
   }
 
   function openNode(node: LauncherNode): void {
@@ -136,20 +211,63 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
     setNodeURL("");
     setFormError("");
     setComposerOpen(false);
-    onOpenNode(nextNode.url);
+  }
+
+  async function handleDownloadAppUpdate(): Promise<void> {
+    const next = normalizeAppUpdateState(appUpdateState);
+    const packageLabel = appPackageLabel(next.platform);
+    if (!next.download_url || appUpdateBusy) {
+      return;
+    }
+    setAppUpdateBusy(true);
+    setAppUpdateState((prev) =>
+      normalizeAppUpdateState({
+        ...prev,
+        status: "downloading",
+        message: `正在下载 ${packageLabel} 更新包`,
+      }),
+    );
+    try {
+      await downloadURL(next.download_url, next.filename || "");
+      setAppUpdateState((prev) =>
+        normalizeAppUpdateState({
+          ...prev,
+          status: "downloaded",
+          message: "更新包已开始下载，请在系统通知或下载目录中打开安装",
+        }),
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : `${packageLabel} 更新下载失败`;
+      setAppUpdateState((prev) =>
+        normalizeAppUpdateState({
+          ...prev,
+          status: "failed",
+          message,
+        }),
+      );
+    } finally {
+      setAppUpdateBusy(false);
+    }
   }
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      const pendingNodes = await consumePendingRelayNodes();
-      if (cancelled || pendingNodes.length === 0) {
+    const timers: number[] = [];
+
+    const syncLauncherNodes = async (): Promise<void> => {
+      const [nativeNodes, pendingNodes] = await Promise.all([
+        getNativeLauncherNodes(),
+        consumePendingRelayNodes(),
+      ]);
+      if (cancelled) {
         return;
       }
 
       const existingNodes = getStoredLauncherNodes();
+      const restoredNodes = mergeLauncherNodes(existingNodes, nativeNodes);
       const existingURLSet = new Set(
-        existingNodes.map((item) => normalizeNodeURL(item.url)).filter(Boolean),
+        restoredNodes.map((item) => normalizeNodeURL(item.url)).filter(Boolean),
       );
       const createdAt = new Date().toISOString();
       const importedNodes: LauncherNode[] = [];
@@ -169,21 +287,76 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
         });
       }
 
-      if (importedNodes.length === 0) {
+      const nextNodes = mergeLauncherNodes(importedNodes, restoredNodes);
+      if (nextNodes.length === existingNodes.length && importedNodes.length === 0) {
         return;
       }
 
-      const nextNodes = sortNodes([...importedNodes, ...existingNodes]);
       setStoredLauncherNodes(nextNodes);
+      void setNativeLauncherNodes(nextNodes);
       if (!cancelled) {
         setNodes(nextNodes);
       }
-    })();
+    };
+
+    const handleLauncherNodesUpdated = (): void => {
+      void syncLauncherNodes();
+    };
+
+    void syncLauncherNodes();
+    timers.push(window.setTimeout(() => void syncLauncherNodes(), 1200));
+    timers.push(window.setTimeout(() => void syncLauncherNodes(), 3200));
+    window.addEventListener("mindfs:launcher-nodes-updated", handleLauncherNodesUpdated);
 
     return () => {
       cancelled = true;
+      window.removeEventListener("mindfs:launcher-nodes-updated", handleLauncherNodesUpdated);
+      timers.forEach((timer) => window.clearTimeout(timer));
     };
   }, []);
+
+  useEffect(() => {
+    if (!isUpdatableNativeRuntime() || nodes.length === 0) {
+      setAppUpdateState(normalizeAppUpdateState(null));
+      return;
+    }
+
+    let cancelled = false;
+    void fetchAppUpdateState()
+      .then((state) => {
+        if (!cancelled) {
+          setAppUpdateState(state);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.warn("[app-update] launcher check failed", error);
+          setAppUpdateState(normalizeAppUpdateState(null));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [nodes.length]);
+
+  const showAppUpdate = shouldShowAppUpdate(appUpdateState);
+  const appUpdateStatus = (appUpdateState.status || "idle").toLowerCase();
+  const appUpdateDisabled =
+    appUpdateBusy ||
+    appUpdateStatus === "downloading" ||
+    appUpdateStatus === "downloaded";
+  const appUpdateText =
+    appUpdateStatus === "downloading"
+      ? "下载中..."
+      : appUpdateStatus === "downloaded"
+        ? "已开始下载"
+        : "更新APP";
+  const appUpdateHelp =
+    appUpdateState.message ||
+    (appUpdateState.latest_version
+      ? `当前 ${appUpdateState.current_version || "未知"}，最新 ${appUpdateState.latest_version}`
+      : "");
+  const appUpdateNotes = appUpdateSummary(appUpdateState);
 
   return (
     <div
@@ -419,6 +592,133 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
           </div>
         ))}
 
+        {showAppUpdate ? (
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              borderRadius: "20px",
+              background: SURFACE_STRONG,
+              padding: "14px",
+              boxShadow: SHADOW,
+              backdropFilter: "blur(20px)",
+              display: "grid",
+              gap: "10px",
+              marginTop: "auto",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+              }}
+            >
+              <div style={{ minWidth: 0, display: "grid", gap: "3px" }}>
+                <div
+                  style={{
+                    fontSize: "15px",
+                    fontWeight: 600,
+                    color: TEXT,
+                    lineHeight: 1.25,
+                  }}
+                >
+                  新版本
+                </div>
+                {appUpdateHelp ? (
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      color: MUTED,
+                      lineHeight: 1.45,
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {appUpdateHelp}
+                  </div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                disabled={appUpdateDisabled}
+                onClick={() => {
+                  void handleDownloadAppUpdate();
+                }}
+                style={{
+                  border: "none",
+                  borderRadius: "14px",
+                  background: appUpdateDisabled ? "rgba(148, 163, 184, 0.35)" : ACCENT,
+                  color: appUpdateDisabled ? MUTED : "#fff8f2",
+                  padding: "10px 14px",
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  cursor: appUpdateDisabled ? "not-allowed" : "pointer",
+                  flexShrink: 0,
+                  minWidth: "86px",
+                }}
+              >
+                {appUpdateText}
+              </button>
+            </div>
+            {appUpdateNotes ? (
+              <>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setAppUpdateNotesOpen((open) => !open)}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      color: ACCENT,
+                      padding: 0,
+                      justifySelf: "start",
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {appUpdateNotesOpen ? "收起更新说明" : "查看更新说明"}
+                  </button>
+                  <span
+                    style={{
+                      color: "#dc2626",
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      lineHeight: 1.35,
+                    }}
+                  >
+                    请先将 mindfs 后端升级到最新版本
+                  </span>
+                </div>
+                {appUpdateNotesOpen ? (
+                  <div
+                    style={{
+                      borderTop: `1px solid ${BORDER}`,
+                      paddingTop: "10px",
+                      color: MUTED,
+                      fontSize: "12px",
+                      lineHeight: 1.55,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      maxHeight: "180px",
+                      overflow: "auto",
+                    }}
+                  >
+                    {appUpdateNotes}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+        ) : null}
+
         <button
           type="button"
           onClick={() => {
@@ -438,7 +738,7 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
             cursor: "pointer",
             boxShadow: SHADOW,
             backdropFilter: "blur(20px)",
-            marginTop: "auto",
+            marginTop: showAppUpdate ? 0 : "auto",
           }}
         >
           +
