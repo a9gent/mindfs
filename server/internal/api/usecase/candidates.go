@@ -535,13 +535,15 @@ func skillScanDirs(root rootfs.RootInfo, agent string) []string {
 	rootDir, _ := root.RootDir()
 	switch strings.TrimSpace(strings.ToLower(agent)) {
 	case "codex":
-		return []string{
+		dirs := []string{
 			filepath.Join(homeDir, ".codex", "skills"),
 			filepath.Join(homeDir, ".codex", "skills", ".system"),
 			filepath.Join(homeDir, ".agents", "skills"),
 			filepath.Join(rootDir, ".agents", "skills"),
 			filepath.Join(rootDir, ".codex", "skills"),
 		}
+		dirs = append(dirs, codexPluginSkillScanDirs(filepath.Join(homeDir, ".codex", "plugins", "cache"))...)
+		return dirs
 	case "claude":
 		dirs := []string{
 			filepath.Join(homeDir, ".claude", "skills"),
@@ -574,6 +576,137 @@ func skillScanDirs(root rootfs.RootInfo, agent string) []string {
 			filepath.Join(homeDir, ".agents", "skills"),
 		}
 	}
+}
+
+func codexPluginSkillScanDirs(cacheRoot string) []string {
+	marketplaces, err := os.ReadDir(cacheRoot)
+	if err != nil {
+		return nil
+	}
+	dirs := make([]string, 0)
+	for _, marketplace := range marketplaces {
+		if !marketplace.IsDir() {
+			continue
+		}
+		marketplaceName := marketplace.Name()
+		if marketplaceName == "" || strings.HasPrefix(marketplaceName, ".") {
+			continue
+		}
+		marketplaceRoot := filepath.Join(cacheRoot, marketplaceName)
+		plugins, err := os.ReadDir(marketplaceRoot)
+		if err != nil {
+			continue
+		}
+		for _, plugin := range plugins {
+			if !isSkillDirectoryEntry(marketplaceRoot, plugin) {
+				continue
+			}
+			pluginName := plugin.Name()
+			if pluginName == "" || strings.HasPrefix(pluginName, ".") {
+				continue
+			}
+			pluginRoot := filepath.Join(marketplaceRoot, pluginName)
+			version, ok := activeCodexPluginVersion(pluginRoot)
+			if !ok {
+				continue
+			}
+			dirs = append(dirs, filepath.Join(pluginRoot, version, "skills"))
+		}
+	}
+	return dirs
+}
+
+func activeCodexPluginVersion(pluginRoot string) (string, bool) {
+	versions, err := os.ReadDir(pluginRoot)
+	if err != nil {
+		return "", false
+	}
+	active := ""
+	for _, version := range versions {
+		if !isSkillDirectoryEntry(pluginRoot, version) {
+			continue
+		}
+		name := version.Name()
+		if !validCodexPluginVersionSegment(name) {
+			continue
+		}
+		if name == "local" {
+			return name, true
+		}
+		if active == "" || compareCodexPluginVersions(active, name) < 0 {
+			active = name
+		}
+	}
+	return active, active != ""
+}
+
+func validCodexPluginVersionSegment(version string) bool {
+	if version == "" || version == "." || version == ".." {
+		return false
+	}
+	for _, r := range version {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '.' || r == '+' || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func compareCodexPluginVersions(left, right string) int {
+	if isDottedNumericVersion(left) && isDottedNumericVersion(right) {
+		leftParts := strings.Split(left, ".")
+		rightParts := strings.Split(right, ".")
+		maxParts := len(leftParts)
+		if len(rightParts) > maxParts {
+			maxParts = len(rightParts)
+		}
+		for i := 0; i < maxParts; i++ {
+			leftPart := 0
+			rightPart := 0
+			if i < len(leftParts) {
+				leftPart = atoiVersionPart(leftParts[i])
+			}
+			if i < len(rightParts) {
+				rightPart = atoiVersionPart(rightParts[i])
+			}
+			if leftPart < rightPart {
+				return -1
+			}
+			if leftPart > rightPart {
+				return 1
+			}
+		}
+		return 0
+	}
+	return strings.Compare(left, right)
+}
+
+func isDottedNumericVersion(version string) bool {
+	if version == "" {
+		return false
+	}
+	for _, r := range version {
+		if r >= '0' && r <= '9' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func atoiVersionPart(part string) int {
+	value := 0
+	for _, r := range part {
+		if r < '0' || r > '9' {
+			return value
+		}
+		value = value*10 + int(r-'0')
+	}
+	return value
 }
 
 func readSkillDescription(path string) string {

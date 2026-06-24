@@ -748,6 +748,32 @@ func TestSkillCandidateProviderSearch(t *testing.T) {
 	}
 }
 
+func TestSkillCandidateProviderSearchIncludesCodexPluginCacheSkills(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	rootDir := t.TempDir()
+	mustWriteFile(t, filepath.Join(homeDir, ".codex", "plugins", "cache", "openai-primary-runtime", "documents", "26.1.0", "skills", "documents", "SKILL.md"), "---\nname: documents\ndescription: Old documents skill\n---\n")
+	mustWriteFile(t, filepath.Join(homeDir, ".codex", "plugins", "cache", "openai-primary-runtime", "documents", "26.10.0", "skills", "documents", "SKILL.md"), "---\nname: documents\ndescription: Current documents skill\n---\n")
+	mustWriteFile(t, filepath.Join(homeDir, ".codex", "plugins", "cache", "openai-curated-remote", "product-design", "0.1.47", "skills", "audit", "SKILL.md"), "---\nname: audit\ndescription: Audit product flows\n---\n")
+	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)
+
+	provider := NewSkillCandidateProvider()
+	items, err := provider.Search(context.Background(), root, "codex", "")
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	descriptionByName := make(map[string]string, len(items))
+	for _, item := range items {
+		descriptionByName[item.Name] = item.Description
+	}
+	if got := descriptionByName["documents"]; got != "Current documents skill" {
+		t.Fatalf("documents description = %q, want Current documents skill; items=%#v", got, items)
+	}
+	if got := descriptionByName["audit"]; got != "Audit product flows" {
+		t.Fatalf("audit description = %q, want Audit product flows; items=%#v", got, items)
+	}
+}
+
 func TestSkillCandidateProviderSearchFollowsSymlinkedSkillDir(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
