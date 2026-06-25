@@ -1482,12 +1482,13 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 
 func (h *HTTPHandler) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 	rootID := strings.TrimSpace(r.URL.Query().Get("root"))
-	if rootID == "" {
-		respondError(w, http.StatusBadRequest, errInvalidRequest("root required"))
+	rootPath := strings.TrimSpace(r.URL.Query().Get("path"))
+	if rootID == "" && rootPath == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("root or path required"))
 		return
 	}
 	uc := h.service()
-	out, err := uc.GetGitStatus(r.Context(), usecase.GitStatusInput{RootID: rootID})
+	out, err := uc.GetGitStatus(r.Context(), usecase.GitStatusInput{RootID: rootID, RootPath: rootPath})
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err)
 		return

@@ -13,6 +13,10 @@ type GitStatusPanelProps = {
   isFiltered?: boolean;
   expanded?: boolean;
   compact?: boolean;
+  showHeader?: boolean;
+  showHeaderActions?: boolean;
+  showExpandedToggle?: boolean;
+  enableBranchMenu?: boolean;
   onSelectItem?: (item: GitStatusItem) => void;
   onOpenItem?: (item: GitStatusItem) => void;
   onDiscardItem?: (item: GitStatusItem) => void | Promise<void>;
@@ -191,6 +195,10 @@ export function GitStatusPanel({
   isFiltered = false,
   expanded = true,
   compact = false,
+  showHeader = true,
+  showHeaderActions = true,
+  showExpandedToggle = true,
+  enableBranchMenu = true,
   onSelectItem,
   onOpenItem,
   onDiscardItem,
@@ -293,6 +301,7 @@ export function GitStatusPanel({
 
   return (
     <section style={{ padding: 0, flexShrink: 0, minWidth: 0 }}>
+      {showHeader ? (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: compact ? "6px" : "12px", marginBottom: headerMarginBottom, padding: compact ? "0 4px 0 0" : "0 10px", minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
           <span
@@ -319,8 +328,12 @@ export function GitStatusPanel({
             <div ref={branchMenuRef} style={{ position: "relative", minWidth: 0 }}>
               <button
                 type="button"
-                onClick={() => setBranchMenuOpen((open) => !open)}
-                disabled={!rootId || !onSwitchBranch}
+                onClick={() => {
+                  if (enableBranchMenu && rootId && onSwitchBranch) {
+                    setBranchMenuOpen((open) => !open);
+                  }
+                }}
+                disabled={!enableBranchMenu || !rootId || !onSwitchBranch}
                 style={{
                   border: "none",
                   background: branchMenuOpen ? "rgba(15, 23, 42, 0.06)" : "transparent",
@@ -332,33 +345,35 @@ export function GitStatusPanel({
                   gap: "4px",
                   minWidth: 0,
                   maxWidth: "180px",
-                  cursor: rootId && onSwitchBranch ? "pointer" : "default",
+                  cursor: enableBranchMenu && rootId && onSwitchBranch ? "pointer" : "default",
                 }}
               >
                 <span style={{ fontSize: "12px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {status.branch}
                 </span>
-                <svg
-                  width="12"
-                  height="12"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                  aria-hidden="true"
-                  style={{
-                    color: "var(--text-secondary)",
-                    flexShrink: 0,
-                    transform: branchMenuOpen ? "rotate(180deg)" : "rotate(0deg)",
-                    transition: "transform 0.15s",
-                  }}
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06"
-                    clipRule="evenodd"
-                  />
-                </svg>
+                {enableBranchMenu && onSwitchBranch ? (
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden="true"
+                    style={{
+                      color: "var(--text-secondary)",
+                      flexShrink: 0,
+                      transform: branchMenuOpen ? "rotate(180deg)" : "rotate(0deg)",
+                      transition: "transform 0.15s",
+                    }}
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                ) : null}
               </button>
-              {branchMenuOpen ? (
+              {enableBranchMenu && branchMenuOpen ? (
                 <div
                   style={{
                     position: "absolute",
@@ -429,30 +444,35 @@ export function GitStatusPanel({
           ) : null}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "1px", flexShrink: 0 }}>
-          <GitIconButton
-            title={actionBusy === "pull" ? "pull 中" : "Git pull"}
-            disabled={!onPull || !!actionBusy}
-            onClick={() => runPanelAction("pull", onPull)}
-          >
-            <GitPullIcon />
-          </GitIconButton>
-          <GitIconButton
-            title={actionBusy === "push" ? "push 中" : "Git push"}
-            disabled={!onPush || !!actionBusy}
-            onClick={() => runPanelAction("push", onPush)}
-          >
-            <GitPushIcon />
-          </GitIconButton>
-          <GitIconButton
-            title="Git commit"
-            disabled={!onCommit || !!actionBusy}
-            onClick={() => setCommitOpen((open) => !open)}
-          >
-            <GitCommitIcon />
-          </GitIconButton>
+          {showHeaderActions ? (
+            <>
+              <GitIconButton
+                title={actionBusy === "pull" ? "pull 中" : "Git pull"}
+                disabled={!onPull || !!actionBusy}
+                onClick={() => runPanelAction("pull", onPull)}
+              >
+                <GitPullIcon />
+              </GitIconButton>
+              <GitIconButton
+                title={actionBusy === "push" ? "push 中" : "Git push"}
+                disabled={!onPush || !!actionBusy}
+                onClick={() => runPanelAction("push", onPush)}
+              >
+                <GitPushIcon />
+              </GitIconButton>
+              <GitIconButton
+                title="Git commit"
+                disabled={!onCommit || !!actionBusy}
+                onClick={() => setCommitOpen((open) => !open)}
+              >
+                <GitCommitIcon />
+              </GitIconButton>
+            </>
+          ) : null}
           <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)" }}>
             {loading ? "..." : items.length}
           </div>
+          {showExpandedToggle ? (
           <button
             type="button"
             aria-label={expanded ? "收起 Git 变更" : "展开 Git 变更"}
@@ -490,10 +510,12 @@ export function GitStatusPanel({
               />
             </svg>
           </button>
+          ) : null}
         </div>
       </div>
+      ) : null}
 
-      {commitOpen ? (
+      {showHeaderActions && commitOpen ? (
         <div
           style={{
             display: "flex",

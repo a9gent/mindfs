@@ -100,6 +100,11 @@ export async function fetchGitStatus(rootId: string): Promise<GitStatusPayload> 
   return normalizeGitStatusPayload(payload);
 }
 
+export async function fetchGitStatusByPath(path: string): Promise<GitStatusPayload> {
+  const payload = await protectedJSON<any>(appURL("/api/git/status", new URLSearchParams({ path })));
+  return normalizeGitStatusPayload(payload);
+}
+
 const DEFAULT_HISTORY_LIMIT = 10;
 const HISTORY_LIST_STORAGE_PREFIX = "mindfs.git.history.list:";
 const COMMIT_FILES_STORAGE_PREFIX = "mindfs.git.history.files:";

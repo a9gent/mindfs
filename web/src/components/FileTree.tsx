@@ -75,14 +75,14 @@ type RootSessionIndicator = {
   pending?: boolean;
 };
 
-type ProjectTreeTab = "files" | "git" | "related";
+type ProjectTreeTab = "files" | "git" | "worktrees" | "related";
 
 const PROJECT_TREE_TAB_STORAGE_KEY = "mindfs-project-tree-tab";
 const PROJECT_TREE_ROOT_PADDING_LEFT = 0;
 const PROJECT_TREE_INDENT = 16;
 
 function isProjectTreeTab(value: unknown): value is ProjectTreeTab {
-  return value === "files" || value === "git" || value === "related";
+  return value === "files" || value === "git" || value === "worktrees" || value === "related";
 }
 
 type FileTreeProps = {
@@ -103,8 +103,10 @@ type FileTreeProps = {
   onSelectRoot?: (entry: FileEntry, rootId: string) => void;
   onToggleDir?: (entry: FileEntry, rootId: string) => void;
   renderRootExtraContent?: (rootId: string) => React.ReactNode;
+  renderRootWorktreeContent?: (rootId: string) => React.ReactNode;
   renderRootRelatedContent?: (rootId: string) => React.ReactNode;
   projectTreeTabRequest?: { tab: ProjectTreeTab; nonce: number } | null;
+  onProjectTreeTabChange?: (tab: ProjectTreeTab) => void;
   creatingRootName?: string | null;
   creatingRootBusy?: boolean;
   creatingRootExtraContent?: React.ReactNode;
@@ -1012,8 +1014,10 @@ export function FileTree({
   onSelectRoot,
   onToggleDir,
   renderRootExtraContent,
+  renderRootWorktreeContent,
   renderRootRelatedContent,
   projectTreeTabRequest = null,
+  onProjectTreeTabChange,
   creatingRootName = null,
   creatingRootBusy = false,
   creatingRootExtraContent = null,
@@ -1159,6 +1163,10 @@ export function FileTree({
     }
     setProjectTreeTab(projectTreeTabRequest.tab);
   }, [projectTreeTabRequest?.nonce, projectTreeTabRequest?.tab]);
+
+  React.useEffect(() => {
+    onProjectTreeTabChange?.(projectTreeTab);
+  }, [onProjectTreeTabChange, projectTreeTab]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") {
@@ -1906,6 +1914,8 @@ export function FileTree({
         const rootExtraContent = isManagedRootNode
           ? projectTreeTab === "git"
             ? renderRootExtraContent?.(entry.path)
+            : projectTreeTab === "worktrees"
+              ? renderRootWorktreeContent?.(entry.path)
             : projectTreeTab === "related"
               ? renderRootRelatedContent?.(entry.path)
               : null
@@ -2029,6 +2039,7 @@ export function FileTree({
             {([
               ["files", "文件"],
               ["git", "git"],
+              ["worktrees", "工作树"],
               ["related", "关联文件"],
             ] as const).map(([value, label], index) => {
               const active = projectTreeTab === value;

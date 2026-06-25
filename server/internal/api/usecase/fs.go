@@ -206,7 +206,8 @@ type ReadFileOutput struct {
 }
 
 type GitStatusInput struct {
-	RootID string
+	RootID   string
+	RootPath string
 }
 
 type GitStatusOutput struct {
@@ -283,6 +284,17 @@ func (s *Service) ReadFile(ctx context.Context, in ReadFileInput) (ReadFileOutpu
 }
 
 func (s *Service) GetGitStatus(ctx context.Context, in GitStatusInput) (GitStatusOutput, error) {
+	if strings.TrimSpace(in.RootPath) != "" {
+		rootPath := filepath.Clean(strings.TrimSpace(in.RootPath))
+		if !filepath.IsAbs(rootPath) {
+			return GitStatusOutput{}, errors.New("path must be absolute")
+		}
+		status, err := gitview.InspectStatus(ctx, rootPath)
+		if err != nil {
+			return GitStatusOutput{}, err
+		}
+		return GitStatusOutput{Status: status}, nil
+	}
 	if err := s.ensureRegistry(); err != nil {
 		return GitStatusOutput{}, err
 	}

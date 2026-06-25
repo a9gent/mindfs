@@ -52,6 +52,7 @@ import {
   fetchGitBranches,
   fetchGitHistory,
   fetchGitStatus,
+  fetchGitStatusByPath,
   fetchGitWorktrees,
   getCachedGitHistory,
   getCachedGitHistoryHead,
@@ -1349,9 +1350,16 @@ export function App({ onGoHome }: AppProps) {
   );
   const [showHiddenFiles, setShowHiddenFiles] = useState(false);
   const [projectTreeTabRequest, setProjectTreeTabRequest] = useState<{
-    tab: "files" | "git" | "related";
+    tab: "files" | "git" | "worktrees" | "related";
     nonce: number;
   } | null>(null);
+  const [projectTreeTab, setProjectTreeTab] = useState<"files" | "git" | "worktrees" | "related">("files");
+  const [worktreeItemsByRoot, setWorktreeItemsByRoot] = useState<Record<string, GitWorktreeItem[]>>({});
+  const [worktreeLoadingByRoot, setWorktreeLoadingByRoot] = useState<Record<string, boolean>>({});
+  const [worktreeErrorByRoot, setWorktreeErrorByRoot] = useState<Record<string, string>>({});
+  const [expandedWorktreeByRoot, setExpandedWorktreeByRoot] = useState<Record<string, string>>({});
+  const [worktreeStatusByPath, setWorktreeStatusByPath] = useState<Record<string, GitStatusPayload | null>>({});
+  const [worktreeStatusLoadingByPath, setWorktreeStatusLoadingByPath] = useState<Record<string, boolean>>({});
   const [updateState, setUpdateState] = useState<UpdateState>(() =>
     normalizeUpdateState(null),
   );
@@ -6202,6 +6210,48 @@ export function App({ onGoHome }: AppProps) {
     }
   }, []);
 
+  const loadProjectTreeWorktrees = useCallback(async (rootID: string) => {
+    if (!rootID) {
+      return;
+    }
+    setWorktreeLoadingByRoot((prev) => ({ ...prev, [rootID]: true }));
+    setWorktreeErrorByRoot((prev) => ({ ...prev, [rootID]: "" }));
+    try {
+      const payload = await fetchGitWorktrees(rootID);
+      setWorktreeItemsByRoot((prev) => ({
+        ...prev,
+        [rootID]: (payload.items || []).filter((item) => !!item.branch),
+      }));
+    } catch (error) {
+      setWorktreeItemsByRoot((prev) => ({ ...prev, [rootID]: [] }));
+      setWorktreeErrorByRoot((prev) => ({
+        ...prev,
+        [rootID]: error instanceof Error ? error.message : "加载 worktree 失败",
+      }));
+    } finally {
+      setWorktreeLoadingByRoot((prev) => ({ ...prev, [rootID]: false }));
+    }
+  }, []);
+
+  const loadProjectTreeWorktreeStatus = useCallback(async (worktreePath: string) => {
+    if (!worktreePath) {
+      return;
+    }
+    setWorktreeStatusLoadingByPath((prev) => ({ ...prev, [worktreePath]: true }));
+    try {
+      const status = await fetchGitStatusByPath(worktreePath);
+      setWorktreeStatusByPath((prev) => ({ ...prev, [worktreePath]: status }));
+    } catch (error) {
+      console.error("[git.worktree.status] failed", { worktreePath, error });
+      setWorktreeStatusByPath((prev) => ({
+        ...prev,
+        [worktreePath]: { available: false, dirty_count: 0, items: [] } as GitStatusPayload,
+      }));
+    } finally {
+      setWorktreeStatusLoadingByPath((prev) => ({ ...prev, [worktreePath]: false }));
+    }
+  }, []);
+
   const handleCreateWorktreeStart = useCallback((parentPath: string) => {
     if (creatingRootBusy) {
       return;
@@ -6241,6 +6291,18 @@ export function App({ onGoHome }: AppProps) {
     void loadWorktreeList(rootID);
   }, [loadWorktreeList]);
 
+  useEffect(() => {
+    if (projectTreeTab !== "worktrees") {
+      return;
+    }
+    managedRootIds.forEach((rootID) => {
+      if (!rootID || worktreeItemsByRoot[rootID] || worktreeLoadingByRoot[rootID]) {
+        return;
+      }
+      void loadProjectTreeWorktrees(rootID);
+    });
+  }, [loadProjectTreeWorktrees, managedRootIds, projectTreeTab, worktreeItemsByRoot, worktreeLoadingByRoot]);
+
   const handleSwitchWorktree = useCallback(async (item: GitWorktreeItem) => {
     const targetPath = String(item.path || "").trim();
     if (!targetPath || switchingWorktreePath) {
@@ -6266,6 +6328,7 @@ export function App({ onGoHome }: AppProps) {
           isRoot: true,
           forceDirectory: true,
         });
+        return targetRoot.id;
       }
     } catch (error) {
       reportError(
@@ -6275,6 +6338,7 @@ export function App({ onGoHome }: AppProps) {
     } finally {
       setSwitchingWorktreePath("");
     }
+    return undefined;
   }, [findManagedRootByPath, refreshManagedRoots, switchingWorktreePath]);
 
   const handleOpenProjectAdd = useCallback(() => {
@@ -9583,6 +9647,157 @@ export function App({ onGoHome }: AppProps) {
     currentRootId;
   const relatedSessionKey = relatedSessionSnapshot?.key || relatedSessionSnapshot?.session_key;
   const relatedSelectedPath = gitDiff?.path || file?.path || "";
+  const renderRootWorktreeContent = (root: string): React.ReactNode => {
+    const items = worktreeItemsByRoot[root] || [];
+    const loading = worktreeLoadingByRoot[root] === true;
+    const error = worktreeErrorByRoot[root] || "";
+    const expandedPath = expandedWorktreeByRoot[root] || "";
+    if (loading) {
+      return (
+        <div style={{ padding: "8px 4px", fontSize: "12px", color: "var(--text-secondary)" }}>
+          加载 worktree 中...
+        </div>
+      );
+    }
+    if (error) {
+      return (
+        <div style={{ padding: "8px 4px", fontSize: "12px", color: "#b45309" }}>
+          {error}
+        </div>
+      );
+    }
+    if (items.length === 0) {
+      return (
+        <div style={{ padding: "8px 4px", fontSize: "12px", color: "var(--text-secondary)" }}>
+          没有 worktree
+        </div>
+      );
+    }
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: 0 }}>
+        {items.map((item) => {
+          const managed = findManagedRootByPath(item.path);
+          const targetRootId = managed?.id || "";
+          const selected = expandedPath === item.path;
+          const status = worktreeStatusByPath[item.path] || null;
+          const statusLoading = worktreeStatusLoadingByPath[item.path] === true;
+          const dirtyCount = status?.items?.length || 0;
+          const branchLabel = item.branch || item.head?.slice(0, 8) || item.path;
+          const statusCountLabel = statusLoading ? "..." : status ? String(dirtyCount) : "";
+          return (
+            <div key={item.path} style={{ minWidth: 0 }}>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (selected) {
+                    setExpandedWorktreeByRoot((prev) => ({ ...prev, [root]: "" }));
+                    return;
+                  }
+                  setExpandedWorktreeByRoot((prev) => ({ ...prev, [root]: item.path }));
+                  await loadProjectTreeWorktreeStatus(item.path);
+                }}
+                style={{
+                  width: "100%",
+                  border: "none",
+                  borderRadius: "7px",
+                  background: selected ? "var(--selection-bg)" : "transparent",
+                  color: selected ? "var(--accent-color)" : "var(--text-primary)",
+                  padding: "6px 4px 6px 0",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "8px",
+                  textAlign: "left",
+                  cursor: "pointer",
+                }}
+              >
+                <span style={{ minWidth: 0, display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                  <span
+                    title="Git 变更"
+                    aria-label="Git 变更"
+                    style={{
+                      width: "18px",
+                      height: "18px",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "var(--text-primary)",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path
+                        fill="currentColor"
+                        d="M7 5a2 2 0 1 1 3.763.945h.58a4 4 0 0 1 4 4v1.28a2 2 0 0 1-1.02 3.72a2 2 0 0 1-.98-3.745V9.945a2 2 0 0 0-2-2H10v9.323A2 2 0 0 1 9 21a2 2 0 0 1-1-3.732V6.732A2 2 0 0 1 7 5"
+                      />
+                    </svg>
+                  </span>
+                  <span style={{ fontSize: "12px", fontWeight: selected ? 700 : 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {branchLabel}
+                  </span>
+                </span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "11px", color: selected ? "var(--accent-color)" : "var(--text-secondary)", flexShrink: 0 }}>
+                  <span>{statusCountLabel}</span>
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden="true"
+                    style={{
+                      transform: selected ? "rotate(180deg)" : "rotate(0deg)",
+                      transition: "transform 0.15s",
+                    }}
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </span>
+              </button>
+              {selected ? (
+                <div style={{ padding: "4px 0 4px 0" }}>
+                  {statusLoading || status ? (
+                    <GitStatusPanel
+                      rootId={targetRootId || currentRootId || undefined}
+                      status={status}
+                      loading={statusLoading}
+                      compact
+                      expanded
+                      showHeader={false}
+                      showHeaderActions={false}
+                      showExpandedToggle={false}
+                      enableBranchMenu={false}
+                      onSelectItem={(statusItem) => {
+                        const nextRoot = targetRootId;
+                        if (!nextRoot) {
+                          return;
+                        }
+                        void openGitDiff(nextRoot, statusItem);
+                      }}
+                      onOpenItem={(statusItem) => {
+                        const nextRoot = targetRootId;
+                        if (!nextRoot || statusItem.is_dir === true) {
+                          return;
+                        }
+                        actionHandlers.open({ path: statusItem.path, root: nextRoot });
+                      }}
+                    />
+                  ) : (
+                    <div style={{ padding: "6px 4px", fontSize: "12px", color: "var(--text-secondary)" }}>
+                      加载 git status 中...
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
   const selectedSessionRelatedFiles = useMemo(() => {
     const rawRelated = relatedSessionSnapshot?.related_files || (relatedSessionSnapshot as any)?.outputs || [];
     return (Array.isArray(rawRelated) ? rawRelated : [])
@@ -10512,8 +10727,10 @@ export function App({ onGoHome }: AppProps) {
               })
             }
             renderRootExtraContent={renderRootGitContent}
+            renderRootWorktreeContent={renderRootWorktreeContent}
             renderRootRelatedContent={renderRootRelatedContent}
             projectTreeTabRequest={projectTreeTabRequest}
+            onProjectTreeTabChange={setProjectTreeTab}
             relayActionLabel={relayActionLabel}
             relayActionDisabled={relayActionDisabled}
             relayActionHelp={null}
