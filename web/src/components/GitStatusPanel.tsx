@@ -12,6 +12,7 @@ type GitStatusPanelProps = {
   loading?: boolean;
   isFiltered?: boolean;
   expanded?: boolean;
+  compact?: boolean;
   onSelectItem?: (item: GitStatusItem) => void;
   onSwitchBranch?: (branch: string) => void | Promise<void>;
   onExpandedChange?: (expanded: boolean) => void;
@@ -48,7 +49,12 @@ function renderStatusLabel(status: string): string {
   return status;
 }
 
-export function GitStatusPanel({ rootId, status, loading = false, isFiltered = false, expanded = true, onSelectItem, onSwitchBranch, onExpandedChange }: GitStatusPanelProps) {
+function compactPath(path: string): string {
+  const normalized = String(path || "").replace(/\\/g, "/").replace(/\/+$/g, "");
+  return normalized.split("/").filter(Boolean).pop() || normalized || path;
+}
+
+export function GitStatusPanel({ rootId, status, loading = false, isFiltered = false, expanded = true, compact = false, onSelectItem, onSwitchBranch, onExpandedChange }: GitStatusPanelProps) {
   const branchMenuRef = useRef<HTMLDivElement | null>(null);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branches, setBranches] = useState<GitBranchItem[]>([]);
@@ -106,8 +112,8 @@ export function GitStatusPanel({ rootId, status, loading = false, isFiltered = f
   }
 
   return (
-    <section style={{ padding: 0, flexShrink: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px", padding: "0 10px" }}>
+    <section style={{ padding: 0, flexShrink: 0, minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: compact ? "6px" : "12px", marginBottom: "10px", padding: compact ? "0 4px 0 0" : "0 10px", minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
           <span
             title="Git 变更"
@@ -289,7 +295,7 @@ export function GitStatusPanel({ rootId, status, loading = false, isFiltered = f
       {!expanded ? null : loading ? (
         <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "6px 10px" }}>正在加载 git 变更...</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "6px", paddingLeft: "14px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px", paddingLeft: compact ? 0 : "14px", minWidth: 0 }}>
           {items.map((item) => (
             <button
               key={`${item.status}:${item.path}`}
@@ -303,11 +309,11 @@ export function GitStatusPanel({ rootId, status, loading = false, isFiltered = f
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: "10px",
+                gap: compact ? "6px" : "10px",
                 width: "100%",
                 border: "none",
                 background: "linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.03))",
-                padding: "6px 10px",
+                padding: compact ? "6px 7px" : "6px 10px",
                 cursor: item.is_dir === true ? "default" : "pointer",
                 textAlign: "left",
                 borderRadius: "8px",
@@ -317,13 +323,13 @@ export function GitStatusPanel({ rootId, status, loading = false, isFiltered = f
               onMouseEnter={(e) => { e.currentTarget.style.background = "linear-gradient(180deg, rgba(59, 130, 246, 0.12), rgba(59, 130, 246, 0.05))"; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = "linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.03))"; }}
             >
-              <span style={{ width: "24px", color: renderStatusColor(item.status), fontSize: "12px", fontWeight: 700, flexShrink: 0 }}>
+              <span style={{ width: compact ? "18px" : "24px", color: renderStatusColor(item.status), fontSize: "12px", fontWeight: 700, flexShrink: 0 }}>
                 {renderStatusLabel(item.status)}
               </span>
-              <span style={{ flex: 1, minWidth: 0, fontSize: "12px", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {item.display_path || item.path}
+              <span title={item.display_path || item.path} style={{ flex: 1, minWidth: 0, fontSize: "12px", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {compactPath(item.display_path || item.path)}
               </span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: compact ? "4px" : "8px", fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>
                 {renderLineStat(item.additions, "+")}
                 {renderLineStat(item.deletions, "-")}
               </span>

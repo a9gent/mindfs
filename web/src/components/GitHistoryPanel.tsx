@@ -11,6 +11,7 @@ type GitHistoryPanelProps = {
   loading?: boolean;
   loadingMore?: boolean;
   hasMore?: boolean;
+  compact?: boolean;
   expandedCommits?: Record<string, boolean>;
   onToggleCommit?: (hash: string) => void;
   onLoadMore?: () => void;
@@ -47,14 +48,14 @@ function formatCommitTime(value: string): string {
     return "";
   }
   const now = new Date();
-  const sameYear = date.getFullYear() === now.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, "0");
-  const day = `${date.getDate()}`.padStart(2, "0");
-  const hours = `${date.getHours()}`.padStart(2, "0");
-  const minutes = `${date.getMinutes()}`.padStart(2, "0");
-  return sameYear
-    ? `${month}-${day} ${hours}:${minutes}`
-    : `${date.getFullYear()}-${month}-${day}`;
+  const diff = now.getTime() - date.getTime();
+  if (diff < 60000) return "刚刚";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
+  if (now.getFullYear() === date.getFullYear()) {
+    return `${date.getMonth() + 1}/${date.getDate()}`;
+  }
+  return `${date.getFullYear() % 100}/${date.getMonth() + 1}`;
 }
 
 export function GitHistoryPanel({
@@ -63,6 +64,7 @@ export function GitHistoryPanel({
   loading = false,
   loadingMore = false,
   hasMore = false,
+  compact = false,
   expandedCommits = {},
   onToggleCommit,
   onLoadMore,
@@ -109,11 +111,11 @@ export function GitHistoryPanel({
   };
 
   return (
-    <section style={{ padding: 0, flexShrink: 0 }}>
+    <section style={{ padding: 0, flexShrink: 0, minWidth: 0 }}>
       {loading ? (
         <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "6px 10px 6px 14px" }}>正在加载 git 历史...</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "2px", paddingLeft: "4px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "2px", paddingLeft: compact ? 0 : "4px", minWidth: 0 }}>
           {items.map((commit, index) => {
             const isExpanded = expandedCommits[commit.hash] === true;
             const files = filesByCommit[commit.hash] || [];
@@ -152,11 +154,11 @@ export function GitHistoryPanel({
                     style={{
                       display: "flex",
                       alignItems: "center",
-                      gap: "8px",
+                      gap: compact ? "6px" : "8px",
                       width: "100%",
                       border: "none",
                       background: isExpanded ? "var(--selection-bg)" : "transparent",
-                      padding: "6px 10px",
+                      padding: compact ? "6px 7px" : "6px 10px",
                       cursor: "pointer",
                       textAlign: "left",
                       borderRadius: "8px",
@@ -173,7 +175,7 @@ export function GitHistoryPanel({
                     </span>
                   </button>
                 {isExpanded ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginLeft: 0 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginLeft: 0, minWidth: 0 }}>
                     {loadingFiles[commit.hash] ? (
                       <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "4px 10px" }}>正在加载文件...</div>
                     ) : files.length === 0 ? (
@@ -186,11 +188,11 @@ export function GitHistoryPanel({
                         style={{
                           display: "flex",
                           alignItems: "center",
-                          gap: "10px",
+                          gap: compact ? "6px" : "10px",
                           width: "100%",
                           border: "none",
                           background: "linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.03))",
-                          padding: "5px 10px",
+                          padding: compact ? "5px 7px" : "5px 10px",
                           cursor: "pointer",
                           textAlign: "left",
                           borderRadius: "8px",
@@ -198,13 +200,13 @@ export function GitHistoryPanel({
                         onMouseEnter={(e) => { e.currentTarget.style.background = "linear-gradient(180deg, rgba(59, 130, 246, 0.12), rgba(59, 130, 246, 0.05))"; }}
                         onMouseLeave={(e) => { e.currentTarget.style.background = "linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.03))"; }}
                       >
-                        <span style={{ width: "24px", color: renderStatusColor(file.status), fontSize: "12px", fontWeight: 700, flexShrink: 0 }}>
+                        <span style={{ width: compact ? "18px" : "24px", color: renderStatusColor(file.status), fontSize: "12px", fontWeight: 700, flexShrink: 0 }}>
                           {file.status === "??" ? "U" : file.status}
                         </span>
                         <span style={{ flex: 1, minWidth: 0, fontSize: "12px", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {file.path}
                         </span>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: compact ? "4px" : "8px", fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>
                           {renderLineStat(file.additions, "+")}
                           {renderLineStat(file.deletions, "-")}
                         </span>

@@ -48,6 +48,7 @@ type DefaultListViewProps = {
   isGitRepo?: boolean;
   isGitWorktree?: boolean;
   showGitHistory?: boolean;
+  enableGitHistoryToggle?: boolean;
   onToggleGitHistory?: () => void;
   onCreateWorktree?: () => void;
   onSwitchWorktree?: () => void;
@@ -411,6 +412,7 @@ export function DefaultListView({
   isGitRepo = false,
   isGitWorktree = false,
   showGitHistory = true,
+  enableGitHistoryToggle = true,
   onToggleGitHistory,
   onCreateWorktree,
   onSwitchWorktree,
@@ -742,7 +744,7 @@ export function DefaultListView({
                 />
                 {isRootView ? (
                   <>
-                    {isGitRepo ? (
+                    {isGitRepo && enableGitHistoryToggle ? (
                       <button
                         type="button"
                         onClick={() => {

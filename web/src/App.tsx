@@ -408,7 +408,6 @@ const TREE_SORT_STORAGE_KEY = "mindfs-tree-sort-mode";
 const DIRECTORY_SORT_OVERRIDES_STORAGE_KEY = "mindfs-directory-sort-overrides";
 const FILE_SCROLL_STORAGE_KEY = "mindfs-file-scroll-positions";
 const LAST_ROOT_STORAGE_KEY = "mindfs-last-root-id";
-const SHOW_GIT_HISTORY_BY_ROOT_STORAGE_KEY = "mindfs-show-git-history-by-root";
 const GIT_STATUS_EXPANDED_STORAGE_KEY = "mindfs-git-status-expanded";
 const GIT_HISTORY_EXPANDED_STORAGE_KEY = "mindfs-git-history-expanded";
 const READ_FILE_TOKEN_PATTERN = /\[read file:\s*[^\]]+\]/i;
@@ -488,22 +487,6 @@ function buildFileScrollKey(
     return "";
   }
   return `${rootId}::${path}`;
-}
-
-function trimGitPathPrefix(path: string, prefix: string): string {
-  const normalizedPath = String(path || "").replace(/^\/+|\/+$/g, "");
-  const normalizedPrefix = String(prefix || "").replace(/^\/+|\/+$/g, "");
-  if (!normalizedPrefix) {
-    return normalizedPath;
-  }
-  if (normalizedPath === normalizedPrefix) {
-    return ".";
-  }
-  const matchPrefix = `${normalizedPrefix}/`;
-  if (normalizedPath.startsWith(matchPrefix)) {
-    return normalizedPath.slice(matchPrefix.length);
-  }
-  return normalizedPath;
 }
 
 function hasSessionExchanges(session: Session | null | undefined): boolean {
@@ -1305,9 +1288,6 @@ export function App({ onGoHome }: AppProps) {
   const [gitHistory, setGitHistory] = useState<GitHistoryPayload | null>(null);
   const [gitHistoryLoading, setGitHistoryLoading] = useState(false);
   const [gitHistoryLoadingMore, setGitHistoryLoadingMore] = useState(false);
-  const [showGitHistoryByRoot, setShowGitHistoryByRoot] = useState<Record<string, boolean>>(() =>
-    loadBooleanRecord(SHOW_GIT_HISTORY_BY_ROOT_STORAGE_KEY),
-  );
   const [gitStatusExpandedByRoot, setGitStatusExpandedByRoot] = useState<Record<string, boolean>>(() =>
     loadBooleanRecord(GIT_STATUS_EXPANDED_STORAGE_KEY),
   );
@@ -1630,12 +1610,6 @@ export function App({ onGoHome }: AppProps) {
     if (typeof window === "undefined") {
       return;
     }
-    window.localStorage.setItem(SHOW_GIT_HISTORY_BY_ROOT_STORAGE_KEY, JSON.stringify(showGitHistoryByRoot));
-  }, [showGitHistoryByRoot]);
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
     window.localStorage.setItem(GIT_STATUS_EXPANDED_STORAGE_KEY, JSON.stringify(gitStatusExpandedByRoot));
   }, [gitStatusExpandedByRoot]);
   useEffect(() => {
@@ -1876,12 +1850,6 @@ export function App({ onGoHome }: AppProps) {
       ),
     );
 
-    setShowGitHistoryByRoot((prev) => {
-      if (!(root in prev)) return prev;
-      const next = { ...prev };
-      delete next[root];
-      return next;
-    });
     setGitStatusExpandedByRoot((prev) => {
       if (!(root in prev)) return prev;
       const next = { ...prev };
@@ -5961,7 +5929,6 @@ export function App({ onGoHome }: AppProps) {
         delete next[oldID];
         return next;
       };
-      setShowGitHistoryByRoot((prev) => moveStateRecord(prev));
       setGitStatusExpandedByRoot((prev) => moveStateRecord(prev));
       setGitHistoryExpandedByRoot((prev) => moveStateRecord(prev));
 
@@ -6965,31 +6932,6 @@ export function App({ onGoHome }: AppProps) {
       ]),
     );
   }, [gitStatus]);
-
-  const filteredGitStatus = useMemo<GitStatusPayload | null>(() => {
-    if (!gitStatus) {
-      return null;
-    }
-    const currentDir =
-      selectedDir && selectedDir !== currentRootId ? selectedDir : ".";
-    if (!currentDir || currentDir === ".") {
-      return gitStatus;
-    }
-    const prefix = `${currentDir.replace(/^\/+|\/+$/g, "")}/`;
-    const items = (gitStatus.items || [])
-      .filter(
-        (item) => item.path === currentDir || item.path.startsWith(prefix),
-      )
-      .map((item) => ({
-        ...item,
-        display_path: trimGitPathPrefix(item.path, currentDir),
-      }));
-    return {
-      ...gitStatus,
-      dirty_count: items.length,
-      items,
-    };
-  }, [currentRootId, gitStatus, selectedDir]);
 
   useEffect(() => {
     if (!currentRootId) return;
@@ -9499,31 +9441,45 @@ export function App({ onGoHome }: AppProps) {
     ) : null;
 
   let workspaceView: React.ReactNode;
-  const showGitStatusPanel = !gitDiff && !file && !!currentRootId;
-  const isRootDirectoryView = !selectedDir || selectedDir === currentRootId || selectedDir === ".";
-  const gitStatusAvailable = filteredGitStatus?.available === true;
+  const gitStatusAvailable = gitStatus?.available === true;
   const gitHistoryAvailable = gitHistory?.available === true;
-  const showGitHistory = currentRootId ? showGitHistoryByRoot[currentRootId] !== false : true;
   const gitStatusExpanded = currentRootId ? gitStatusExpandedByRoot[currentRootId] !== false : true;
   const gitHistoryExpandedCommits = currentRootId ? gitHistoryExpandedByRoot[currentRootId] || {} : {};
   const shouldRenderGitPanel =
-    showGitStatusPanel &&
     gitStatusAvailable &&
-    (gitStatusLoading || (filteredGitStatus?.items.length || 0) > 0);
+    (gitStatusLoading || (gitStatus?.items.length || 0) > 0);
   const shouldRenderGitHistoryPanel =
-    showGitStatusPanel &&
-    isRootDirectoryView &&
-    showGitHistory &&
-    (gitHistoryLoading || (gitHistoryAvailable && (gitHistory?.items.length || 0) > 0));
-  const gitRootTopContent =
-    shouldRenderGitPanel || shouldRenderGitHistoryPanel ? (
-      <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+    gitHistoryLoading || (gitHistoryAvailable && (gitHistory?.items.length || 0) > 0);
+  const renderRootGitContent = (root: string): React.ReactNode => {
+    if (!root || root !== currentRootId) {
+      return (
+        <div style={{ padding: "8px 4px", fontSize: "12px", color: "var(--text-secondary)" }}>
+          选择项目后查看 Git 状态
+        </div>
+      );
+    }
+    if (managedRootByIdRef.current[root]?.is_git_repo !== true) {
+      return (
+        <div style={{ padding: "8px 4px", fontSize: "12px", color: "var(--text-secondary)" }}>
+          不是 Git 仓库
+        </div>
+      );
+    }
+    if (!gitStatusLoading && !gitHistoryLoading && !shouldRenderGitPanel && !shouldRenderGitHistoryPanel) {
+      return (
+        <div style={{ padding: "8px 4px", fontSize: "12px", color: "var(--text-secondary)" }}>
+          暂无 Git 变更或历史
+        </div>
+      );
+    }
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "14px", minWidth: 0 }}>
         {shouldRenderGitPanel ? (
           <GitStatusPanel
             rootId={currentRootId || undefined}
-            status={filteredGitStatus}
+            status={gitStatus}
             loading={gitStatusLoading}
-            isFiltered={!!selectedDir && selectedDir !== currentRootId}
+            compact
             expanded={gitStatusExpanded}
             onExpandedChange={(expanded) => {
               const root = currentRootIdRef.current;
@@ -9555,6 +9511,7 @@ export function App({ onGoHome }: AppProps) {
             loading={gitHistoryLoading}
             loadingMore={gitHistoryLoadingMore}
             hasMore={gitHistory?.has_more === true}
+            compact
             expandedCommits={gitHistoryExpandedCommits}
             onToggleCommit={(hash) => {
               const root = currentRootIdRef.current;
@@ -9585,7 +9542,8 @@ export function App({ onGoHome }: AppProps) {
           />
         ) : null}
       </div>
-    ) : null;
+    );
+  };
   if (gitDiff) {
     workspaceView = (
       <GitDiffViewer
@@ -9774,7 +9732,7 @@ export function App({ onGoHome }: AppProps) {
         path={selectedDir || ""}
         entries={visibleMainEntries}
         errorMessage={mainDirectoryError}
-        topContent={gitRootTopContent}
+        topContent={null}
         showHiddenFiles={showHiddenFiles}
         sortMode={currentDirectorySortMode}
         sortControlValue={currentDirectorySortOverride || "inherit"}
@@ -9801,14 +9759,7 @@ export function App({ onGoHome }: AppProps) {
         onRemoveRoot={handleRemoveCurrentRoot}
         isGitRepo={managedRootByIdRef.current[currentRootId || ""]?.is_git_repo === true}
         isGitWorktree={managedRootByIdRef.current[currentRootId || ""]?.is_git_worktree === true}
-        showGitHistory={showGitHistory}
-        onToggleGitHistory={() => {
-          const root = currentRootIdRef.current;
-          if (!root) {
-            return;
-          }
-          setShowGitHistoryByRoot((prev) => ({ ...prev, [root]: prev[root] === false }));
-        }}
+        enableGitHistoryToggle={false}
         onCreateWorktree={handleOpenWorktreeLocation}
         onSwitchWorktree={handleSwitchWorktreeStart}
         onRemoveWorktree={handleRemoveCurrentWorktree}
@@ -10271,6 +10222,7 @@ export function App({ onGoHome }: AppProps) {
                 isRoot: e.is_root === true,
               })
             }
+            renderRootExtraContent={renderRootGitContent}
             relayActionLabel={relayActionLabel}
             relayActionDisabled={relayActionDisabled}
             relayActionHelp={null}

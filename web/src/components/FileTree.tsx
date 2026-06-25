@@ -75,6 +75,16 @@ type RootSessionIndicator = {
   pending?: boolean;
 };
 
+type ProjectTreeTab = "files" | "git";
+
+const PROJECT_TREE_TAB_STORAGE_KEY = "mindfs-project-tree-tab";
+const PROJECT_TREE_ROOT_PADDING_LEFT = 0;
+const PROJECT_TREE_INDENT = 16;
+
+function isProjectTreeTab(value: unknown): value is ProjectTreeTab {
+  return value === "files" || value === "git";
+}
+
 type FileTreeProps = {
   entries: FileEntry[];
   childrenByPath: Record<string, FileEntry[]>;
@@ -92,6 +102,7 @@ type FileTreeProps = {
   onSelectFile?: (entry: FileEntry, rootId: string) => void;
   onSelectRoot?: (entry: FileEntry, rootId: string) => void;
   onToggleDir?: (entry: FileEntry, rootId: string) => void;
+  renderRootExtraContent?: (rootId: string) => React.ReactNode;
   creatingRootName?: string | null;
   creatingRootBusy?: boolean;
   creatingRootExtraContent?: React.ReactNode;
@@ -998,6 +1009,7 @@ export function FileTree({
   onSelectFile,
   onSelectRoot,
   onToggleDir,
+  renderRootExtraContent,
   creatingRootName = null,
   creatingRootBusy = false,
   creatingRootExtraContent = null,
@@ -1033,6 +1045,17 @@ export function FileTree({
 }: FileTreeProps) {
   const expandedSet = new Set(expanded);
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
+  const [projectTreeTab, setProjectTreeTab] = React.useState<ProjectTreeTab>(() => {
+    if (typeof window === "undefined") {
+      return "files";
+    }
+    try {
+      const saved = window.localStorage.getItem(PROJECT_TREE_TAB_STORAGE_KEY);
+      return isProjectTreeTab(saved) ? saved : "files";
+    } catch {
+      return "files";
+    }
+  });
   const [isAppearanceMenuOpen, setIsAppearanceMenuOpen] = React.useState(false);
   const [isSortMenuOpen, setIsSortMenuOpen] = React.useState(false);
   const [appearanceMode, setAppearanceModeState] = React.useState<AppearanceMode>(() => getAppearanceMode());
@@ -1125,6 +1148,16 @@ export function FileTree({
   }, []);
 
   const [isNativeApp, setIsNativeApp] = React.useState(() => isNativeShellRuntime());
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(PROJECT_TREE_TAB_STORAGE_KEY, projectTreeTab);
+    } catch {
+    }
+  }, [projectTreeTab]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") {
@@ -1721,7 +1754,7 @@ export function FileTree({
           <div
             style={{
               padding: "6px 8px",
-              paddingLeft: 8,
+              paddingLeft: PROJECT_TREE_ROOT_PADDING_LEFT,
               display: "flex",
               alignItems: creatingRootExtraContent ? "flex-start" : "center",
               gap: "8px",
@@ -1856,6 +1889,11 @@ export function FileTree({
           onToggleDir?.(entry, entryRoot);
         };
 
+        const rootExtraContent = isManagedRootNode && projectTreeTab === "git"
+          ? renderRootExtraContent?.(entry.path)
+          : null;
+        const shouldRenderChildren = projectTreeTab === "files" || !isManagedRootNode;
+
         return (
           <li key={expandedKey}>
             <button
@@ -1866,7 +1904,7 @@ export function FileTree({
                 background: isSelected ? "var(--selection-bg)" : "transparent",
                 cursor: "pointer",
                 padding: "6px 8px",
-                paddingLeft: 8 + depth * 16,
+                paddingLeft: PROJECT_TREE_ROOT_PADDING_LEFT + depth * PROJECT_TREE_INDENT,
                 display: "flex",
                 alignItems: "center",
                 gap: "4px",
@@ -1940,7 +1978,12 @@ export function FileTree({
                 </span>
               )}
             </button>
-            {entry.is_dir && isOpen && children.length > 0 ? renderEntries(children, depth + 1, entryRoot) : null}
+            {entry.is_dir && isOpen && shouldRenderChildren && children.length > 0 ? renderEntries(children, depth + 1, entryRoot) : null}
+            {entry.is_dir && isOpen && rootExtraContent ? (
+              <div style={{ padding: `2px 4px 8px ${PROJECT_TREE_INDENT}px` }}>
+                {rootExtraContent}
+              </div>
+            ) : null}
           </li>
         );
       })}
@@ -1950,8 +1993,56 @@ export function FileTree({
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <div style={{ position: "relative", height: "36px", padding: "0 3px 0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--mindfs-topbar-bg, transparent)", boxSizing: "border-box", flexShrink: 0, gap: 12, overflow: "visible" }}>
-        <h3 style={{ margin: 0, fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", letterSpacing: "0.5px", textTransform: "uppercase" }}>Projects</h3>
-        <div ref={menuRef} style={{ position: "relative" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }}>
+          <h3 style={{ margin: 0, fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", letterSpacing: "0.5px", textTransform: "uppercase", flexShrink: 0 }}>Projects</h3>
+          <div
+            role="tablist"
+            aria-label="项目展开内容"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "2px",
+              padding: "2px",
+              borderRadius: "8px",
+              border: "1px solid var(--border-color)",
+              background: "rgba(148, 163, 184, 0.10)",
+              minWidth: 0,
+            }}
+          >
+            {([
+              ["files", "文件"],
+              ["git", "git"],
+            ] as const).map(([value, label], index) => {
+              const active = projectTreeTab === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setProjectTreeTab(value)}
+                  style={{
+                    border: "none",
+                    borderLeft: index > 0 && !active ? "1px solid var(--border-color)" : "none",
+                    borderRadius: "6px",
+                    background: active ? "var(--accent-color)" : "transparent",
+                    color: active ? "#fff" : "var(--text-secondary)",
+                    padding: "3px 7px",
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    lineHeight: "14px",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                    boxShadow: active ? "0 1px 3px rgba(37, 99, 235, 0.28)" : "none",
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div ref={menuRef} style={{ position: "relative", flexShrink: 0 }}>
           <button
             type="button"
             onClick={() => {
