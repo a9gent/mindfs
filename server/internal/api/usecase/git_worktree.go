@@ -66,6 +66,101 @@ func (s *Service) CheckoutGitBranch(ctx context.Context, in CheckoutGitBranchInp
 	return CheckoutGitBranchOutput{Status: status}, nil
 }
 
+type GitActionInput struct {
+	RootID  string
+	Path    string
+	Status  string
+	Message string
+}
+
+type GitActionOutput struct {
+	Output string               `json:"output"`
+	Status gitview.StatusResult `json:"status"`
+}
+
+func (s *Service) GitPull(ctx context.Context, in GitActionInput) (GitActionOutput, error) {
+	root, err := s.gitActionRoot(in.RootID)
+	if err != nil {
+		return GitActionOutput{}, err
+	}
+	result, err := gitview.Pull(ctx, root.RootPath)
+	if err != nil {
+		return GitActionOutput{}, err
+	}
+	return GitActionOutput{Output: result.Output, Status: result.Status}, nil
+}
+
+func (s *Service) GitPush(ctx context.Context, in GitActionInput) (GitActionOutput, error) {
+	root, err := s.gitActionRoot(in.RootID)
+	if err != nil {
+		return GitActionOutput{}, err
+	}
+	result, err := gitview.Push(ctx, root.RootPath)
+	if err != nil {
+		return GitActionOutput{}, err
+	}
+	return GitActionOutput{Output: result.Output, Status: result.Status}, nil
+}
+
+func (s *Service) GitCommit(ctx context.Context, in GitActionInput) (GitActionOutput, error) {
+	root, err := s.gitActionRoot(in.RootID)
+	if err != nil {
+		return GitActionOutput{}, err
+	}
+	result, err := gitview.Commit(ctx, root.RootPath, in.Message)
+	if err != nil {
+		return GitActionOutput{}, err
+	}
+	return GitActionOutput{Output: result.Output, Status: result.Status}, nil
+}
+
+func (s *Service) GitStagePath(ctx context.Context, in GitActionInput) (GitActionOutput, error) {
+	root, err := s.gitActionRoot(in.RootID)
+	if err != nil {
+		return GitActionOutput{}, err
+	}
+	result, err := gitview.StagePath(ctx, root.RootPath, in.Path)
+	if err != nil {
+		return GitActionOutput{}, err
+	}
+	return GitActionOutput{Output: result.Output, Status: result.Status}, nil
+}
+
+func (s *Service) GitUnstagePath(ctx context.Context, in GitActionInput) (GitActionOutput, error) {
+	root, err := s.gitActionRoot(in.RootID)
+	if err != nil {
+		return GitActionOutput{}, err
+	}
+	result, err := gitview.UnstagePath(ctx, root.RootPath, in.Path)
+	if err != nil {
+		return GitActionOutput{}, err
+	}
+	return GitActionOutput{Output: result.Output, Status: result.Status}, nil
+}
+
+func (s *Service) GitDiscardPath(ctx context.Context, in GitActionInput) (GitActionOutput, error) {
+	root, err := s.gitActionRoot(in.RootID)
+	if err != nil {
+		return GitActionOutput{}, err
+	}
+	result, err := gitview.DiscardPath(ctx, root.RootPath, in.Path, in.Status)
+	if err != nil {
+		return GitActionOutput{}, err
+	}
+	return GitActionOutput{Output: result.Output, Status: result.Status}, nil
+}
+
+func (s *Service) gitActionRoot(rootID string) (fs.RootInfo, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return fs.RootInfo{}, err
+	}
+	root, err := s.Registry.GetRoot(rootID)
+	if err != nil {
+		return fs.RootInfo{}, err
+	}
+	return root, nil
+}
+
 type ListGitWorktreesInput struct {
 	RootID string
 }

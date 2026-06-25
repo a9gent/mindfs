@@ -9,6 +9,7 @@ export type GitStatusItem = {
   display_path?: string;
   old_path?: string;
   status: GitStatusCode;
+  staged?: boolean;
   additions: number;
   deletions: number;
   is_dir?: boolean;
@@ -73,14 +74,30 @@ export type GitWorktreesPayload = {
   items: GitWorktreeItem[];
 };
 
-export async function fetchGitStatus(rootId: string): Promise<GitStatusPayload> {
-  const payload = await protectedJSON<any>(appURL("/api/git/status", new URLSearchParams({ root: rootId })));
+export type GitActionPayload = {
+  output: string;
+  status: GitStatusPayload;
+};
+
+function normalizeGitStatusPayload(payload: any): GitStatusPayload {
   return {
     available: payload?.available === true,
     branch: typeof payload?.branch === "string" ? payload.branch : undefined,
     dirty_count: Number(payload?.dirty_count) || 0,
     items: Array.isArray(payload?.items) ? payload.items as GitStatusItem[] : [],
   };
+}
+
+function normalizeGitActionPayload(payload: any): GitActionPayload {
+  return {
+    output: typeof payload?.output === "string" ? payload.output : "",
+    status: normalizeGitStatusPayload(payload?.status || {}),
+  };
+}
+
+export async function fetchGitStatus(rootId: string): Promise<GitStatusPayload> {
+  const payload = await protectedJSON<any>(appURL("/api/git/status", new URLSearchParams({ root: rootId })));
+  return normalizeGitStatusPayload(payload);
 }
 
 const DEFAULT_HISTORY_LIMIT = 10;
@@ -331,12 +348,9 @@ export async function fetchGitHistory(
         remoteHead,
       });
     } else if (afterCommit) {
-      const remoteHead = normalized.remote_head || existing?.remoteHead;
-      setHistoryCacheEntry(rootId, {
-        items: applyRemoteHead(mergeHistoryItems(normalized.items, existing?.items || []), remoteHead),
-        hasMore: existing?.hasMore ?? normalized.has_more,
-        remoteHead,
-      });
+      // afterCommit is a change probe. A reset/rebase can leave afterCommit as an
+      // existing object that is no longer in the current HEAD history, so blindly
+      // prepending new commits to the cached list can show stale commits.
     }
     return {
       ...normalized,
@@ -402,13 +416,61 @@ export async function checkoutGitBranch(rootId: string, branch: string): Promise
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ root: rootId, branch }),
   });
-  const status = payload?.status || {};
-  return {
-    available: status?.available === true,
-    branch: typeof status?.branch === "string" ? status.branch : undefined,
-    dirty_count: Number(status?.dirty_count) || 0,
-    items: Array.isArray(status?.items) ? status.items as GitStatusItem[] : [],
-  };
+  return normalizeGitStatusPayload(payload?.status || {});
+}
+
+export async function pullGit(rootId: string): Promise<GitActionPayload> {
+  const payload = await protectedJSON<any>(appURL("/api/git/pull"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ root: rootId }),
+  });
+  return normalizeGitActionPayload(payload);
+}
+
+export async function pushGit(rootId: string): Promise<GitActionPayload> {
+  const payload = await protectedJSON<any>(appURL("/api/git/push"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ root: rootId }),
+  });
+  return normalizeGitActionPayload(payload);
+}
+
+export async function commitGit(rootId: string, message: string): Promise<GitActionPayload> {
+  const payload = await protectedJSON<any>(appURL("/api/git/commit"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ root: rootId, message }),
+  });
+  return normalizeGitActionPayload(payload);
+}
+
+export async function stageGitItem(rootId: string, item: Pick<GitStatusItem, "path">): Promise<GitActionPayload> {
+  const payload = await protectedJSON<any>(appURL("/api/git/stage"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ root: rootId, path: item.path }),
+  });
+  return normalizeGitActionPayload(payload);
+}
+
+export async function unstageGitItem(rootId: string, item: Pick<GitStatusItem, "path">): Promise<GitActionPayload> {
+  const payload = await protectedJSON<any>(appURL("/api/git/unstage"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ root: rootId, path: item.path }),
+  });
+  return normalizeGitActionPayload(payload);
+}
+
+export async function discardGitItem(rootId: string, item: Pick<GitStatusItem, "path" | "status">): Promise<GitActionPayload> {
+  const payload = await protectedJSON<any>(appURL("/api/git/discard"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ root: rootId, path: item.path, status: item.status }),
+  });
+  return normalizeGitActionPayload(payload);
 }
 
 export async function fetchGitWorktrees(rootId: string): Promise<GitWorktreesPayload> {

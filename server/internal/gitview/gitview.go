@@ -21,6 +21,7 @@ type StatusItem struct {
 	Path      string `json:"path"`
 	OldPath   string `json:"old_path,omitempty"`
 	Status    string `json:"status"`
+	Staged    bool   `json:"staged,omitempty"`
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
 	IsDir     bool   `json:"is_dir,omitempty"`
@@ -82,6 +83,11 @@ type HistoryResult struct {
 type CommitFilesResult struct {
 	Commit string       `json:"commit"`
 	Items  []StatusItem `json:"items"`
+}
+
+type ActionResult struct {
+	Output string       `json:"output"`
+	Status StatusResult `json:"status"`
 }
 
 type repoContext struct {
@@ -197,6 +203,133 @@ func CheckoutBranch(ctx context.Context, rootPath, branch string) error {
 	}
 	_, err = runGit(ctx, repo.repoRoot, "checkout", branch)
 	return err
+}
+
+func Pull(ctx context.Context, rootPath string) (ActionResult, error) {
+	repo, err := loadRepoContext(ctx, rootPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	output, err := runGit(ctx, repo.repoRoot, "pull", "--ff-only")
+	if err != nil {
+		return ActionResult{}, err
+	}
+	status, err := InspectStatus(ctx, rootPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	return ActionResult{Output: strings.TrimSpace(output), Status: status}, nil
+}
+
+func Push(ctx context.Context, rootPath string) (ActionResult, error) {
+	repo, err := loadRepoContext(ctx, rootPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	output, err := runGit(ctx, repo.repoRoot, "push")
+	if err != nil {
+		return ActionResult{}, err
+	}
+	status, err := InspectStatus(ctx, rootPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	return ActionResult{Output: strings.TrimSpace(output), Status: status}, nil
+}
+
+func Commit(ctx context.Context, rootPath, message string) (ActionResult, error) {
+	repo, err := loadRepoContext(ctx, rootPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ActionResult{}, errors.New("commit message required")
+	}
+	if strings.ContainsAny(message, "\x00\r\n") {
+		return ActionResult{}, errors.New("invalid commit message")
+	}
+	output, err := runGit(ctx, repo.repoRoot, "commit", "-am", message)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	status, err := InspectStatus(ctx, rootPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	return ActionResult{Output: strings.TrimSpace(output), Status: status}, nil
+}
+
+func StagePath(ctx context.Context, rootPath, relPath string) (ActionResult, error) {
+	repo, repoPath, err := resolveActionPath(ctx, rootPath, relPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	output, err := runGit(ctx, repo.repoRoot, "add", "--", repoPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	status, err := InspectStatus(ctx, rootPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	return ActionResult{Output: strings.TrimSpace(output), Status: status}, nil
+}
+
+func UnstagePath(ctx context.Context, rootPath, relPath string) (ActionResult, error) {
+	repo, repoPath, err := resolveActionPath(ctx, rootPath, relPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	output, err := runGit(ctx, repo.repoRoot, "restore", "--staged", "--", repoPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	status, err := InspectStatus(ctx, rootPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	return ActionResult{Output: strings.TrimSpace(output), Status: status}, nil
+}
+
+func DiscardPath(ctx context.Context, rootPath, relPath, statusCode string) (ActionResult, error) {
+	repo, repoPath, err := resolveActionPath(ctx, rootPath, relPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	var output string
+	if strings.TrimSpace(statusCode) == "??" {
+		output, err = runGit(ctx, repo.repoRoot, "clean", "-fd", "--", repoPath)
+	} else {
+		output, err = runGit(ctx, repo.repoRoot, "restore", "--staged", "--worktree", "--", repoPath)
+	}
+	if err != nil {
+		return ActionResult{}, err
+	}
+	status, err := InspectStatus(ctx, rootPath)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	return ActionResult{Output: strings.TrimSpace(output), Status: status}, nil
+}
+
+func resolveActionPath(ctx context.Context, rootPath, relPath string) (repoContext, string, error) {
+	repo, err := loadRepoContext(ctx, rootPath)
+	if err != nil {
+		return repoContext{}, "", err
+	}
+	relPath = strings.TrimSpace(filepath.ToSlash(relPath))
+	if relPath == "" {
+		return repoContext{}, "", errors.New("path required")
+	}
+	if strings.ContainsAny(relPath, "\x00\r\n") {
+		return repoContext{}, "", errors.New("invalid path")
+	}
+	cleanPath := filepath.ToSlash(filepath.Clean(relPath))
+	if cleanPath == "." || strings.HasPrefix(cleanPath, "../") || cleanPath == ".." {
+		return repoContext{}, "", errors.New("invalid path")
+	}
+	return repo, repo.toRepoPath(cleanPath), nil
 }
 
 func ListWorktrees(ctx context.Context, rootPath string) (WorktreeListResult, error) {
@@ -583,6 +716,7 @@ func (r repoContext) statusItems(ctx context.Context) ([]StatusItem, error) {
 			Path:      path,
 			OldPath:   oldPath,
 			Status:    item.Status,
+			Staged:    item.Staged,
 			Additions: additions,
 			Deletions: deletions,
 			IsDir:     isDir,
@@ -864,6 +998,7 @@ type porcelainItem struct {
 	Path    string
 	OldPath string
 	Status  string
+	Staged  bool
 }
 
 func parsePorcelainV1Z(data []byte) ([]porcelainItem, error) {
@@ -882,7 +1017,7 @@ func parsePorcelainV1Z(data []byte) ([]porcelainItem, error) {
 		}
 		path := string(data[index : index+next])
 		index += next + 1
-		item := porcelainItem{Path: path, Status: normalizeStatus(x, y)}
+		item := porcelainItem{Path: path, Status: normalizeStatus(x, y), Staged: x != ' ' && x != '?'}
 		if x == 'R' || y == 'R' || x == 'C' || y == 'C' {
 			oldNext := bytes.IndexByte(data[index:], 0)
 			if oldNext < 0 {

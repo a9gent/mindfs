@@ -44,7 +44,9 @@ import {
   buildGitDiffCacheSignature,
   checkoutGitBranch,
   clearGitHistoryCache,
+  commitGit,
   createGitWorktree,
+  discardGitItem,
   fetchGitCommitDiff,
   fetchGitDiff,
   fetchGitBranches,
@@ -53,7 +55,11 @@ import {
   fetchGitWorktrees,
   getCachedGitHistory,
   getCachedGitHistoryHead,
+  pullGit,
+  pushGit,
   removeGitWorktree,
+  stageGitItem,
+  unstageGitItem,
   type GitBranchesPayload,
   type GitDiffPayload,
   type GitHistoryItem,
@@ -3310,6 +3316,10 @@ export function App({ onGoHome }: AppProps) {
                 clearGitHistoryCache(rootID);
                 return fetchGitHistory(rootID, { force: true });
               }
+              if ((next.items || []).length > 0) {
+                clearGitHistoryCache(rootID);
+                return fetchGitHistory(rootID, { force: true });
+              }
               return getCachedGitHistoryHead(rootID) || next;
             })
             .then((fresh) => {
@@ -3723,6 +3733,97 @@ export function App({ onGoHome }: AppProps) {
       }
     },
     [refreshGitHistory, refreshTreeDir],
+  );
+
+  const applyGitActionResult = useCallback(
+    async (rootID: string, nextStatus: GitStatusPayload, options?: { refreshHistory?: boolean; clearDiff?: boolean }) => {
+      clearGitHistoryCache(rootID);
+      if (currentRootIdRef.current !== rootID) {
+        return;
+      }
+      setGitStatus(nextStatus);
+      if (options?.clearDiff) {
+        setGitDiff(null);
+      }
+      if (options?.refreshHistory !== false) {
+        await refreshGitHistory(rootID, { force: true });
+      }
+      await refreshTreeDir(rootID, selectedDirRef.current || ".", true);
+    },
+    [refreshGitHistory, refreshTreeDir],
+  );
+
+  const runGitAction = useCallback(
+    async (
+      rootID: string,
+      action: string,
+      run: () => Promise<{ status: GitStatusPayload; output?: string }>,
+      options?: { refreshHistory?: boolean; clearDiff?: boolean },
+    ) => {
+      if (!rootID) {
+        return;
+      }
+      try {
+        const result = await run();
+        await applyGitActionResult(rootID, result.status, options);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : `${action} 失败`;
+        console.error(`[git.${action}] failed`, {
+          rootID,
+          message,
+          payload: err instanceof ProtectedAPIError ? err.payload : undefined,
+          err,
+        });
+        window.alert(message);
+        throw err;
+      }
+    },
+    [applyGitActionResult],
+  );
+
+  const handleGitPull = useCallback(
+    (rootID: string) =>
+      runGitAction(rootID, "pull", () => pullGit(rootID), { clearDiff: true }),
+    [runGitAction],
+  );
+
+  const handleGitPush = useCallback(
+    (rootID: string) =>
+      runGitAction(rootID, "push", () => pushGit(rootID)),
+    [runGitAction],
+  );
+
+  const handleGitCommit = useCallback(
+    (rootID: string, message: string) =>
+      runGitAction(rootID, "commit", () => commitGit(rootID, message), { clearDiff: true }),
+    [runGitAction],
+  );
+
+  const handleGitStageItem = useCallback(
+    (rootID: string, item: GitStatusItem) =>
+      runGitAction(rootID, "stage", () => stageGitItem(rootID, item), {
+        refreshHistory: false,
+        clearDiff: true,
+      }),
+    [runGitAction],
+  );
+
+  const handleGitUnstageItem = useCallback(
+    (rootID: string, item: GitStatusItem) =>
+      runGitAction(rootID, "unstage", () => unstageGitItem(rootID, item), {
+        refreshHistory: false,
+        clearDiff: true,
+      }),
+    [runGitAction],
+  );
+
+  const handleGitDiscardItem = useCallback(
+    (rootID: string, item: GitStatusItem) =>
+      runGitAction(rootID, "discard", () => discardGitItem(rootID, item), {
+        refreshHistory: false,
+        clearDiff: true,
+      }),
+    [runGitAction],
   );
 
   const handleTreeUpload = useCallback(
@@ -9446,8 +9547,7 @@ export function App({ onGoHome }: AppProps) {
   const gitStatusExpanded = currentRootId ? gitStatusExpandedByRoot[currentRootId] !== false : true;
   const gitHistoryExpandedCommits = currentRootId ? gitHistoryExpandedByRoot[currentRootId] || {} : {};
   const shouldRenderGitPanel =
-    gitStatusAvailable &&
-    (gitStatusLoading || (gitStatus?.items.length || 0) > 0);
+    gitStatusLoading || gitStatusAvailable;
   const shouldRenderGitHistoryPanel =
     gitHistoryLoading || (gitHistoryAvailable && (gitHistory?.items.length || 0) > 0);
   const renderRootGitContent = (root: string): React.ReactNode => {
@@ -9494,6 +9594,50 @@ export function App({ onGoHome }: AppProps) {
                 return;
               }
               void openGitDiff(root, item);
+            }}
+            onOpenItem={(item) => {
+              const root = currentRootIdRef.current;
+              if (!root || item.is_dir === true) {
+                return;
+              }
+              actionHandlers.open({ path: item.path, root });
+            }}
+            onDiscardItem={(item) => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              return handleGitDiscardItem(root, item);
+            }}
+            onStageItem={(item) => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              return item.staged === true
+                ? handleGitUnstageItem(root, item)
+                : handleGitStageItem(root, item);
+            }}
+            onPull={() => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              return handleGitPull(root);
+            }}
+            onPush={() => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              return handleGitPush(root);
+            }}
+            onCommit={(message) => {
+              const root = currentRootIdRef.current;
+              if (!root) {
+                return;
+              }
+              return handleGitCommit(root, message);
             }}
             onSwitchBranch={(branch) => {
               const root = currentRootIdRef.current;
