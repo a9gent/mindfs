@@ -2193,6 +2193,15 @@ if (useInnerScrollContainer && !container) {
                 }}
               >
                 <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setRelatedFilesCollapsed((value) => !value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setRelatedFilesCollapsed((value) => !value);
+                    }
+                  }}
                   style={{
                     fontSize: "12px",
                     fontWeight: 500,
@@ -2201,6 +2210,10 @@ if (useInnerScrollContainer && !container) {
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "space-between",
+                    cursor: "pointer",
+                    borderRadius: "6px",
+                    padding: "2px 0",
+                    outline: "none",
                   }}
                 >
                   <span>关联文件 {relatedFiles.length}</span>
@@ -2214,7 +2227,10 @@ if (useInnerScrollContainer && !container) {
                     {hasMoreFiles ? (
                       <button
                         type="button"
-                        onClick={() => setShowAllFiles(!showAllFiles)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setShowAllFiles(!showAllFiles);
+                        }}
                         style={{
                           background: "none",
                           border: "none",
@@ -2229,9 +2245,10 @@ if (useInnerScrollContainer && !container) {
                     ) : null}
                     <button
                       type="button"
-                      onClick={() =>
+                      onClick={(event) => {
+                        event.stopPropagation();
                         setRelatedFilesCollapsed((value) => !value)
-                      }
+                      }}
                       aria-label={
                         relatedFilesCollapsed ? "展开关联文件" : "折叠关联文件"
                       }

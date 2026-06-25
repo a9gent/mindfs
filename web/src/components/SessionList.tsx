@@ -434,7 +434,7 @@ export function SessionList({
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: searchResultsMode ? "0 10px 0 4px" : "0 10px 0 16px",
+          padding: searchResultsMode ? "0 10px 0 4px" : "0 10px 0 2px",
           borderBottom: "1px solid var(--border-color)",
           background: "var(--mindfs-topbar-bg, transparent)",
           flexShrink: 0,
@@ -452,18 +452,6 @@ export function SessionList({
           </button>
         ) : (
           <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-            <h3
-              style={{
-                margin: 0,
-                fontSize: "11px",
-                fontWeight: 700,
-                color: "var(--text-secondary)",
-                letterSpacing: "0.5px",
-                textTransform: "uppercase",
-              }}
-            >
-              SESSIONS
-            </h3>
             {onSearchToggle ? (
               <button
                 type="button"
@@ -936,7 +924,7 @@ export function MultiProjectSessionList({
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "0 10px 0 16px",
+          padding: "0 10px 0 2px",
           borderBottom: "1px solid var(--border-color)",
           background: "var(--mindfs-topbar-bg, transparent)",
           flexShrink: 0,
@@ -944,9 +932,6 @@ export function MultiProjectSessionList({
         }}
       >
         <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-          <h3 style={{ margin: 0, fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", letterSpacing: "0.5px", textTransform: "uppercase" }}>
-            SESSIONS
-          </h3>
           {onSearchToggle ? (
             <button
               type="button"

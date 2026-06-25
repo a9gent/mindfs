@@ -1065,6 +1065,7 @@ export function App({ onGoHome }: AppProps) {
   const selectedDirRef = useRef<string | null>(null);
   const fileRef = useRef<FilePayload | null>(null);
   const selectedSessionRef = useRef<SessionItem | null>(null);
+  const lastMainSessionSnapshotRef = useRef<Session | null>(null);
   const sessionSearchTargetCounterRef = useRef(0);
   const currentSessionRef = useRef<SessionItem | null>(null);
   const interactionModeRef = useRef<"main" | "drawer">("main");
@@ -1347,6 +1348,10 @@ export function App({ onGoHome }: AppProps) {
     readURLState().pluginQuery,
   );
   const [showHiddenFiles, setShowHiddenFiles] = useState(false);
+  const [projectTreeTabRequest, setProjectTreeTabRequest] = useState<{
+    tab: "files" | "git" | "related";
+    nonce: number;
+  } | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState>(() =>
     normalizeUpdateState(null),
   );
@@ -2298,6 +2303,16 @@ export function App({ onGoHome }: AppProps) {
       if (cached) {
         sessionCacheRef.current[cacheKey] = {
           ...(cached as any),
+          related_files: nextRelatedFiles,
+        } as Session;
+      }
+      const lastMain = lastMainSessionSnapshotRef.current;
+      const lastMainKey = lastMain?.key || lastMain?.session_key;
+      const lastMainRoot =
+        (lastMain?.root_id as string | undefined) || currentRootIdRef.current;
+      if (lastMain && lastMainKey === sessionKey && lastMainRoot === rootID) {
+        lastMainSessionSnapshotRef.current = {
+          ...(lastMain as any),
           related_files: nextRelatedFiles,
         } as Session;
       }
@@ -8914,6 +8929,12 @@ export function App({ onGoHome }: AppProps) {
   );
 
   useEffect(() => {
+    if (selectedSessionSnapshot) {
+      lastMainSessionSnapshotRef.current = selectedSessionSnapshot as Session;
+    }
+  }, [selectedSessionSnapshot]);
+
+  useEffect(() => {
     const sessionKey =
       selectedSession?.key || selectedSession?.session_key || "";
     const rootID =
@@ -8980,10 +9001,15 @@ export function App({ onGoHome }: AppProps) {
 
   const handleSelectedSessionFileClick = useCallback(
     (path: string) => {
+      setProjectTreeTabRequest((prev) => ({
+        tab: "related",
+        nonce: (prev?.nonce || 0) + 1,
+      }));
       const root =
         (selectedSessionRef.current?.root_id as string | undefined) ||
         currentRootIdRef.current;
       if (!root) return;
+      setExpanded((prev) => Array.from(new Set([...prev, root])));
       const gitItem = (gitStatus?.items || []).find(
         (item) => item.path === path,
       );
@@ -9550,6 +9576,125 @@ export function App({ onGoHome }: AppProps) {
     gitStatusLoading || gitStatusAvailable;
   const shouldRenderGitHistoryPanel =
     gitHistoryLoading || (gitHistoryAvailable && (gitHistory?.items.length || 0) > 0);
+  const relatedSessionSnapshot = selectedSessionSnapshot || lastMainSessionSnapshotRef.current;
+  const relatedSessionRootId =
+    (relatedSessionSnapshot?.root_id as string | undefined) ||
+    (selectedSession?.root_id as string | undefined) ||
+    currentRootId;
+  const relatedSessionKey = relatedSessionSnapshot?.key || relatedSessionSnapshot?.session_key;
+  const relatedSelectedPath = gitDiff?.path || file?.path || "";
+  const selectedSessionRelatedFiles = useMemo(() => {
+    const rawRelated = relatedSessionSnapshot?.related_files || (relatedSessionSnapshot as any)?.outputs || [];
+    return (Array.isArray(rawRelated) ? rawRelated : [])
+      .map((file: RelatedFile | string | { path?: unknown; name?: unknown }) => {
+        const path = typeof file === "string"
+          ? file
+          : typeof file?.path === "string"
+            ? file.path
+            : "";
+        const name = typeof file !== "string" && typeof file?.name === "string"
+          ? file.name
+          : path.split("/").pop() || path;
+        return { path, name };
+      })
+      .filter((file) => file.path);
+  }, [relatedSessionSnapshot]);
+  const renderRootRelatedContent = (root: string): React.ReactNode => {
+    if (!root || root !== currentRootId || root !== relatedSessionRootId) {
+      return null;
+    }
+    if (!relatedSessionSnapshot) {
+      return (
+        <div style={{ padding: "8px 4px", fontSize: "12px", color: "var(--text-secondary)" }}>
+          主视图未选择 session
+        </div>
+      );
+    }
+    if (selectedSessionRelatedFiles.length === 0) {
+      return (
+        <div style={{ padding: "8px 4px", fontSize: "12px", color: "var(--text-secondary)" }}>
+          当前 session 没有关联文件
+        </div>
+      );
+    }
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "4px", minWidth: 0 }}>
+        {selectedSessionRelatedFiles.map((file) => {
+          const stats = gitFileStatsByPath[file.path];
+          const isSelected = file.path === relatedSelectedPath;
+          return (
+            <div key={file.path} style={{ display: "flex", alignItems: "center", gap: "4px", minWidth: 0 }}>
+              <button
+                type="button"
+                onClick={() => handleSelectedSessionFileClick(file.path)}
+                title={file.path}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  border: "none",
+                  background: isSelected ? "var(--selection-bg)" : "transparent",
+                  color: isSelected ? "var(--accent-color)" : "var(--text-primary)",
+                  borderRadius: "6px",
+                  padding: "5px 6px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "7px",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  fontSize: "12px",
+                  fontWeight: isSelected ? 700 : 400,
+                }}
+              >
+                <span style={{ width: "16px", display: "inline-flex", justifyContent: "center", color: "#94a3b8", flexShrink: 0 }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="16" x2="8" y1="13" y2="13" />
+                    <line x1="16" x2="8" y1="17" y2="17" />
+                  </svg>
+                </span>
+                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {file.name}
+                </span>
+                {stats ? (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>
+                    <span style={{ color: "#15803d", fontVariantNumeric: "tabular-nums" }}>+{stats.additions}</span>
+                    <span style={{ color: "#b91c1c", fontVariantNumeric: "tabular-nums" }}>-{stats.deletions}</span>
+                  </span>
+                ) : null}
+              </button>
+              <button
+                type="button"
+                aria-label={`移除关联文件 ${file.name}`}
+                title="移除关联文件"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void handleRemoveSessionRelatedFile(relatedSessionRootId, relatedSessionKey, file.path);
+                }}
+                style={{
+                  width: "18px",
+                  height: "18px",
+                  border: "none",
+                  borderRadius: "5px",
+                  background: "transparent",
+                  color: "#dc2626",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: 0,
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  fontSize: "13px",
+                }}
+              >
+                x
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
   const renderRootGitContent = (root: string): React.ReactNode => {
     if (!root || root !== currentRootId) {
       return (
@@ -10367,6 +10512,8 @@ export function App({ onGoHome }: AppProps) {
               })
             }
             renderRootExtraContent={renderRootGitContent}
+            renderRootRelatedContent={renderRootRelatedContent}
+            projectTreeTabRequest={projectTreeTabRequest}
             relayActionLabel={relayActionLabel}
             relayActionDisabled={relayActionDisabled}
             relayActionHelp={null}
