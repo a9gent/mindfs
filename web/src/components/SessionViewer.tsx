@@ -1049,6 +1049,7 @@ function SessionViewerInner({
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [userSummaryHoverOpen, setUserSummaryHoverOpen] = useState(false);
   const [userSummaryPinnedOpen, setUserSummaryPinnedOpen] = useState(false);
+  const viewportStickFrameRef = useRef<number | null>(null);
 
   const cancelTargetSeqScroll = () => {
     if (targetSeqFrameRef.current !== null) {
@@ -1057,6 +1058,15 @@ function SessionViewerInner({
     }
     targetSeqTimerRefs.current.forEach((timer) => window.clearTimeout(timer));
     targetSeqTimerRefs.current = [];
+  };
+
+  const stickSessionToBottom = (behavior: ScrollBehavior = "auto") => {
+    const container = scrollRef.current;
+    if (!container) {
+      return;
+    }
+    const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    container.scrollTo({ top: maxTop, behavior });
   };
 
   useEffect(() => {
@@ -1162,6 +1172,10 @@ function SessionViewerInner({
         window.cancelAnimationFrame(targetSeqFrameRef.current);
         targetSeqFrameRef.current = null;
       }
+      if (viewportStickFrameRef.current !== null) {
+        window.cancelAnimationFrame(viewportStickFrameRef.current);
+        viewportStickFrameRef.current = null;
+      }
       targetSeqTimerRefs.current.forEach((timer) => window.clearTimeout(timer));
       targetSeqTimerRefs.current = [];
     };
@@ -1182,9 +1196,43 @@ if (useInnerScrollContainer && !container) {
       shouldStickToBottomRef.current = true;
     }
     if (shouldStickToBottomRef.current) {
-      scrollEndRef.current.scrollIntoView({ behavior: "auto", block: "end" });
+      stickSessionToBottom("auto");
     }
   }, [sessionKey, timeline, isStreaming, streamVersion, slashCommandResult, useInnerScrollContainer]);
+
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!useInnerScrollContainer || !container || typeof window === "undefined") {
+      return;
+    }
+    const queueStickToBottom = () => {
+      if (!shouldStickToBottomRef.current) {
+        return;
+      }
+      if (viewportStickFrameRef.current !== null) {
+        window.cancelAnimationFrame(viewportStickFrameRef.current);
+      }
+      viewportStickFrameRef.current = window.requestAnimationFrame(() => {
+        viewportStickFrameRef.current = null;
+        if (!shouldStickToBottomRef.current) {
+          return;
+        }
+        stickSessionToBottom("auto");
+      });
+    };
+    window.visualViewport?.addEventListener("resize", queueStickToBottom);
+    window.visualViewport?.addEventListener("scroll", queueStickToBottom);
+    window.addEventListener("mindfs:safe-area-updated", queueStickToBottom as EventListener);
+    return () => {
+      window.visualViewport?.removeEventListener("resize", queueStickToBottom);
+      window.visualViewport?.removeEventListener("scroll", queueStickToBottom);
+      window.removeEventListener("mindfs:safe-area-updated", queueStickToBottom as EventListener);
+      if (viewportStickFrameRef.current !== null) {
+        window.cancelAnimationFrame(viewportStickFrameRef.current);
+        viewportStickFrameRef.current = null;
+      }
+    };
+  }, [sessionKey, useInnerScrollContainer]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -2669,7 +2717,7 @@ if (useInnerScrollContainer && !container) {
               }
               shouldStickToBottomRef.current = true;
               setShowJumpToLatest(false);
-              scrollEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+              stickSessionToBottom("smooth");
             }}
             aria-label="回到底部最新消息"
             title="回到底部最新消息"
