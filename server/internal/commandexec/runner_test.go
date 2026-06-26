@@ -77,6 +77,57 @@ func TestCloseSessionRemovesAllShellsForRootSession(t *testing.T) {
 	}
 }
 
+func TestLongShellBootstrapDisablesUserHistory(t *testing.T) {
+	tests := []struct {
+		shell string
+		want  []string
+	}{
+		{shell: "zsh", want: []string{"unset HISTFILE", "SAVEHIST=0", "HIST_NO_STORE"}},
+		{shell: "bash", want: []string{"HISTFILE=/dev/null", "set +o history", "history -c"}},
+		{shell: "fish", want: []string{"set -g fish_history ''", "function fish_prompt; end"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.shell, func(t *testing.T) {
+			bootstrap := longShellBootstrap(tt.shell)
+			for _, want := range tt.want {
+				if !strings.Contains(bootstrap, want) {
+					t.Fatalf("bootstrap for %s does not contain %q: %q", tt.shell, want, bootstrap)
+				}
+			}
+		})
+	}
+}
+
+func TestLongShellBootstrapDisablesPowerShellHistory(t *testing.T) {
+	bootstrap := longShellBootstrapForOS("pwsh", "windows")
+	for _, want := range []string{"Set-PSReadLineOption", "HistorySaveStyle SaveNothing", "Clear-History"} {
+		if !strings.Contains(bootstrap, want) {
+			t.Fatalf("PowerShell bootstrap does not contain %q: %q", want, bootstrap)
+		}
+	}
+}
+
+func TestLongShellEnvOverridesHistoryFile(t *testing.T) {
+	env := longShellEnv([]string{"HISTFILE=/tmp/user-history"}, "zsh")
+	if got := lastEnvValue(env, "HISTFILE"); got != "/dev/null" {
+		t.Fatalf("HISTFILE = %q, want /dev/null", got)
+	}
+	if got := lastEnvValue(env, "SAVEHIST"); got != "0" {
+		t.Fatalf("SAVEHIST = %q, want 0", got)
+	}
+}
+
+func lastEnvValue(env []string, key string) string {
+	prefix := key + "="
+	value := ""
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			value = strings.TrimPrefix(item, prefix)
+		}
+	}
+	return value
+}
+
 func TestLongShellDoesNotFeedControlScriptToCommandStdin(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")

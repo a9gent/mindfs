@@ -590,6 +590,38 @@ func TestSearchCommandCandidatesMergesMindFSAndShellHistory(t *testing.T) {
 	}
 }
 
+func TestSearchCommandCandidatesCleansMindFSControlHistory(t *testing.T) {
+	rootDir := t.TempDir()
+	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)
+	manager := session.NewManager(root)
+	historyFile := filepath.Join(rootDir, "zsh_history")
+	history := strings.Join([]string{
+		": 1710000000:0;command printf '\\n%s\\n' '__MINDFS_CMD_START_abc__'",
+		": 1710000001:0;eval 'git status' </dev/null",
+		": 1710000002:0;__mindfs_status=$?",
+		": 1710000003:0;command printf '\\n%s%s\\n' '__MINDFS_CMD_END_abc__:' \"$__mindfs_status\"",
+		": 1710000004:0;eval 'printf '\\''x y'\\''' </dev/null",
+		": 1710000005:0;git stash",
+	}, "\n") + "\n"
+	if err := os.WriteFile(historyFile, []byte(history), 0o644); err != nil {
+		t.Fatalf("write zsh history: %v", err)
+	}
+	t.Setenv("HISTFILE", historyFile)
+
+	candidates, err := SearchCommandCandidates(context.Background(), manager, root.ID, "", 10, ShellHistorySpec{Command: "zsh"})
+	if err != nil {
+		t.Fatalf("SearchCommandCandidates: %v", err)
+	}
+	names := make([]string, 0, len(candidates))
+	for _, item := range candidates {
+		names = append(names, item.Name)
+	}
+	want := []string{"git stash", "printf 'x y'", "git status"}
+	if strings.Join(names, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("candidate names = %#v, want %#v", names, want)
+	}
+}
+
 func TestSaveUploadedFilesUsesExplicitDir(t *testing.T) {
 	rootDir := t.TempDir()
 	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)

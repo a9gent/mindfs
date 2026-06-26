@@ -160,7 +160,7 @@ func newLongShellSession(_ context.Context, key string, opts Options) (*longShel
 	}
 	cmd := exec.CommandContext(context.Background(), shell, args...)
 	cmd.Dir = absCwd
-	cmd.Env = commandEnv(opts.Env)
+	cmd.Env = longShellEnv(opts.Env, shell)
 	proc, err := startLongShellPlatformProcess(context.Background(), cmd, shell, opts.TerminalCols)
 	if err != nil {
 		return nil, err
@@ -179,17 +179,47 @@ func newLongShellSession(_ context.Context, key string, opts Options) (*longShel
 	return sess, nil
 }
 
-func longShellBootstrap(shell string) string {
+func longShellEnv(extra []string, shell string) []string {
+	env := commandEnv(extra)
 	if runtime.GOOS == "windows" {
-		switch strings.ToLower(filepath.Base(shell)) {
+		return env
+	}
+	switch strings.ToLower(filepath.Base(shell)) {
+	case "bash", "zsh", "sh":
+		env = append(env, "HISTFILE=/dev/null", "HISTSIZE=0", "HISTFILESIZE=0", "SAVEHIST=0")
+	case "fish":
+		env = append(env, "fish_history=")
+	}
+	return env
+}
+
+func longShellBootstrap(shell string) string {
+	return longShellBootstrapForOS(shell, runtime.GOOS)
+}
+
+func longShellBootstrapForOS(shell, goos string) string {
+	base := strings.ToLower(filepath.Base(shell))
+	if goos == "windows" {
+		switch base {
 		case "powershell.exe", "powershell", "pwsh.exe", "pwsh":
-			return "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::InputEncoding = [Console]::OutputEncoding; $OutputEncoding = [Console]::OutputEncoding\n"
+			return "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::InputEncoding = [Console]::OutputEncoding; $OutputEncoding = [Console]::OutputEncoding\n" +
+				"if (Get-Command Set-PSReadLineOption -ErrorAction SilentlyContinue) { Set-PSReadLineOption -HistorySaveStyle SaveNothing -ErrorAction SilentlyContinue }\n" +
+				"Clear-History -ErrorAction SilentlyContinue\n"
 		case "cmd.exe", "cmd":
 			return "prompt $S\r\nchcp 65001 >NUL\r\n"
 		}
 		return ""
 	}
-	return "unsetopt zle prompt_cr prompt_sp 2>/dev/null || true\nPROMPT=''\nRPROMPT=''\nPS1=''\nPROMPT_COMMAND=''\nstty -echo 2>/dev/null || true\n"
+	switch base {
+	case "fish":
+		return "set -e fish_history 2>/dev/null\nset -g fish_history '' 2>/dev/null\nfunction fish_prompt; end\nfunction fish_right_prompt; end\nstty -echo 2>/dev/null\n"
+	case "zsh":
+		return "unset HISTFILE\nHISTSIZE=0\nSAVEHIST=0\nsetopt HIST_NO_STORE 2>/dev/null || true\nunsetopt INC_APPEND_HISTORY INC_APPEND_HISTORY_TIME SHARE_HISTORY APPEND_HISTORY EXTENDED_HISTORY 2>/dev/null || true\nunsetopt zle prompt_cr prompt_sp 2>/dev/null || true\nPROMPT=''\nRPROMPT=''\nPS1=''\nPROMPT_COMMAND=''\nstty -echo 2>/dev/null || true\n"
+	case "bash":
+		return "HISTFILE=/dev/null\nexport HISTFILE\nHISTSIZE=0\nHISTFILESIZE=0\nset +o history 2>/dev/null || true\nhistory -c 2>/dev/null || true\nPROMPT=''\nRPROMPT=''\nPS1=''\nPROMPT_COMMAND=''\nstty -echo 2>/dev/null || true\n"
+	default:
+		return "HISTFILE=/dev/null\nexport HISTFILE\nHISTSIZE=0\nHISTFILESIZE=0\nset +o history 2>/dev/null || true\nunsetopt zle prompt_cr prompt_sp 2>/dev/null || true\nPROMPT=''\nRPROMPT=''\nPS1=''\nPROMPT_COMMAND=''\nstty -echo 2>/dev/null || true\n"
+	}
 }
 
 func longShellProcessCommand(spec ShellSpec) (string, []string) {

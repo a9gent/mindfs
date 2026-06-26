@@ -126,7 +126,7 @@ func readHistoryFile(ctx context.Context, path, shellBase string) []string {
 			return reverseStrings(commands)
 		default:
 		}
-		if command := parseHistoryLine(scanner.Text(), shellBase); command != "" {
+		if command := cleanSystemHistoryCommand(parseHistoryLine(scanner.Text(), shellBase)); command != "" {
 			commands = append(commands, command)
 		}
 	}
@@ -152,6 +152,81 @@ func parseHistoryLine(line, shellBase string) string {
 		return ""
 	}
 	return trimmed
+}
+
+func cleanSystemHistoryCommand(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" || isMindFSControlHistoryCommand(command) {
+		return ""
+	}
+	if unwrapped, ok := unwrapMindFSEvalHistoryCommand(command); ok {
+		return strings.TrimSpace(unwrapped)
+	}
+	return command
+}
+
+func isMindFSControlHistoryCommand(command string) bool {
+	text := strings.TrimSpace(command)
+	if text == "" {
+		return true
+	}
+	controlTokens := []string{
+		"__MINDFS_CMD_START_",
+		"__MINDFS_CMD_END_",
+		"__mindfs_status",
+		"$global:LASTEXITCODE",
+		"[Console]::OutputEncoding",
+		"[Console]::InputEncoding",
+	}
+	for _, token := range controlTokens {
+		if strings.Contains(text, token) {
+			return true
+		}
+	}
+	lower := strings.ToLower(text)
+	return strings.HasPrefix(lower, "command printf ") ||
+		strings.HasPrefix(lower, "write-output ") ||
+		strings.HasPrefix(lower, "echo __mindfs_cmd_") ||
+		strings.HasPrefix(lower, "set -l __mindfs_status ") ||
+		strings.HasPrefix(lower, "prompt $s") ||
+		strings.HasPrefix(lower, "chcp 65001 ")
+}
+
+func unwrapMindFSEvalHistoryCommand(command string) (string, bool) {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(command), "eval ")
+	if !ok {
+		return "", false
+	}
+	unquoted, rest, ok := readShellSingleQuoted(rest)
+	if !ok {
+		return "", false
+	}
+	if strings.TrimSpace(rest) != "</dev/null" {
+		return "", false
+	}
+	return unquoted, true
+}
+
+func readShellSingleQuoted(value string) (string, string, bool) {
+	value = strings.TrimLeft(value, " \t")
+	if !strings.HasPrefix(value, "'") {
+		return "", value, false
+	}
+	var out strings.Builder
+	for i := 1; i < len(value); {
+		if value[i] != '\'' {
+			out.WriteByte(value[i])
+			i++
+			continue
+		}
+		if strings.HasPrefix(value[i:], "'\\''") {
+			out.WriteByte('\'')
+			i += len("'\\''")
+			continue
+		}
+		return out.String(), value[i+1:], true
+	}
+	return "", value, false
 }
 
 func expandHome(path string) string {
