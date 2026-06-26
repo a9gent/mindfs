@@ -12,24 +12,24 @@
         var mode = "system";
         try {
           var stored = window.localStorage && window.localStorage.getItem(key);
-          if (stored === "dark" || stored === "light" || stored === "system") {
+          if (stored === "dark" || stored === "light" || stored === "system" || stored === "meadow" || stored === "moss") {
             mode = stored;
           }
         } catch (_) {}
 
-        if (mode === "dark" || mode === "light") {
+        if (mode === "dark" || mode === "light" || mode === "meadow" || mode === "moss") {
           document.documentElement.setAttribute("data-theme", mode);
         } else {
           document.documentElement.removeAttribute("data-theme");
         }
 
         var effective = mode;
-        if (effective !== "dark" && effective !== "light") {
+        if (effective !== "dark" && effective !== "light" && effective !== "meadow" && effective !== "moss") {
           effective = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
             ? "dark"
             : "light";
         }
-        var color = effective === "dark" ? "#0f172a" : "#f3f4f6";
+        var color = effective === "dark" ? "#0f172a" : effective === "meadow" ? "#f4efe6" : effective === "moss" ? "#dfe5d4" : "#f3f4f6";
         var metas = document.querySelectorAll('meta[name="theme-color"]');
         for (var i = 0; i < metas.length; i += 1) {
           metas[i].setAttribute("content", color);

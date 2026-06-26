@@ -125,7 +125,7 @@ export function AppShell({
     height: isMobile ? mobileHeight : "100dvh",
     background: isMobile
       ? "var(--mindfs-topbar-bg, var(--mindfs-system-bar-bg, var(--mobile-overlay-bg, var(--content-bg))))"
-      : "var(--bg-gradient-start, #f3f4f6)",
+      : "var(--bg-gradient-composite, var(--bg-gradient-start, #f3f4f6))",
     color: "var(--text-primary)",
     position: "relative",
     width: isMobile ? "100%" : undefined,

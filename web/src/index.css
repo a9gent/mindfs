@@ -202,6 +202,210 @@ html {
   box-shadow: none !important;
 }
 
+/* ===== Meadow theme (翠谷金光) ===== */
+:root[data-theme="meadow"] {
+  color-scheme: light;
+  --mindfs-system-bar-bg: #f4efe6;
+  --mindfs-topbar-bg: rgba(255, 250, 241, 0.92);
+  --mindfs-launcher-bg: radial-gradient(circle at top left, rgba(198, 151, 56, 0.18), transparent 34%), radial-gradient(circle at top right, rgba(40, 80, 45, 0.22), transparent 30%), linear-gradient(180deg, var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+  --mindfs-launcher-surface: rgba(255, 250, 241, 0.82);
+  --mindfs-launcher-surface-strong: rgba(255, 252, 247, 0.94);
+  --mindfs-launcher-surface-soft: rgba(255, 255, 255, 0.58);
+  --mindfs-launcher-border: rgba(25, 48, 51, 0.12);
+  --mindfs-launcher-border-strong: rgba(40, 80, 45, 0.22);
+  --mindfs-launcher-modal-border: rgba(255, 255, 255, 0.72);
+  --mindfs-launcher-input-bg: rgba(255, 255, 255, 0.68);
+  --mindfs-launcher-text: #193033;
+  --mindfs-launcher-muted: #6d7b77;
+  --mindfs-launcher-accent: #2d5a32;
+  --mindfs-launcher-shadow: 0 24px 70px rgba(63, 54, 33, 0.12);
+  --mindfs-launcher-error-bg: rgba(213, 78, 78, 0.12);
+  --mindfs-launcher-error-text: #d54e4e;
+  --bg-gradient-start: #f4efe6;
+  --bg-gradient-end: #efe5d3;
+  --bg-gradient-composite:
+    radial-gradient(circle at top left, rgba(198, 151, 56, 0.18), transparent 34%),
+    radial-gradient(circle at top right, rgba(40, 80, 45, 0.22), transparent 30%),
+    linear-gradient(180deg, var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+  --text-primary: #193033;
+  --text-secondary: #6d7b77;
+  --border-color: rgba(25, 48, 51, 0.12);
+  --sidebar-bg: rgba(255, 250, 241, 0.82);
+  --mobile-sidebar-bg: rgba(255, 250, 241, 0.94);
+  --content-bg: rgba(255, 250, 241, 0.72);
+  --mobile-overlay-bg: #fffaf1;
+  --panel-bg: rgba(255, 252, 247, 0.94);
+  --panel-border: rgba(25, 48, 51, 0.14);
+  --panel-shadow: 0 24px 70px rgba(63, 54, 33, 0.12);
+  --panel-focus-shadow: 0 0 0 3px rgba(40, 80, 45, 0.16);
+  --mindfs-code-bg: rgba(255, 252, 247, 0.94);
+  --mindfs-code-text: #193033;
+  --mindfs-code-border: rgba(25, 48, 51, 0.14);
+  --menu-bg: rgba(255, 252, 247, 0.96);
+  --menu-border: rgba(25, 48, 51, 0.12);
+  --menu-divider: rgba(25, 48, 51, 0.10);
+  --menu-active-bg: rgba(40, 80, 45, 0.12);
+  --accent-color: #2d5a32;
+  --accent-hover: #3a6b3f;
+  --selection-bg: rgba(198, 151, 56, 0.18);
+  --root-badge-bg: rgba(198, 151, 56, 0.22);
+  --root-badge-border: rgba(198, 151, 56, 0.32);
+  --root-badge-text: #7a561b;
+}
+
+:root[data-theme="meadow"] #root {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+:root[data-theme="meadow"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at top left, rgba(198, 151, 56, 0.18), transparent 34%),
+    radial-gradient(circle at top right, rgba(40, 80, 45, 0.22), transparent 30%);
+}
+
+:root[data-theme="meadow"] a { color: #2d5a32; }
+:root[data-theme="meadow"] a:hover { color: #3a6b3f; }
+
+:root[data-theme="meadow"] .mindfs-sidebar-resize-rail::before {
+  background: linear-gradient(transparent, rgba(40, 80, 45, 0.08) 12%, rgba(40, 80, 45, 0.55), rgba(40, 80, 45, 0.08) 88%, transparent);
+  box-shadow: 0 0 16px rgba(40, 80, 45, 0.22);
+}
+:root[data-theme="meadow"] .mindfs-sidebar-resize-rail:focus-visible::before {
+  background: linear-gradient(transparent, rgba(40, 80, 45, 0.12) 12%, rgba(40, 80, 45, 0.7), rgba(40, 80, 45, 0.12) 88%, transparent);
+}
+
+:root[data-theme="meadow"] pre[class*="language-"],
+:root[data-theme="meadow"] code[class*="language-"] {
+  box-shadow: none !important;
+  background: var(--mindfs-code-bg) !important;
+  color: var(--mindfs-code-text) !important;
+  text-shadow: none !important;
+  border: 1px solid var(--mindfs-code-border) !important;
+}
+
+:root[data-theme="meadow"] pre[class*="language-"] > code[class*="language-"] {
+  box-shadow: none !important;
+  background: transparent !important;
+  border: none !important;
+}
+
+:root[data-theme="meadow"] .plugin-shadcn-sandbox {
+  --vp-surface-bg: #fffaf1;
+  --vp-surface-bg-elevated: #fffdf7;
+  --vp-text: #193033;
+  --vp-text-muted: #6d7b77;
+  --vp-border: rgba(25, 48, 51, 0.14);
+  --vp-shadow: 0 18px 42px rgba(63, 54, 33, 0.14);
+}
+
+/* ===== Moss theme (苔痕绿影) ===== */
+:root[data-theme="moss"] {
+  color-scheme: light;
+  --mindfs-system-bar-bg: #dfe5d4;
+  --mindfs-topbar-bg: rgba(224, 229, 210, 0.78);
+  --mindfs-launcher-bg: radial-gradient(circle at top left, rgba(116, 133, 91, 0.20), transparent 36%), radial-gradient(circle at top right, rgba(65, 91, 63, 0.20), transparent 34%), linear-gradient(180deg, var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+  --mindfs-launcher-surface: rgba(224, 229, 210, 0.76);
+  --mindfs-launcher-surface-strong: rgba(244, 247, 238, 0.94);
+  --mindfs-launcher-surface-soft: rgba(238, 241, 231, 0.58);
+  --mindfs-launcher-border: rgba(55, 75, 50, 0.12);
+  --mindfs-launcher-border-strong: rgba(65, 91, 63, 0.24);
+  --mindfs-launcher-modal-border: rgba(255, 255, 255, 0.68);
+  --mindfs-launcher-input-bg: rgba(246, 248, 241, 0.72);
+  --mindfs-launcher-text: #1d261f;
+  --mindfs-launcher-muted: #536052;
+  --mindfs-launcher-accent: #415b3f;
+  --mindfs-launcher-shadow: 0 24px 70px rgba(39, 51, 36, 0.10);
+  --mindfs-launcher-error-bg: rgba(180, 50, 50, 0.10);
+  --mindfs-launcher-error-text: #a13a34;
+  --bg-gradient-start: #dfe5d4;
+  --bg-gradient-end: #cfd8c4;
+  --bg-gradient-composite:
+    radial-gradient(circle at top left, rgba(116, 133, 91, 0.20), transparent 36%),
+    radial-gradient(circle at top right, rgba(65, 91, 63, 0.20), transparent 34%),
+    linear-gradient(180deg, var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+  --text-primary: #1d261f;
+  --text-secondary: #536052;
+  --border-color: rgba(55, 75, 50, 0.12);
+  --sidebar-bg: rgba(224, 229, 210, 0.76);
+  --mobile-sidebar-bg: rgba(224, 229, 210, 0.94);
+  --content-bg: rgba(238, 241, 231, 0.56);
+  --mobile-overlay-bg: #dfe5d4;
+  --panel-bg: rgba(246, 248, 241, 0.92);
+  --panel-border: rgba(55, 75, 50, 0.14);
+  --panel-shadow: 0 24px 70px rgba(39, 51, 36, 0.10);
+  --panel-focus-shadow: 0 0 0 3px rgba(65, 91, 63, 0.18);
+  --mindfs-code-bg: rgba(246, 248, 241, 0.94);
+  --mindfs-code-text: #1d261f;
+  --mindfs-code-border: rgba(55, 75, 50, 0.14);
+  --menu-bg: rgba(246, 248, 241, 0.96);
+  --menu-border: rgba(55, 75, 50, 0.12);
+  --menu-divider: rgba(55, 75, 50, 0.08);
+  --menu-active-bg: rgba(65, 91, 63, 0.11);
+  --accent-color: #415b3f;
+  --accent-hover: #344a33;
+  --selection-bg: rgba(116, 133, 91, 0.20);
+  --root-badge-bg: rgba(116, 133, 91, 0.18);
+  --root-badge-border: rgba(116, 133, 91, 0.30);
+  --root-badge-text: #44512f;
+}
+
+:root[data-theme="moss"] #root {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+:root[data-theme="moss"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at top left, rgba(116, 133, 91, 0.20), transparent 36%),
+    radial-gradient(circle at top right, rgba(65, 91, 63, 0.20), transparent 34%);
+}
+
+:root[data-theme="moss"] a { color: #415b3f; }
+:root[data-theme="moss"] a:hover { color: #344a33; }
+
+:root[data-theme="moss"] .mindfs-sidebar-resize-rail::before {
+  background: linear-gradient(transparent, rgba(65, 91, 63, 0.08) 12%, rgba(65, 91, 63, 0.55), rgba(65, 91, 63, 0.08) 88%, transparent);
+  box-shadow: 0 0 16px rgba(65, 91, 63, 0.22);
+}
+:root[data-theme="moss"] .mindfs-sidebar-resize-rail:focus-visible::before {
+  background: linear-gradient(transparent, rgba(65, 91, 63, 0.12) 12%, rgba(65, 91, 63, 0.7), rgba(65, 91, 63, 0.12) 88%, transparent);
+}
+
+:root[data-theme="moss"] pre[class*="language-"],
+:root[data-theme="moss"] code[class*="language-"] {
+  box-shadow: none !important;
+  background: var(--mindfs-code-bg) !important;
+  color: var(--mindfs-code-text) !important;
+  text-shadow: none !important;
+  border: 1px solid var(--mindfs-code-border) !important;
+}
+
+:root[data-theme="moss"] pre[class*="language-"] > code[class*="language-"] {
+  box-shadow: none !important;
+  background: transparent !important;
+  border: none !important;
+}
+
+:root[data-theme="moss"] .plugin-shadcn-sandbox {
+  --vp-surface-bg: #eef1e7;
+  --vp-surface-bg-elevated: #f6f8f1;
+  --vp-text: #1d261f;
+  --vp-text-muted: #536052;
+  --vp-border: rgba(55, 75, 50, 0.14);
+  --vp-shadow: 0 18px 42px rgba(39, 51, 36, 0.12);
+}
+
 * {
   box-sizing: border-box;
 }
