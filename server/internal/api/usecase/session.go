@@ -72,13 +72,33 @@ type ListChildSessionsInput struct {
 }
 
 type SearchSessionsInput struct {
-	RootID string
-	Query  string
-	Limit  int
+	RootID    string
+	Query     string
+	Limit     int
+	MultiRoot bool
 }
 
 type SearchSessionsOutput struct {
-	Items []session.SearchHit
+	Items []SessionSearchHit
+}
+
+type SessionSearchHit struct {
+	RootID           string     `json:"root_id,omitempty"`
+	Key              string     `json:"key"`
+	Type             string     `json:"type"`
+	ParentSessionKey string     `json:"parent_session_key,omitempty"`
+	ParentToolCallID string     `json:"parent_tool_call_id,omitempty"`
+	Agent            string     `json:"agent,omitempty"`
+	Model            string     `json:"model,omitempty"`
+	Shell            string     `json:"shell,omitempty"`
+	Name             string     `json:"name"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	ClosedAt         *time.Time `json:"closed_at,omitempty"`
+	MatchType        string     `json:"match_type"`
+	MatchScore       int        `json:"match_score"`
+	Seq              int        `json:"seq"`
+	Snippet          string     `json:"snippet,omitempty"`
 }
 
 func (s *Service) ListSessions(ctx context.Context, in ListSessionsInput) (ListSessionsOutput, error) {
@@ -231,6 +251,9 @@ func (s *Service) SearchSessions(ctx context.Context, in SearchSessionsInput) (S
 	if err := s.ensureRegistry(); err != nil {
 		return SearchSessionsOutput{}, err
 	}
+	if in.MultiRoot {
+		return s.searchMultiRootSessions(ctx, in)
+	}
 	manager, err := s.Registry.GetSessionManager(in.RootID)
 	if err != nil {
 		return SearchSessionsOutput{}, err
@@ -242,7 +265,100 @@ func (s *Service) SearchSessions(ctx context.Context, in SearchSessionsInput) (S
 	if err != nil {
 		return SearchSessionsOutput{}, err
 	}
+	return SearchSessionsOutput{Items: mapSessionSearchHits(in.RootID, items)}, nil
+}
+
+func (s *Service) searchMultiRootSessions(ctx context.Context, in SearchSessionsInput) (SearchSessionsOutput, error) {
+	limit := normalizeSessionSearchLimit(in.Limit)
+	items := make([]SessionSearchHit, 0, limit)
+	for _, root := range s.Registry.ListRoots() {
+		manager, err := s.Registry.GetSessionManager(root.ID)
+		if err != nil {
+			return SearchSessionsOutput{}, err
+		}
+		hits, err := manager.Search(ctx, session.SearchOptions{
+			Query: in.Query,
+			Limit: limit,
+		})
+		if err != nil {
+			return SearchSessionsOutput{}, err
+		}
+		items = append(items, mapSessionSearchHits(root.ID, hits)...)
+	}
+	sortSessionSearchHits(items)
+	if len(items) > limit {
+		items = items[:limit]
+	}
 	return SearchSessionsOutput{Items: items}, nil
+}
+
+func mapSessionSearchHits(rootID string, hits []session.SearchHit) []SessionSearchHit {
+	out := make([]SessionSearchHit, 0, len(hits))
+	for _, hit := range hits {
+		out = append(out, SessionSearchHit{
+			RootID:           strings.TrimSpace(rootID),
+			Key:              hit.Key,
+			Type:             hit.Type,
+			ParentSessionKey: hit.ParentSessionKey,
+			ParentToolCallID: hit.ParentToolCallID,
+			Agent:            hit.Agent,
+			Model:            hit.Model,
+			Shell:            hit.Shell,
+			Name:             hit.Name,
+			CreatedAt:        hit.CreatedAt,
+			UpdatedAt:        hit.UpdatedAt,
+			ClosedAt:         hit.ClosedAt,
+			MatchType:        hit.MatchType,
+			MatchScore:       hit.MatchScore,
+			Seq:              hit.Seq,
+			Snippet:          hit.Snippet,
+		})
+	}
+	return out
+}
+
+func normalizeSessionSearchLimit(limit int) int {
+	switch {
+	case limit <= 0:
+		return 20
+	case limit > 50:
+		return 50
+	default:
+		return limit
+	}
+}
+
+func sortSessionSearchHits(items []SessionSearchHit) {
+	sort.SliceStable(items, func(i, j int) bool {
+		left := items[i]
+		right := items[j]
+		if left.MatchType != right.MatchType {
+			return sessionSearchMatchTypeRank(left.MatchType) < sessionSearchMatchTypeRank(right.MatchType)
+		}
+		if left.MatchScore != right.MatchScore {
+			return left.MatchScore > right.MatchScore
+		}
+		if !left.UpdatedAt.Equal(right.UpdatedAt) {
+			return left.UpdatedAt.After(right.UpdatedAt)
+		}
+		if left.RootID != right.RootID {
+			return left.RootID < right.RootID
+		}
+		return left.Key < right.Key
+	})
+}
+
+func sessionSearchMatchTypeRank(matchType string) int {
+	switch strings.TrimSpace(matchType) {
+	case "name":
+		return 0
+	case "user":
+		return 1
+	case "reply":
+		return 2
+	default:
+		return 3
+	}
 }
 
 type CreateSessionInput struct {

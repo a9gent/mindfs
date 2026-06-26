@@ -509,9 +509,10 @@ func (h *HTTPHandler) handleSessionSearch(w http.ResponseWriter, r *http.Request
 		return
 	}
 	out, err := h.service().SearchSessions(r.Context(), usecase.SearchSessionsInput{
-		RootID: rootID,
-		Query:  query,
-		Limit:  limit,
+		RootID:    rootID,
+		Query:     query,
+		Limit:     limit,
+		MultiRoot: truthyQuery(r, "multi_root"),
 	})
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err)

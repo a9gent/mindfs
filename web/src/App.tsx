@@ -3677,16 +3677,20 @@ export function App({ onGoHome }: AppProps) {
     }
 
     let cancelled = false;
+    const searchAcrossRoots = multiProjectSessionsEnabled;
     setSessionSearchLoading(true);
     void sessionService
-      .searchSessions(currentRootId, sessionSearchAppliedQuery, 20)
+      .searchSessions(currentRootId, sessionSearchAppliedQuery, 20, {
+        multiRoot: searchAcrossRoots,
+      })
       .then((hits) => {
         if (cancelled) return;
         const mapped = hits
           .map((hit) => {
-            const item = toSessionItem(currentRootId, {
+            const hitRootId = String(hit.root_id || currentRootId || "");
+            const item = toSessionItem(hitRootId, {
               ...hit,
-              root_id: currentRootId,
+              root_id: hitRootId,
               search_seq: hit.seq,
               search_snippet: hit.snippet,
               search_match_type: hit.match_type,
@@ -3714,7 +3718,7 @@ export function App({ onGoHome }: AppProps) {
     return () => {
       cancelled = true;
     };
-  }, [currentRootId, sessionListMode, sessionSearchAppliedQuery, sessionSearchOpen]);
+  }, [currentRootId, multiProjectSessionsEnabled, sessionListMode, sessionSearchAppliedQuery, sessionSearchOpen]);
 
   const openGitDiff = useCallback(
     async (rootID: string, item: GitStatusItem) => {

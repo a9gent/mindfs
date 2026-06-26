@@ -144,6 +144,84 @@ func TestSendCommandMessagePersistsFinalToolCallAndSuggestion(t *testing.T) {
 	}
 }
 
+func TestSearchSessionsMultiRootIncludesRootIDs(t *testing.T) {
+	ctx := context.Background()
+	rootA := rootfs.NewRootInfo("root-a", "Root A", t.TempDir())
+	rootB := rootfs.NewRootInfo("root-b", "Root B", t.TempDir())
+	managerA := session.NewManager(rootA)
+	managerB := session.NewManager(rootB)
+	registry := &multiRootSearchTestRegistry{
+		roots:    []rootfs.RootInfo{rootA, rootB},
+		managers: map[string]*session.Manager{rootA.ID: managerA, rootB.ID: managerB},
+	}
+	service := Service{Registry: registry}
+
+	if _, err := managerA.Create(ctx, session.CreateInput{Type: session.TypeChat, Name: "needle alpha"}); err != nil {
+		t.Fatalf("create root A session: %v", err)
+	}
+	rootBSession, err := managerB.Create(ctx, session.CreateInput{Type: session.TypeChat, Name: "beta"})
+	if err != nil {
+		t.Fatalf("create root B session: %v", err)
+	}
+	if err := managerB.AddExchangeForAgent(ctx, rootBSession, "user", "content has needle inside", "codex", "", "", ""); err != nil {
+		t.Fatalf("add root B exchange: %v", err)
+	}
+
+	out, err := service.SearchSessions(ctx, SearchSessionsInput{
+		Query:     "needle",
+		Limit:     20,
+		MultiRoot: true,
+	})
+	if err != nil {
+		t.Fatalf("SearchSessions returned error: %v", err)
+	}
+	if len(out.Items) != 2 {
+		t.Fatalf("items len = %d, want 2: %#v", len(out.Items), out.Items)
+	}
+	seen := map[string]bool{}
+	for _, item := range out.Items {
+		seen[item.RootID] = true
+	}
+	if !seen[rootA.ID] || !seen[rootB.ID] {
+		t.Fatalf("root ids = %#v, want %q and %q", seen, rootA.ID, rootB.ID)
+	}
+}
+
+func TestSearchSessionsMultiRootAppliesGlobalLimit(t *testing.T) {
+	ctx := context.Background()
+	rootA := rootfs.NewRootInfo("root-a", "Root A", t.TempDir())
+	rootB := rootfs.NewRootInfo("root-b", "Root B", t.TempDir())
+	managerA := session.NewManager(rootA)
+	managerB := session.NewManager(rootB)
+	registry := &multiRootSearchTestRegistry{
+		roots:    []rootfs.RootInfo{rootA, rootB},
+		managers: map[string]*session.Manager{rootA.ID: managerA, rootB.ID: managerB},
+	}
+	service := Service{Registry: registry}
+
+	if _, err := managerA.Create(ctx, session.CreateInput{Type: session.TypeChat, Name: "needle alpha"}); err != nil {
+		t.Fatalf("create root A session: %v", err)
+	}
+	if _, err := managerB.Create(ctx, session.CreateInput{Type: session.TypeChat, Name: "needle beta"}); err != nil {
+		t.Fatalf("create root B session: %v", err)
+	}
+
+	out, err := service.SearchSessions(ctx, SearchSessionsInput{
+		Query:     "needle",
+		Limit:     1,
+		MultiRoot: true,
+	})
+	if err != nil {
+		t.Fatalf("SearchSessions returned error: %v", err)
+	}
+	if len(out.Items) != 1 {
+		t.Fatalf("items len = %d, want 1: %#v", len(out.Items), out.Items)
+	}
+	if out.Items[0].RootID == "" {
+		t.Fatal("first item root id is empty")
+	}
+}
+
 func TestSendCommandMessagePersistsCancelledSuggestion(t *testing.T) {
 	rootDir := t.TempDir()
 	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)
@@ -1564,6 +1642,70 @@ func (r *commandTestRegistry) GetFileWatcher(string, *session.Manager) (*rootfs.
 }
 
 func (r *commandTestRegistry) ReleaseFileWatcher(string, string) {}
+
+type multiRootSearchTestRegistry struct {
+	roots    []rootfs.RootInfo
+	managers map[string]*session.Manager
+}
+
+func (r *multiRootSearchTestRegistry) GetRoot(rootID string) (rootfs.RootInfo, error) {
+	for _, root := range r.roots {
+		if root.ID == rootID {
+			return root, nil
+		}
+	}
+	return rootfs.RootInfo{}, errors.New("root not found")
+}
+
+func (r *multiRootSearchTestRegistry) GetSessionManager(rootID string) (*session.Manager, error) {
+	manager := r.managers[rootID]
+	if manager == nil {
+		return nil, errors.New("session manager not found")
+	}
+	return manager, nil
+}
+
+func (r *multiRootSearchTestRegistry) UpsertRoot(string) (rootfs.RootInfo, error) {
+	return rootfs.RootInfo{}, nil
+}
+
+func (r *multiRootSearchTestRegistry) RemoveRoot(string) (rootfs.RootInfo, error) {
+	return rootfs.RootInfo{}, nil
+}
+
+func (r *multiRootSearchTestRegistry) RenameRoot(string, string, string) (rootfs.RootInfo, error) {
+	return rootfs.RootInfo{}, nil
+}
+
+func (r *multiRootSearchTestRegistry) ListRoots() []rootfs.RootInfo {
+	return append([]rootfs.RootInfo(nil), r.roots...)
+}
+
+func (r *multiRootSearchTestRegistry) GetAgentPool() *agent.Pool {
+	return nil
+}
+
+func (r *multiRootSearchTestRegistry) GetPreferences() *preferences.Store {
+	return nil
+}
+
+func (r *multiRootSearchTestRegistry) GetExternalSessionImporter(string) (agenttypes.ExternalSessionImporter, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (r *multiRootSearchTestRegistry) GetProber() *agent.Prober {
+	return nil
+}
+
+func (r *multiRootSearchTestRegistry) GetCandidateRegistry() *CandidateRegistry {
+	return nil
+}
+
+func (r *multiRootSearchTestRegistry) GetFileWatcher(string, *session.Manager) (*rootfs.SharedFileWatcher, error) {
+	return nil, nil
+}
+
+func (r *multiRootSearchTestRegistry) ReleaseFileWatcher(string, string) {}
 
 type renameManagedDirTestRegistry struct {
 	root                       rootfs.RootInfo

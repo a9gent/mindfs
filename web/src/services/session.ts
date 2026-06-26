@@ -132,6 +132,7 @@ export type Session = {
 };
 
 export type SessionSearchHit = {
+  root_id?: string;
   key: string;
   type: SessionType;
   parent_session_key?: string;
@@ -1097,13 +1098,19 @@ class SessionService {
     rootId: string,
     query: string,
     limit?: number,
+    options?: { multiRoot?: boolean },
   ): Promise<SessionSearchHit[]> {
     try {
       const trimmed = query.trim();
-      if (!rootId || !trimmed) {
+      if ((!rootId && !options?.multiRoot) || !trimmed) {
         return [];
       }
-      const params = new URLSearchParams({ root: rootId, q: trimmed });
+      const params = new URLSearchParams({ q: trimmed });
+      if (options?.multiRoot) {
+        params.set("multi_root", "1");
+      } else {
+        params.set("root", rootId);
+      }
       if (typeof limit === "number" && limit > 0) {
         params.set("limit", String(limit));
       }
