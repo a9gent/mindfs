@@ -1,3 +1,10 @@
+# MindFS v0.3.11
+
+## 优化和修复
+- `deploy-release.sh` 生成的 systemd service 现在会带常见用户级二进制目录 PATH，避免 `codex`、`gemini`、`reasonix` 等 agent 已安装但 MindFS 误判为未安装
+- README 补充服务器上一键部署和 agent 自动检测 PATH 说明
+
+
 # MindFS v0.3.9
 
 ## 新功能
