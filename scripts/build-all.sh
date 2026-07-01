@@ -57,12 +57,21 @@ for PLATFORM in "${PLATFORMS[@]}"; do
       -o "${ROOT}/${TARGET}" \
       ./cli/cmd
 
-  # Bundle web assets (already built) and install scripts
+  # Bundle web assets and helper scripts so the archive can be deployed directly.
   if [[ -d "${ROOT}/web/dist" ]]; then
     cp -r "${ROOT}/web/dist" "${ROOT}/${OUT_DIR}/web"
   fi
   if [[ -f "${ROOT}/agents.json" ]]; then
     cp "${ROOT}/agents.json" "${ROOT}/${OUT_DIR}/agents.json"
+  fi
+  install -d "${ROOT}/${OUT_DIR}/scripts"
+  if [[ -f "${ROOT}/scripts/install.sh" ]]; then
+    cp "${ROOT}/scripts/install.sh" "${ROOT}/${OUT_DIR}/scripts/install.sh"
+    chmod 0755 "${ROOT}/${OUT_DIR}/scripts/install.sh"
+  fi
+  if [[ -f "${ROOT}/scripts/deploy-release.sh" ]]; then
+    cp "${ROOT}/scripts/deploy-release.sh" "${ROOT}/${OUT_DIR}/scripts/deploy-release.sh"
+    chmod 0755 "${ROOT}/${OUT_DIR}/scripts/deploy-release.sh"
   fi
 done
 

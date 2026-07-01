@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, for example v0.3.9'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install web dependencies
+        working-directory: web
+        run: yarn install --frozen-lockfile
+
+      - name: Build release archives
+        run: make build-all VERSION='${{ steps.vars.outputs.tag }}'
+
+      - name: Collect release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='${{ steps.vars.outputs.tag }}'
+          awk -v tag="$tag" '
+            $0 ~ ("^# MindFS " tag "$") { capture=1; next }
+            capture && /^# MindFS / { exit }
+            capture { print }
+          ' release-notes.md > dist/release-notes-${tag}.md
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: ${{ steps.vars.outputs.tag }}
+          body_path: dist/release-notes-${{ steps.vars.outputs.tag }}.md
+          files: |
+            dist/mindfs_${{ steps.vars.outputs.tag }}_darwin_amd64.tar.gz
+            dist/mindfs_${{ steps.vars.outputs.tag }}_darwin_arm64.tar.gz
+            dist/mindfs_${{ steps.vars.outputs.tag }}_linux_amd64.tar.gz
+            dist/mindfs_${{ steps.vars.outputs.tag }}_linux_arm64.tar.gz
+            dist/mindfs_${{ steps.vars.outputs.tag }}_linux_arm.tar.gz
+            dist/mindfs_${{ steps.vars.outputs.tag }}_windows_amd64.zip
+            dist/mindfs_${{ steps.vars.outputs.tag }}_windows_arm64.zip

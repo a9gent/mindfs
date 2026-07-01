@@ -164,6 +164,36 @@ cd mindfs
 make build      # 产物为 ./mindfs
 ```
 
+**打包 release 并一键部署（Linux 服务器）**
+```bash
+git clone https://github.com/a9gent/mindfs.git
+cd mindfs
+make build-all VERSION=v0.3.8
+
+# 将 dist/mindfs_v0.3.8_linux_amd64.tar.gz 拷到目标服务器后执行
+bash scripts/deploy-release.sh \
+  --archive dist/mindfs_v0.3.8_linux_amd64.tar.gz \
+  --service-name mindfs-17331 \
+  --addr 127.0.0.1:17331 \
+  --agent-config /etc/mindfs/agents-empty.json \
+  --env OPENAI_API_KEY=your_key
+```
+
+部署脚本会完成这些动作：
+- 解压 release 到 `INSTALL_DIR/releases/<version>`
+- 更新 `INSTALL_DIR/current` 软链接
+- 写入/更新 systemd service
+- 可选写入环境变量文件并重启服务
+
+如果 release 包已经在机器上，也可以直接用 Makefile：
+```bash
+make deploy-release \
+  ARCHIVE=dist/mindfs_v0.3.8_linux_amd64.tar.gz \
+  SERVICE_NAME=mindfs-17331 \
+  ADDR=127.0.0.1:17331 \
+  AGENT_CONFIG=/etc/mindfs/agents-empty.json
+```
+
 ### 启动
 
 ```bash

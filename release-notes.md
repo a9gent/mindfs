@@ -1,3 +1,14 @@
+# MindFS v0.3.9
+
+## 新功能
+- release 包中增加 `scripts/deploy-release.sh`，Linux 服务器可直接一键部署
+- `make deploy-release`，可用本地 Linux release 包快速部署并写入 systemd service
+
+## 优化和修复
+- `build-all` 产出的 release 包现在内置 `install.sh` 和 `deploy-release.sh`
+- 修复更新器中 `downloadReleaseAsset` 缺少返回值导致的编译失败
+
+
 # MindFS v0.3.8
 
 ## 新功能
