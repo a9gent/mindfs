@@ -119,6 +119,8 @@ Once an agent is installed, start MindFS and interact with it through the browse
 
 ### Install
 
+If you are deploying MindFS as a long-running Linux server and want it to create or update a systemd service with the correct agent-detection `PATH`, do not use `install.sh`. Use the `deploy-release.sh` server entry shown below instead.
+
 **macOS / Linux**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh | bash
@@ -182,6 +184,8 @@ bash scripts/deploy-release.sh \
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh | bash
 ```
+
+This is the recommended server entry. It deploys to `/opt/mindfs` and creates or updates a systemd service.
 
 To customize the port, service name, or environment:
 ```bash

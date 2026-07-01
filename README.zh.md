@@ -120,6 +120,8 @@ MindFS 已整理常见流行 Agent，在本地 UI 中可以直接安装和更新
 
 ### 安装
 
+如果你是在 Linux 服务器上长期运行 MindFS，并且希望自动创建/更新 systemd service、自动携带 agent 探测所需 PATH，请不要使用下面的 `install.sh`，直接使用后面的 `deploy-release.sh` 一键部署入口。
+
 **macOS / Linux**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh | bash
@@ -183,6 +185,8 @@ bash scripts/deploy-release.sh \
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh | bash
 ```
+
+这是服务器推荐入口。它会部署到 `/opt/mindfs`，并创建或更新 systemd service。
 
 如果要指定端口、服务名或环境变量：
 ```bash
