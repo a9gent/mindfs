@@ -23,7 +23,7 @@ ENV_FILE=""
 DECLARE_ENV=()
 NO_SERVICE=0
 NO_RESTART=0
-SERVICE_PATH='/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+SERVICE_PATH='/root/.local/bin:/root/bin:/root/.npm-global/bin:/root/.yarn/bin:/root/.config/yarn/global/node_modules/.bin:/root/.bun/bin:/root/go/bin:/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
 usage() {
   cat <<'EOF'

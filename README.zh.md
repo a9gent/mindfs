@@ -196,13 +196,13 @@ curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/dep
 脚本地址：
 - `https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh`
 
-如果服务器里已经安装了 `codex`，但 MindFS 仍显示“未安装”，常见原因不是 `~/.codex` 缺失，而是 `mindfs` 的 systemd 服务进程 `PATH` 没包含 `codex` 所在目录，例如 `~/.local/bin`。`deploy-release.sh` 生成的 service 会显式写入：
+如果服务器里已经安装了 `codex` 或其他 agent，但 MindFS 仍显示“未安装”，常见原因不是某个配置目录缺失，而是 `mindfs` 的 systemd 服务进程 `PATH` 没包含这些 agent 可执行文件所在目录，例如 `~/.local/bin`、`~/go/bin`、`~/.cargo/bin`、`~/.bun/bin`。`deploy-release.sh` 生成的 service 会显式写入一组常见用户级安装目录：
 
 ```ini
-Environment=PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PATH=/root/.local/bin:/root/bin:/root/.npm-global/bin:/root/.yarn/bin:/root/.config/yarn/global/node_modules/.bin:/root/.bun/bin:/root/go/bin:/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ```
 
-这样 `mindfs` 用 `exec.LookPath("codex")` 探测时，就能识别通过用户级方式安装的 `codex`。
+这样 `mindfs` 用 `exec.LookPath(...)` 探测时，就能识别大多数通过用户级方式安装的 agent，而不只是 `codex`。
 
 部署脚本会完成这些动作：
 - 解压 release 到 `INSTALL_DIR/releases/<version>`

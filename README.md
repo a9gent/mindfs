@@ -195,13 +195,13 @@ curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/dep
 Script URL:
 - `https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh`
 
-If `codex` is already installed on the server but MindFS still shows it as not installed, the usual cause is not a missing `~/.codex` directory. The actual issue is that the `mindfs` systemd service process does not have the directory containing `codex` in its `PATH`, typically `~/.local/bin`. `deploy-release.sh` now writes this explicitly into the generated service:
+If `codex` or another agent is already installed on the server but MindFS still shows it as not installed, the usual cause is not a missing config directory. The actual issue is that the `mindfs` systemd service process does not have the directory containing the agent executable in its `PATH`, commonly `~/.local/bin`, `~/go/bin`, `~/.cargo/bin`, or `~/.bun/bin`. `deploy-release.sh` now writes a broader set of common user-level install directories into the generated service:
 
 ```ini
-Environment=PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PATH=/root/.local/bin:/root/bin:/root/.npm-global/bin:/root/.yarn/bin:/root/.config/yarn/global/node_modules/.bin:/root/.bun/bin:/root/go/bin:/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ```
 
-That allows MindFS to detect user-level `codex` installs through `exec.LookPath("codex")`.
+That allows MindFS to detect most user-level agent installs through `exec.LookPath(...)`, not just `codex`.
 
 ### Run
 
