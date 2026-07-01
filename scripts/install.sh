@@ -4,7 +4,7 @@
 # Usage:  bash install.sh [--version VERSION] [--prefix PREFIX] [--uninstall] [--purge]
 set -euo pipefail
 
-REPO="a9gent/mindfs"
+REPO="shuguangnet/mindfs"
 RELEASE_NOTES_URL="https://raw.githubusercontent.com/${REPO}/main/release-notes.md"
 VERSION=""
 PREFIX="${HOME}/.local"

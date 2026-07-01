@@ -10,7 +10,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Repo = "a9gent/mindfs"
+$Repo = "shuguangnet/mindfs"
 $ReleaseNotesUrl = "https://raw.githubusercontent.com/$Repo/main/release-notes.md"
 
 if ($Purge -and -not $Uninstall) {
