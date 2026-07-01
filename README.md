@@ -121,20 +121,20 @@ Once an agent is installed, start MindFS and interact with it through the browse
 
 **macOS / Linux**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh | bash
 ```
 
 Custom install path:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh | bash -s -- --prefix your/path
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh | bash -s -- --prefix your/path
 ```
 
 **Windows (PowerShell)**
 ```powershell
-irm https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.ps1 | iex
 ```
 
-The install script auto-detects your OS and architecture, reads the latest version from the first line of [`release-notes.md`](https://raw.githubusercontent.com/a9gent/mindfs/main/release-notes.md), then downloads the matching binary from [GitHub Releases](https://github.com/a9gent/mindfs/releases). `release-notes.md` keeps release history with the newest entry at the top; `make release TAG=v1.2.3` commits and pushes it when changed, then uses only the top entry as the GitHub release notes.
+The install script auto-detects your OS and architecture, reads the latest version from the first line of [`release-notes.md`](https://raw.githubusercontent.com/shuguangnet/mindfs/main/release-notes.md), then downloads the matching binary from [GitHub Releases](https://github.com/shuguangnet/mindfs/releases). This entry is for personal machines or user-level installs and defaults to `~/.local`.
 
 ### Uninstall
 
@@ -143,14 +143,14 @@ The uninstall command removes the installed binary, bundled web assets, bundled 
 **macOS / Linux**
 ```bash
 installer="${TMPDIR:-/tmp}/mindfs-install.sh"
-curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh -o "$installer"
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh -o "$installer"
 bash "$installer" --uninstall
 ```
 
 **Windows (PowerShell)**
 ```powershell
 $Installer = Join-Path $env:TEMP "mindfs-install.ps1"
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.ps1" -OutFile $Installer
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.ps1" -OutFile $Installer
 & $Installer -Uninstall
 ```
 
@@ -158,14 +158,14 @@ To also remove user-level MindFS config and logs, add `--purge` on macOS/Linux o
 
 **Build from source** (requires Go 1.22+, Node.js 20+)
 ```bash
-git clone https://github.com/a9gent/mindfs.git
+git clone https://github.com/shuguangnet/mindfs.git
 cd mindfs
 make build      # output: ./mindfs
 ```
 
 **Package a release and deploy it on a Linux server**
 ```bash
-git clone https://github.com/a9gent/mindfs.git
+git clone https://github.com/shuguangnet/mindfs.git
 cd mindfs
 make build-all VERSION=v0.3.8
 
@@ -194,6 +194,14 @@ curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/dep
 
 Script URL:
 - `https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh`
+
+If `codex` is already installed on the server but MindFS still shows it as not installed, the usual cause is not a missing `~/.codex` directory. The actual issue is that the `mindfs` systemd service process does not have the directory containing `codex` in its `PATH`, typically `~/.local/bin`. `deploy-release.sh` now writes this explicitly into the generated service:
+
+```ini
+Environment=PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+```
+
+That allows MindFS to detect user-level `codex` installs through `exec.LookPath("codex")`.
 
 ### Run
 

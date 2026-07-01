@@ -23,6 +23,7 @@ ENV_FILE=""
 DECLARE_ENV=()
 NO_SERVICE=0
 NO_RESTART=0
+SERVICE_PATH='/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
 usage() {
   cat <<'EOF'
@@ -272,6 +273,7 @@ Type=simple
 User=root
 WorkingDirectory=/root
 Environment=HOME=/root
+Environment=PATH=${SERVICE_PATH}
 EnvironmentFile=-${ENV_FILE}
 ExecStart=${exec_line}
 Restart=always

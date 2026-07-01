@@ -122,20 +122,20 @@ MindFS 已整理常见流行 Agent，在本地 UI 中可以直接安装和更新
 
 **macOS / Linux**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh | bash
 ```
 
 自定义安装路径：
 ```bash
-curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh | bash -s -- --prefix your/path
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh | bash -s -- --prefix your/path
 ```
 
 **Windows（PowerShell）**
 ```powershell
-irm https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.ps1 | iex
 ```
 
-安装脚本会自动检测系统和架构，先从 [`release-notes.md`](https://raw.githubusercontent.com/a9gent/mindfs/main/release-notes.md) 第一行读取最新版本号，再从 [GitHub Releases](https://github.com/a9gent/mindfs/releases) 下载对应的二进制包并完成安装。`release-notes.md` 会保留历史记录且最新版本在顶部；`make release TAG=v1.2.3` 会在它有变更时提交并推送，然后只用顶部当前版本内容作为 GitHub release notes。
+安装脚本会自动检测系统和架构，先从 [`release-notes.md`](https://raw.githubusercontent.com/shuguangnet/mindfs/main/release-notes.md) 第一行读取最新版本号，再从 [GitHub Releases](https://github.com/shuguangnet/mindfs/releases) 下载对应的二进制包并完成安装。这个入口适合个人机器或普通用户级安装，默认安装到 `~/.local`。
 
 ### 卸载
 
@@ -144,14 +144,14 @@ irm https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.ps1 | i
 **macOS / Linux**
 ```bash
 installer="${TMPDIR:-/tmp}/mindfs-install.sh"
-curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh -o "$installer"
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh -o "$installer"
 bash "$installer" --uninstall
 ```
 
 **Windows（PowerShell）**
 ```powershell
 $Installer = Join-Path $env:TEMP "mindfs-install.ps1"
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.ps1" -OutFile $Installer
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.ps1" -OutFile $Installer
 & $Installer -Uninstall
 ```
 
@@ -159,14 +159,14 @@ Invoke-WebRequest -Uri "https://raw.githubusercontent.com/a9gent/mindfs/main/scr
 
 **从源码编译**（需要 Go 1.22+、Node.js 20+）
 ```bash
-git clone https://github.com/a9gent/mindfs.git
+git clone https://github.com/shuguangnet/mindfs.git
 cd mindfs
 make build      # 产物为 ./mindfs
 ```
 
 **打包 release 并一键部署（Linux 服务器）**
 ```bash
-git clone https://github.com/a9gent/mindfs.git
+git clone https://github.com/shuguangnet/mindfs.git
 cd mindfs
 make build-all VERSION=v0.3.8
 
@@ -195,6 +195,14 @@ curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/dep
 
 脚本地址：
 - `https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh`
+
+如果服务器里已经安装了 `codex`，但 MindFS 仍显示“未安装”，常见原因不是 `~/.codex` 缺失，而是 `mindfs` 的 systemd 服务进程 `PATH` 没包含 `codex` 所在目录，例如 `~/.local/bin`。`deploy-release.sh` 生成的 service 会显式写入：
+
+```ini
+Environment=PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+```
+
+这样 `mindfs` 用 `exec.LookPath("codex")` 探测时，就能识别通过用户级方式安装的 `codex`。
 
 部署脚本会完成这些动作：
 - 解压 release 到 `INSTALL_DIR/releases/<version>`
