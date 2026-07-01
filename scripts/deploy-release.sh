@@ -2,6 +2,7 @@
 # Deploy a MindFS release archive on Linux with an optional systemd service.
 #
 # Examples:
+#   curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh | bash
 #   bash scripts/deploy-release.sh --archive dist/mindfs_v0.3.8_linux_amd64.tar.gz
 #   bash scripts/deploy-release.sh --version v0.3.8 --repo shuguangnet/mindfs
 #   bash scripts/deploy-release.sh --archive ./mindfs_v0.3.8_linux_amd64.tar.gz \
@@ -10,7 +11,7 @@
 
 set -euo pipefail
 
-REPO="a9gent/mindfs"
+REPO="shuguangnet/mindfs"
 VERSION=""
 ARCHIVE=""
 INSTALL_DIR="/opt/mindfs"
@@ -30,7 +31,7 @@ Usage: deploy-release.sh [options]
 Options:
   --archive PATH            Deploy from a local .tar.gz release archive.
   --version VERSION         Download and deploy this release version from GitHub.
-  --repo OWNER/REPO         GitHub repo used with --version. Default: a9gent/mindfs
+  --repo OWNER/REPO         GitHub repo used with --version. Default: shuguangnet/mindfs
   --install-dir PATH        Install root. Default: /opt/mindfs
   --service-name NAME       systemd service name. Default: mindfs
   --addr HOST:PORT          MindFS listen address. Default: 127.0.0.1:7331
@@ -113,11 +114,6 @@ if [[ -n "$ARCHIVE" && -n "$VERSION" ]]; then
   exit 1
 fi
 
-if [[ -z "$ARCHIVE" && -z "$VERSION" ]]; then
-  echo "Error: one of --archive or --version is required." >&2
-  exit 1
-fi
-
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "Error: deploy-release.sh currently supports Linux only." >&2
   exit 1
@@ -150,6 +146,14 @@ detect_arch() {
 download_file() {
   local url="$1"
   local dst="$2"
+  if [[ "$dst" == "-" ]]; then
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL "$url"
+    else
+      wget -qO- "$url"
+    fi
+    return 0
+  fi
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL "$url" -o "$dst"
   else
@@ -157,11 +161,29 @@ download_file() {
   fi
 }
 
+extract_version() {
+  sed -nE '1s/^[[:space:]]*#[[:space:]]+MindFS[[:space:]]+(v?[0-9]+(\.[0-9]+){1,3}[^[:space:]]*).*$/\1/p'
+}
+
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 if [[ -n "$VERSION" ]]; then
   VERSION="$(normalize_tag "$VERSION")"
+fi
+
+if [[ -z "$ARCHIVE" && -z "$VERSION" ]]; then
+  RELEASE_NOTES_URL="https://raw.githubusercontent.com/${REPO}/main/release-notes.md"
+  echo "==> Resolving latest release from ${RELEASE_NOTES_URL}"
+  VERSION="$(download_file "$RELEASE_NOTES_URL" - | extract_version)"
+  if [[ -z "$VERSION" ]]; then
+    echo "Error: could not determine latest release version from ${REPO}." >&2
+    exit 1
+  fi
+  VERSION="$(normalize_tag "$VERSION")"
+fi
+
+if [[ -n "$VERSION" ]]; then
   ARCH="$(detect_arch)"
   FILE_NAME="mindfs_${VERSION}_linux_${ARCH}.tar.gz"
   ARCHIVE="${TMPDIR}/${FILE_NAME}"
@@ -273,4 +295,3 @@ fi
 systemctl restart "$SERVICE_NAME"
 echo "==> Service restarted: ${SERVICE_NAME}"
 systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,20p'
-

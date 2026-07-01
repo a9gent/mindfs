@@ -163,6 +163,38 @@ cd mindfs
 make build      # output: ./mindfs
 ```
 
+**Package a release and deploy it on a Linux server**
+```bash
+git clone https://github.com/a9gent/mindfs.git
+cd mindfs
+make build-all VERSION=v0.3.8
+
+# Copy dist/mindfs_v0.3.8_linux_amd64.tar.gz to the target host, then run:
+bash scripts/deploy-release.sh \
+  --archive dist/mindfs_v0.3.8_linux_amd64.tar.gz \
+  --service-name mindfs-17331 \
+  --addr 127.0.0.1:17331 \
+  --agent-config /etc/mindfs/agents-empty.json \
+  --env OPENAI_API_KEY=your_key
+```
+
+**One-line deploy on a fresh Linux server**
+```bash
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh | bash
+```
+
+To customize the port, service name, or environment:
+```bash
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh | bash -s -- \
+  --service-name mindfs-17331 \
+  --addr 127.0.0.1:17331 \
+  --agent-config /etc/mindfs/agents-empty.json \
+  --env OPENAI_API_KEY=your_key
+```
+
+Script URL:
+- `https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh`
+
 ### Run
 
 ```bash

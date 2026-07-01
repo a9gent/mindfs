@@ -179,6 +179,23 @@ bash scripts/deploy-release.sh \
   --env OPENAI_API_KEY=your_key
 ```
 
+**空白 Linux 服务器一键部署最新 release**
+```bash
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh | bash
+```
+
+如果要指定端口、服务名或环境变量：
+```bash
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh | bash -s -- \
+  --service-name mindfs-17331 \
+  --addr 127.0.0.1:17331 \
+  --agent-config /etc/mindfs/agents-empty.json \
+  --env OPENAI_API_KEY=your_key
+```
+
+脚本地址：
+- `https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh`
+
 部署脚本会完成这些动作：
 - 解压 release 到 `INSTALL_DIR/releases/<version>`
 - 更新 `INSTALL_DIR/current` 软链接
