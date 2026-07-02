@@ -1950,6 +1950,7 @@ function ForkSessionIcon() {
         strokeWidth="1.8"
         d="M17 7a2 2 0 1 0 0-4a2 2 0 0 0 0 4M7 7a2 2 0 1 0 0-4a2 2 0 0 0 0 4m0 14a2 2 0 1 0 0-4a2 2 0 0 0 0 4M7 7v10M17 7v1c0 2.5-2 3-2 3l-6 2s-2 .5-2 3v1"
       />
+      <circle cx="17" cy="5" r="2" fill="currentColor" />
     </svg>
   );
 }
