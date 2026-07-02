@@ -4,9 +4,8 @@
 # Usage:  bash install.sh [--version VERSION] [--prefix PREFIX] [--uninstall] [--purge]
 set -euo pipefail
 
-REPO="a9gent/mindfs"
+REPO="shuguangnet/mindfs"
 RELEASE_NOTES_URL="https://raw.githubusercontent.com/${REPO}/main/release-notes.md"
-RELAY_DOWNLOAD_BASE="https://relay.a9gent.com/mindfs-downloads"
 VERSION=""
 PREFIX="${HOME}/.local"
 UNINSTALL=0
@@ -154,7 +153,6 @@ echo "  Prefix: ${PREFIX}"
 # ── Download ────────────────────────────────────────────────────────────────
 FILENAME="mindfs_${VERSION}_${OS}_${ARCH}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
-FALLBACK_URL="${RELAY_DOWNLOAD_BASE}/${FILENAME}"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -169,11 +167,7 @@ download_file() {
 }
 
 echo "  Downloading ${URL}"
-if ! download_file "$URL" "${TMPDIR}/${FILENAME}"; then
-  echo "  GitHub download failed; trying ${FALLBACK_URL}"
-  rm -f "${TMPDIR}/${FILENAME}"
-  download_file "$FALLBACK_URL" "${TMPDIR}/${FILENAME}"
-fi
+download_file "$URL" "${TMPDIR}/${FILENAME}"
 
 # ── Extract ─────────────────────────────────────────────────────────────────
 tar -xzf "${TMPDIR}/${FILENAME}" -C "$TMPDIR"

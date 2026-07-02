@@ -1,6 +1,6 @@
 # MindFS
 
-[English](./README.md) | [简体中文](./README.zh.md) | [官网](https://relay.a9gent.com/) | [Discord](https://discord.gg/YPJMqeWSn) | [Twitter](https://x.com/yandc18) | [【微信群】](#微信群)
+[English](./README.md) | [简体中文](./README.zh.md) | [官网](https://github.com/shuguangnet/mindfs) | [Discord](https://discord.gg/YPJMqeWSn) | [Twitter](https://x.com/yandc18) | [【微信群】](#微信群)
 
 > **AI Agent 远程访问网关 · 结果可视化**
 
@@ -120,22 +120,24 @@ MindFS 已整理常见流行 Agent，在本地 UI 中可以直接安装和更新
 
 ### 安装
 
+如果你是在 Linux 服务器上长期运行 MindFS，并且希望自动创建/更新 systemd service、自动携带 agent 探测所需 PATH，请不要使用下面的 `install.sh`，直接使用后面的 `deploy-release.sh` 一键部署入口。
+
 **macOS / Linux**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh | bash
 ```
 
 自定义安装路径：
 ```bash
-curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh | bash -s -- --prefix your/path
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh | bash -s -- --prefix your/path
 ```
 
 **Windows（PowerShell）**
 ```powershell
-irm https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.ps1 | iex
 ```
 
-安装脚本会自动检测系统和架构，先从 [`release-notes.md`](https://raw.githubusercontent.com/a9gent/mindfs/main/release-notes.md) 第一行读取最新版本号，再从 [GitHub Releases](https://github.com/a9gent/mindfs/releases) 下载对应的二进制包并完成安装。`release-notes.md` 会保留历史记录且最新版本在顶部；`make release TAG=v1.2.3` 会在它有变更时提交并推送，然后只用顶部当前版本内容作为 GitHub release notes。
+安装脚本会自动检测系统和架构，先从 [`release-notes.md`](https://raw.githubusercontent.com/shuguangnet/mindfs/main/release-notes.md) 第一行读取最新版本号，再从 [GitHub Releases](https://github.com/shuguangnet/mindfs/releases) 下载对应的二进制包并完成安装。这个入口适合个人机器或普通用户级安装，默认安装到 `~/.local`。
 
 ### 卸载
 
@@ -144,14 +146,14 @@ irm https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.ps1 | i
 **macOS / Linux**
 ```bash
 installer="${TMPDIR:-/tmp}/mindfs-install.sh"
-curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh -o "$installer"
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh -o "$installer"
 bash "$installer" --uninstall
 ```
 
 **Windows（PowerShell）**
 ```powershell
 $Installer = Join-Path $env:TEMP "mindfs-install.ps1"
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.ps1" -OutFile $Installer
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.ps1" -OutFile $Installer
 & $Installer -Uninstall
 ```
 
@@ -159,9 +161,66 @@ Invoke-WebRequest -Uri "https://raw.githubusercontent.com/a9gent/mindfs/main/scr
 
 **从源码编译**（需要 Go 1.22+、Node.js 20+）
 ```bash
-git clone https://github.com/a9gent/mindfs.git
+git clone https://github.com/shuguangnet/mindfs.git
 cd mindfs
 make build      # 产物为 ./mindfs
+```
+
+**打包 release 并一键部署（Linux 服务器）**
+```bash
+git clone https://github.com/shuguangnet/mindfs.git
+cd mindfs
+make build-all VERSION=v0.3.8
+
+# 将 dist/mindfs_v0.3.8_linux_amd64.tar.gz 拷到目标服务器后执行
+bash scripts/deploy-release.sh \
+  --archive dist/mindfs_v0.3.8_linux_amd64.tar.gz \
+  --service-name mindfs-17331 \
+  --addr 127.0.0.1:17331 \
+  --agent-config /etc/mindfs/agents-empty.json \
+  --env OPENAI_API_KEY=your_key
+```
+
+**空白 Linux 服务器一键部署最新 release**
+```bash
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh | bash
+```
+
+这是服务器推荐入口。它会部署到 `/opt/mindfs`，并创建或更新 systemd service。
+
+如果要指定端口、服务名或环境变量：
+```bash
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh | bash -s -- \
+  --service-name mindfs-17331 \
+  --addr 127.0.0.1:17331 \
+  --agent-config /etc/mindfs/agents-empty.json \
+  --env OPENAI_API_KEY=your_key
+```
+
+脚本地址：
+- `https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh`
+
+如果服务器里已经安装了 `codex` 或其他 agent，但 MindFS 仍显示“未安装”，常见原因不是某个配置目录缺失，而是 `mindfs` 的 systemd 服务进程 `PATH` 没包含这些 agent 可执行文件所在目录，例如 `~/.local/bin`、`~/go/bin`、`~/.cargo/bin`、`~/.bun/bin`。`deploy-release.sh` 生成的 service 会显式写入一组常见用户级安装目录：
+
+```ini
+Environment=PATH=/root/.local/bin:/root/bin:/root/.npm-global/bin:/root/.yarn/bin:/root/.config/yarn/global/node_modules/.bin:/root/.bun/bin:/root/go/bin:/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+```
+
+这样 `mindfs` 用 `exec.LookPath(...)` 探测时，就能识别大多数通过用户级方式安装的 agent，而不只是 `codex`。
+
+部署脚本会完成这些动作：
+- 解压 release 到 `INSTALL_DIR/releases/<version>`
+- 更新 `INSTALL_DIR/current` 软链接
+- 写入/更新 systemd service
+- 可选写入环境变量文件并重启服务
+
+如果 release 包已经在机器上，也可以直接用 Makefile：
+```bash
+make deploy-release \
+  ARCHIVE=dist/mindfs_v0.3.8_linux_amd64.tar.gz \
+  SERVICE_NAME=mindfs-17331 \
+  ADDR=127.0.0.1:17331 \
+  AGENT_CONFIG=/etc/mindfs/agents-empty.json
 ```
 
 ### 启动

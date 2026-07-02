@@ -166,19 +166,32 @@ struct Index {
   }
 
   private shouldSyncRelayNodes(url: string): boolean {
-    return this.hostFromUrl(url) === 'relay.a9gent.com';
+    const origin = this.originFromUrl(url);
+    const shellOrigin = this.appOrigin.replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(origin) || origin === shellOrigin) {
+      return false;
+    }
+    return (this.pathFromUrl(url).replace(/\/+$/, '') || '/') === '/nodes';
   }
 
   private shouldPatchRelayNodeShell(url: string): boolean {
-    const host = this.hostFromUrl(url);
+    const origin = this.originFromUrl(url);
+    const shellOrigin = this.appOrigin.replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(origin) || origin === shellOrigin) {
+      return false;
+    }
     const path = this.pathFromUrl(url);
-    return host === 'relay.a9gent.com' && /^\/n\/[^/]+\/?/.test(path);
+    return /^\/n\/[^/]+\/?/.test(path);
   }
 
   private shouldPatchRelayListSafeArea(url: string): boolean {
-    const host = this.hostFromUrl(url);
+    const origin = this.originFromUrl(url);
+    const shellOrigin = this.appOrigin.replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(origin) || origin === shellOrigin) {
+      return false;
+    }
     const path = this.pathFromUrl(url).replace(/\/+$/, '') || '/';
-    return host === 'relay.a9gent.com' && (path === '/nodes' || path === '/login');
+    return path === '/nodes' || path === '/login';
   }
 
   private shouldPatchNodeShell(url: string): boolean {
@@ -262,11 +275,10 @@ struct Index {
     if (!/^https?:\/\//i.test(origin)) {
       return '';
     }
-    const host = this.hostFromUrl(url);
     const path = this.pathFromUrl(url).replace(/\/+$/, '') || '/';
-    if (host === 'relay.a9gent.com') {
-      const match = /^\/n\/[^/]+/.exec(path);
-      return match ? `${origin}${match[0]}` : '';
+    const match = /^\/n\/[^/]+/.exec(path);
+    if (match) {
+      return `${origin}${match[0]}`;
     }
     if (path === '/nodes' || path === '/login') {
       return '';
@@ -544,40 +556,6 @@ struct Index {
   }
 
   private injectLauncherRelayEntryVisibility(): void {
-    this.controller.runJavaScript(`
-      (function(){
-        try {
-          function isLauncher() {
-            return window.location.hostname === 'mindfs.local';
-          }
-          function compactText(node) {
-            return String((node && node.textContent) || '').replace(/\\s+/g, ' ').trim();
-          }
-          function hideFixedRelayEntry() {
-            if (!isLauncher()) {
-              return;
-            }
-            Array.prototype.forEach.call(document.querySelectorAll('button'), function(button) {
-              var text = compactText(button);
-              if (text.indexOf('mindfs relayer') >= 0 && text.indexOf('https://relay.a9gent.com/nodes') >= 0) {
-                button.style.display = 'none';
-                button.setAttribute('data-mindfs-harmony-hidden-fixed-relay', '1');
-              }
-            });
-          }
-          hideFixedRelayEntry();
-          window.setTimeout(hideFixedRelayEntry, 250);
-          window.setTimeout(hideFixedRelayEntry, 1000);
-          if (!window.__mindfsHarmonyFixedRelayObserver) {
-            window.__mindfsHarmonyFixedRelayObserver = new MutationObserver(hideFixedRelayEntry);
-            window.__mindfsHarmonyFixedRelayObserver.observe(document.documentElement, { childList: true, subtree: true });
-          }
-        } catch (_error) {
-        }
-      })();
-    `).catch((error: Error) => {
-      console.warn(`MindFS launcher fixed relay hide inject failed: ${JSON.stringify(error)}`);
-    });
   }
 
   private injectLauncherNodesFromNative(reason: string, rawNodes?: string): void {
@@ -666,104 +644,6 @@ struct Index {
   }
 
   private injectRelayNodeSync(): void {
-    this.controller.runJavaScript(`
-      (function(){
-        try {
-          if (window.__mindfsHarmonyRelayNodeSyncInstalled) {
-            return;
-          }
-          window.__mindfsHarmonyRelayNodeSyncInstalled = true;
-          function bridge() {
-            return window.MindFSLauncherNodeSync || window.MindFSNative || window.MindFSHarmony || null;
-          }
-          function store(nodes) {
-            if (!nodes || !nodes.length) {
-              return;
-            }
-            window.__mindfsHarmonyRelayNodes = nodes;
-            var target = bridge();
-            if (!target || typeof target.storeRelayNodes !== 'function') {
-              return;
-            }
-            target.storeRelayNodes(JSON.stringify(nodes));
-          }
-          function shouldSync() {
-            return window.location.hostname === 'relay.a9gent.com' && (window.location.pathname.replace(/\\/+$/, '') || '/') === '/nodes';
-          }
-          function sync() {
-            if (!shouldSync()) {
-              return;
-            }
-            syncDOM();
-          }
-          function relayNodesFromDOM() {
-            var byURL = {};
-            Array.prototype.forEach.call(document.querySelectorAll('a[href*="/n/"]'), function(anchor) {
-              try {
-                var url = new URL(anchor.getAttribute('href') || '', window.location.origin);
-                var match = url.pathname.match(/^\\/n\\/([^/]+)\\/?/);
-                if (!match) {
-                  return;
-                }
-                var text = String(anchor.textContent || '').replace(/\\s+/g, ' ').trim();
-                var id = decodeURIComponent(match[1]);
-                byURL[new URL('/n/' + encodeURIComponent(id) + '/', window.location.origin).toString()] = {
-                  name: text || id,
-                  url: new URL('/n/' + encodeURIComponent(id) + '/', window.location.origin).toString()
-                };
-              } catch (_error) {
-              }
-            });
-            return Object.keys(byURL).map(function(url) { return byURL[url]; });
-          }
-          function syncDOM() {
-            if (!shouldSync()) {
-              return;
-            }
-            var nodes = relayNodesFromDOM();
-            if (nodes.length) {
-              store(nodes);
-            }
-          }
-          var lastURL = '';
-          function syncOnRoute() {
-            var currentURL = window.location.href;
-            if (currentURL !== lastURL) {
-              lastURL = currentURL;
-              sync();
-              window.setTimeout(sync, 1200);
-              window.setTimeout(sync, 3000);
-            }
-          }
-          ['pushState', 'replaceState'].forEach(function(name) {
-            var original = history[name];
-            if (typeof original !== 'function' || original.__mindfsHarmonyRelayWrapped) {
-              return;
-            }
-            var wrapped = function() {
-              var result = original.apply(this, arguments);
-              window.setTimeout(syncOnRoute, 0);
-              return result;
-            };
-            wrapped.__mindfsHarmonyRelayWrapped = true;
-            history[name] = wrapped;
-          });
-          window.addEventListener('popstate', syncOnRoute);
-          window.addEventListener('hashchange', syncOnRoute);
-          sync();
-          syncDOM();
-          window.setTimeout(sync, 1200);
-          window.setTimeout(syncDOM, 1200);
-          window.setTimeout(sync, 3000);
-          window.setTimeout(syncDOM, 3000);
-          window.setInterval(syncOnRoute, 1500);
-          window.setInterval(syncDOM, 1500);
-        } catch (_error) {
-        }
-      })();
-    `).catch((error: Error) => {
-      console.warn(`MindFS relay node sync inject failed: ${JSON.stringify(error)}`);
-    });
   }
 
   private injectRelayNodeShellControls(): void {

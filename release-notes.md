@@ -1,3 +1,29 @@
+# MindFS v0.3.12
+
+## 新功能
+- 新增 `雾蓝晨光`、`胭脂薄雾`、`暖砂纸页`、`石墨夜航` 四套外观皮肤
+- 外观选择在页面启动阶段即可识别新皮肤，减少刷新时的主题闪烁
+
+
+# MindFS v0.3.11
+
+## 优化和修复
+- `deploy-release.sh` 生成的 systemd service 现在会带常见用户级二进制目录 PATH，避免 `codex`、`gemini`、`reasonix` 等 agent 已安装但 MindFS 误判为未安装
+- README 补充服务器上一键部署和 agent 自动检测 PATH 说明
+
+
+# MindFS v0.3.9
+
+## 新功能
+- release 包中增加 `scripts/deploy-release.sh`，Linux 服务器可直接一键部署
+- `make deploy-release`，可用本地 Linux release 包快速部署并写入 systemd service
+- 支持空白 Linux 服务器通过 `curl | bash` 直接部署最新 release
+
+## 优化和修复
+- `build-all` 产出的 release 包现在内置 `install.sh` 和 `deploy-release.sh`
+- 修复更新器中 `downloadReleaseAsset` 缺少返回值导致的编译失败
+
+
 # MindFS v0.3.8
 
 ## 新功能

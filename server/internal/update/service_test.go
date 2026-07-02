@@ -146,19 +146,6 @@ func TestVerifyFileSHA256(t *testing.T) {
 	}
 }
 
-func TestRelayAssetURL(t *testing.T) {
-	name := "mindfs_v0.3.4_windows_amd64.zip"
-	want := "https://relay.a9gent.com/mindfs-downloads/mindfs_v0.3.4_windows_amd64.zip"
-	if got := relayAssetURL(name); got != want {
-		t.Fatalf("relayAssetURL() = %q, want %q", got, want)
-	}
-	for _, name := range []string{"", "../mindfs.zip", `dir\mindfs.zip`} {
-		if got := relayAssetURL(name); got != "" {
-			t.Fatalf("relayAssetURL(%q) = %q, want empty", name, got)
-		}
-	}
-}
-
 func TestInstallLayoutInstalled(t *testing.T) {
 	service := NewService("a9gent/mindfs", "v1.2.2", filepath.Join("opt", "mindfs", "bin", "mindfs"), nil, time.Hour)
 	layout, err := service.installLayout()

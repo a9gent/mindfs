@@ -1,6 +1,6 @@
 # MindFS
 
-[English](./README.md) | [简体中文](./README.zh.md) | [Official Site](https://relay.a9gent.com/) | [Discord](https://discord.gg/YPJMqeWSn) | [Twitter](https://x.com/yandc18) | [【wechat group】](#wechat-group)
+[English](./README.md) | [简体中文](./README.zh.md) | [Official Site](https://github.com/shuguangnet/mindfs) | [Discord](https://discord.gg/YPJMqeWSn) | [Twitter](https://x.com/yandc18) | [【wechat group】](#wechat-group)
 
 > **AI Agent Remote Access Gateway · Result Visualization**
 
@@ -119,22 +119,24 @@ Once an agent is installed, start MindFS and interact with it through the browse
 
 ### Install
 
+If you are deploying MindFS as a long-running Linux server and want it to create or update a systemd service with the correct agent-detection `PATH`, do not use `install.sh`. Use the `deploy-release.sh` server entry shown below instead.
+
 **macOS / Linux**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh | bash
 ```
 
 Custom install path:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh | bash -s -- --prefix your/path
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh | bash -s -- --prefix your/path
 ```
 
 **Windows (PowerShell)**
 ```powershell
-irm https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.ps1 | iex
 ```
 
-The install script auto-detects your OS and architecture, reads the latest version from the first line of [`release-notes.md`](https://raw.githubusercontent.com/a9gent/mindfs/main/release-notes.md), then downloads the matching binary from [GitHub Releases](https://github.com/a9gent/mindfs/releases). `release-notes.md` keeps release history with the newest entry at the top; `make release TAG=v1.2.3` commits and pushes it when changed, then uses only the top entry as the GitHub release notes.
+The install script auto-detects your OS and architecture, reads the latest version from the first line of [`release-notes.md`](https://raw.githubusercontent.com/shuguangnet/mindfs/main/release-notes.md), then downloads the matching binary from [GitHub Releases](https://github.com/shuguangnet/mindfs/releases). This entry is for personal machines or user-level installs and defaults to `~/.local`.
 
 ### Uninstall
 
@@ -143,14 +145,14 @@ The uninstall command removes the installed binary, bundled web assets, bundled 
 **macOS / Linux**
 ```bash
 installer="${TMPDIR:-/tmp}/mindfs-install.sh"
-curl -fsSL https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.sh -o "$installer"
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.sh -o "$installer"
 bash "$installer" --uninstall
 ```
 
 **Windows (PowerShell)**
 ```powershell
 $Installer = Join-Path $env:TEMP "mindfs-install.ps1"
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/a9gent/mindfs/main/scripts/install.ps1" -OutFile $Installer
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/install.ps1" -OutFile $Installer
 & $Installer -Uninstall
 ```
 
@@ -158,10 +160,52 @@ To also remove user-level MindFS config and logs, add `--purge` on macOS/Linux o
 
 **Build from source** (requires Go 1.22+, Node.js 20+)
 ```bash
-git clone https://github.com/a9gent/mindfs.git
+git clone https://github.com/shuguangnet/mindfs.git
 cd mindfs
 make build      # output: ./mindfs
 ```
+
+**Package a release and deploy it on a Linux server**
+```bash
+git clone https://github.com/shuguangnet/mindfs.git
+cd mindfs
+make build-all VERSION=v0.3.8
+
+# Copy dist/mindfs_v0.3.8_linux_amd64.tar.gz to the target host, then run:
+bash scripts/deploy-release.sh \
+  --archive dist/mindfs_v0.3.8_linux_amd64.tar.gz \
+  --service-name mindfs-17331 \
+  --addr 127.0.0.1:17331 \
+  --agent-config /etc/mindfs/agents-empty.json \
+  --env OPENAI_API_KEY=your_key
+```
+
+**One-line deploy on a fresh Linux server**
+```bash
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh | bash
+```
+
+This is the recommended server entry. It deploys to `/opt/mindfs` and creates or updates a systemd service.
+
+To customize the port, service name, or environment:
+```bash
+curl -fsSL https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh | bash -s -- \
+  --service-name mindfs-17331 \
+  --addr 127.0.0.1:17331 \
+  --agent-config /etc/mindfs/agents-empty.json \
+  --env OPENAI_API_KEY=your_key
+```
+
+Script URL:
+- `https://raw.githubusercontent.com/shuguangnet/mindfs/main/scripts/deploy-release.sh`
+
+If `codex` or another agent is already installed on the server but MindFS still shows it as not installed, the usual cause is not a missing config directory. The actual issue is that the `mindfs` systemd service process does not have the directory containing the agent executable in its `PATH`, commonly `~/.local/bin`, `~/go/bin`, `~/.cargo/bin`, or `~/.bun/bin`. `deploy-release.sh` now writes a broader set of common user-level install directories into the generated service:
+
+```ini
+Environment=PATH=/root/.local/bin:/root/bin:/root/.npm-global/bin:/root/.yarn/bin:/root/.config/yarn/global/node_modules/.bin:/root/.bun/bin:/root/go/bin:/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+```
+
+That allows MindFS to detect most user-level agent installs through `exec.LookPath(...)`, not just `codex`.
 
 ### Run
 

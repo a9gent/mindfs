@@ -10,9 +10,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Repo = "a9gent/mindfs"
+$Repo = "shuguangnet/mindfs"
 $ReleaseNotesUrl = "https://raw.githubusercontent.com/$Repo/main/release-notes.md"
-$RelayDownloadBase = "https://relay.a9gent.com/mindfs-downloads"
 
 if ($Purge -and -not $Uninstall) {
     Write-Error "-Purge can only be used with -Uninstall."
@@ -160,20 +159,13 @@ Write-Host "  Prefix: $Prefix"
 # ── Download ────────────────────────────────────────────────────────────────
 $Filename = "mindfs_${Version}_${OS}_${Arch}.zip"
 $Url      = "https://github.com/$Repo/releases/download/$Version/$Filename"
-$FallbackUrl = "$RelayDownloadBase/$Filename"
 $TmpDir   = Join-Path $env:TEMP ("mindfs_install_" + [System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
 
 try {
     $ZipPath = Join-Path $TmpDir $Filename
     Write-Host "  Downloading $Url"
-    try {
-        Invoke-WebRequest -Uri $Url -OutFile $ZipPath -UseBasicParsing
-    } catch {
-        Write-Host "  GitHub download failed; trying $FallbackUrl"
-        Remove-Item -Force $ZipPath -ErrorAction SilentlyContinue
-        Invoke-WebRequest -Uri $FallbackUrl -OutFile $ZipPath -UseBasicParsing
-    }
+    Invoke-WebRequest -Uri $Url -OutFile $ZipPath -UseBasicParsing
 
     # ── Extract ─────────────────────────────────────────────────────────────
     Expand-Archive -Path $ZipPath -DestinationPath $TmpDir -Force

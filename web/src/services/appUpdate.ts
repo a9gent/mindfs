@@ -1,8 +1,8 @@
 import { getNativeBridge, parseNativeJSON } from "./nativeBridge";
 import { getNativePlatform, isAndroidRuntime, isHarmonyRuntime, isNativeShellRuntime, type NativePlatform } from "./runtime";
 
-const DEFAULT_ANDROID_VERSION_URL = "https://relay.a9gent.com/api/versions/android";
-const DEFAULT_HARMONY_VERSION_URL = "https://relay.a9gent.com/api/versions/harmony";
+const DEFAULT_ANDROID_VERSION_URL = "";
+const DEFAULT_HARMONY_VERSION_URL = "";
 
 export type AppUpdateState = {
   platform: NativePlatform;
@@ -63,6 +63,14 @@ export async function fetchAppUpdateState(): Promise<AppUpdateState> {
   const platform = getNativePlatform();
   const appInfo = await getAppInfo();
   const endpoint = buildVersionEndpoint(platform);
+  if (!endpoint) {
+    return normalizeAppUpdateState({
+      platform,
+      current_version: appInfo.version || "",
+      current_build: appInfo.build || "",
+      message: "App update endpoint is not configured.",
+    });
+  }
   const response = await fetch(endpoint, { cache: "no-cache" });
   if (!response.ok) {
     throw new Error(`${platform}_version_check_failed_${response.status}`);

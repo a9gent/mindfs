@@ -187,13 +187,6 @@ func TestProbeInstalledAgentWithPoolSkipsMissingCommand(t *testing.T) {
 	}
 }
 
-func TestLoadConfigReadsRelayBaseURL(t *testing.T) {
-	cfg := loadPoolTestConfig(t)
-	if cfg.RelayBaseURL != "https://relay.example.com" {
-		t.Fatalf("relay base url = %q", cfg.RelayBaseURL)
-	}
-}
-
 func TestLoadConfigReadsShells(t *testing.T) {
 	cfg := loadPoolTestConfig(t)
 	var want []Shell
@@ -255,8 +248,7 @@ func TestLoadConfigReadsOMPAgent(t *testing.T) {
 
 func TestMergeConfigsKeepsBundledAgentsAndAppliesUserOverrides(t *testing.T) {
 	base := Config{
-		RelayBaseURL: "https://relay.default.example.com",
-		Shells:       []Shell{{Command: "zsh", Args: []string{"-ic"}}, {Command: "bash", Args: []string{"-ic"}}},
+		Shells: []Shell{{Command: "zsh", Args: []string{"-ic"}}, {Command: "bash", Args: []string{"-ic"}}},
 		Agents: []Definition{
 			{
 				Name:            "codex",
@@ -271,8 +263,7 @@ func TestMergeConfigsKeepsBundledAgentsAndAppliesUserOverrides(t *testing.T) {
 		},
 	}
 	override := Config{
-		RelayBaseURL: "https://relay.user.example.com",
-		Shells:       []Shell{{Command: "fish", Args: []string{"-i", "-c"}}, {Command: "zsh", Args: []string{"-ic"}}},
+		Shells: []Shell{{Command: "fish", Args: []string{"-i", "-c"}}, {Command: "zsh", Args: []string{"-ic"}}},
 		Agents: []Definition{
 			{Name: "codex", Command: "custom-codex", Protocol: ProtocolCodexSDK, Args: []string{"--profile", "work"}},
 			{Name: "local-agent", Command: "local-agent", Protocol: ProtocolACP},
@@ -280,9 +271,6 @@ func TestMergeConfigsKeepsBundledAgentsAndAppliesUserOverrides(t *testing.T) {
 	}
 
 	cfg := mergeConfigs(base, override)
-	if cfg.RelayBaseURL != override.RelayBaseURL {
-		t.Fatalf("relay base url = %q", cfg.RelayBaseURL)
-	}
 	wantShells := []Shell{
 		{Command: "fish", Args: []string{"-i", "-c"}},
 		{Command: "zsh", Args: []string{"-ic"}},

@@ -1,5 +1,4 @@
 {
-  "relayBaseURL": "https://relay.example.com",
   "shells": [
     {"command": "zsh", "args": ["-ic"], "longShellArgs": [], "os": ["darwin", "linux"]},
     {"command": "bash", "args": ["-ic"], "longShellArgs": [], "os": ["darwin", "linux"]},

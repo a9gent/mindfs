@@ -1,4 +1,4 @@
-.PHONY: help dev dev-backend dev-web build-web build build-android build-harmony install uninstall build-all start start-server test dist-clean publish-release-notes verify-release release tag
+.PHONY: help dev dev-backend dev-web build-web build build-android build-harmony install uninstall build-all deploy-release start start-server test dist-clean publish-release-notes verify-release release tag
 
 GO ?= go
 NPM ?= npm
@@ -22,6 +22,7 @@ help:
 		"  make install      # install binary and built static assets into $(PREFIX)" \
 		"  make uninstall    # remove installed binary and static assets from $(PREFIX)" \
 		"  make build-all    # cross-compile for all platforms into dist/" \
+		"  make deploy-release ARCHIVE=dist/mindfs_v1.2.3_linux_amd64.tar.gz  # deploy a Linux release archive with systemd" \
 		"  make dist-clean   # remove dist/ directory" \
 		"  make start        # run mindfs on $(ADDR) with built static assets" \
 		"  make start-server # backend entrypoint serving built static assets" \
@@ -107,6 +108,15 @@ PLATFORMS := \
 
 build-all: build-web
 	@bash scripts/build-all.sh "$(VERSION)" "$(DIST_DIR)"
+
+deploy-release:
+	@test -n "$(ARCHIVE)" || (echo "Usage: make deploy-release ARCHIVE=dist/mindfs_v1.2.3_linux_amd64.tar.gz [SERVICE_NAME=mindfs] [ADDR=127.0.0.1:7331] [ROOT=/path] [AGENT_CONFIG=/path/to/agents.json]" >&2; exit 1)
+	@bash scripts/deploy-release.sh \
+		--archive "$(ARCHIVE)" \
+		--service-name "$(SERVICE_NAME)" \
+		--addr "$(ADDR)" \
+		$(if $(ROOT),--root "$(ROOT)") \
+		$(if $(AGENT_CONFIG),--agent-config "$(AGENT_CONFIG)")
 
 build-android:
 	cd $(WEB_DIR) && $(NPM) run build:android

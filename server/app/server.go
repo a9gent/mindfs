@@ -85,14 +85,15 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	if err != nil {
 		return err
 	}
-	relayBaseURL := opts.RelayBaseURL
-	if relayBaseURL == "" {
-		relayBaseURL = agentConfig.RelayBaseURL
-	}
+	relayBaseURL := strings.TrimSpace(opts.RelayBaseURL)
 	agentPool := agent.NewPool(agentConfig)
 	agentProber := agent.NewProber(&agentConfig, agentPool, 5*time.Minute)
 	agentProber.Start(ctx)
-	startHostedAgentConfigLoop(ctx, relayBaseURL, agentConfig, agentPool, agentProber)
+	if relayBaseURL != "" {
+		startHostedAgentConfigLoop(ctx, relayBaseURL, agentConfig, agentPool, agentProber)
+	} else {
+		log.Printf("[agents/hosted] disabled no relay base configured")
+	}
 	prefs, err := preferences.NewStore()
 	if err != nil {
 		log.Printf("[preferences] init.error err=%v", err)

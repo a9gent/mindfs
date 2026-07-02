@@ -12,24 +12,45 @@
         var mode = "system";
         try {
           var stored = window.localStorage && window.localStorage.getItem(key);
-          if (stored === "dark" || stored === "light" || stored === "system") {
+          if (
+            stored === "dark" ||
+            stored === "light" ||
+            stored === "system" ||
+            stored === "moss" ||
+            stored === "mist" ||
+            stored === "sakura" ||
+            stored === "amber" ||
+            stored === "graphite"
+          ) {
             mode = stored;
           }
         } catch (_) {}
 
-        if (mode === "dark" || mode === "light") {
+        if (mode !== "system") {
           document.documentElement.setAttribute("data-theme", mode);
         } else {
           document.documentElement.removeAttribute("data-theme");
         }
 
-        var effective = mode;
-        if (effective !== "dark" && effective !== "light") {
-          effective = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
-            ? "dark"
-            : "light";
+        var themeColors = {
+          dark: "#0f172a",
+          light: "#f3f4f6",
+          moss: "#E8F0E4",
+          mist: "#EAF2FA",
+          sakura: "#F8EAF0",
+          amber: "#F5EBDD",
+          graphite: "#101418"
+        };
+        var color = themeColors[mode];
+        if (!color) {
+          var effective = mode;
+          if (effective !== "dark" && effective !== "light") {
+            effective = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+          }
+          color = themeColors[effective];
         }
-        var color = effective === "dark" ? "#0f172a" : "#f3f4f6";
         var metas = document.querySelectorAll('meta[name="theme-color"]');
         for (var i = 0; i < metas.length; i += 1) {
           metas[i].setAttribute("content", color);
