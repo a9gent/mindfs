@@ -20,6 +20,8 @@ import (
 	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/gitview"
 	"mindfs/server/internal/kanban"
+	"mindfs/server/internal/notify"
+	"mindfs/server/internal/notifyscript"
 	"mindfs/server/internal/preferences"
 	"mindfs/server/internal/relay"
 	"mindfs/server/internal/scheduled"
@@ -44,6 +46,7 @@ type AppContext struct {
 	GitHub    *githubimport.Service
 	E2EE      *e2ee.Manager
 	WebPush   *webpush.Service
+	Notify    *notifyscript.Service
 	Prefs     *preferences.Store
 	Scheduled *scheduled.Service
 	Kanban    *kanban.Service
@@ -751,7 +754,7 @@ func (s *AppContext) BroadcastScheduledTaskFailed(rootID, taskID, taskName, sess
 }
 
 func (s *AppContext) notifySessionDone(rootID, sessionKey, requestID string, pending PendingSessionSnapshot) {
-	if s == nil || s.WebPush == nil || !s.WebPush.Enabled() {
+	if s == nil {
 		return
 	}
 	if strings.HasPrefix(strings.TrimSpace(requestID), "scheduled:") {
@@ -767,7 +770,7 @@ func (s *AppContext) notifySessionDone(rootID, sessionKey, requestID string, pen
 	if eventID == "" {
 		eventID = "session.done:" + rootID + ":" + sessionKey + ":" + pending.UpdatedAt.Format(time.RFC3339Nano)
 	}
-	s.WebPush.NotifySession(context.Background(), webpush.SessionNotification{
+	payload := notify.BuildSessionPayload(notify.SessionNotification{
 		Type:         "session.done",
 		RootID:       rootID,
 		RootTitle:    rootTitle,
@@ -776,6 +779,7 @@ func (s *AppContext) notifySessionDone(rootID, sessionKey, requestID string, pen
 		Summary:      summary,
 		EventID:      eventID,
 	})
+	s.notifyPayload(context.Background(), eventID, payload)
 }
 
 func (s *AppContext) notifyAskUserIfNeeded(rootID, sessionKey string, event *StreamEvent) {
@@ -786,10 +790,7 @@ func (s *AppContext) notifyAskUserIfNeeded(rootID, sessionKey string, event *Str
 	if !ok || toolCall.Kind != agenttypes.ToolKindAskUser {
 		return
 	}
-	if s.WebPush == nil || !s.WebPush.Enabled() {
-		return
-	}
-	s.WebPush.NotifySession(context.Background(), webpush.SessionNotification{
+	payload := notify.BuildSessionPayload(notify.SessionNotification{
 		Type:         "session.ask_user",
 		RootID:       rootID,
 		RootTitle:    s.rootTitle(rootID),
@@ -798,6 +799,7 @@ func (s *AppContext) notifyAskUserIfNeeded(rootID, sessionKey string, event *Str
 		Summary:      askUserSummary(toolCall),
 		EventID:      "session.ask_user:" + rootID + ":" + sessionKey + ":" + toolCall.CallID,
 	})
+	s.notifyPayload(context.Background(), notify.EventID(payload), payload)
 }
 
 func (s *AppContext) updateTaskAuxFlagsFromEvent(rootID, sessionKey string, event *StreamEvent) {
@@ -868,13 +870,14 @@ func (s *AppContext) updateTaskAuxFlagsForSession(rootID, sessionKey string, pat
 }
 
 func (s *AppContext) notifyScheduled(rootID, taskID, taskName, sessionKey, summary, message string, success bool) {
-	if s == nil || s.WebPush == nil || !s.WebPush.Enabled() {
+	if s == nil {
 		return
 	}
 	if strings.TrimSpace(summary) == "" && success {
 		summary = s.sessionSummary(rootID, sessionKey)
 	}
-	s.WebPush.NotifyScheduled(context.Background(), webpush.ScheduledNotification{
+	eventID := "scheduled:" + rootID + ":" + taskID + ":" + time.Now().UTC().Format(time.RFC3339Nano)
+	payload := notify.BuildScheduledPayload(notify.ScheduledNotification{
 		RootID:     rootID,
 		RootTitle:  s.rootTitle(rootID),
 		TaskID:     taskID,
@@ -883,8 +886,21 @@ func (s *AppContext) notifyScheduled(rootID, taskID, taskName, sessionKey, summa
 		Summary:    summary,
 		Error:      message,
 		Success:    success,
-		EventID:    "scheduled:" + rootID + ":" + taskID + ":" + time.Now().UTC().Format(time.RFC3339Nano),
+		EventID:    eventID,
 	})
+	s.notifyPayload(context.Background(), eventID, payload)
+}
+
+func (s *AppContext) notifyPayload(ctx context.Context, eventID string, payload notify.Payload) {
+	if s == nil {
+		return
+	}
+	if s.WebPush != nil && s.WebPush.Enabled() {
+		s.WebPush.NotifyPayload(ctx, eventID, payload)
+	}
+	if s.Notify != nil && s.Notify.Enabled() {
+		s.Notify.NotifyPayload(ctx, payload)
+	}
 }
 
 func (s *AppContext) rootTitle(rootID string) string {
@@ -927,7 +943,7 @@ func (s *AppContext) sessionSummary(rootID, sessionKey string) string {
 	}
 	for i := len(sess.Exchanges) - 1; i >= 0; i-- {
 		if strings.TrimSpace(sess.Exchanges[i].Role) == "assistant" {
-			return lastRunes(strings.TrimSpace(sess.Exchanges[i].Content), 80)
+			return lastRunes(strings.TrimSpace(sess.Exchanges[i].Content), notify.BodyMaxRunes)
 		}
 	}
 	return ""
@@ -946,7 +962,7 @@ func askUserSummary(toolCall agenttypes.ToolCall) string {
 			return strings.TrimSpace(questions[0].Question)
 		}
 		if input := strings.TrimSpace(stringMetaValue(toolCall.Meta, "input")); input != "" {
-			return "需要确认：" + lastRunes(input, 80)
+			return "需要确认：" + lastRunes(input, notify.BodyMaxRunes)
 		}
 	}
 	return "需要你继续输入"

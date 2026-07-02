@@ -75,6 +75,7 @@ func main() {
 	bindRelay := flag.Bool("bind-relay", false, "start relay binding and print the relayer bind URL")
 	configFlag := flag.String("config", "", "mindfs startup config file; command-line flags override file values")
 	agentConfigFlag := flag.String("agent-config", "", "extra agents.json file for customizable agent(ACP-protocol) and shell")
+	notifyScriptFlag := flag.String("notify-script", "", "executable script for notification events; receives JSON payload on stdin")
 	remove := flag.Bool("remove", false, "remove the managed directory")
 	taskNumber := flag.String("task", "", "task number for task stage control; defaults to status when set")
 	taskNext := flag.Bool("next", false, "advance task to next stage")
@@ -89,7 +90,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
-	applyStartupConfig(startupCfg, explicitFlags, addr, noRelayer, e2eeFlag, webPushFlag, foreground, bindRelay, tlsFlag, certFlag, keyFlag, agentConfigFlag)
+	applyStartupConfig(startupCfg, explicitFlags, addr, noRelayer, e2eeFlag, webPushFlag, foreground, bindRelay, tlsFlag, certFlag, keyFlag, agentConfigFlag, notifyScriptFlag)
 	if *versionFlag {
 		printVersion()
 		return
@@ -283,6 +284,7 @@ func main() {
 			AgentConfigPath: *agentConfigFlag,
 			E2EEConfig:      e2eeResult.Config,
 			WebPushEnabled:  *webPushFlag,
+			NotifyScript:    *notifyScriptFlag,
 			UseTLS:          *tlsFlag,
 			CertFile:        resolvedCert,
 			KeyFile:         resolvedKey,
@@ -388,6 +390,7 @@ type startupConfig struct {
 	Cert          *string `json:"cert"`
 	Key           *string `json:"key"`
 	AgentConfig   *string `json:"agent-config"`
+	NotifyScript  *string `json:"notify-script"`
 }
 
 func loadStartupConfig(path string) (startupConfig, error) {
@@ -427,6 +430,7 @@ func applyStartupConfig(
 	cert *string,
 	key *string,
 	agentConfig *string,
+	notifyScript *string,
 ) {
 	if cfg.Addr != nil && !explicit["addr"] {
 		*addr = strings.TrimSpace(*cfg.Addr)
@@ -457,6 +461,9 @@ func applyStartupConfig(
 	}
 	if cfg.AgentConfig != nil && !explicit["agent-config"] {
 		*agentConfig = strings.TrimSpace(*cfg.AgentConfig)
+	}
+	if cfg.NotifyScript != nil && !explicit["notify-script"] {
+		*notifyScript = strings.TrimSpace(*cfg.NotifyScript)
 	}
 }
 

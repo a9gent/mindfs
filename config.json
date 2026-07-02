@@ -3,6 +3,7 @@
   "no-relayer": false,
   "e2ee": false,
   "web-push": true,
+  "notify-script": "",
   "foreground": false,
   "tls": false,
   "cert": "",

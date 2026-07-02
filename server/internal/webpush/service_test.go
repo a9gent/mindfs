@@ -59,7 +59,7 @@ func TestBuildAskUserPayloadRequiresInteraction(t *testing.T) {
 
 func TestBuildSessionPayloadPrefixesTruncatedBody(t *testing.T) {
 	payload := BuildSessionPayload(SessionNotification{
-		Summary: strings.Repeat("前", 181) + "后",
+		Summary: strings.Repeat("前", 601) + "后",
 	})
 
 	if !strings.HasPrefix(payload.Body, "...") {

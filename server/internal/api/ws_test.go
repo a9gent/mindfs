@@ -46,7 +46,7 @@ func TestAppendReplyEventPrefixesTruncatedSummary(t *testing.T) {
 
 	hub.AppendReplyEvent("sess-1", StreamEvent{
 		Type: "message_chunk",
-		Data: agenttypes.MessageChunk{Content: strings.Repeat("前", 51) + "后"},
+		Data: agenttypes.MessageChunk{Content: strings.Repeat("前", 601) + "后"},
 	})
 
 	snapshot := hub.PendingSessionSnapshot("sess-1")
@@ -55,6 +55,28 @@ func TestAppendReplyEventPrefixesTruncatedSummary(t *testing.T) {
 	}
 	if !strings.HasSuffix(snapshot.Summary, "后") {
 		t.Fatalf("summary should keep the end of the content, got %q", snapshot.Summary)
+	}
+}
+
+func TestAppendReplyEventResetsSummaryAfterAuxiliaryEvent(t *testing.T) {
+	hub := NewStreamHub(nil)
+
+	hub.AppendReplyEvent("sess-1", StreamEvent{
+		Type: string(agenttypes.EventTypeMessageChunk),
+		Data: agenttypes.MessageChunk{Content: "before aux"},
+	})
+	hub.AppendReplyEvent("sess-1", StreamEvent{
+		Type: string(agenttypes.EventTypePlanUpdate),
+		Data: agenttypes.PlanUpdate{Content: "- inspect"},
+	})
+	hub.AppendReplyEvent("sess-1", StreamEvent{
+		Type: string(agenttypes.EventTypeMessageChunk),
+		Data: agenttypes.MessageChunk{Content: "after aux"},
+	})
+
+	snapshot := hub.PendingSessionSnapshot("sess-1")
+	if snapshot.Summary != "after aux" {
+		t.Fatalf("summary = %q, want aux boundary to discard previous content", snapshot.Summary)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/gitview"
+	"mindfs/server/internal/notifyscript"
 	"mindfs/server/internal/preferences"
 	"mindfs/server/internal/relay"
 	"mindfs/server/internal/scheduled"
@@ -39,6 +40,7 @@ type StartOptions struct {
 	AgentConfigPath string
 	E2EEConfig      E2EEConfig
 	WebPushEnabled  bool
+	NotifyScript    string
 	UseTLS          bool
 	CertFile        string
 	KeyFile         string
@@ -122,6 +124,7 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 			PairingSecret: opts.E2EEConfig.PairingSecret,
 		}),
 		WebPush: webpush.NewService(webPushConfig, webPushStore),
+		Notify:  notifyscript.NewService(notifyscript.Config{Script: opts.NotifyScript}),
 	}
 	services.Scheduled = scheduled.NewService(services, services)
 	services.Scheduled.Start(ctx)

@@ -10,6 +10,7 @@ import (
 	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/api/usecase"
 	"mindfs/server/internal/e2ee"
+	"mindfs/server/internal/notify"
 	"mindfs/server/internal/session"
 
 	"github.com/gorilla/websocket"
@@ -610,8 +611,24 @@ func (h *StreamHub) AppendReplyEvent(sessionKey string, event StreamEvent) {
 	state.UpdatedAt = time.Now().UTC()
 	if event.Type == "message_chunk" {
 		if chunk, ok := event.Data.(agenttypes.MessageChunk); ok {
-			state.Summary = lastRunes(state.Summary+chunk.Content, 50)
+			state.Summary = lastRunes(state.Summary+chunk.Content, notify.BodyMaxRunes)
 		}
+	} else if isAuxiliarySummaryBoundary(event.Type) {
+		state.Summary = ""
+	}
+}
+
+func isAuxiliarySummaryBoundary(eventType string) bool {
+	switch agenttypes.EventType(eventType) {
+	case agenttypes.EventTypeThoughtChunk,
+		agenttypes.EventTypeToolCall,
+		agenttypes.EventTypeToolUpdate,
+		agenttypes.EventTypeTodoUpdate,
+		agenttypes.EventTypePlanUpdate,
+		agenttypes.EventTypeCompact:
+		return true
+	default:
+		return false
 	}
 }
 

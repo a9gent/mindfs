@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"mindfs/server/internal/config"
+	"mindfs/server/internal/notify"
 
 	webpushgo "github.com/SherClockHolmes/webpush-go"
 )
@@ -399,40 +399,9 @@ func (s *Service) DeleteSubscription(endpoint string) error {
 	return s.store.Delete(endpoint)
 }
 
-type Payload struct {
-	Type               string         `json:"type"`
-	Title              string         `json:"title"`
-	Body               string         `json:"body,omitempty"`
-	Tag                string         `json:"tag,omitempty"`
-	URL                string         `json:"url,omitempty"`
-	Icon               string         `json:"icon,omitempty"`
-	Badge              string         `json:"badge,omitempty"`
-	Renotify           bool           `json:"renotify,omitempty"`
-	RequireInteraction bool           `json:"requireInteraction,omitempty"`
-	Data               map[string]any `json:"data,omitempty"`
-}
-
-type SessionNotification struct {
-	Type         string
-	RootID       string
-	RootTitle    string
-	SessionKey   string
-	SessionTitle string
-	Summary      string
-	EventID      string
-}
-
-type ScheduledNotification struct {
-	RootID     string
-	RootTitle  string
-	TaskID     string
-	TaskName   string
-	SessionKey string
-	Summary    string
-	Error      string
-	Success    bool
-	EventID    string
-}
+type Payload = notify.Payload
+type SessionNotification = notify.SessionNotification
+type ScheduledNotification = notify.ScheduledNotification
 
 func (s *Service) NotifySession(ctx context.Context, in SessionNotification) {
 	if s == nil || !s.Enabled() {
@@ -448,6 +417,13 @@ func (s *Service) NotifyScheduled(ctx context.Context, in ScheduledNotification)
 	}
 	payload := BuildScheduledPayload(in)
 	s.sendAsync(ctx, firstNonEmpty(in.EventID, payload.Tag), payload)
+}
+
+func (s *Service) NotifyPayload(ctx context.Context, eventID string, payload Payload) {
+	if s == nil || !s.Enabled() {
+		return
+	}
+	s.sendAsync(ctx, firstNonEmpty(eventID, notify.EventID(payload), payload.Tag), payload)
 }
 
 func (s *Service) SendTest(ctx context.Context) error {
@@ -487,79 +463,11 @@ func testPayload() Payload {
 }
 
 func BuildSessionPayload(in SessionNotification) Payload {
-	kind := strings.TrimSpace(in.Type)
-	if kind == "" {
-		kind = "session.done"
-	}
-	status := "完成"
-	if kind == "session.ask_user" {
-		status = "需要输入"
-	}
-	root := firstNonEmpty(in.RootTitle, in.RootID, "MindFS")
-	sessionTitle := firstNonEmpty(in.SessionTitle, "会话")
-	title := fmt.Sprintf("%s · %s · %s", root, sessionTitle, status)
-	body := truncateRunes(strings.TrimSpace(in.Summary), 180)
-	tag := fmt.Sprintf("mindfs:%s:%s:%s", kind, in.RootID, in.SessionKey)
-	eventID := firstNonEmpty(in.EventID, tag)
-	if kind == "session.done" {
-		tag = fmt.Sprintf("mindfs:%s:%s:%s:%s", kind, in.RootID, in.SessionKey, eventID)
-	}
-	return Payload{
-		Type:               kind,
-		Title:              title,
-		Body:               body,
-		Tag:                tag,
-		URL:                sessionURL(in.RootID, in.SessionKey),
-		Icon:               "./pwa-192.png",
-		Badge:              "./pwa-192.png",
-		Renotify:           kind == "session.ask_user" || kind == "session.done",
-		RequireInteraction: kind == "session.ask_user",
-		Data: map[string]any{
-			"type":       kind,
-			"rootId":     in.RootID,
-			"sessionKey": in.SessionKey,
-			"eventId":    eventID,
-		},
-	}
+	return notify.BuildSessionPayload(in)
 }
 
 func BuildScheduledPayload(in ScheduledNotification) Payload {
-	root := firstNonEmpty(in.RootTitle, in.RootID, "MindFS")
-	status := "定时任务完成"
-	kind := "scheduled.done"
-	body := strings.TrimSpace(in.Summary)
-	renotify := false
-	if !in.Success {
-		status = "定时任务失败"
-		kind = "scheduled.failed"
-		body = strings.TrimSpace(in.Error)
-		renotify = true
-	}
-	taskName := firstNonEmpty(in.TaskName, "未命名任务")
-	if body == "" {
-		body = taskName
-	} else {
-		body = taskName + ": " + body
-	}
-	tag := fmt.Sprintf("mindfs:%s:%s:%s", kind, in.RootID, in.TaskID)
-	return Payload{
-		Type:               kind,
-		Title:              fmt.Sprintf("%s · %s", root, status),
-		Body:               truncateRunes(body, 180),
-		Tag:                tag,
-		URL:                sessionURL(in.RootID, in.SessionKey),
-		Icon:               "./pwa-192.png",
-		Badge:              "./pwa-192.png",
-		Renotify:           renotify,
-		RequireInteraction: !in.Success,
-		Data: map[string]any{
-			"type":       kind,
-			"rootId":     in.RootID,
-			"sessionKey": in.SessionKey,
-			"taskId":     in.TaskID,
-			"eventId":    firstNonEmpty(in.EventID, tag),
-		},
-	}
+	return notify.BuildScheduledPayload(in)
 }
 
 func (s *Service) sendAsync(ctx context.Context, eventID string, payload Payload) {
@@ -689,24 +597,6 @@ func subscriptionID(endpoint string) string {
 		return endpoint
 	}
 	return endpoint[len(endpoint)-24:]
-}
-
-func sessionURL(rootID, sessionKey string) string {
-	params := make([]string, 0, 2)
-	if strings.TrimSpace(rootID) != "" {
-		params = append(params, "root="+urlQueryEscape(rootID))
-	}
-	if strings.TrimSpace(sessionKey) != "" {
-		params = append(params, "session="+urlQueryEscape(sessionKey))
-	}
-	if len(params) == 0 {
-		return "./"
-	}
-	return "./?" + strings.Join(params, "&")
-}
-
-func urlQueryEscape(value string) string {
-	return url.QueryEscape(value)
 }
 
 func firstNonEmpty(values ...string) string {
