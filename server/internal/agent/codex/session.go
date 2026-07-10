@@ -690,7 +690,8 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 	if s == nil || s.client == nil {
 		return types.ModelList{}, errors.New("codex session not initialized")
 	}
-	resp, err := s.client.ListModels(ctx, codexsdk.ModelListParams{})
+	includeHidden := true
+	resp, err := s.client.ListModels(ctx, codexsdk.ModelListParams{IncludeHidden: &includeHidden})
 	if err != nil {
 		return types.ModelList{}, err
 	}
@@ -698,17 +699,7 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 	currentModelID := ""
 	defaults, _ := s.RuntimeDefaults(ctx)
 	for _, model := range resp.Data {
-		name := strings.TrimSpace(model.DisplayName)
-		if name == "" {
-			name = strings.TrimSpace(model.Model)
-		}
-		models = append(models, types.ModelInfo{
-			ID:            model.Model,
-			Name:          name,
-			Description:   model.Description,
-			Hidden:        model.Hidden,
-			SupportEffort: true,
-		})
+		models = append(models, mapCodexModel(model))
 		if model.IsDefault && currentModelID == "" {
 			currentModelID = model.Model
 		}
@@ -720,6 +711,39 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 		CurrentModelID: currentModelID,
 		Models:         models,
 	}, nil
+}
+
+func mapCodexModel(model codexsdk.Model) types.ModelInfo {
+	name := strings.TrimSpace(model.DisplayName)
+	if name == "" {
+		name = strings.TrimSpace(model.Model)
+	}
+
+	// app-server 已按模型返回完整能力；原样保序透传，兼容 max、ultra 及未来新增等级。
+	efforts := make([]string, 0, len(model.SupportedReasoningEfforts))
+	seen := make(map[string]struct{}, len(model.SupportedReasoningEfforts))
+	for _, option := range model.SupportedReasoningEfforts {
+		effort := strings.ToLower(strings.TrimSpace(string(option.ReasoningEffort)))
+		if effort == "" {
+			continue
+		}
+		if _, ok := seen[effort]; ok {
+			continue
+		}
+		seen[effort] = struct{}{}
+		efforts = append(efforts, effort)
+	}
+
+	return types.ModelInfo{
+		ID:          model.Model,
+		Name:        name,
+		Description: model.Description,
+		Hidden:      model.Hidden,
+		// 旧版 app-server 省略该字段时沿用原有能力回退；显式空数组则表示模型不支持。
+		SupportEffort: model.SupportedReasoningEfforts == nil || len(efforts) > 0,
+		Efforts:       efforts,
+		DefaultEffort: strings.ToLower(strings.TrimSpace(string(model.DefaultReasoningEffort))),
+	}
 }
 
 func (s *session) RuntimeDefaults(ctx context.Context) (types.RuntimeDefaults, error) {

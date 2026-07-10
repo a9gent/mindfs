@@ -2,6 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { type SessionMode } from "./ModeSelector";
 import { ModeSelector } from "./ModeSelector";
 import { AgentSelector } from "./AgentSelector";
+import { ModelSelector } from "./ModelSelector";
+import { AgentModeSelector } from "./AgentModeSelector";
+import { EffortSelector } from "./EffortSelector";
+import { FastServiceSelector } from "./FastServiceSelector";
 import { fetchAgents, fetchShells, restartAgent, type AgentStatus, type ShellStatus } from "../services/agents";
 import { fetchCandidates, type CandidateItem } from "../services/candidates";
 import { reportError } from "../services/error";
@@ -162,6 +166,15 @@ function getAgentDefaults(agent?: AgentStatus | null) {
     effort: agent?.default_effort || "",
     fastService: (agent?.default_fast_service || "") as "" | "on" | "off",
   } as const;
+}
+
+function getModelDefaultEffort(agent: AgentStatus | null | undefined, modelID: string): string {
+  const model = agent?.models?.find((item) => item.id === modelID);
+  if (model && !model.supportEffort) return "";
+  const modelEfforts = model?.efforts ?? [];
+  const availableEfforts = modelEfforts.length > 0 ? modelEfforts : agent?.efforts ?? [];
+  const candidates = [model?.default_effort || "", agent?.default_effort || ""];
+  return candidates.find((item) => item && availableEfforts.includes(item)) || availableEfforts[0] || "";
 }
 
 function buildPendingAttachment(file: File): PendingAttachment {
@@ -565,7 +578,11 @@ export function ActionBar({
     || (selectedAgent?.models ?? []).find(
       (item) => item.id === (selectedAgent?.default_model_id || selectedAgent?.current_model_id),
     );
-  const availableEfforts = selectedAgent?.efforts ?? [];
+  // 优先使用当前模型的能力，避免给 gpt-5.5 显示仅 gpt-5.6 支持的 ultra/max。
+  const modelEfforts = selectedModelInfo?.efforts ?? [];
+  const availableEfforts = modelEfforts.length > 0
+    ? modelEfforts
+    : selectedAgent?.efforts ?? [];
   const isCodexEffortAgent = selectedAgent?.name === "codex";
   const supportsEffort =
     availableEfforts.length > 0 && !!selectedModelInfo?.supportEffort;
@@ -582,9 +599,17 @@ export function ActionBar({
       return;
     }
     if (effort && !availableEfforts.includes(effort)) {
-      setEffort(getAgentDefaults(selectedAgent).effort);
+      const modelDefault = selectedModelInfo?.default_effort || "";
+      const agentDefault = getAgentDefaults(selectedAgent).effort;
+      setEffort(
+        availableEfforts.includes(modelDefault)
+          ? modelDefault
+          : availableEfforts.includes(agentDefault)
+            ? agentDefault
+            : availableEfforts[0] || "",
+      );
     }
-  }, [supportsEffort, effort, availableEfforts, selectedAgent, isCodexEffortAgent]);
+  }, [supportsEffort, effort, availableEfforts, selectedAgent, selectedModelInfo, isCodexEffortAgent]);
 
   useEffect(() => {
     if (!supportsServiceTier) {
@@ -1048,7 +1073,12 @@ export function ActionBar({
     : mode === "chat" && !isFocused
       ? blurPlaceholder
       : modePlaceholders[mode];
-  const editorRightInset = isMultiLine ? 14 : mode === "command" ? (isMobile ? 92 : 116) : isMobile ? 124 : 148;
+  // Agent 与模型拆成两个相邻控件后，单行编辑器需为右侧工具栏预留更多空间。
+  const editorRightInset = isMultiLine
+    ? 14
+    : mode === "command"
+      ? isMobile ? 92 : 116
+      : isMobile ? 224 : 280;
   const editorBottomInset = isMultiLine ? 44 : 12;
   const editorMinHeight = 44;
   const mobileFileSidebarButton = isMobile ? (
@@ -1537,26 +1567,19 @@ export function ActionBar({
 
               <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} />
               {mode !== "command" ? (
-                <div>
+                <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
                   <AgentSelector
                     agent={agent}
-                    model={model}
-                    mode={agentMode}
-                    effort={effort}
                     agents={agents}
-                    onAgentChange={(nextAgent, nextModel) => {
+                    onAgentChange={(nextAgent) => {
                       const nextStatus = agents.find((item) => item.name === nextAgent);
                       const defaults = getAgentDefaults(nextStatus);
                       setAgent(nextAgent);
-                      setModel(nextModel || defaults.model);
+                      setModel(defaults.model);
                       setAgentMode("");
-                      setEffort(defaults.effort);
+                      setEffort(getModelDefaultEffort(nextStatus, defaults.model));
                       setFastService(defaults.fastService);
                     }}
-                    onModeChange={(nextAgentMode) => setAgentMode(nextAgentMode || "")}
-                    onEffortChange={(nextEffort) => setEffort(nextEffort || "")}
-                    fastService={fastService}
-                    onFastServiceChange={(nextFastService) => setFastService(nextFastService || "")}
                     onAgentRestart={async (targetAgent) => {
                       await restartAgent(targetAgent);
                       const items = await fetchAgents(true);
@@ -1564,6 +1587,40 @@ export function ActionBar({
                     }}
                     compact={true}
                     warnUnavailable={isSelectedAgentUnavailable}
+                  />
+                  <ModelSelector
+                    agent={selectedAgent}
+                    model={model}
+                    compact
+                    maxButtonWidth={isMobile ? "min(25vw, 88px)" : "132px"}
+                    onModelChange={(nextModel) => {
+                      const defaults = getAgentDefaults(selectedAgent);
+                      setModel(nextModel);
+                      setAgentMode("");
+                      setEffort(getModelDefaultEffort(selectedAgent, nextModel));
+                      setFastService(defaults.fastService);
+                    }}
+                  />
+                  <AgentModeSelector
+                    agent={selectedAgent}
+                    mode={agentMode}
+                    compact
+                    maxButtonWidth={isMobile ? "min(25vw, 88px)" : "132px"}
+                    onModeChange={(nextAgentMode) => setAgentMode(nextAgentMode || "")}
+                  />
+                  <EffortSelector
+                    agent={selectedAgent}
+                    model={model}
+                    effort={effort}
+                    compact
+                    maxButtonWidth={isMobile ? "min(25vw, 88px)" : "132px"}
+                    onEffortChange={(nextEffort) => setEffort(nextEffort || "")}
+                  />
+                  <FastServiceSelector
+                    agent={selectedAgent}
+                    fastService={fastService}
+                    compact
+                    onFastServiceChange={(nextFastService) => setFastService(nextFastService || "")}
                   />
                 </div>
               ) : (

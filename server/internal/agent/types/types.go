@@ -193,6 +193,9 @@ type ModelInfo struct {
 	Description   string `json:"description,omitempty"`
 	Hidden        bool   `json:"hidden,omitempty"`
 	SupportEffort bool   `json:"supportEffort,omitempty"`
+	// Efforts 和 DefaultEffort 来自模型目录，避免把不同模型的思考等级混成 Agent 全局能力。
+	Efforts       []string `json:"efforts,omitempty"`
+	DefaultEffort string   `json:"default_effort,omitempty"`
 }
 
 type ModelList struct {

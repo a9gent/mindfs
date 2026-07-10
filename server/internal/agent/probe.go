@@ -709,7 +709,9 @@ func statusChanged(prev Status, next Status) bool {
 			prev.Models[i].Name != next.Models[i].Name ||
 			prev.Models[i].Description != next.Models[i].Description ||
 			prev.Models[i].Hidden != next.Models[i].Hidden ||
-			prev.Models[i].SupportEffort != next.Models[i].SupportEffort {
+			prev.Models[i].SupportEffort != next.Models[i].SupportEffort ||
+			prev.Models[i].DefaultEffort != next.Models[i].DefaultEffort ||
+			!equalStrings(prev.Models[i].Efforts, next.Models[i].Efforts) {
 			return true
 		}
 	}
@@ -930,11 +932,25 @@ func preserveKnownCapabilities(prev Status, next Status) Status {
 func inferAgentEfforts(models []agenttypes.ModelInfo) []string {
 	hasSupport := false
 	looksLikeClaude := false
+	explicitEfforts := make([]string, 0)
+	seenEfforts := make(map[string]struct{})
 	for _, model := range models {
 		if !model.SupportEffort {
 			continue
 		}
 		hasSupport = true
+		// 新协议以模型目录为准；Agent 级列表仅作为旧前端和旧 Agent 的能力并集。
+		for _, rawEffort := range model.Efforts {
+			effort := strings.ToLower(strings.TrimSpace(rawEffort))
+			if effort == "" {
+				continue
+			}
+			if _, ok := seenEfforts[effort]; ok {
+				continue
+			}
+			seenEfforts[effort] = struct{}{}
+			explicitEfforts = append(explicitEfforts, effort)
+		}
 		joined := strings.ToLower(strings.TrimSpace(model.ID) + " " + strings.TrimSpace(model.Name))
 		if strings.Contains(joined, "sonnet") || strings.Contains(joined, "opus") {
 			looksLikeClaude = true
@@ -943,10 +959,25 @@ func inferAgentEfforts(models []agenttypes.ModelInfo) []string {
 	if !hasSupport {
 		return nil
 	}
+	if len(explicitEfforts) > 0 {
+		return explicitEfforts
+	}
 	if looksLikeClaude {
 		return []string{"low", "medium", "high", "xhigh", "max"}
 	}
 	return []string{"low", "medium", "high", "xhigh"}
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func supportsAgentFastService(agentName string) bool {

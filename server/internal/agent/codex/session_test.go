@@ -1,7 +1,9 @@
 package codex
 
 import (
+	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	agenttypes "mindfs/server/internal/agent/types"
@@ -9,6 +11,66 @@ import (
 	codexsdk "github.com/fanwenlin/codex-go-sdk/codex"
 	codextypes "github.com/fanwenlin/codex-go-sdk/types"
 )
+
+type modelListExecStub struct {
+	params   codextypes.ModelListParams
+	response *codextypes.ModelListResponse
+}
+
+func (e *modelListExecStub) Run(codexsdk.CodexExecArgs) <-chan codexsdk.ExecResult {
+	output := make(chan codexsdk.ExecResult)
+	close(output)
+	return output
+}
+
+func (e *modelListExecStub) ListModels(_ context.Context, params codextypes.ModelListParams) (*codextypes.ModelListResponse, error) {
+	e.params = params
+	return e.response, nil
+}
+
+func (e *modelListExecStub) RPCCall(_ context.Context, _ string, _ interface{}) (json.RawMessage, error) {
+	return json.RawMessage(`{"config":{}}`), nil
+}
+
+func TestListModelsPreservesPerModelReasoningEfforts(t *testing.T) {
+	effortOptions := []codextypes.ReasoningEffortOption{
+		{ReasoningEffort: codextypes.ReasoningEffort("low")},
+		{ReasoningEffort: codextypes.ReasoningEffort("medium")},
+		{ReasoningEffort: codextypes.ReasoningEffort("high")},
+		{ReasoningEffort: codextypes.ReasoningEffort("xhigh")},
+		{ReasoningEffort: codextypes.ReasoningEffort("max")},
+		{ReasoningEffort: codextypes.ReasoningEffort("ultra")},
+	}
+	exec := &modelListExecStub{response: &codextypes.ModelListResponse{
+		Data: []codextypes.Model{{
+			Model:                     "gpt-5.6-sol",
+			DisplayName:               "GPT-5.6-Sol",
+			SupportedReasoningEfforts: effortOptions,
+			DefaultReasoningEffort:    codextypes.ReasoningEffort("low"),
+			IsDefault:                 true,
+		}},
+	}}
+	s := &session{client: codexsdk.NewCodexWithExec(exec, codextypes.CodexOptions{})}
+
+	models, err := s.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+	if exec.params.IncludeHidden == nil || !*exec.params.IncludeHidden {
+		t.Fatal("ListModels() did not request hidden models")
+	}
+	if len(models.Models) != 1 {
+		t.Fatalf("models count = %d, want 1", len(models.Models))
+	}
+	got := models.Models[0]
+	wantEfforts := []string{"low", "medium", "high", "xhigh", "max", "ultra"}
+	if !reflect.DeepEqual(got.Efforts, wantEfforts) {
+		t.Fatalf("efforts = %#v, want %#v", got.Efforts, wantEfforts)
+	}
+	if !got.SupportEffort || got.DefaultEffort != "low" {
+		t.Fatalf("model effort metadata = %#v", got)
+	}
+}
 
 func TestHandleRawEventPlanDeltaAggregatesPlanUpdates(t *testing.T) {
 	s := &session{}

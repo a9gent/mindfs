@@ -35,6 +35,8 @@ export type AgentModelInfo = {
   description?: string;
   hidden?: boolean;
   supportEffort?: boolean;
+  efforts?: string[];
+  default_effort?: string;
 };
 
 export type AgentModeInfo = {
@@ -59,7 +61,6 @@ export type ShellStatus = {
   default?: boolean;
 };
 
-const VALID_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 function normalizeEfforts(input: unknown): string[] | undefined {
   if (!Array.isArray(input)) {
     return undefined;
@@ -67,8 +68,12 @@ function normalizeEfforts(input: unknown): string[] | undefined {
   const seen = new Set<string>();
   const efforts: string[] = [];
   for (const item of input) {
-    const value = String(item || "").trim().toLowerCase();
-    if (!VALID_EFFORTS.includes(value as (typeof VALID_EFFORTS)[number])) {
+    if (typeof item !== "string") {
+      continue;
+    }
+    const value = item.trim().toLowerCase();
+    // 思考等级由 Agent 的模型目录定义，不能用前端白名单丢弃 ultra 等新增能力。
+    if (!value) {
       continue;
     }
     if (seen.has(value)) {
@@ -88,6 +93,16 @@ function normalizeAgentStatus(input: unknown): AgentStatus | null {
   return {
     ...agent,
     efforts: normalizeEfforts(agent.efforts),
+    models: Array.isArray(agent.models)
+      ? agent.models.map((model) => ({
+          ...model,
+          efforts: normalizeEfforts(model.efforts),
+          default_effort:
+            typeof model.default_effort === "string"
+              ? model.default_effort.trim().toLowerCase()
+              : "",
+        }))
+      : agent.models,
     default_fast_service:
       typeof agent.default_fast_service === "string"
         ? agent.default_fast_service
