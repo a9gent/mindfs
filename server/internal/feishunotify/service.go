@@ -236,6 +236,8 @@ func (s *Service) PublicConfig() PublicConfig {
 }
 
 // UpdateConfig merges the request into the live config, persists, and hot-reloads.
+// Persist succeeds first; memory is only committed after SaveConfig returns nil so a
+// failed save never leaves the process sending with a config the disk does not have.
 func (s *Service) UpdateConfig(req UpdateRequest) (PublicConfig, error) {
 	if s == nil {
 		return PublicConfig{}, errors.New("feishu notify service not configured")
@@ -261,6 +263,12 @@ func (s *Service) UpdateConfig(req UpdateRequest) (PublicConfig, error) {
 		cfg.Events = req.Events
 	}
 	cfg = normalizeConfig(cfg)
+	// Hold s.mu across SaveConfig so concurrent updates cannot interleave
+	// (next B saved then next A committed). SaveConfig only does filesystem I/O.
+	if err := SaveConfig(cfg); err != nil {
+		s.mu.Unlock()
+		return toPublicConfig(s.snapshot()), fmt.Errorf("persist feishu-notify config: %w", err)
+	}
 	s.config = cfg
 	// Credentials changed → force token refresh on next app-mode send.
 	s.tokenMu.Lock()
@@ -269,28 +277,30 @@ func (s *Service) UpdateConfig(req UpdateRequest) (PublicConfig, error) {
 	s.tokenMu.Unlock()
 	s.mu.Unlock()
 
-	if err := SaveConfig(cfg); err != nil {
-		return toPublicConfig(cfg), fmt.Errorf("persist feishu-notify config: %w", err)
-	}
 	log.Printf("[feishu-notify] config.updated enabled=%t active=%t webhook=%t app=%t",
 		cfg.Enabled, configIsActive(cfg), cfg.WebhookURL != "", cfg.AppID != "")
 	return toPublicConfig(cfg), nil
 }
 
 // ReplaceConfig fully replaces live config (used by tests / internal).
+// Same persist-then-commit order as UpdateConfig.
 func (s *Service) ReplaceConfig(cfg Config) error {
 	if s == nil {
 		return errors.New("feishu notify service not configured")
 	}
 	cfg = normalizeConfig(cfg)
 	s.mu.Lock()
+	if err := SaveConfig(cfg); err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	s.config = cfg
 	s.tokenMu.Lock()
 	s.accessToken = ""
 	s.tokenExpiry = time.Time{}
 	s.tokenMu.Unlock()
 	s.mu.Unlock()
-	return SaveConfig(cfg)
+	return nil
 }
 
 func (s *Service) Enabled() bool {
@@ -376,18 +386,42 @@ func (s *Service) send(ctx context.Context, payload notify.Payload) error {
 	}
 
 	cfg := s.snapshot()
-	var firstErr error
+	var webhookErr, appErr error
+	sentOK := false
 	if cfg.WebhookURL != "" {
 		if err := s.postJSON(ctx, cfg.WebhookURL, body); err != nil {
-			firstErr = err
+			webhookErr = err
+		} else {
+			sentOK = true
 		}
 	}
 	if cfg.AppID != "" && cfg.AppSecret != "" && cfg.ChatID != "" {
-		if err := s.sendAppMessage(ctx, cfg, body); err != nil && firstErr == nil {
-			firstErr = err
+		if err := s.sendAppMessage(ctx, cfg, body); err != nil {
+			appErr = err
+		} else {
+			sentOK = true
 		}
 	}
-	return firstErr
+	// Any successful channel is enough; only fail when every attempted path failed.
+	if sentOK {
+		if webhookErr != nil {
+			log.Printf("[feishu-notify] webhook.error err=%v (app path ok)", webhookErr)
+		}
+		if appErr != nil {
+			log.Printf("[feishu-notify] app.error err=%v (webhook path ok)", appErr)
+		}
+		return nil
+	}
+	if webhookErr != nil && appErr != nil {
+		return fmt.Errorf("webhook: %v; app: %v", webhookErr, appErr)
+	}
+	if webhookErr != nil {
+		return webhookErr
+	}
+	if appErr != nil {
+		return appErr
+	}
+	return errors.New("feishu notify has no delivery channel")
 }
 
 func (s *Service) sendAppMessage(ctx context.Context, cfg Config, interactiveBody map[string]any) error {

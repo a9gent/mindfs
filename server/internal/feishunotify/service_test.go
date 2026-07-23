@@ -6,10 +6,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"mindfs/server/internal/config"
 	"mindfs/server/internal/notify"
 )
 
@@ -112,34 +115,26 @@ func TestMergeOverrides(t *testing.T) {
 
 func TestUpdateConfigHotReload(t *testing.T) {
 	dir := t.TempDir()
+	// MindFSConfigDir uses os.UserConfigDir → APPDATA on Windows, HOME/.config on Unix.
 	t.Setenv("APPDATA", dir)
-	// MindFSConfigDir uses OS user config; force via env is platform-dependent.
-	// Exercise in-memory Replace/Update without relying on config dir when possible.
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
+
 	svc := NewService(Config{Enabled: false})
 	if svc.Enabled() {
 		t.Fatal("expected disabled")
 	}
 	enabled := true
 	webhook := "https://open.feishu.cn/open-apis/bot/v2/hook/test"
-	// UpdateConfig persists; if config dir fails in CI we still want hot memory update.
-	// Use ReplaceConfig path via UpdateConfig and tolerate persist error only if dir unusable —
-	// on normal temp APPDATA it should work on Windows; on Unix HOME may be needed.
-	// Prefer direct field apply via UpdateConfig; if SaveConfig fails test still checks memory.
 	out, err := svc.UpdateConfig(UpdateRequest{
 		Enabled:    &enabled,
 		WebhookURL: &webhook,
 	})
 	if err != nil {
-		// Persist may fail if MindFSConfigDir is not writable; still verify live config.
-		t.Logf("UpdateConfig persist note: %v", err)
+		t.Fatalf("UpdateConfig persist failed: %v", err)
 	}
 	if !svc.Enabled() {
-		// If persist failed after memory update, Enabled should still be true.
-		// Re-check public.
-		_ = out
-		if !configIsActive(svc.snapshot()) {
-			t.Fatalf("expected active after update public=%#v snapshot=%#v", out, svc.snapshot())
-		}
+		t.Fatalf("expected active after update public=%#v snapshot=%#v", out, svc.snapshot())
 	}
 	pub := svc.PublicConfig()
 	if !pub.Enabled || pub.WebhookURL != webhook || !pub.Active {
@@ -148,25 +143,91 @@ func TestUpdateConfigHotReload(t *testing.T) {
 	if pub.HasAppSecret {
 		t.Fatal("expected no secret")
 	}
+	// Disk must match memory after successful update.
+	disk, err := LoadOrCreateConfig()
+	if err != nil {
+		t.Fatalf("reload disk: %v", err)
+	}
+	if !disk.Enabled || disk.WebhookURL != webhook {
+		t.Fatalf("disk=%#v", disk)
+	}
+
 	// Keep secret when omitted
 	secret := "super-secret"
 	appID := "cli_x"
 	chat := "oc_x"
-	_, _ = svc.UpdateConfig(UpdateRequest{AppID: &appID, AppSecret: &secret, ChatID: &chat})
+	if _, err := svc.UpdateConfig(UpdateRequest{AppID: &appID, AppSecret: &secret, ChatID: &chat}); err != nil {
+		t.Fatal(err)
+	}
 	if !svc.PublicConfig().HasAppSecret {
 		t.Fatal("expected has_app_secret")
 	}
 	emptyWebhook := ""
-	_, _ = svc.UpdateConfig(UpdateRequest{WebhookURL: &emptyWebhook})
+	if _, err := svc.UpdateConfig(UpdateRequest{WebhookURL: &emptyWebhook}); err != nil {
+		t.Fatal(err)
+	}
 	// secret should remain
 	if !svc.PublicConfig().HasAppSecret {
 		t.Fatal("secret should be preserved when omitted")
 	}
 	clear := ""
-	_, _ = svc.UpdateConfig(UpdateRequest{AppSecret: &clear})
+	if _, err := svc.UpdateConfig(UpdateRequest{AppSecret: &clear}); err != nil {
+		t.Fatal(err)
+	}
 	if svc.PublicConfig().HasAppSecret {
 		t.Fatal("secret should clear when empty string sent")
 	}
+}
+
+func TestUpdateConfigPersistFailureKeepsOldMemory(t *testing.T) {
+	// Point config dir at a path that cannot be created as a directory for SaveConfig.
+	// On Windows, using an existing file as the config parent makes MkdirAll/Write fail.
+	base := t.TempDir()
+	blocker := filepath.Join(base, "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// UserConfigDir = APPDATA (Windows) or HOME-based; put a file where mindfs/ would be created
+	// by joining UserConfigDir with "mindfs". Easiest portable approach: set APPDATA/HOME to a
+	// path whose "mindfs" child is an existing file (SaveConfig MkdirAll then write fails).
+	t.Setenv("APPDATA", base)
+	t.Setenv("HOME", base)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(base, ".config"))
+	// Create a file named "mindfs" so MindFSConfigDir path cannot hold feishu-notify.json as file under it.
+	// MindFSConfigDir returns filepath.Join(UserConfigDir(), "mindfs").
+	// If UserConfigDir returns base, create base/mindfs as a FILE.
+	// Note: os.UserConfigDir may ignore env on some platforms; skip if not controllable.
+	cfgDir, err := configdirForTest()
+	if err != nil {
+		t.Skip(err)
+	}
+	if err := os.WriteFile(cfgDir, []byte("blocked"), 0o600); err != nil {
+		// If cfgDir already exists as dir from earlier test env, remove and replace with file.
+		_ = os.RemoveAll(cfgDir)
+		if err := os.WriteFile(cfgDir, []byte("blocked"), 0o600); err != nil {
+			t.Skipf("cannot block config dir: %v", err)
+		}
+	}
+
+	svc := NewService(Config{Enabled: true, WebhookURL: "https://old.example/hook"})
+	if !svc.Enabled() {
+		t.Fatal("precondition")
+	}
+	enabled := false
+	empty := ""
+	_, err = svc.UpdateConfig(UpdateRequest{Enabled: &enabled, WebhookURL: &empty})
+	if err == nil {
+		t.Fatal("expected persist error")
+	}
+	// Memory must remain old active config (persist-then-commit).
+	pub := svc.PublicConfig()
+	if !pub.Enabled || pub.WebhookURL != "https://old.example/hook" || !pub.Active {
+		t.Fatalf("memory mutated despite persist failure: %#v", pub)
+	}
+}
+
+func configdirForTest() (string, error) {
+	return config.MindFSConfigDir()
 }
 
 func TestAppMessagePathUsesToken(t *testing.T) {
