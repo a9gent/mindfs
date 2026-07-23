@@ -508,6 +508,10 @@ func (s *AppContext) GetWebPushService() *webpush.Service {
 	return s.WebPush
 }
 
+func (s *AppContext) GetFeishuService() *feishunotify.Service {
+	return s.Feishu
+}
+
 func (s *AppContext) GetGitHubImportService() *githubimport.Service {
 	return s.GitHub
 }

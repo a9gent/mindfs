@@ -4,13 +4,32 @@ MindFS can push session and scheduled-task events to Feishu (Lark) in addition t
 
 This is **outbound push only** (session done / need input / scheduled done|failed). It is inspired by Codeg’s Lark channel send path (tenant token + IM API / interactive cards), but does not implement bidirectional chat control.
 
-## Configuration
+## Configure in the UI (recommended)
 
-Any one of the following enables Feishu notify when credentials are complete:
+Open the file-tree **⋯ menu** → **飞书通知 / Feishu notify**:
 
-### 1) Bot webhook (simplest)
+1. Enable the toggle
+2. Paste a Feishu group bot **Webhook URL**
+3. Click **Save**
+4. Optionally **Send test**
 
-File `%AppData%/mindfs/feishu-notify.json` (or `~/.config/mindfs/feishu-notify.json`):
+Changes are written to `%AppData%/mindfs/feishu-notify.json` (or `~/.config/mindfs/feishu-notify.json`) and applied **live** — no process restart.
+
+Optional app credentials (App ID / App Secret / Chat ID) are under the expandable **App credentials** section in the same panel. `app_secret` is never returned by the API; leave the field blank to keep the stored secret.
+
+### HTTP API
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/api/feishu-notify` | Public config (`has_app_secret`, no secret value) |
+| `PUT` / `POST` | `/api/feishu-notify` | Partial update; omit fields to keep; empty `app_secret` clears |
+| `POST` | `/api/feishu-notify/test` | Send a test interactive card |
+
+## File / env / flags (optional bootstrap)
+
+You can still seed config outside the UI:
+
+### 1) Bot webhook
 
 ```json
 {
@@ -19,7 +38,7 @@ File `%AppData%/mindfs/feishu-notify.json` (or `~/.config/mindfs/feishu-notify.j
 }
 ```
 
-Or flags / env:
+Or flags / env (applied once at startup, then overridable from the UI):
 
 - `--feishu-webhook` / `MINDFS_FEISHU_WEBHOOK`
 

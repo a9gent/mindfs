@@ -361,6 +361,10 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/web-push/subscriptions", h.protectedEndpoint(h.handleWebPushSubscriptionSave))
 	r.Delete("/api/web-push/subscriptions", h.protectedEndpoint(h.handleWebPushSubscriptionDelete))
 	r.Post("/api/web-push/test", h.protectedEndpoint(h.handleWebPushTest))
+	r.Get("/api/feishu-notify", h.protectedEndpoint(h.handleFeishuNotifyGet))
+	r.Put("/api/feishu-notify", h.protectedEndpoint(h.handleFeishuNotifyPut))
+	r.Post("/api/feishu-notify", h.protectedEndpoint(h.handleFeishuNotifyPut))
+	r.Post("/api/feishu-notify/test", h.protectedEndpoint(h.handleFeishuNotifyTest))
 
 	// Agent status API
 	r.Get("/api/agents", h.protectedEndpoint(h.handleAgentsList))

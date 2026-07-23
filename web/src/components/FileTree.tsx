@@ -44,6 +44,12 @@ import {
   webPushReasonLabel,
   type WebPushStatus,
 } from "../services/webPush";
+import {
+  getFeishuNotifyConfig,
+  sendFeishuNotifyTest,
+  updateFeishuNotifyConfig,
+  type FeishuNotifyConfig,
+} from "../services/feishuNotify";
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -357,6 +363,238 @@ function WebPushMenuItem() {
             </button>
           ) : null}
         </>
+      ) : null}
+    </div>
+  );
+}
+
+
+function FeishuNotifyMenuItem() {
+  const { t } = useI18n();
+  const [config, setConfig] = React.useState<FeishuNotifyConfig | null>(null);
+  const [expanded, setExpanded] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [message, setMessage] = React.useState("");
+  const [enabled, setEnabled] = React.useState(false);
+  const [webhook, setWebhook] = React.useState("");
+  const [appId, setAppId] = React.useState("");
+  const [appSecret, setAppSecret] = React.useState("");
+  const [chatId, setChatId] = React.useState("");
+  const [showAppFields, setShowAppFields] = React.useState(false);
+
+  const applyConfig = React.useCallback((next: FeishuNotifyConfig) => {
+    setConfig(next);
+    setEnabled(Boolean(next.enabled));
+    setWebhook(next.webhook_url || "");
+    setAppId(next.app_id || "");
+    setChatId(next.chat_id || "");
+    setAppSecret("");
+    setShowAppFields(Boolean(next.app_id || next.chat_id || next.has_app_secret));
+  }, []);
+
+  const refresh = React.useCallback(async () => {
+    try {
+      applyConfig(await getFeishuNotifyConfig());
+    } catch (error) {
+      setConfig(null);
+      setMessage(error instanceof Error ? error.message : t("fileTree.feishuLoadFailed"));
+    }
+  }, [applyConfig, t]);
+
+  React.useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const save = async () => {
+    if (busy) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const payload: Parameters<typeof updateFeishuNotifyConfig>[0] = {
+        enabled,
+        webhook_url: webhook.trim(),
+        app_id: appId.trim(),
+        chat_id: chatId.trim(),
+      };
+      if (appSecret.trim() !== "") {
+        payload.app_secret = appSecret.trim();
+      }
+      const next = await updateFeishuNotifyConfig(payload);
+      applyConfig(next);
+      setMessage(t("fileTree.feishuSaved"));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : t("fileTree.feishuSaveFailed"));
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runTest = async () => {
+    if (busy) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await sendFeishuNotifyTest();
+      setMessage(t("fileTree.feishuTestSent"));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : t("fileTree.feishuSaveFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const active = Boolean(config?.active);
+  const label = active ? t("fileTree.feishuNotifyActive") : t("fileTree.feishuNotifyInactive");
+  const detail = message || t("fileTree.feishuNotifyHint");
+  const fieldStyle: React.CSSProperties = {
+    width: "100%",
+    boxSizing: "border-box",
+    border: "1px solid var(--border-color)",
+    background: "var(--bg-primary)",
+    color: "var(--text-primary)",
+    borderRadius: "6px",
+    padding: "6px 8px",
+    fontSize: "11px",
+    outline: "none",
+  };
+  const secondaryBtn: React.CSSProperties = {
+    ...fileTreeMenuButtonStyle,
+    padding: "6px 8px",
+    color: "var(--text-secondary)",
+    opacity: busy ? 0.55 : 1,
+    cursor: busy ? "not-allowed" : "pointer",
+  };
+
+  return (
+    <div>
+      <div
+        style={{
+          ...fileTreeMenuButtonStyle,
+          color: active ? "var(--accent-color)" : "var(--text-primary)",
+          cursor: "default",
+          minWidth: 0,
+          whiteSpace: "nowrap",
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          style={{
+            minWidth: 0,
+            border: "none",
+            background: "transparent",
+            color: "inherit",
+            padding: 0,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "8px",
+            flex: "0 1 auto",
+            cursor: "pointer",
+            font: "inherit",
+            textAlign: "left",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {busy ? t("fileTree.feishuBusy") : label}
+          </span>
+        </button>
+        <span style={{ marginLeft: "auto", fontSize: "11px", opacity: active ? 1 : 0, flexShrink: 0 }}>✓</span>
+      </div>
+      {expanded ? (
+        <div style={{ padding: "0 10px 8px 32px", display: "flex", flexDirection: "column", gap: "6px" }}>
+          <div style={{ color: "var(--text-secondary)", fontSize: "11px", lineHeight: 1.35 }}>{detail}</div>
+          <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--text-primary)" }}>
+            <input
+              type="checkbox"
+              checked={enabled}
+              disabled={busy}
+              onChange={(e) => setEnabled(e.target.checked)}
+            />
+            <span>{t("fileTree.feishuEnabled")}</span>
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", color: "var(--text-secondary)" }}>
+            <span>{t("fileTree.feishuWebhook")}</span>
+            <input
+              type="url"
+              value={webhook}
+              disabled={busy}
+              placeholder={t("fileTree.feishuWebhookPlaceholder")}
+              onChange={(e) => setWebhook(e.target.value)}
+              style={fieldStyle}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setShowAppFields((v) => !v)}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: "var(--text-secondary)",
+              padding: 0,
+              textAlign: "left",
+              cursor: "pointer",
+              fontSize: "11px",
+            }}
+          >
+            {t("fileTree.feishuAppMode")} {showAppFields ? "▾" : "▸"}
+          </button>
+          {showAppFields ? (
+            <>
+              <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", color: "var(--text-secondary)" }}>
+                <span>{t("fileTree.feishuAppId")}</span>
+                <input
+                  type="text"
+                  value={appId}
+                  disabled={busy}
+                  onChange={(e) => setAppId(e.target.value)}
+                  style={fieldStyle}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", color: "var(--text-secondary)" }}>
+                <span>{t("fileTree.feishuAppSecret")}</span>
+                <input
+                  type="password"
+                  value={appSecret}
+                  disabled={busy}
+                  placeholder={config?.has_app_secret ? t("fileTree.feishuAppSecretKeep") : ""}
+                  onChange={(e) => setAppSecret(e.target.value)}
+                  style={fieldStyle}
+                  autoComplete="new-password"
+                />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", color: "var(--text-secondary)" }}>
+                <span>{t("fileTree.feishuChatId")}</span>
+                <input
+                  type="text"
+                  value={chatId}
+                  disabled={busy}
+                  onChange={(e) => setChatId(e.target.value)}
+                  style={fieldStyle}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+            </>
+          ) : null}
+          <button type="button" disabled={busy} onClick={() => void save()} style={secondaryBtn}>
+            <span>{t("fileTree.feishuSave")}</span>
+          </button>
+          {active ? (
+            <button type="button" disabled={busy} onClick={() => void runTest()} style={secondaryBtn}>
+              <span>{t("fileTree.feishuTest")}</span>
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
@@ -2600,6 +2838,7 @@ export function FileTree({
                   <span>{t("fileTree.relayLocalServices")}</span>
                 </button>
                 {!isNativeApp ? <WebPushMenuItem /> : null}
+                <FeishuNotifyMenuItem />
                 <div style={{ height: "1px", background: "var(--border-color)", margin: "6px 4px" }} />
                 <button
                   type="button"

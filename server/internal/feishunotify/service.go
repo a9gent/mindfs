@@ -51,13 +51,41 @@ type Config struct {
 
 type persistedConfig = Config
 
+// PublicConfig is the API-facing view of Config. AppSecret is never returned.
+type PublicConfig struct {
+	Enabled      bool     `json:"enabled"`
+	WebhookURL   string   `json:"webhook_url"`
+	AppID        string   `json:"app_id"`
+	HasAppSecret bool     `json:"has_app_secret"`
+	ChatID       string   `json:"chat_id"`
+	Events       []string `json:"events,omitempty"`
+	// Active is true when enabled and enough credentials exist to send.
+	Active bool `json:"active"`
+}
+
+// UpdateRequest is the frontend payload for PUT/POST config.
+// Pointer fields: nil keeps current; non-nil replaces (empty string clears).
+// AppSecret is special: omit/nil keeps existing secret; "" clears; non-empty replaces.
+type UpdateRequest struct {
+	Enabled    *bool    `json:"enabled"`
+	WebhookURL *string  `json:"webhook_url"`
+	AppID      *string  `json:"app_id"`
+	AppSecret  *string  `json:"app_secret"`
+	ChatID     *string  `json:"chat_id"`
+	// Events: when present (including empty array), replaces the filter.
+	// When the field is omitted entirely, existing events are kept.
+	// Use EventsSet to distinguish omit vs empty for JSON decoding at handler level.
+	Events    []string `json:"events"`
+	EventsSet bool     `json:"-"`
+}
+
 type Service struct {
-	config Config
 	client *http.Client
 
 	sem chan struct{}
 
 	mu     sync.Mutex
+	config Config
 	recent map[string]time.Time
 
 	tokenMu     sync.Mutex
@@ -95,6 +123,36 @@ func LoadOrCreateConfig() (Config, error) {
 		return Config{}, fmt.Errorf("decode %s: %w", path, err)
 	}
 	return normalizeConfig(cfg), nil
+}
+
+// SaveConfig writes config to MindFSConfigDir()/feishu-notify.json.
+func SaveConfig(cfg Config) error {
+	cfg = normalizeConfig(cfg)
+	dir, err := config.MindFSConfigDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, configFileName)
+	payload, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, payload, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		// Windows may fail rename over existing file; try remove+rename.
+		_ = os.Remove(path)
+		if err2 := os.Rename(tmp, path); err2 != nil {
+			_ = os.Remove(tmp)
+			return err2
+		}
+	}
+	return nil
 }
 
 // MergeOverrides applies non-empty flag/env values onto a base config.
@@ -138,17 +196,108 @@ func normalizeConfig(cfg Config) Config {
 	return cfg
 }
 
+func configIsActive(cfg Config) bool {
+	if !cfg.Enabled {
+		return false
+	}
+	if cfg.WebhookURL != "" {
+		return true
+	}
+	return cfg.AppID != "" && cfg.AppSecret != "" && cfg.ChatID != ""
+}
+
+func toPublicConfig(cfg Config) PublicConfig {
+	events := cfg.Events
+	if events == nil {
+		events = []string{}
+	}
+	return PublicConfig{
+		Enabled:      cfg.Enabled,
+		WebhookURL:   cfg.WebhookURL,
+		AppID:        cfg.AppID,
+		HasAppSecret: cfg.AppSecret != "",
+		ChatID:       cfg.ChatID,
+		Events:       events,
+		Active:       configIsActive(cfg),
+	}
+}
+
+func (s *Service) snapshot() Config {
+	if s == nil {
+		return Config{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.config
+}
+
+func (s *Service) PublicConfig() PublicConfig {
+	return toPublicConfig(s.snapshot())
+}
+
+// UpdateConfig merges the request into the live config, persists, and hot-reloads.
+func (s *Service) UpdateConfig(req UpdateRequest) (PublicConfig, error) {
+	if s == nil {
+		return PublicConfig{}, errors.New("feishu notify service not configured")
+	}
+	s.mu.Lock()
+	cfg := s.config
+	if req.Enabled != nil {
+		cfg.Enabled = *req.Enabled
+	}
+	if req.WebhookURL != nil {
+		cfg.WebhookURL = *req.WebhookURL
+	}
+	if req.AppID != nil {
+		cfg.AppID = *req.AppID
+	}
+	if req.AppSecret != nil {
+		cfg.AppSecret = *req.AppSecret
+	}
+	if req.ChatID != nil {
+		cfg.ChatID = *req.ChatID
+	}
+	if req.EventsSet {
+		cfg.Events = req.Events
+	}
+	cfg = normalizeConfig(cfg)
+	s.config = cfg
+	// Credentials changed → force token refresh on next app-mode send.
+	s.tokenMu.Lock()
+	s.accessToken = ""
+	s.tokenExpiry = time.Time{}
+	s.tokenMu.Unlock()
+	s.mu.Unlock()
+
+	if err := SaveConfig(cfg); err != nil {
+		return toPublicConfig(cfg), fmt.Errorf("persist feishu-notify config: %w", err)
+	}
+	log.Printf("[feishu-notify] config.updated enabled=%t active=%t webhook=%t app=%t",
+		cfg.Enabled, configIsActive(cfg), cfg.WebhookURL != "", cfg.AppID != "")
+	return toPublicConfig(cfg), nil
+}
+
+// ReplaceConfig fully replaces live config (used by tests / internal).
+func (s *Service) ReplaceConfig(cfg Config) error {
+	if s == nil {
+		return errors.New("feishu notify service not configured")
+	}
+	cfg = normalizeConfig(cfg)
+	s.mu.Lock()
+	s.config = cfg
+	s.tokenMu.Lock()
+	s.accessToken = ""
+	s.tokenExpiry = time.Time{}
+	s.tokenMu.Unlock()
+	s.mu.Unlock()
+	return SaveConfig(cfg)
+}
+
 func (s *Service) Enabled() bool {
 	if s == nil {
 		return false
 	}
-	if !s.config.Enabled {
-		return false
-	}
-	if s.config.WebhookURL != "" {
-		return true
-	}
-	return s.config.AppID != "" && s.config.AppSecret != "" && s.config.ChatID != ""
+	return configIsActive(s.snapshot())
 }
 
 func (s *Service) NotifyPayload(ctx context.Context, payload notify.Payload) {
@@ -162,12 +311,30 @@ func (s *Service) NotifyPayload(ctx context.Context, payload notify.Payload) {
 	}()
 }
 
+// SendTest pushes a synthetic interactive card for the current config.
+func (s *Service) SendTest(ctx context.Context) error {
+	if s == nil {
+		return errors.New("feishu notify service not configured")
+	}
+	if !s.Enabled() {
+		return errors.New("feishu notify is not active; enable and set webhook or app credentials first")
+	}
+	return s.send(ctx, notify.Payload{
+		Type:  "session.done",
+		Title: "MindFS · 测试通知",
+		Body:  "飞书通知配置正常。会话完成、需要输入和定时任务会推送到这里。",
+		Tag:   fmt.Sprintf("feishu-test-%d", time.Now().UnixNano()),
+		Data:  map[string]any{"eventId": fmt.Sprintf("feishu-test-%d", time.Now().UnixNano())},
+	})
+}
+
 func (s *Service) allowsEvent(eventType string) bool {
 	eventType = strings.TrimSpace(eventType)
-	if len(s.config.Events) == 0 {
+	cfg := s.snapshot()
+	if len(cfg.Events) == 0 {
 		return true
 	}
-	for _, e := range s.config.Events {
+	for _, e := range cfg.Events {
 		if e == eventType {
 			return true
 		}
@@ -208,22 +375,23 @@ func (s *Service) send(ctx context.Context, payload notify.Payload) error {
 		return err
 	}
 
+	cfg := s.snapshot()
 	var firstErr error
-	if s.config.WebhookURL != "" {
-		if err := s.postJSON(ctx, s.config.WebhookURL, body); err != nil {
+	if cfg.WebhookURL != "" {
+		if err := s.postJSON(ctx, cfg.WebhookURL, body); err != nil {
 			firstErr = err
 		}
 	}
-	if s.config.AppID != "" && s.config.AppSecret != "" && s.config.ChatID != "" {
-		if err := s.sendAppMessage(ctx, body); err != nil && firstErr == nil {
+	if cfg.AppID != "" && cfg.AppSecret != "" && cfg.ChatID != "" {
+		if err := s.sendAppMessage(ctx, cfg, body); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
 	return firstErr
 }
 
-func (s *Service) sendAppMessage(ctx context.Context, interactiveBody map[string]any) error {
-	token, err := s.getTenantAccessToken(ctx)
+func (s *Service) sendAppMessage(ctx context.Context, cfg Config, interactiveBody map[string]any) error {
+	token, err := s.getTenantAccessToken(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -235,7 +403,7 @@ func (s *Service) sendAppMessage(ctx context.Context, interactiveBody map[string
 		return err
 	}
 	reqBody := map[string]any{
-		"receive_id": s.config.ChatID,
+		"receive_id": cfg.ChatID,
 		"msg_type":   "interactive",
 		"content":    string(contentBytes),
 	}
@@ -243,15 +411,15 @@ func (s *Service) sendAppMessage(ctx context.Context, interactiveBody map[string
 	return s.postJSONAuth(ctx, url, token, reqBody)
 }
 
-func (s *Service) getTenantAccessToken(ctx context.Context) (string, error) {
+func (s *Service) getTenantAccessToken(ctx context.Context, cfg Config) (string, error) {
 	s.tokenMu.Lock()
 	defer s.tokenMu.Unlock()
 	if s.accessToken != "" && time.Now().Before(s.tokenExpiry) {
 		return s.accessToken, nil
 	}
 	reqBody := map[string]string{
-		"app_id":     s.config.AppID,
-		"app_secret": s.config.AppSecret,
+		"app_id":     cfg.AppID,
+		"app_secret": cfg.AppSecret,
 	}
 	raw, err := s.doJSON(ctx, http.MethodPost, openAPIBase+"/open-apis/auth/v3/tenant_access_token/internal", "", reqBody)
 	if err != nil {

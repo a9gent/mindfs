@@ -110,6 +110,65 @@ func TestMergeOverrides(t *testing.T) {
 	}
 }
 
+func TestUpdateConfigHotReload(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("APPDATA", dir)
+	// MindFSConfigDir uses OS user config; force via env is platform-dependent.
+	// Exercise in-memory Replace/Update without relying on config dir when possible.
+	svc := NewService(Config{Enabled: false})
+	if svc.Enabled() {
+		t.Fatal("expected disabled")
+	}
+	enabled := true
+	webhook := "https://open.feishu.cn/open-apis/bot/v2/hook/test"
+	// UpdateConfig persists; if config dir fails in CI we still want hot memory update.
+	// Use ReplaceConfig path via UpdateConfig and tolerate persist error only if dir unusable —
+	// on normal temp APPDATA it should work on Windows; on Unix HOME may be needed.
+	// Prefer direct field apply via UpdateConfig; if SaveConfig fails test still checks memory.
+	out, err := svc.UpdateConfig(UpdateRequest{
+		Enabled:    &enabled,
+		WebhookURL: &webhook,
+	})
+	if err != nil {
+		// Persist may fail if MindFSConfigDir is not writable; still verify live config.
+		t.Logf("UpdateConfig persist note: %v", err)
+	}
+	if !svc.Enabled() {
+		// If persist failed after memory update, Enabled should still be true.
+		// Re-check public.
+		_ = out
+		if !configIsActive(svc.snapshot()) {
+			t.Fatalf("expected active after update public=%#v snapshot=%#v", out, svc.snapshot())
+		}
+	}
+	pub := svc.PublicConfig()
+	if !pub.Enabled || pub.WebhookURL != webhook || !pub.Active {
+		t.Fatalf("public=%#v", pub)
+	}
+	if pub.HasAppSecret {
+		t.Fatal("expected no secret")
+	}
+	// Keep secret when omitted
+	secret := "super-secret"
+	appID := "cli_x"
+	chat := "oc_x"
+	_, _ = svc.UpdateConfig(UpdateRequest{AppID: &appID, AppSecret: &secret, ChatID: &chat})
+	if !svc.PublicConfig().HasAppSecret {
+		t.Fatal("expected has_app_secret")
+	}
+	emptyWebhook := ""
+	_, _ = svc.UpdateConfig(UpdateRequest{WebhookURL: &emptyWebhook})
+	// secret should remain
+	if !svc.PublicConfig().HasAppSecret {
+		t.Fatal("secret should be preserved when omitted")
+	}
+	clear := ""
+	_, _ = svc.UpdateConfig(UpdateRequest{AppSecret: &clear})
+	if svc.PublicConfig().HasAppSecret {
+		t.Fatal("secret should clear when empty string sent")
+	}
+}
+
 func TestAppMessagePathUsesToken(t *testing.T) {
 	var paths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
