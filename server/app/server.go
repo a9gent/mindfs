@@ -20,6 +20,7 @@ import (
 	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/gitview"
 	"mindfs/server/internal/kanban"
+	"mindfs/server/internal/feishunotify"
 	"mindfs/server/internal/notifyscript"
 	"mindfs/server/internal/preferences"
 	"mindfs/server/internal/relay"
@@ -42,6 +43,12 @@ type StartOptions struct {
 	E2EEConfig      E2EEConfig
 	WebPushEnabled  bool
 	NotifyScript    string
+	// Feishu outbound notify (webhook and/or app credentials).
+	FeishuEnabled   *bool
+	FeishuWebhook   string
+	FeishuAppID     string
+	FeishuAppSecret string
+	FeishuChatID    string
 	UseTLS          bool
 	CertFile        string
 	KeyFile         string
@@ -109,6 +116,23 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	if err != nil {
 		log.Printf("[webpush] config.error err=%v", err)
 	}
+	feishuCfg, err := feishunotify.LoadOrCreateConfig()
+	if err != nil {
+		log.Printf("[feishu-notify] config.error err=%v", err)
+		feishuCfg = feishunotify.Config{}
+	}
+	feishuCfg = feishunotify.MergeOverrides(
+		feishuCfg,
+		firstNonEmpty(opts.FeishuWebhook, os.Getenv("MINDFS_FEISHU_WEBHOOK")),
+		firstNonEmpty(opts.FeishuAppID, os.Getenv("MINDFS_FEISHU_APP_ID")),
+		firstNonEmpty(opts.FeishuAppSecret, os.Getenv("MINDFS_FEISHU_APP_SECRET")),
+		firstNonEmpty(opts.FeishuChatID, os.Getenv("MINDFS_FEISHU_CHAT_ID")),
+		opts.FeishuEnabled,
+	)
+	feishuSvc := feishunotify.NewService(feishuCfg)
+	if feishuSvc.Enabled() {
+		log.Printf("[feishu-notify] enabled webhook=%t app=%t", strings.TrimSpace(feishuCfg.WebhookURL) != "", strings.TrimSpace(feishuCfg.AppID) != "")
+	}
 	executable, _ := os.Executable()
 	updateSvc := update.NewService("a9gent/mindfs", opts.Version, executable, opts.Args, 10*time.Minute)
 	updateSvc.Start(ctx)
@@ -126,6 +150,7 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 		}),
 		WebPush: webpush.NewService(webPushConfig, webPushStore),
 		Notify:  notifyscript.NewService(notifyscript.Config{Script: opts.NotifyScript}),
+		Feishu:  feishuSvc,
 	}
 	services.Scheduled = scheduled.NewService(services, services)
 	services.Scheduled.Start(ctx)
@@ -413,4 +438,13 @@ func RemoveManagedDirFromRegistry(path string) error {
 // under os.UserConfigDir/mindfs/ and reused across restarts.
 func EnsureTLSCert(certFlag, keyFlag string) (string, string, error) {
 	return tlsutil.EnsureCert(certFlag, keyFlag)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
