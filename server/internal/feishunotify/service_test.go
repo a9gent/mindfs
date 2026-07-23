@@ -152,6 +152,11 @@ func TestUpdateConfigHotReload(t *testing.T) {
 		t.Fatalf("disk=%#v", disk)
 	}
 
+	// Credential edits require notify disabled first.
+	off := false
+	if _, err := svc.UpdateConfig(UpdateRequest{Enabled: &off}); err != nil {
+		t.Fatal(err)
+	}
 	// Keep secret when omitted
 	secret := "super-secret"
 	appID := "cli_x"
@@ -228,6 +233,41 @@ func TestUpdateConfigPersistFailureKeepsOldMemory(t *testing.T) {
 
 func configdirForTest() (string, error) {
 	return config.MindFSConfigDir()
+}
+
+
+func TestUpdateConfigLockedWhileEnabled(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("APPDATA", dir)
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
+
+	svc := NewService(Config{})
+	enabled := true
+	webhook := "https://open.feishu.cn/open-apis/bot/v2/hook/locked"
+	if _, err := svc.UpdateConfig(UpdateRequest{Enabled: &enabled, WebhookURL: &webhook}); err != nil {
+		t.Fatal(err)
+	}
+	// Changing webhook while enabled must fail and leave config unchanged.
+	other := "https://open.feishu.cn/open-apis/bot/v2/hook/other"
+	if _, err := svc.UpdateConfig(UpdateRequest{WebhookURL: &other}); err == nil {
+		t.Fatal("expected lock error while enabled")
+	}
+	if got := svc.PublicConfig().WebhookURL; got != webhook {
+		t.Fatalf("webhook mutated: %q", got)
+	}
+	// Turning off is allowed.
+	off := false
+	if _, err := svc.UpdateConfig(UpdateRequest{Enabled: &off}); err != nil {
+		t.Fatal(err)
+	}
+	// After disabled, webhook can change.
+	if _, err := svc.UpdateConfig(UpdateRequest{WebhookURL: &other}); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.PublicConfig().WebhookURL; got != other {
+		t.Fatalf("webhook after unlock=%q", got)
+	}
 }
 
 func TestAppMessagePathUsesToken(t *testing.T) {

@@ -244,6 +244,21 @@ func (s *Service) UpdateConfig(req UpdateRequest) (PublicConfig, error) {
 	}
 	s.mu.Lock()
 	cfg := s.config
+	// When notify is currently enabled, only allow turning it off.
+	// Credentials must be edited while disabled so a live channel cannot be
+	// silently retargeted mid-flight.
+	if cfg.Enabled {
+		turningOff := req.Enabled != nil && !*req.Enabled
+		mutatingCreds := req.WebhookURL != nil || req.AppID != nil || req.AppSecret != nil || req.ChatID != nil || req.EventsSet
+		keepingEnabled := req.Enabled == nil || *req.Enabled
+		if keepingEnabled && mutatingCreds {
+			s.mu.Unlock()
+			return toPublicConfig(cfg), errors.New("feishu notify is enabled; disable it before changing channel settings")
+		}
+		if !turningOff && !mutatingCreds && req.Enabled == nil {
+			// no-op update while enabled is fine
+		}
+	}
 	if req.Enabled != nil {
 		cfg.Enabled = *req.Enabled
 	}

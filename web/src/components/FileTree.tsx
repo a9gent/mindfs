@@ -405,11 +405,27 @@ function FeishuNotifyMenuItem() {
     void refresh();
   }, [refresh]);
 
+  // Saved "enabled" locks channel credentials; only disable/enable toggle + test remain.
+  const locked = Boolean(config?.enabled);
+  const active = Boolean(config?.active);
+  const canTest = active;
+
   const save = async () => {
     if (busy) return;
     setBusy(true);
     setMessage("");
     try {
+      if (locked) {
+        // Only allow turning notify off while locked.
+        if (enabled) {
+          setMessage(t("fileTree.feishuLockedHint"));
+          return;
+        }
+        const next = await updateFeishuNotifyConfig({ enabled: false });
+        applyConfig(next);
+        setMessage(t("fileTree.feishuSaved"));
+        return;
+      }
       const payload: Parameters<typeof updateFeishuNotifyConfig>[0] = {
         enabled,
         webhook_url: webhook.trim(),
@@ -432,31 +448,35 @@ function FeishuNotifyMenuItem() {
 
   const runTest = async () => {
     if (busy) return;
+    if (!canTest) {
+      setMessage(t("fileTree.feishuTestNeedActive"));
+      return;
+    }
     setBusy(true);
     setMessage("");
     try {
       await sendFeishuNotifyTest();
       setMessage(t("fileTree.feishuTestSent"));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : t("fileTree.feishuSaveFailed"));
+      setMessage(error instanceof Error ? error.message : t("fileTree.feishuTestFailed"));
     } finally {
       setBusy(false);
     }
   };
 
-  const active = Boolean(config?.active);
   const label = active ? t("fileTree.feishuNotifyActive") : t("fileTree.feishuNotifyInactive");
-  const detail = message || t("fileTree.feishuNotifyHint");
+  const detail = message || (locked ? t("fileTree.feishuLockedHint") : t("fileTree.feishuNotifyHint"));
   const fieldStyle: React.CSSProperties = {
     width: "100%",
     boxSizing: "border-box",
     border: "1px solid var(--border-color)",
-    background: "var(--bg-primary)",
+    background: locked ? "var(--bg-secondary, var(--bg-primary))" : "var(--bg-primary)",
     color: "var(--text-primary)",
     borderRadius: "6px",
     padding: "6px 8px",
     fontSize: "11px",
     outline: "none",
+    opacity: locked ? 0.75 : 1,
   };
   const secondaryBtn: React.CSSProperties = {
     ...fileTreeMenuButtonStyle,
@@ -513,16 +533,24 @@ function FeishuNotifyMenuItem() {
               type="checkbox"
               checked={enabled}
               disabled={busy}
-              onChange={(e) => setEnabled(e.target.checked)}
+              onChange={(e) => {
+                const next = e.target.checked;
+                setEnabled(next);
+                // Instant disable/enable of the toggle only; credentials stay locked while saved-enabled.
+                if (locked && !next) {
+                  // user is turning off — allow editing after save
+                }
+              }}
             />
             <span>{t("fileTree.feishuEnabled")}</span>
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", color: "var(--text-secondary)" }}>
-            <span>{t("fileTree.feishuWebhook")}</span>
+            <span>{t("fileTree.feishuWebhook")}{locked ? ` · ${t("fileTree.feishuDisableToEdit")}` : ""}</span>
             <input
               type="url"
               value={webhook}
-              disabled={busy}
+              disabled={busy || locked}
+              readOnly={locked}
               placeholder={t("fileTree.feishuWebhookPlaceholder")}
               onChange={(e) => setWebhook(e.target.value)}
               style={fieldStyle}
@@ -553,7 +581,8 @@ function FeishuNotifyMenuItem() {
                 <input
                   type="text"
                   value={appId}
-                  disabled={busy}
+                  disabled={busy || locked}
+                  readOnly={locked}
                   onChange={(e) => setAppId(e.target.value)}
                   style={fieldStyle}
                   autoComplete="off"
@@ -565,7 +594,8 @@ function FeishuNotifyMenuItem() {
                 <input
                   type="password"
                   value={appSecret}
-                  disabled={busy}
+                  disabled={busy || locked}
+                  readOnly={locked}
                   placeholder={config?.has_app_secret ? t("fileTree.feishuAppSecretKeep") : ""}
                   onChange={(e) => setAppSecret(e.target.value)}
                   style={fieldStyle}
@@ -577,7 +607,8 @@ function FeishuNotifyMenuItem() {
                 <input
                   type="text"
                   value={chatId}
-                  disabled={busy}
+                  disabled={busy || locked}
+                  readOnly={locked}
                   onChange={(e) => setChatId(e.target.value)}
                   style={fieldStyle}
                   autoComplete="off"
@@ -589,16 +620,26 @@ function FeishuNotifyMenuItem() {
           <button type="button" disabled={busy} onClick={() => void save()} style={secondaryBtn}>
             <span>{t("fileTree.feishuSave")}</span>
           </button>
-          {active ? (
-            <button type="button" disabled={busy} onClick={() => void runTest()} style={secondaryBtn}>
-              <span>{t("fileTree.feishuTest")}</span>
-            </button>
-          ) : null}
+          <button
+            type="button"
+            disabled={busy || !canTest}
+            onClick={() => void runTest()}
+            title={canTest ? t("fileTree.feishuTest") : t("fileTree.feishuTestNeedActive")}
+            style={{
+              ...secondaryBtn,
+              color: canTest ? "var(--accent-color)" : "var(--text-secondary)",
+              opacity: busy || !canTest ? 0.55 : 1,
+              cursor: busy || !canTest ? "not-allowed" : "pointer",
+            }}
+          >
+            <span>{t("fileTree.feishuTest")}</span>
+          </button>
         </div>
       ) : null}
     </div>
   );
 }
+
 
 const ChevronRight = ({ isOpen }: { isOpen: boolean }) => (
   <svg

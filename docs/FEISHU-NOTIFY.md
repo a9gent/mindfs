@@ -11,7 +11,9 @@ Open the file-tree **⋯ menu** → **飞书通知 / Feishu notify**:
 1. Enable the toggle
 2. Paste a Feishu group bot **Webhook URL**
 3. Click **Save**
-4. Optionally **Send test**
+4. Click **测试飞书通道 / Test Feishu channel** to verify delivery
+
+While notify is **enabled**, webhook/app credentials are **read-only**. Turn notify off, edit, save, then enable again.
 
 Changes are written to `%AppData%/mindfs/feishu-notify.json` (or `~/.config/mindfs/feishu-notify.json`) and applied **live** — no process restart.
 
