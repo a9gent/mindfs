@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -174,13 +175,40 @@ func newClient(opts OpenOptions) *codexsdk.Codex {
 	codexOptions := codexsdk.CodexOptions{
 		Transport:             codexsdk.TransportAppServer,
 		AppServerPathOverride: opts.Command,
-		Env:                   opts.Env,
+		Env:                   buildCodexClientEnv(opts.Env),
 		Verbose:               true,
 	}
 	if len(opts.Args) > 0 {
 		codexOptions.AppServerArgs = append([]string{}, opts.Args...)
 	}
 	return codexsdk.NewCodex(codexOptions)
+}
+
+// buildCodexClientEnv prepares env for codex-go-sdk.
+// The SDK fully replaces the process environment when Env != nil. Empty/nil
+// keeps host inheritance; non-empty overlays agent keys onto os.Environ() so
+// Windows still has PATH/USERPROFILE and Unix keeps HOME/PATH.
+func buildCodexClientEnv(base map[string]string) map[string]string {
+	if len(base) == 0 {
+		return nil
+	}
+	env := environToMap(os.Environ())
+	for key, value := range base {
+		env[key] = value
+	}
+	return env
+}
+
+func environToMap(environ []string) map[string]string {
+	out := make(map[string]string, len(environ))
+	for _, entry := range environ {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 type session struct {

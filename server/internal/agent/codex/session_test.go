@@ -178,3 +178,39 @@ func TestHandleUnknownPlanAndContextCompactionItems(t *testing.T) {
 		t.Fatalf("compact notice = %#v", updates[1].Data)
 	}
 }
+
+func TestBuildCodexClientEnvNilWhenNoOverrides(t *testing.T) {
+	if env := buildCodexClientEnv(nil); env != nil {
+		t.Fatalf("env = %#v, want nil", env)
+	}
+	if env := buildCodexClientEnv(map[string]string{}); env != nil {
+		t.Fatalf("empty env = %#v, want nil", env)
+	}
+}
+
+func TestBuildCodexClientEnvMergesHostEnvironment(t *testing.T) {
+	t.Setenv("MINDFS_CODEX_ENV_MARKER", "1")
+	env := buildCodexClientEnv(map[string]string{"FOO": "bar"})
+	if env == nil {
+		t.Fatal("env is nil")
+	}
+	if got := env["FOO"]; got != "bar" {
+		t.Fatalf("FOO = %q, want bar", got)
+	}
+	if got := env["MINDFS_CODEX_ENV_MARKER"]; got != "1" {
+		t.Fatalf("host env marker = %q, want 1", got)
+	}
+}
+
+func TestEnvironToMapParsesEntries(t *testing.T) {
+	got := environToMap([]string{"A=1", "B=2=3", "bad", "=skip", "C="})
+	if got["A"] != "1" || got["B"] != "2=3" || got["C"] != "" {
+		t.Fatalf("environ map = %#v", got)
+	}
+	if _, ok := got[""]; ok {
+		t.Fatal("empty key should be skipped")
+	}
+	if _, ok := got["bad"]; ok {
+		t.Fatal("entry without = should be skipped")
+	}
+}
