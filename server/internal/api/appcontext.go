@@ -277,8 +277,8 @@ func (s *AppContext) RunAgentStage(ctx context.Context, exec kanban.AgentStageEx
 		FastService:     normalizeFastServiceValue(exec.Stage.FastService),
 		PlanMode:        &planMode,
 		Content:         exec.Prompt,
-		OnStart: func() {
-			s.BroadcastSessionUserMessage(exec.RootID, sessionKey, session.TypeChat, sessionName, exec.Stage.Agent, exec.Stage.Model, exec.Stage.Mode, exec.Stage.Effort, exec.Stage.FastService, planMode, exec.Prompt)
+		OnStart: func(userTimestamp time.Time) {
+			s.BroadcastSessionUserMessage(exec.RootID, sessionKey, session.TypeChat, sessionName, exec.Stage.Agent, exec.Stage.Model, exec.Stage.Mode, exec.Stage.Effort, exec.Stage.FastService, planMode, exec.Prompt, userTimestamp)
 		},
 		OnUpdate: func(update agenttypes.Event) {
 			updateTracker.Begin()
@@ -733,9 +733,9 @@ func (s *AppContext) SetSessionPendingReply(rootID, sessionKey, sessionTitle str
 	s.GetSessionStreamHub().SetPendingReply(rootID, sessionKey, sessionTitle)
 }
 
-func (s *AppContext) BroadcastSessionUserMessage(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, fastService string, planMode bool, content string) {
+func (s *AppContext) BroadcastSessionUserMessage(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, fastService string, planMode bool, content string, timestamp time.Time) {
 	s.ClearTaskAuxFlagsForSession(rootID, sessionKey)
-	s.GetSessionStreamHub().BroadcastSessionUserMessage(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, fastService, planMode, content, "", false)
+	s.GetSessionStreamHub().BroadcastSessionUserMessage(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, fastService, planMode, content, timestamp, "", false)
 }
 
 func (s *AppContext) BroadcastSessionUpdate(rootID, sessionKey string, update agenttypes.Event) {

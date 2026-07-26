@@ -213,11 +213,17 @@ func TestSendCommandMessagePersistsFinalToolCallAndSuggestion(t *testing.T) {
 		t.Fatalf("create command session: %v", err)
 	}
 
+	userTimestamp := time.Date(2026, 7, 26, 3, 4, 5, 6000000, time.UTC)
+	var startedAt time.Time
 	var sawStart, sawFinal, sawDone bool
 	err = service.SendMessage(context.Background(), SendMessageInput{
-		RootID:  root.ID,
-		Key:     created.Key,
-		Content: "printf mindfs-command",
+		RootID:        root.ID,
+		Key:           created.Key,
+		Content:       "printf mindfs-command",
+		UserTimestamp: userTimestamp,
+		OnStart: func(timestamp time.Time) {
+			startedAt = timestamp
+		},
 		OnUpdate: func(event agenttypes.Event) {
 			if event.Type == agenttypes.EventTypeMessageDone {
 				sawDone = true
@@ -250,6 +256,9 @@ func TestSendCommandMessagePersistsFinalToolCallAndSuggestion(t *testing.T) {
 	if !sawStart || !sawFinal || !sawDone {
 		t.Fatalf("events sawStart=%v sawFinal=%v sawDone=%v", sawStart, sawFinal, sawDone)
 	}
+	if !startedAt.Equal(userTimestamp) {
+		t.Fatalf("OnStart timestamp = %s, want %s", startedAt, userTimestamp)
+	}
 
 	current, err := manager.Get(context.Background(), created.Key, 0)
 	if err != nil {
@@ -257,6 +266,9 @@ func TestSendCommandMessagePersistsFinalToolCallAndSuggestion(t *testing.T) {
 	}
 	if len(current.Exchanges) != 2 {
 		t.Fatalf("exchange count = %d, want 2", len(current.Exchanges))
+	}
+	if !current.Exchanges[0].Timestamp.Equal(userTimestamp) {
+		t.Fatalf("user exchange timestamp = %s, want %s", current.Exchanges[0].Timestamp, userTimestamp)
 	}
 	aux, err := manager.GetExchangeAux(context.Background(), created.Key, 0)
 	if err != nil {

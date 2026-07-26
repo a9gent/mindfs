@@ -346,9 +346,13 @@ func (h *StreamHub) getAllClientIDs() []string {
 	return clientIDs
 }
 
-func (h *StreamHub) SetPendingUser(rootID, sessionKey, sessionTitle, agent, model, mode, effort, fastService string, planMode bool, content string) *PendingUserMessage {
+func (h *StreamHub) SetPendingUser(rootID, sessionKey, sessionTitle, agent, model, mode, effort, fastService string, planMode bool, content string, timestamp time.Time) *PendingUserMessage {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	timestamp = timestamp.UTC()
+	if timestamp.IsZero() {
+		timestamp = time.Now().UTC()
+	}
 	state := h.ensurePendingSessionLocked(sessionKey)
 	delete(h.completed, sessionKey)
 	state.RootID = rootID
@@ -362,7 +366,7 @@ func (h *StreamHub) SetPendingUser(rootID, sessionKey, sessionTitle, agent, mode
 		FastService: fastService,
 		PlanMode:    planMode,
 		Content:     content,
-		Timestamp:   time.Now().UTC(),
+		Timestamp:   timestamp,
 	}
 	state.ReplyingList = nil
 	state.Summary = ""
@@ -812,10 +816,11 @@ func (h *StreamHub) BroadcastSessionUserMessage(
 	fastService string,
 	planMode bool,
 	content string,
+	timestamp time.Time,
 	excludeClientID string,
 	queued bool,
 ) {
-	pendingUser := h.SetPendingUser(rootID, sessionKey, sessionName, agentName, model, mode, effort, fastService, planMode, content)
+	pendingUser := h.SetPendingUser(rootID, sessionKey, sessionName, agentName, model, mode, effort, fastService, planMode, content, timestamp)
 	resp := buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, fastService, planMode, content, pendingUser.Timestamp, queued)
 	for _, clientID := range h.GetSessionClientIDs(sessionKey, false) {
 		if clientID == excludeClientID {

@@ -41,6 +41,46 @@ func TestParseClientContext(t *testing.T) {
 	}
 }
 
+func TestReserveClientRequestKeepsOriginalTimestamp(t *testing.T) {
+	handler := &WSHandler{}
+
+	firstTimestamp, firstReserved := handler.reserveClientRequest("request-1")
+	secondTimestamp, secondReserved := handler.reserveClientRequest("request-1")
+
+	if !firstReserved {
+		t.Fatal("first request was not reserved")
+	}
+	if secondReserved {
+		t.Fatal("duplicate request was reserved again")
+	}
+	if !secondTimestamp.Equal(firstTimestamp) {
+		t.Fatalf("duplicate timestamp = %s, want %s", secondTimestamp, firstTimestamp)
+	}
+}
+
+func TestStreamHubPendingUserKeepsProvidedTimestamp(t *testing.T) {
+	hub := NewStreamHub(nil)
+	want := time.Date(2026, 7, 26, 3, 4, 5, 6000000, time.UTC)
+
+	pending := hub.SetPendingUser(
+		"root",
+		"session",
+		"Session",
+		"codex",
+		"gpt-5",
+		"default",
+		"high",
+		"off",
+		false,
+		"prompt",
+		want,
+	)
+
+	if !pending.Timestamp.Equal(want) {
+		t.Fatalf("pending timestamp = %s, want %s", pending.Timestamp, want)
+	}
+}
+
 func TestAppendReplyEventPrefixesTruncatedSummary(t *testing.T) {
 	hub := NewStreamHub(nil)
 

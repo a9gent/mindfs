@@ -9445,12 +9445,18 @@ export function App({ onGoHome }: AppProps) {
           }
           console.info("[session/ws] accepted", { requestId, rootId: pending.rootId, sessionKey: pending.sessionKey || null, tempKey: pending.tempKey || null });
           delete pendingRequestRef.current[requestId];
+          const acceptedTimestamp =
+            typeof payload?.timestamp === "string" &&
+            !Number.isNaN(Date.parse(payload.timestamp))
+              ? payload.timestamp
+              : pending.timestamp;
           const acceptedSessionKey =
             typeof payload?.session_key === "string" ? payload.session_key : "";
           if (!pending.sessionKey && pending.tempKey && acceptedSessionKey) {
             const cacheKey = rootSessionKey(pending.rootId, acceptedSessionKey);
             pendingBySessionRef.current[cacheKey] = {
               ...pending,
+              timestamp: acceptedTimestamp,
               sessionKey: acceptedSessionKey,
             };
             setMultiProjectSessionPending(pending.rootId, pending.tempKey, false);
@@ -9474,11 +9480,19 @@ export function App({ onGoHome }: AppProps) {
                   exchange.pending_ack === true &&
                   exchange.content === pending.message &&
                   exchange.timestamp === pending.timestamp
-                    ? { ...exchange, pending_ack: false }
+                    ? {
+                        ...exchange,
+                        timestamp: acceptedTimestamp,
+                        pending_ack: false,
+                      }
                     : exchange,
                 )
               : [];
-            return { ...(sess as any), exchanges } as Session;
+            return {
+              ...(sess as any),
+              exchanges,
+              updated_at: acceptedTimestamp,
+            } as Session;
           };
           const acceptedTargetKey = pending.sessionKey || acceptedSessionKey;
           if (acceptedTargetKey) {
