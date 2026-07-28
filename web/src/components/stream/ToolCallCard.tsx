@@ -483,6 +483,10 @@ export const ToolCallCard = memo(function ToolCallCard({
   const isExecute = normalizedKind === "execute";
   const isUserShell = isExecute && effectiveMeta?.source === "userShell";
   const executeCommand = isExecute ? extractExecuteCommand(effectiveMeta, labelTitle) : "";
+  const userShellText = useMemo(
+    () => (effectiveContent || []).map((item) => ("text" in item ? item.text || "" : "")).join("") || result || "",
+    [effectiveContent, result],
+  );
   const executeOutputText = useMemo(
     () => {
       const contentText = (effectiveContent || []).map((item) => ("text" in item ? item.text || "" : "")).join("");
@@ -498,10 +502,16 @@ export const ToolCallCard = memo(function ToolCallCard({
   const hasResult = !!result;
   const hasExecuteCommand = executeCommand.length > 0;
   const hasExecuteOutput = executeOutputText.trim().length > 0;
+  const hasUserShellOutput = userShellText.trim().length > 0;
   const hasCollabDetails = isCollabTool && !isCollabWait && Boolean(effectiveMeta?.prompt);
   const canLoadDetails = Boolean(rootId && sessionKey && _callId);
-  const needsRemoteDetails = canLoadDetails && (isExecute ? !hasExecuteOutput : !hasContent);
-  const hasDetails = (isExecute ? hasExecuteCommand || hasExecuteOutput : hasContent || hasLocations || hasResult || hasCollabDetails) || canLoadDetails;
+  const needsRemoteDetails = canLoadDetails && (isUserShell ? !hasUserShellOutput : isExecute ? !hasExecuteOutput : !hasContent);
+  const hasDetails =
+    (isUserShell
+      ? hasUserShellOutput
+      : isExecute
+      ? hasExecuteCommand || hasExecuteOutput
+      : hasContent || hasLocations || hasResult || hasCollabDetails) || canLoadDetails;
   const icon = renderToolIcon(normalizedKind);
   const normalizedStatus = (effectiveStatus || "").toLowerCase();
   const detailSections = useMemo(() => {
@@ -715,21 +725,22 @@ export const ToolCallCard = memo(function ToolCallCard({
 
       {expanded && hasDetails && (
         <div
-          ref={isExecute ? detailScrollRef : undefined}
+          ref={isUserShell ? detailScrollRef : undefined}
           style={{
             padding: "0 10px 22px",
             borderTop: "1px solid var(--border-color)",
             maxHeight: "min(60vh, 720px)",
             overflowY: "auto",
             WebkitOverflowScrolling: "touch",
-            overscrollBehavior: isExecute ? "auto" : undefined,
+            overscrollBehavior: isUserShell ? "auto" : undefined,
           }}
         >
-          {isExecute ? (
+          {isUserShell ? (
+            <AnsiOutput text={userShellText} onRendered={scrollUserShellDetailsToBottom} />
+          ) : isExecute ? (
             <ExecuteToolDetails
               command={executeCommand}
               output={executeOutputText}
-              onOutputRendered={scrollUserShellDetailsToBottom}
             />
           ) : loadingDetails ? (
             <div style={{ marginTop: "10px", fontSize: "12px", color: "var(--text-secondary)" }}>{t("common.loading")}</div>
