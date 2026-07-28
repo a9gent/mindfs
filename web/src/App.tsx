@@ -86,9 +86,17 @@ import {
 import { isUploadAbortError, uploadFiles, type UploadProgress } from "./services/upload";
 import {
   PluginManager,
-  loadAllPlugins,
+  loadPluginsFromSources,
+  scanPluginSources,
+  snapshotFromPluginSources,
+  type PluginSourceBundle,
   type PluginInput,
 } from "./plugins/manager";
+import {
+  isPluginSnapshotTrusted,
+  readTrustedPluginSet,
+  saveTrustedPluginSet,
+} from "./plugins/trust";
 import { appPath, appURL, isRelayNodePage } from "./services/base";
 import { copyText } from "./services/clipboard";
 import { triggerUpdate, type UpdateState } from "./services/update";
@@ -1492,6 +1500,7 @@ export function App({ onGoHome }: AppProps) {
   const fullUpgradeAttemptRef = useRef("");
   const pluginsLoadedByRootRef = useRef<Record<string, boolean>>({});
   const pluginsLoadingByRootRef = useRef<Record<string, Promise<void>>>({});
+  const pluginsTrustPendingByRootRef = useRef<Record<string, boolean>>({});
   const didInitRef = useRef(false);
   const relayWSAuthCheckRef = useRef(false);
   const managedRootsRequestRef = useRef<Promise<ManagedRootPayload[] | null> | null>(null);
@@ -2409,6 +2418,10 @@ export function App({ onGoHome }: AppProps) {
     useState<AttachedFileContext | null>(null);
   const [pluginVersion, setPluginVersion] = useState(0);
   const [pluginLoading, setPluginLoading] = useState(false);
+  const [pendingPluginTrust, setPendingPluginTrust] = useState<{
+    rootId: string;
+    bundle: PluginSourceBundle;
+  } | null>(null);
   const [pluginBypass, setPluginBypass] = useState(false);
   const [pluginQuery, setPluginQuery] = useState<Record<string, string>>(
     () => readURLState().pluginQuery,
@@ -2930,6 +2943,7 @@ export function App({ onGoHome }: AppProps) {
     delete drawerOpenByRootRef.current[root];
     delete pluginsLoadedByRootRef.current[root];
     delete pluginsLoadingByRootRef.current[root];
+    delete pluginsTrustPendingByRootRef.current[root];
 
     deleteSessionRecordKeys(sessionCacheRef.current);
     deleteSessionRecordKeys(loadedSessionRef.current);
@@ -8156,14 +8170,26 @@ export function App({ onGoHome }: AppProps) {
     if (!rootId || pluginsLoadedByRootRef.current[rootId]) {
       return;
     }
+    if (pluginsTrustPendingByRootRef.current[rootId]) {
+      return;
+    }
     const inflight = pluginsLoadingByRootRef.current[rootId];
     if (inflight) {
       await inflight;
       return;
     }
     setPluginLoading(true);
-    const request = loadAllPlugins(rootId)
-      .then((plugins) => {
+    const request = scanPluginSources(rootId, managedRootByIdRef.current[rootId]?.root_path || rootId)
+      .then(async (bundle) => {
+        const snapshot = snapshotFromPluginSources(bundle);
+        if (bundle.plugins.length > 0 && !isPluginSnapshotTrusted(snapshot, readTrustedPluginSet(rootId))) {
+          pluginManagerRef.current.clear(rootId);
+          pluginsTrustPendingByRootRef.current[rootId] = true;
+          setPendingPluginTrust({ rootId, bundle });
+          setPluginVersion((v) => v + 1);
+          return;
+        }
+        const plugins = await loadPluginsFromSources(bundle.plugins);
         pluginManagerRef.current.set(rootId, plugins);
         pluginsLoadedByRootRef.current[rootId] = true;
         setPluginVersion((v) => v + 1);
@@ -8180,6 +8206,47 @@ export function App({ onGoHome }: AppProps) {
     pluginsLoadingByRootRef.current[rootId] = request;
     await request;
   }, []);
+
+  const handleTrustPendingPlugins = useCallback(async () => {
+    const pending = pendingPluginTrust;
+    if (!pending) return;
+    setPluginLoading(true);
+    try {
+      const snapshot = snapshotFromPluginSources(pending.bundle);
+      saveTrustedPluginSet(pending.rootId, snapshot);
+      const plugins = await loadPluginsFromSources(pending.bundle.plugins);
+      pluginManagerRef.current.set(pending.rootId, plugins);
+      pluginsLoadedByRootRef.current[pending.rootId] = true;
+      delete pluginsTrustPendingByRootRef.current[pending.rootId];
+      setPendingPluginTrust((current) => current?.rootId === pending.rootId ? null : current);
+      setPluginVersion((v) => v + 1);
+    } finally {
+      setPluginLoading(false);
+    }
+  }, [pendingPluginTrust]);
+
+  const handleDisablePendingPlugins = useCallback(() => {
+    const pending = pendingPluginTrust;
+    if (!pending) return;
+    pluginManagerRef.current.clear(pending.rootId);
+    pluginsLoadedByRootRef.current[pending.rootId] = true;
+    delete pluginsTrustPendingByRootRef.current[pending.rootId];
+    setPendingPluginTrust((current) => current?.rootId === pending.rootId ? null : current);
+    setPluginVersion((v) => v + 1);
+  }, [pendingPluginTrust]);
+
+  const invalidatePluginsForRoot = useCallback((rootId: string) => {
+    if (!rootId) return;
+    pluginManagerRef.current.clear(rootId);
+    delete pluginsLoadedByRootRef.current[rootId];
+    delete pluginsLoadingByRootRef.current[rootId];
+    delete pluginsTrustPendingByRootRef.current[rootId];
+    setPendingPluginTrust((current) => current?.rootId === rootId ? null : current);
+    setPluginVersion((v) => v + 1);
+    if (rootId === currentRootIdRef.current) {
+      void ensurePluginsLoaded(rootId).catch(() => {});
+    }
+  }, [ensurePluginsLoaded]);
 
   const pluginHandlers = useMemo(
     () => ({
@@ -9187,6 +9254,14 @@ export function App({ onGoHome }: AppProps) {
       for (const path of paths) {
         invalidateFileCache(rootID, path);
       }
+      if (
+        [...paths, ...dirs].some((path) => {
+          const normalized = String(path || "").replace(/\\/g, "/").replace(/^\/+/, "");
+          return normalized === ".mindfs/plugins" || normalized.startsWith(".mindfs/plugins/");
+        })
+      ) {
+        invalidatePluginsForRoot(rootID);
+      }
 
       const currentFile = fileRef.current;
       const currentFileRoot =
@@ -9993,6 +10068,7 @@ export function App({ onGoHome }: AppProps) {
     setMultiProjectSessionPending,
     refreshManagedRoots,
     handleRelayWebSocketClosed,
+    invalidatePluginsForRoot,
     refreshTreeDir,
     refreshCurrentFileContent,
     refreshGitStatus,
@@ -11193,6 +11269,8 @@ export function App({ onGoHome }: AppProps) {
     gitStatusLoading || gitStatusAvailable;
   const shouldRenderGitHistoryPanel =
     gitHistoryLoading || (gitHistoryAvailable && (gitHistory?.items.length || 0) > 0);
+  const activePendingPluginTrust =
+    pendingPluginTrust && pendingPluginTrust.rootId === currentRootId ? pendingPluginTrust : null;
 	  const relatedSessionSnapshot =
 	    selectedKanbanTaskSessionSnapshot ||
 	    selectedSessionSnapshot ||
@@ -12649,7 +12727,108 @@ export function App({ onGoHome }: AppProps) {
       )}
     </div>
   ) : null;
-  if (gitDiff) {
+  if (activePendingPluginTrust) {
+    workspaceView = (
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+          background: "var(--mindfs-main-bg, transparent)",
+        }}
+      >
+        <section
+          style={{
+            width: "min(720px, 100%)",
+            border: "1px solid var(--border-color)",
+            borderRadius: 8,
+            background: "var(--mindfs-panel-bg, var(--bg-primary))",
+            padding: 20,
+            display: "flex",
+            flexDirection: "column",
+            gap: 14,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <ModeIcon type="plugin" size={18} />
+            <strong style={{ fontSize: 15, color: "var(--text-primary)" }}>
+              {t("plugin.trustTitle")}
+            </strong>
+          </div>
+          <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.55 }}>
+            {t("plugin.trustRisk")}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+            <div>{t("plugin.trustRoot", { path: activePendingPluginTrust.bundle.rootPath })}</div>
+            <div>{t("plugin.trustCount", { count: activePendingPluginTrust.bundle.plugins.length })}</div>
+          </div>
+          <div
+            style={{
+              border: "1px solid var(--border-color)",
+              borderRadius: 6,
+              overflow: "hidden",
+            }}
+          >
+            {activePendingPluginTrust.bundle.plugins.map((plugin) => (
+              <div
+                key={plugin.path}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  gap: 12,
+                  padding: "8px 10px",
+                  borderBottom: "1px solid var(--border-color)",
+                  fontSize: 12,
+                }}
+              >
+                <span style={{ color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {plugin.path}
+                </span>
+                <span style={{ color: "var(--text-secondary)", fontFamily: "monospace" }}>
+                  {plugin.sha256.slice(0, 12)}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <button
+              type="button"
+              onClick={handleDisablePendingPlugins}
+              style={{
+                border: "1px solid var(--border-color)",
+                background: "transparent",
+                borderRadius: 6,
+                padding: "6px 10px",
+                cursor: "pointer",
+                color: "var(--text-secondary)",
+              }}
+            >
+              {t("plugin.trustDisable")}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void handleTrustPendingPlugins();
+              }}
+              style={{
+                border: "1px solid var(--accent-color)",
+                background: "var(--accent-color)",
+                borderRadius: 6,
+                padding: "6px 10px",
+                cursor: "pointer",
+                color: "var(--accent-foreground, #fff)",
+              }}
+            >
+              {pluginLoading ? t("plugin.loading") : t("plugin.trustAllow")}
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  } else if (gitDiff) {
     workspaceView = (
       <GitDiffViewer
         diff={gitDiff}

@@ -555,6 +555,12 @@ export const zhCN = {
   "plugin.usePlugin": "使用插件",
   "plugin.renderFailedFallback": "插件 {name} 执行失败，已回退原始视图",
   "plugin.ignorePlugin": "忽略插件",
+  "plugin.trustTitle": "确认加载项目插件",
+  "plugin.trustRisk": "该项目包含 JavaScript 视图插件。信任后，这些代码会在 MindFS 前端上下文中执行，可访问浏览器 API 和 MindFS 接口。请只加载你信任来源和内容的插件。",
+  "plugin.trustRoot": "项目：{path}",
+  "plugin.trustCount": "插件数量：{count}",
+  "plugin.trustDisable": "保持禁用",
+  "plugin.trustAllow": "信任并加载",
 
   "externalImport.open": "导入外部会话",
   "externalImport.chooseAgent": "选择要导入会话的 agent",

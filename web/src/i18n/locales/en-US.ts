@@ -557,6 +557,12 @@ export const enUS = {
   "plugin.usePlugin": "Use plugin",
   "plugin.renderFailedFallback": "Plugin {name} failed. Fell back to raw view.",
   "plugin.ignorePlugin": "Ignore plugin",
+  "plugin.trustTitle": "Confirm project plugins",
+  "plugin.trustRisk": "This project contains JavaScript view plugins. If trusted, this code runs in the MindFS frontend context and can access browser APIs and MindFS interfaces. Only load plugins whose source and content you trust.",
+  "plugin.trustRoot": "Project: {path}",
+  "plugin.trustCount": "Plugins: {count}",
+  "plugin.trustDisable": "Keep disabled",
+  "plugin.trustAllow": "Trust and load",
 
   "externalImport.open": "Import external sessions",
   "externalImport.chooseAgent": "Choose an agent to import sessions",

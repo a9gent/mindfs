@@ -1,6 +1,7 @@
 import { fetchFile } from "../services/file";
 import { appURL } from "../services/base";
 import { protectedJSON } from "../services/api";
+import type { PluginSourceRecord, PluginSourceSnapshot } from "./trust";
 
 export type MatchRule = {
   ext?: string;
@@ -57,6 +58,14 @@ export type ViewPlugin = {
   };
   process: (file: PluginInput) => PluginOutput;
   viewContext?: (file: PluginInput) => PluginViewContext;
+};
+
+export type PluginSourceFile = PluginSourceRecord & {
+  code: string;
+};
+
+export type PluginSourceBundle = PluginSourceSnapshot & {
+  plugins: PluginSourceFile[];
 };
 
 function splitCSV(value: string): string[] {
@@ -209,14 +218,33 @@ export async function loadPlugin(code: string): Promise<ViewPlugin> {
   return loaded;
 }
 
-export async function loadAllPlugins(rootId: string): Promise<ViewPlugin[]> {
+async function sha256Hex(value: string): Promise<string> {
+  const data = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+export function snapshotFromPluginSources(bundle: PluginSourceBundle): PluginSourceSnapshot {
+  return {
+    rootPath: bundle.rootPath,
+    plugins: bundle.plugins.map(({ path, sha256, size }) => ({ path, sha256, size })),
+  };
+}
+
+export async function scanPluginSources(rootId: string, rootPath = ""): Promise<PluginSourceBundle> {
   let treePayload: any;
   try {
     treePayload = await protectedJSON<any>(
       appURL("/api/tree", new URLSearchParams({ root: rootId, dir: ".mindfs/plugins" })),
     );
   } catch {
-    return [];
+    return { rootPath, plugins: [] };
   }
   const entries = Array.isArray(treePayload?.entries) ? treePayload.entries : [];
   const pluginFiles = entries.filter(
@@ -228,7 +256,7 @@ export async function loadAllPlugins(rootId: string): Promise<ViewPlugin[]> {
       typeof entry.path === "string",
   );
 
-  const plugins: ViewPlugin[] = [];
+  const plugins: PluginSourceFile[] = [];
   for (const file of pluginFiles) {
     try {
       const payload = await fetchFile({
@@ -238,7 +266,27 @@ export async function loadAllPlugins(rootId: string): Promise<ViewPlugin[]> {
       });
       const content = payload?.content;
       if (typeof content !== "string") continue;
-      const loaded = await loadPlugin(content);
+      plugins.push({
+        path: file.path,
+        sha256: await sha256Hex(content),
+        size: utf8ByteLength(content),
+        code: content,
+      });
+    } catch {
+      // ignore unreadable plugin files
+    }
+  }
+  return {
+    rootPath,
+    plugins: plugins.sort((a, b) => a.path.localeCompare(b.path)),
+  };
+}
+
+export async function loadPluginsFromSources(sources: PluginSourceFile[]): Promise<ViewPlugin[]> {
+  const plugins: ViewPlugin[] = [];
+  for (const source of sources) {
+    try {
+      const loaded = await loadPlugin(source.code);
       plugins.push(loaded);
     } catch {
       // ignore invalid plugin files
