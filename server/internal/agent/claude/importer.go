@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -51,6 +52,11 @@ type importedExchangeLocator struct {
 type importedTurn struct {
 	Users []importedExchangeLocator
 	Agent importedExchangeLocator
+}
+
+type importedToolLocation struct {
+	ExchangeIndex int
+	AuxIndex      int
 }
 
 func NewImporter(opts ImporterOptions) *Importer {
@@ -113,17 +119,7 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		return agenttypes.ImportedExternalSession{}, errors.New("agent session id required")
 	}
 	if file, ok := i.lookupSessionFile(targetID, rootPath); ok {
-		exchanges, err := readClaudeImportedExchanges(file.Path, in.AfterTimestamp)
-		if err != nil {
-			log.Printf("[agent/claude/importer] import session read failed session_id=%s path=%s err=%v", targetID, file.Path, err)
-			return agenttypes.ImportedExternalSession{}, err
-		}
-		return agenttypes.ImportedExternalSession{
-			Agent:          i.agentName,
-			AgentSessionID: targetID,
-			Cwd:            file.Cwd,
-			Exchanges:      exchanges,
-		}, nil
+		return i.importSessionFile(file, in.AfterTimestamp)
 	}
 	files, err := i.scanSessionFiles(context.Background(), rootPath, time.Time{}, time.Time{}, int(^uint(0)>>1), nil)
 	if err != nil {
@@ -133,19 +129,195 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		if file.AgentSessionID != targetID {
 			continue
 		}
-		exchanges, err := readClaudeImportedExchanges(file.Path, in.AfterTimestamp)
-		if err != nil {
-			log.Printf("[agent/claude/importer] import session read failed session_id=%s path=%s err=%v", targetID, file.Path, err)
-			return agenttypes.ImportedExternalSession{}, err
-		}
-		return agenttypes.ImportedExternalSession{
-			Agent:          i.agentName,
-			AgentSessionID: targetID,
-			Cwd:            file.Cwd,
-			Exchanges:      exchanges,
-		}, nil
+		return i.importSessionFile(file, in.AfterTimestamp)
 	}
 	return agenttypes.ImportedExternalSession{}, errors.New("external session not found")
+}
+
+func (i *Importer) importSessionFile(file claudeSessionFile, after time.Time) (agenttypes.ImportedExternalSession, error) {
+	exchanges, err := readClaudeImportedExchanges(file.Path, after)
+	if err != nil {
+		log.Printf("[agent/claude/importer] import session read failed session_id=%s path=%s err=%v", file.AgentSessionID, file.Path, err)
+		return agenttypes.ImportedExternalSession{}, err
+	}
+	subagents, err := readClaudeImportedSubagents(file.Path)
+	if err != nil {
+		log.Printf("[agent/claude/importer] import subagents failed session_id=%s path=%s err=%v", file.AgentSessionID, file.Path, err)
+		return agenttypes.ImportedExternalSession{}, err
+	}
+	return agenttypes.ImportedExternalSession{
+		Agent:          i.agentName,
+		AgentSessionID: file.AgentSessionID,
+		Cwd:            file.Cwd,
+		Exchanges:      exchanges,
+		Subagents:      subagents,
+	}, nil
+}
+
+type claudeSubagentRelation struct {
+	AgentID          string
+	ParentAgentID    string
+	ParentToolCallID string
+	Title            string
+	Model            string
+}
+
+func readClaudeImportedSubagents(parentPath string) ([]agenttypes.ImportedSubagentSession, error) {
+	dir := filepath.Join(strings.TrimSuffix(parentPath, filepath.Ext(parentPath)), "subagents")
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, apperr.Wrap("read_dir", dir, err)
+	}
+	pathsByAgentID := make(map[string]string)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".jsonl" {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		agentID, err := inspectClaudeSubagentID(path)
+		if err != nil {
+			return nil, err
+		}
+		if agentID != "" {
+			pathsByAgentID[agentID] = path
+		}
+	}
+	if len(pathsByAgentID) == 0 {
+		return nil, nil
+	}
+	relations := make(map[string]claudeSubagentRelation)
+	if err := collectClaudeSubagentRelations(parentPath, "", relations); err != nil {
+		return nil, err
+	}
+	for agentID, path := range pathsByAgentID {
+		if err := collectClaudeSubagentRelations(path, agentID, relations); err != nil {
+			return nil, err
+		}
+	}
+	items := make([]agenttypes.ImportedSubagentSession, 0, len(relations))
+	remaining := make(map[string]claudeSubagentRelation, len(relations))
+	for agentID, relation := range relations {
+		if _, ok := pathsByAgentID[agentID]; ok {
+			remaining[agentID] = relation
+		}
+	}
+	added := make(map[string]bool)
+	for len(remaining) > 0 {
+		progressed := false
+		for agentID, relation := range remaining {
+			if relation.ParentAgentID != "" && !added[relation.ParentAgentID] {
+				continue
+			}
+			exchanges, err := readClaudeImportedExchanges(pathsByAgentID[agentID], time.Time{})
+			if err != nil {
+				return nil, err
+			}
+			parentID := ""
+			if relation.ParentAgentID != "" {
+				parentID = "claude-subagent:" + relation.ParentAgentID
+			}
+			items = append(items, agenttypes.ImportedSubagentSession{
+				AgentSessionID:       "claude-subagent:" + agentID,
+				ParentAgentSessionID: parentID,
+				ParentToolCallID:     relation.ParentToolCallID,
+				Title:                relation.Title,
+				Model:                relation.Model,
+				Exchanges:            exchanges,
+			})
+			added[agentID] = true
+			delete(remaining, agentID)
+			progressed = true
+		}
+		if !progressed {
+			break
+		}
+	}
+	return items, nil
+}
+
+func inspectClaudeSubagentID(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", apperr.Wrap("open", path, err)
+	}
+	defer file.Close()
+	var agentID string
+	err = forEachJSONLLine(file, func(line string) error {
+		var raw map[string]any
+		if json.Unmarshal([]byte(line), &raw) == nil {
+			agentID = strings.TrimSpace(asString(raw["agentId"]))
+		}
+		if agentID != "" {
+			return errStopJSONL
+		}
+		return nil
+	})
+	if errors.Is(err, errStopJSONL) {
+		err = nil
+	}
+	return agentID, err
+}
+
+func collectClaudeSubagentRelations(path, parentAgentID string, relations map[string]claudeSubagentRelation) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return apperr.Wrap("open", path, err)
+	}
+	defer file.Close()
+	callDetails := make(map[string]claudeSubagentRelation)
+	return forEachJSONLLine(file, func(line string) error {
+		var raw map[string]any
+		if json.Unmarshal([]byte(line), &raw) != nil {
+			return nil
+		}
+		message, _ := raw["message"].(map[string]any)
+		blocks, _ := message["content"].([]any)
+		for _, value := range blocks {
+			block, _ := value.(map[string]any)
+			if block == nil {
+				continue
+			}
+			toolName := strings.ToLower(strings.TrimSpace(asString(block["name"])))
+			if strings.EqualFold(asString(block["type"]), "tool_use") && (toolName == "agent" || toolName == "task") {
+				input, _ := block["input"].(map[string]any)
+				callID := strings.TrimSpace(asString(block["id"]))
+				callDetails[callID] = claudeSubagentRelation{
+					ParentAgentID:    parentAgentID,
+					ParentToolCallID: callID,
+					Title:            firstNonEmpty(asString(input["description"]), asString(input["subagent_type"]), "Subagent"),
+					Model:            strings.TrimSpace(asString(input["model"])),
+				}
+			}
+		}
+		result, _ := raw["toolUseResult"].(map[string]any)
+		agentID := strings.TrimSpace(asString(result["agentId"]))
+		if agentID == "" {
+			return nil
+		}
+		callID := ""
+		for _, value := range blocks {
+			block, _ := value.(map[string]any)
+			if block != nil && strings.EqualFold(asString(block["type"]), "tool_result") {
+				callID = strings.TrimSpace(asString(block["tool_use_id"]))
+				break
+			}
+		}
+		relation := callDetails[callID]
+		relation.AgentID = agentID
+		relation.ParentAgentID = parentAgentID
+		relation.ParentToolCallID = callID
+		if relation.Title == "" {
+			relation.Title = firstNonEmpty(asString(result["agentType"]), "Subagent")
+		}
+		if relation.Model == "" {
+			relation.Model = strings.TrimSpace(asString(result["resolvedModel"]))
+		}
+		relations[agentID] = relation
+		return nil
+	})
 }
 
 func (i *Importer) ResolveForkPointByAgentTurnIndex(ctx context.Context, in agenttypes.ResolveForkPointInput) (agenttypes.ResolveForkPointOutput, error) {
@@ -405,7 +577,7 @@ func inspectClaudeSessionFile(path string) (claudeSessionFile, bool, error) {
 		}
 		if firstUserText == "" && strings.EqualFold(asString(raw["type"]), "user") {
 			if message, _ := raw["message"].(map[string]any); message != nil {
-				if text := strings.TrimSpace(extractClaudeMessageText(message["content"])); isMeaningfulClaudeUserText(text) {
+				if text := extractClaudeUserPreview(message["content"]); text != "" {
 					firstUserText = text
 				}
 			}
@@ -450,6 +622,7 @@ func readClaudeImportedExchangeLocators(path string, after time.Time) ([]importe
 	defer file.Close()
 
 	items := make([]importedExchangeLocator, 0)
+	toolLocations := make(map[string]importedToolLocation)
 	err = forEachJSONLLine(file, func(line string) error {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -468,28 +641,55 @@ func readClaudeImportedExchangeLocators(path string, after time.Time) ([]importe
 		if message == nil {
 			return nil
 		}
-		text := strings.TrimSpace(extractClaudeMessageText(message["content"]))
-		if text == "" {
-			return nil
-		}
 		ts := parseTimeRFC3339(asString(raw["timestamp"]))
-		if !after.IsZero() && (ts.IsZero() || !ts.After(after)) {
-			return nil
-		}
 		if role == "user" {
-			if !isMeaningfulClaudeUserText(text) {
-				return nil
+			applyClaudeToolResults(items, toolLocations, message["content"], raw["toolUseResult"], ts)
+			text := extractClaudeImportedUserText(message["content"])
+			if text != "" && isMeaningfulClaudeUserText(text) {
+				items, _, _ = appendMergedClaudeExchangeLocator(items, "user", text, ts, uuid, nil)
 			}
-			items = appendMergedClaudeExchangeLocator(items, "user", text, ts, uuid)
 			return nil
 		}
-		items = appendMergedClaudeExchangeLocator(items, "agent", text, ts, uuid)
+		text := strings.TrimSpace(extractClaudeMessageText(message["content"]))
+		aux := extractClaudeToolUseAux(message["content"])
+		if text == "" && len(aux) == 0 {
+			return nil
+		}
+		var exchangeIndex, auxStart int
+		items, exchangeIndex, auxStart = appendMergedClaudeExchangeLocator(
+			items,
+			"agent",
+			text,
+			ts,
+			uuid,
+			aux,
+		)
+		for index := auxStart; index < len(items[exchangeIndex].Aux); index++ {
+			toolCall := items[exchangeIndex].Aux[index].ToolCall
+			if toolCall == nil || strings.TrimSpace(toolCall.CallID) == "" {
+				continue
+			}
+			toolLocations[strings.TrimSpace(toolCall.CallID)] = importedToolLocation{
+				ExchangeIndex: exchangeIndex,
+				AuxIndex:      index,
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return items, nil
+	if after.IsZero() {
+		return items, nil
+	}
+	filtered := make([]importedExchangeLocator, 0, len(items))
+	for _, item := range items {
+		if item.Timestamp.IsZero() || !item.Timestamp.After(after) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered, nil
 }
 
 var errStopJSONL = errors.New("stop jsonl")
@@ -534,6 +734,190 @@ func extractClaudeMessageText(raw any) string {
 	return strings.TrimSpace(strings.Join(lines, "\n\n"))
 }
 
+func extractClaudeUserPreview(raw any) string {
+	if text := strings.TrimSpace(asString(raw)); text != "" {
+		if isMeaningfulClaudeUserText(text) {
+			return text
+		}
+		return ""
+	}
+	parts, _ := raw.([]any)
+	for index := len(parts) - 1; index >= 0; index-- {
+		item, _ := parts[index].(map[string]any)
+		if item == nil || strings.TrimSpace(asString(item["type"])) != "text" {
+			continue
+		}
+		text := strings.TrimSpace(asString(item["text"]))
+		if isMeaningfulClaudeUserText(text) {
+			return text
+		}
+	}
+	return ""
+}
+
+func extractClaudeImportedUserText(raw any) string {
+	if text := strings.TrimSpace(asString(raw)); text != "" {
+		if isMeaningfulClaudeUserText(text) {
+			return text
+		}
+		return ""
+	}
+	parts, _ := raw.([]any)
+	texts := make([]string, 0, len(parts))
+	for _, value := range parts {
+		item, _ := value.(map[string]any)
+		if item == nil || strings.TrimSpace(asString(item["type"])) != "text" {
+			continue
+		}
+		text := strings.TrimSpace(asString(item["text"]))
+		if isMeaningfulClaudeUserText(text) {
+			texts = append(texts, text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(texts, "\n\n"))
+}
+
+func extractClaudeToolUseAux(raw any) []agenttypes.ImportedExchangeAux {
+	parts, _ := raw.([]any)
+	aux := make([]agenttypes.ImportedExchangeAux, 0)
+	textParts := make([]string, 0)
+	for _, part := range parts {
+		item, _ := part.(map[string]any)
+		if item == nil {
+			continue
+		}
+		switch strings.TrimSpace(asString(item["type"])) {
+		case "text":
+			if text := strings.TrimSpace(asString(item["text"])); text != "" {
+				textParts = append(textParts, text)
+			}
+		case "tool_use":
+			callID := strings.TrimSpace(asString(item["id"]))
+			name := strings.TrimSpace(asString(item["name"]))
+			if callID == "" {
+				continue
+			}
+			kind := mapToolKind(name)
+			if kind != agenttypes.ToolKindExecute &&
+				kind != agenttypes.ToolKindEdit &&
+				kind != agenttypes.ToolKindThink &&
+				kind != agenttypes.ToolKindAskUser {
+				continue
+			}
+			input, _ := json.Marshal(item["input"])
+			toolCall := newRunningToolCall(callID, name, "tool_use", input)
+			aux = append(aux, agenttypes.ImportedExchangeAux{
+				Line:     importedAssistantLine(strings.Join(textParts, "\n\n")),
+				ToolCall: &toolCall,
+			})
+		}
+	}
+	return aux
+}
+
+func applyClaudeToolResults(
+	items []importedExchangeLocator,
+	locations map[string]importedToolLocation,
+	raw any,
+	toolUseResult any,
+	timestamp time.Time,
+) {
+	parts, _ := raw.([]any)
+	for _, part := range parts {
+		item, _ := part.(map[string]any)
+		if item == nil || strings.TrimSpace(asString(item["type"])) != "tool_result" {
+			continue
+		}
+		callID := strings.TrimSpace(asString(item["tool_use_id"]))
+		location, ok := locations[callID]
+		if !ok || location.ExchangeIndex < 0 || location.ExchangeIndex >= len(items) {
+			continue
+		}
+		exchange := &items[location.ExchangeIndex]
+		if location.AuxIndex < 0 || location.AuxIndex >= len(exchange.Aux) {
+			continue
+		}
+		aux := &exchange.Aux[location.AuxIndex]
+		if aux.ToolCall == nil {
+			continue
+		}
+		if !timestamp.IsZero() {
+			exchange.Timestamp = timestamp
+		}
+		toolCall := *aux.ToolCall
+		output := summarizeToolResult(toolCall.Kind, item["content"])
+		if output == "" {
+			output = summarizeGenericToolResult(item["content"])
+		}
+		isError, _ := item["is_error"].(bool)
+		if isError {
+			toolCall.Status = "failed"
+		} else {
+			toolCall.Status = "complete"
+		}
+		if strings.TrimSpace(output) != "" {
+			toolCall.Meta = mergeToolCallMeta(toolCall.Meta, map[string]any{"output": output})
+			if toolCall.Kind != agenttypes.ToolKindEdit || len(toolCall.Content) == 0 {
+				toolCall.Content = []agenttypes.ToolCallContentItem{{Type: "text", Text: output}}
+			}
+		}
+		if toolCall.Kind == agenttypes.ToolKindAskUser {
+			if answers := importedClaudeAskUserAnswers(toolCall, toolUseResult); len(answers) > 0 {
+				toolCall.Meta = mergeToolCallMeta(toolCall.Meta, map[string]any{"answers": answers})
+			}
+		}
+		aux.ToolCall = &toolCall
+	}
+}
+
+func importedClaudeAskUserAnswers(toolCall agenttypes.ToolCall, raw any) map[string]string {
+	result, _ := raw.(map[string]any)
+	rawAnswers, _ := result["answers"].(map[string]any)
+	if len(rawAnswers) == 0 {
+		return nil
+	}
+	input := importedClaudeToolInput(toolCall)
+	questions, _ := input["questions"].([]any)
+	answers := make(map[string]string)
+	for index, value := range questions {
+		question, _ := value.(map[string]any)
+		if question == nil {
+			continue
+		}
+		questionText := strings.TrimSpace(asString(question["question"]))
+		if questionText == "" {
+			continue
+		}
+		answer := strings.TrimSpace(asString(rawAnswers[questionText]))
+		if answer != "" {
+			answers[fmt.Sprintf("q_%d", index)] = answer
+		}
+	}
+	return answers
+}
+
+func importedClaudeToolInput(toolCall agenttypes.ToolCall) map[string]any {
+	if toolCall.Meta == nil {
+		return nil
+	}
+	raw := strings.TrimSpace(asString(toolCall.Meta["input"]))
+	if raw == "" {
+		return nil
+	}
+	var input map[string]any
+	if json.Unmarshal([]byte(raw), &input) != nil {
+		return nil
+	}
+	return input
+}
+
+func importedAssistantLine(content string) int {
+	if content == "" {
+		return 0
+	}
+	return strings.Count(content, "\n") + 1
+}
+
 func isMeaningfulClaudeUserText(text string) bool {
 	text = strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
 	if text == "" {
@@ -563,52 +947,50 @@ func isMeaningfulClaudeUserText(text string) bool {
 	return true
 }
 
-func appendMergedClaudeExchange(items []agenttypes.ImportedExchange, role, content string, ts time.Time) []agenttypes.ImportedExchange {
+func appendMergedClaudeExchangeLocator(
+	items []importedExchangeLocator,
+	role, content string,
+	ts time.Time,
+	uuid string,
+	aux []agenttypes.ImportedExchangeAux,
+) ([]importedExchangeLocator, int, int) {
 	content = strings.TrimSpace(content)
-	if content == "" {
-		return items
+	if content == "" && len(aux) == 0 {
+		return items, -1, 0
 	}
 	if len(items) > 0 && items[len(items)-1].Role == role {
 		last := &items[len(items)-1]
-		last.Content = strings.TrimSpace(last.Content + "\n\n" + content)
-		if !ts.IsZero() {
-			last.Timestamp = ts
+		lineOffset := importedAssistantLine(last.Content)
+		if content != "" {
+			if last.Content == "" {
+				last.Content = content
+			} else {
+				last.Content = strings.TrimSpace(last.Content + "\n\n" + content)
+			}
 		}
-		return items
-	}
-	items = append(items, agenttypes.ImportedExchange{
-		Role:      role,
-		Content:   content,
-		Timestamp: ts,
-	})
-	return items
-}
-
-func appendMergedClaudeExchangeLocator(items []importedExchangeLocator, role, content string, ts time.Time, uuid string) []importedExchangeLocator {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return items
-	}
-	if len(items) > 0 && items[len(items)-1].Role == role {
-		last := &items[len(items)-1]
-		last.Content = strings.TrimSpace(last.Content + "\n\n" + content)
 		if !ts.IsZero() {
 			last.Timestamp = ts
 		}
 		if strings.TrimSpace(uuid) != "" {
 			last.ClaudeLastMessageUUID = strings.TrimSpace(uuid)
 		}
-		return items
+		auxStart := len(last.Aux)
+		for _, item := range aux {
+			item.Line += lineOffset
+			last.Aux = append(last.Aux, item)
+		}
+		return items, len(items) - 1, auxStart
 	}
 	items = append(items, importedExchangeLocator{
 		ImportedExchange: agenttypes.ImportedExchange{
 			Role:      role,
 			Content:   content,
 			Timestamp: ts,
+			Aux:       aux,
 		},
 		ClaudeLastMessageUUID: strings.TrimSpace(uuid),
 	})
-	return items
+	return items, len(items) - 1, 0
 }
 
 func buildImportedTurns(items []importedExchangeLocator) []importedTurn {

@@ -166,6 +166,17 @@ type ImportedExchange struct {
 	Role      string
 	Content   string
 	Timestamp time.Time
+	Aux       []ImportedExchangeAux
+}
+
+// ImportedExchangeAux is structured historical content attached to an imported
+// exchange. Seq is assigned by the session manager when the exchange is
+// persisted; importers only need to preserve its position within the assistant
+// text and the normalized payload.
+type ImportedExchangeAux struct {
+	Line     int
+	ToolCall *ToolCall
+	Plan     *PlanUpdate
 }
 
 type ImportedExternalSession struct {
@@ -174,6 +185,19 @@ type ImportedExternalSession struct {
 	Cwd            string
 	Title          string
 	Exchanges      []ImportedExchange
+	Subagents      []ImportedSubagentSession
+}
+
+// ImportedSubagentSession describes an externally persisted child agent session.
+// ParentAgentSessionID is empty when the child belongs directly to the imported
+// root session; otherwise it references another item in Subagents.
+type ImportedSubagentSession struct {
+	AgentSessionID       string
+	ParentAgentSessionID string
+	ParentToolCallID     string
+	Title                string
+	Model                string
+	Exchanges            []ImportedExchange
 }
 
 type ExternalSessionImporter interface {

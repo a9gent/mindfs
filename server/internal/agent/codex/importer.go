@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -32,12 +33,15 @@ type Importer struct {
 }
 
 type codexSessionFile struct {
-	Path           string
-	AgentSessionID string
-	Cwd            string
-	Title          string
-	FirstUserText  string
-	UpdatedAt      time.Time
+	Path                 string
+	AgentSessionID       string
+	ParentAgentSessionID string
+	Cwd                  string
+	Title                string
+	AgentNickname        string
+	AgentRole            string
+	FirstUserText        string
+	UpdatedAt            time.Time
 }
 
 type sessionFileCandidate struct {
@@ -53,6 +57,11 @@ type importedExchangeLocator struct {
 type importedTurn struct {
 	Users []importedExchangeLocator
 	Agent importedExchangeLocator
+}
+
+type importedToolLocation struct {
+	ExchangeIndex int
+	AuxIndex      int
 }
 
 func NewImporter(opts ImporterOptions) *Importer {
@@ -112,18 +121,7 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		return agenttypes.ImportedExternalSession{}, errors.New("agent session id required")
 	}
 	if file, ok := i.lookupSessionFile(targetID, rootPath); ok {
-		exchanges, err := readCodexImportedExchanges(file.Path, in.AfterTimestamp)
-		if err != nil {
-			log.Printf("[agent/codex/importer] import session read failed session_id=%s path=%s err=%v", targetID, file.Path, err)
-			return agenttypes.ImportedExternalSession{}, err
-		}
-		return agenttypes.ImportedExternalSession{
-			Agent:          i.agentName,
-			AgentSessionID: targetID,
-			Cwd:            file.Cwd,
-			Title:          file.Title,
-			Exchanges:      exchanges,
-		}, nil
+		return i.importSessionFile(file, in.AfterTimestamp)
 	}
 	files, err := i.scanSessionFiles(context.Background(), time.Time{}, time.Time{}, int(^uint(0)>>1), nil)
 	if err != nil {
@@ -133,20 +131,141 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		if file.AgentSessionID != targetID {
 			continue
 		}
-		exchanges, err := readCodexImportedExchanges(file.Path, in.AfterTimestamp)
-		if err != nil {
-			log.Printf("[agent/codex/importer] import session read failed session_id=%s path=%s err=%v", targetID, file.Path, err)
-			return agenttypes.ImportedExternalSession{}, err
-		}
-		return agenttypes.ImportedExternalSession{
-			Agent:          i.agentName,
-			AgentSessionID: targetID,
-			Cwd:            file.Cwd,
-			Title:          file.Title,
-			Exchanges:      exchanges,
-		}, nil
+		return i.importSessionFile(file, in.AfterTimestamp)
 	}
 	return agenttypes.ImportedExternalSession{}, errors.New("external session not found")
+}
+
+func (i *Importer) importSessionFile(file codexSessionFile, after time.Time) (agenttypes.ImportedExternalSession, error) {
+	exchanges, err := readCodexImportedExchanges(file.Path, after)
+	if err != nil {
+		log.Printf("[agent/codex/importer] import session read failed session_id=%s path=%s err=%v", file.AgentSessionID, file.Path, err)
+		return agenttypes.ImportedExternalSession{}, err
+	}
+	subagents, err := i.readImportedSubagents(file)
+	if err != nil {
+		return agenttypes.ImportedExternalSession{}, err
+	}
+	return agenttypes.ImportedExternalSession{
+		Agent:          i.agentName,
+		AgentSessionID: file.AgentSessionID,
+		Cwd:            file.Cwd,
+		Title:          file.Title,
+		Exchanges:      exchanges,
+		Subagents:      subagents,
+	}, nil
+}
+
+type codexSpawnRelation struct {
+	ParentToolCallID string
+	Title            string
+}
+
+func (i *Importer) readImportedSubagents(root codexSessionFile) ([]agenttypes.ImportedSubagentSession, error) {
+	candidates, err := sortedSessionJSONLFiles(i.baseDir)
+	if err != nil {
+		return nil, err
+	}
+	files := make(map[string]codexSessionFile)
+	for _, candidate := range candidates {
+		item, ok, err := inspectCodexSessionFile(candidate.Path)
+		if err != nil {
+			return nil, err
+		}
+		if ok && normalizeComparablePath(item.Cwd) == normalizeComparablePath(root.Cwd) {
+			files[item.AgentSessionID] = item
+		}
+	}
+	relationsByParent := make(map[string]map[string]codexSpawnRelation)
+	for id, file := range files {
+		relations, err := readCodexSpawnRelations(file.Path)
+		if err != nil {
+			return nil, err
+		}
+		relationsByParent[id] = relations
+	}
+	items := make([]agenttypes.ImportedSubagentSession, 0)
+	added := map[string]bool{root.AgentSessionID: true}
+	for {
+		progressed := false
+		for id, file := range files {
+			if id == root.AgentSessionID || added[id] || !added[file.ParentAgentSessionID] {
+				continue
+			}
+			exchanges, err := readCodexImportedExchanges(file.Path, time.Time{})
+			if err != nil {
+				return nil, err
+			}
+			relation := relationsByParent[file.ParentAgentSessionID][id]
+			parentID := file.ParentAgentSessionID
+			if parentID == root.AgentSessionID {
+				parentID = ""
+			}
+			title := firstNonEmpty(file.AgentNickname, relation.Title, file.AgentRole, file.FirstUserText, "Subagent")
+			items = append(items, agenttypes.ImportedSubagentSession{
+				AgentSessionID:       id,
+				ParentAgentSessionID: parentID,
+				ParentToolCallID:     relation.ParentToolCallID,
+				Title:                title,
+				Exchanges:            exchanges,
+			})
+			added[id] = true
+			progressed = true
+		}
+		if !progressed {
+			break
+		}
+	}
+	return items, nil
+}
+
+func readCodexSpawnRelations(path string) (map[string]codexSpawnRelation, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, apperr.Wrap("open", path, err)
+	}
+	defer file.Close()
+	callDetails := make(map[string]codexSpawnRelation)
+	relations := make(map[string]codexSpawnRelation)
+	err = forEachJSONLLine(file, func(line string) error {
+		var raw map[string]any
+		if json.Unmarshal([]byte(line), &raw) != nil || raw["type"] != "response_item" {
+			return nil
+		}
+		payload, _ := raw["payload"].(map[string]any)
+		switch asString(payload["type"]) {
+		case "function_call":
+			if asString(payload["name"]) != "spawn_agent" {
+				return nil
+			}
+			callID := strings.TrimSpace(asString(payload["call_id"]))
+			var args map[string]any
+			_ = json.Unmarshal([]byte(asString(payload["arguments"])), &args)
+			callDetails[callID] = codexSpawnRelation{
+				ParentToolCallID: callID,
+				Title:            firstNonEmpty(asString(args["agent_type"]), asString(args["message"]), "Subagent"),
+			}
+		case "function_call_output":
+			callID := strings.TrimSpace(asString(payload["call_id"]))
+			relation, ok := callDetails[callID]
+			if !ok {
+				return nil
+			}
+			var result map[string]any
+			if json.Unmarshal([]byte(asString(payload["output"])), &result) != nil {
+				return nil
+			}
+			agentID := strings.TrimSpace(asString(result["agent_id"]))
+			if agentID != "" {
+				if nickname := strings.TrimSpace(asString(result["nickname"])); nickname != "" {
+					relation.Title = nickname
+				}
+				relations[agentID] = relation
+			}
+		}
+		return nil
+	})
+	return relations, err
 }
 
 func (i *Importer) ResolveForkPointByAgentTurnIndex(ctx context.Context, in agenttypes.ResolveForkPointInput) (agenttypes.ResolveForkPointOutput, error) {
@@ -226,6 +345,9 @@ func (i *Importer) scanSessionFiles(ctx context.Context, before, after time.Time
 			continue
 		}
 		if !ok {
+			continue
+		}
+		if item.ParentAgentSessionID != "" {
 			continue
 		}
 		item.Title = titles[item.AgentSessionID]
@@ -358,7 +480,7 @@ func inspectCodexSessionFile(path string) (codexSessionFile, bool, error) {
 	if err != nil {
 		return codexSessionFile{}, false, err
 	}
-	var sessionID, cwd, firstUserText string
+	var sessionID, parentSessionID, cwd, firstUserText, agentNickname, agentRole string
 	err = forEachJSONLLine(file, func(line string) error {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -371,6 +493,22 @@ func inspectCodexSessionFile(path string) (codexSessionFile, bool, error) {
 		if sessionID == "" && raw["type"] == "session_meta" {
 			if payload, _ := raw["payload"].(map[string]any); payload != nil {
 				sessionID = strings.TrimSpace(asString(payload["id"]))
+				cwd = normalizeComparablePath(asString(payload["cwd"]))
+				agentNickname = strings.TrimSpace(asString(payload["agent_nickname"]))
+				agentRole = strings.TrimSpace(asString(payload["agent_role"]))
+				if source, _ := payload["source"].(map[string]any); source != nil {
+					if subagent, _ := source["subagent"].(map[string]any); subagent != nil {
+						if spawn, _ := subagent["thread_spawn"].(map[string]any); spawn != nil {
+							parentSessionID = strings.TrimSpace(asString(spawn["parent_thread_id"]))
+							if agentNickname == "" {
+								agentNickname = strings.TrimSpace(asString(spawn["agent_nickname"]))
+							}
+							if agentRole == "" {
+								agentRole = strings.TrimSpace(asString(spawn["agent_role"]))
+							}
+						}
+					}
+				}
 			}
 			return nil
 		}
@@ -383,7 +521,7 @@ func inspectCodexSessionFile(path string) (codexSessionFile, bool, error) {
 		if firstUserText == "" && raw["type"] == "response_item" {
 			if payload, _ := raw["payload"].(map[string]any); payload != nil {
 				if payload["type"] == "message" && strings.EqualFold(asString(payload["role"]), "user") {
-					if text := extractCodexMessageText(payload["content"]); isMeaningfulCodexUserText(text) {
+					if text := extractCodexUserPreview(payload["content"]); text != "" {
 						firstUserText = text
 					}
 				}
@@ -401,11 +539,14 @@ func inspectCodexSessionFile(path string) (codexSessionFile, bool, error) {
 		return codexSessionFile{}, false, nil
 	}
 	return codexSessionFile{
-		Path:           path,
-		AgentSessionID: sessionID,
-		Cwd:            cwd,
-		FirstUserText:  firstUserText,
-		UpdatedAt:      info.ModTime().UTC(),
+		Path:                 path,
+		AgentSessionID:       sessionID,
+		ParentAgentSessionID: parentSessionID,
+		Cwd:                  cwd,
+		AgentNickname:        agentNickname,
+		AgentRole:            agentRole,
+		FirstUserText:        firstUserText,
+		UpdatedAt:            info.ModTime().UTC(),
 	}, true, nil
 }
 
@@ -429,6 +570,9 @@ func readCodexImportedExchangeLocators(path string, after time.Time) ([]imported
 	defer file.Close()
 
 	items := make([]agenttypes.ImportedExchange, 0)
+	toolLocations := make(map[string]importedToolLocation)
+	toolOrdinal := 0
+	sessionShell := ""
 	err = forEachJSONLLine(file, func(line string) error {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -442,26 +586,63 @@ func readCodexImportedExchangeLocators(path string, after time.Time) ([]imported
 		switch raw["type"] {
 		case "response_item":
 			payload, _ := raw["payload"].(map[string]any)
-			if payload == nil || payload["type"] != "message" {
+			if payload == nil {
 				return nil
 			}
-			role := strings.ToLower(strings.TrimSpace(asString(payload["role"])))
-			text := strings.TrimSpace(extractCodexMessageText(payload["content"]))
-			switch role {
-			case "user":
-				if !isMeaningfulCodexUserText(text) {
+			switch strings.TrimSpace(asString(payload["type"])) {
+			case "message":
+				role := strings.ToLower(strings.TrimSpace(asString(payload["role"])))
+				switch role {
+				case "user":
+					text := extractCodexImportedUserText(payload["content"])
+					if text == "" {
+						return nil
+					}
+					items, _, _ = appendMergedCodexExchange(items, "user", text, timestamp, nil)
+				case "assistant":
+					text := strings.TrimSpace(extractCodexMessageText(payload["content"]))
+					text, planAux := extractImportedCodexProposedPlan(text)
+					if text == "" && len(planAux) == 0 {
+						return nil
+					}
+					items, _, _ = appendMergedCodexExchange(items, "agent", text, timestamp, planAux)
+				}
+			case "function_call", "custom_tool_call":
+				toolOrdinal++
+				toolCall, ok := parseImportedCodexToolCall(payload, toolOrdinal, sessionShell)
+				if !ok {
 					return nil
 				}
-				items = appendMergedExchange(items, "user", text, timestamp)
-			case "assistant":
-				if text == "" {
+				aux := []agenttypes.ImportedExchangeAux{{
+					Line:     0,
+					ToolCall: &toolCall,
+				}}
+				var exchangeIndex, auxStart int
+				items, exchangeIndex, auxStart = appendMergedCodexExchange(
+					items,
+					"agent",
+					"",
+					timestamp,
+					aux,
+				)
+				if exchangeIndex < 0 {
 					return nil
 				}
-				items = appendMergedExchange(items, "agent", text, timestamp)
+				toolLocations[toolCall.CallID] = importedToolLocation{
+					ExchangeIndex: exchangeIndex,
+					AuxIndex:      auxStart,
+				}
+			case "function_call_output", "custom_tool_call_output":
+				applyImportedCodexToolOutput(items, toolLocations, payload, timestamp)
 			}
 		case "event_msg":
 			if numTurns := codexRollbackTurns(raw); numTurns > 0 {
 				items = dropLastCodexUserTurns(items, numTurns)
+				toolLocations = rebuildImportedCodexToolLocations(items)
+			}
+		case "world_state":
+			if shell := importedCodexWorldStateShell(raw); shell != "" {
+				sessionShell = shell
 			}
 		}
 		return nil
@@ -470,6 +651,42 @@ func readCodexImportedExchangeLocators(path string, after time.Time) ([]imported
 		return nil, err
 	}
 	return codexExchangeLocatorsAfter(items, after), nil
+}
+
+func extractImportedCodexProposedPlan(text string) (string, []agenttypes.ImportedExchangeAux) {
+	const openTag = "<proposed_plan>"
+	const closeTag = "</proposed_plan>"
+	start := strings.Index(text, openTag)
+	if start < 0 {
+		return text, nil
+	}
+	contentStart := start + len(openTag)
+	closeOffset := strings.Index(text[contentStart:], closeTag)
+	if closeOffset < 0 {
+		return text, nil
+	}
+	end := contentStart + closeOffset
+	planContent := strings.TrimSpace(text[contentStart:end])
+	if planContent == "" {
+		return text, nil
+	}
+	before := strings.TrimSpace(text[:start])
+	after := strings.TrimSpace(text[end+len(closeTag):])
+	remaining := strings.TrimSpace(strings.Join(nonEmptyStrings(before, after), "\n\n"))
+	return remaining, []agenttypes.ImportedExchangeAux{{
+		Line: importedCodexAssistantLine(before),
+		Plan: &agenttypes.PlanUpdate{Content: planContent},
+	}}
+}
+
+func nonEmptyStrings(values ...string) []string {
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			items = append(items, value)
+		}
+	}
+	return items
 }
 
 var errStopJSONL = errors.New("stop jsonl")
@@ -493,37 +710,72 @@ func forEachJSONLLine(file *os.File, fn func(string) error) error {
 	}
 }
 
-func appendMergedExchange(items []agenttypes.ImportedExchange, role, content string, ts time.Time) []agenttypes.ImportedExchange {
+func appendMergedCodexExchange(
+	items []agenttypes.ImportedExchange,
+	role, content string,
+	ts time.Time,
+	aux []agenttypes.ImportedExchangeAux,
+) ([]agenttypes.ImportedExchange, int, int) {
 	content = strings.TrimSpace(content)
-	if content == "" {
-		return items
+	if content == "" && len(aux) == 0 {
+		return items, -1, 0
 	}
 	if len(items) > 0 && items[len(items)-1].Role == role {
 		last := &items[len(items)-1]
-		last.Content = strings.TrimSpace(last.Content + "\n\n" + content)
+		lineOffset := importedCodexAssistantLine(last.Content)
+		if content != "" {
+			if last.Content == "" {
+				last.Content = content
+			} else {
+				last.Content = strings.TrimSpace(last.Content + "\n\n" + content)
+			}
+		}
 		if !ts.IsZero() {
 			last.Timestamp = ts
 		}
-		return items
+		auxStart := len(last.Aux)
+		for _, item := range aux {
+			item.Line += lineOffset
+			last.Aux = append(last.Aux, item)
+		}
+		return items, len(items) - 1, auxStart
 	}
 	items = append(items, agenttypes.ImportedExchange{
 		Role:      role,
 		Content:   content,
 		Timestamp: ts,
+		Aux:       aux,
 	})
-	return items
+	return items, len(items) - 1, 0
 }
 
-func appendMergedExchangeLocator(items []importedExchangeLocator, role, content string, ts time.Time, userCount int) []importedExchangeLocator {
+func appendMergedExchangeLocator(
+	items []importedExchangeLocator,
+	role, content string,
+	ts time.Time,
+	userCount int,
+	aux []agenttypes.ImportedExchangeAux,
+) []importedExchangeLocator {
 	content = strings.TrimSpace(content)
-	if content == "" {
+	if content == "" && len(aux) == 0 {
 		return items
 	}
 	if len(items) > 0 && items[len(items)-1].Role == role {
 		last := &items[len(items)-1]
-		last.Content = strings.TrimSpace(last.Content + "\n\n" + content)
+		lineOffset := importedCodexAssistantLine(last.Content)
+		if content != "" {
+			if last.Content == "" {
+				last.Content = content
+			} else {
+				last.Content = strings.TrimSpace(last.Content + "\n\n" + content)
+			}
+		}
 		if !ts.IsZero() {
 			last.Timestamp = ts
+		}
+		for _, item := range aux {
+			item.Line += lineOffset
+			last.Aux = append(last.Aux, item)
 		}
 		last.CodexUserCountAfter = userCount
 		return items
@@ -533,6 +785,7 @@ func appendMergedExchangeLocator(items []importedExchangeLocator, role, content 
 			Role:      role,
 			Content:   content,
 			Timestamp: ts,
+			Aux:       aux,
 		},
 		CodexUserCountAfter: userCount,
 	})
@@ -588,9 +841,622 @@ func codexExchangeLocatorsAfter(items []agenttypes.ImportedExchange, after time.
 		if !after.IsZero() && (item.Timestamp.IsZero() || !item.Timestamp.After(after)) {
 			continue
 		}
-		out = appendMergedExchangeLocator(out, item.Role, item.Content, item.Timestamp, userCount)
+		out = appendMergedExchangeLocator(
+			out,
+			item.Role,
+			item.Content,
+			item.Timestamp,
+			userCount,
+			item.Aux,
+		)
 	}
 	return out
+}
+
+func parseImportedCodexToolCall(payload map[string]any, ordinal int, sessionShell ...string) (agenttypes.ToolCall, bool) {
+	rawType := strings.TrimSpace(asString(payload["type"]))
+	callID := strings.TrimSpace(asString(payload["call_id"]))
+	if callID == "" {
+		callID = strings.TrimSpace(asString(payload["id"]))
+	}
+	if callID == "" {
+		callID = "codex-import-tool-" + strings.TrimSpace(asString(payload["timestamp"]))
+	}
+	if callID == "codex-import-tool-" {
+		callID += fmt.Sprint(ordinal)
+	}
+
+	name := strings.TrimSpace(asString(payload["name"]))
+	title := name
+	kind := importedCodexToolKind(name)
+	if kind != agenttypes.ToolKindExecute &&
+		kind != agenttypes.ToolKindEdit &&
+		kind != agenttypes.ToolKindThink &&
+		kind != agenttypes.ToolKindAskUser {
+		return agenttypes.ToolCall{}, false
+	}
+	var input any
+	switch rawType {
+	case "function_call":
+		input = payload["arguments"]
+	case "custom_tool_call":
+		input = payload["input"]
+	default:
+		return agenttypes.ToolCall{}, false
+	}
+	if title == "" {
+		title = rawType
+	}
+
+	meta := map[string]any{"rawType": rawType}
+	if inputText := importedCodexInputText(input); inputText != "" {
+		meta["input"] = inputText
+	}
+	locations := make([]agenttypes.ToolCallLocation, 0, 1)
+	if kind == agenttypes.ToolKindExecute {
+		shell := ""
+		if len(sessionShell) > 0 {
+			shell = sessionShell[0]
+		}
+		if command, ok := importedCodexWrappedExecCommand(input, shell); ok {
+			title = command
+			meta["command"] = command
+		}
+	}
+	if decoded := importedCodexInputObject(input); decoded != nil {
+		switch kind {
+		case agenttypes.ToolKindExecute:
+			command := strings.TrimSpace(asString(decoded["command"]))
+			if command == "" {
+				command = strings.TrimSpace(asString(decoded["cmd"]))
+			}
+			if command != "" {
+				title = command
+				meta["command"] = command
+			}
+		case agenttypes.ToolKindEdit:
+			path := strings.TrimSpace(asString(decoded["path"]))
+			if path == "" {
+				path = strings.TrimSpace(asString(decoded["file_path"]))
+			}
+			if path != "" {
+				locations = append(locations, agenttypes.ToolCallLocation{Path: path})
+				if title == "" || title == rawType || title == name {
+					title = path
+				}
+			}
+		case agenttypes.ToolKindAskUser:
+			if questions := decoded["questions"]; questions != nil {
+				meta["questions"] = questions
+			}
+		}
+	}
+	status := "running"
+	switch strings.ToLower(strings.TrimSpace(asString(payload["status"]))) {
+	case "completed", "complete", "success", "succeeded":
+		status = "complete"
+	case "failed", "error":
+		status = "failed"
+	}
+	content := importedCodexToolInputContent(kind, input)
+	if kind == agenttypes.ToolKindEdit {
+		if patchLocations, patchContent := parseImportedCodexPatch(input); len(patchLocations) > 0 {
+			locations = patchLocations
+			content = patchContent
+			if len(patchLocations) == 1 {
+				title = filepath.Base(patchLocations[0].Path)
+			}
+		} else if editContent := importedCodexStructuredEditContent(input); len(editContent) > 0 {
+			content = editContent
+		}
+	}
+	return agenttypes.ToolCall{
+		CallID:    callID,
+		Title:     title,
+		Status:    status,
+		Kind:      kind,
+		Content:   content,
+		Locations: locations,
+		RawType:   rawType,
+		Meta:      meta,
+	}, true
+}
+
+func applyImportedCodexToolOutput(
+	items []agenttypes.ImportedExchange,
+	locations map[string]importedToolLocation,
+	payload map[string]any,
+	timestamp time.Time,
+) {
+	callID := strings.TrimSpace(asString(payload["call_id"]))
+	location, ok := locations[callID]
+	if !ok || location.ExchangeIndex < 0 || location.ExchangeIndex >= len(items) {
+		return
+	}
+	exchange := &items[location.ExchangeIndex]
+	if location.AuxIndex < 0 || location.AuxIndex >= len(exchange.Aux) {
+		return
+	}
+	aux := &exchange.Aux[location.AuxIndex]
+	if aux.ToolCall == nil {
+		return
+	}
+	if !timestamp.IsZero() {
+		exchange.Timestamp = timestamp
+	}
+	toolCall := *aux.ToolCall
+	rawOutput := payload["output"]
+	if rawOutput == nil {
+		rawOutput = payload
+	}
+	output, failed := importedCodexToolOutput(rawOutput)
+	if toolCall.Kind == agenttypes.ToolKindAskUser {
+		if answers := importedCodexAskUserAnswers(toolCall, rawOutput); len(answers) > 0 {
+			if toolCall.Meta == nil {
+				toolCall.Meta = make(map[string]any)
+			}
+			toolCall.Meta["answers"] = answers
+		}
+	}
+	if toolCall.Kind == agenttypes.ToolKindExecute {
+		output = cleanImportedCodexExecOutput(output)
+	}
+	if failed || strings.EqualFold(strings.TrimSpace(asString(payload["status"])), "failed") {
+		toolCall.Status = "failed"
+	} else {
+		toolCall.Status = "complete"
+	}
+	if strings.TrimSpace(output) != "" {
+		if toolCall.Meta == nil {
+			toolCall.Meta = make(map[string]any)
+		}
+		toolCall.Meta["output"] = output
+		if toolCall.Kind != agenttypes.ToolKindEdit || len(toolCall.Content) == 0 {
+			toolCall.Content = []agenttypes.ToolCallContentItem{{Type: "text", Text: output}}
+		}
+	}
+	aux.ToolCall = &toolCall
+}
+
+func importedCodexAskUserAnswers(toolCall agenttypes.ToolCall, raw any) map[string]string {
+	output := importedCodexInputObject(raw)
+	rawAnswers, _ := output["answers"].(map[string]any)
+	if len(rawAnswers) == 0 {
+		return nil
+	}
+	input := importedCodexInputObject(toolCall.Meta["input"])
+	questions, _ := input["questions"].([]any)
+	answers := make(map[string]string)
+	for index, value := range questions {
+		question, _ := value.(map[string]any)
+		if question == nil {
+			continue
+		}
+		questionID := strings.TrimSpace(asString(question["id"]))
+		if questionID == "" {
+			continue
+		}
+		answer := importedCodexAskUserAnswerText(rawAnswers[questionID])
+		if answer != "" {
+			answers[fmt.Sprintf("q_%d", index)] = answer
+		}
+	}
+	return answers
+}
+
+func importedCodexAskUserAnswerText(raw any) string {
+	switch value := raw.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case []any:
+		items := make([]string, 0, len(value))
+		for _, item := range value {
+			if text := importedCodexAskUserAnswerText(item); text != "" {
+				items = append(items, text)
+			}
+		}
+		return strings.Join(items, ", ")
+	case map[string]any:
+		for _, key := range []string{"answers", "answer", "value"} {
+			if text := importedCodexAskUserAnswerText(value[key]); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func rebuildImportedCodexToolLocations(items []agenttypes.ImportedExchange) map[string]importedToolLocation {
+	locations := make(map[string]importedToolLocation)
+	for exchangeIndex := range items {
+		for auxIndex := range items[exchangeIndex].Aux {
+			toolCall := items[exchangeIndex].Aux[auxIndex].ToolCall
+			if toolCall == nil || strings.TrimSpace(toolCall.CallID) == "" {
+				continue
+			}
+			locations[strings.TrimSpace(toolCall.CallID)] = importedToolLocation{
+				ExchangeIndex: exchangeIndex,
+				AuxIndex:      auxIndex,
+			}
+		}
+	}
+	return locations
+}
+
+func importedCodexToolKind(name string) agenttypes.ToolKind {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	switch {
+	case normalized == "apply_patch" || strings.Contains(normalized, "edit") ||
+		strings.Contains(normalized, "write_file"):
+		return agenttypes.ToolKindEdit
+	case normalized == "exec" || normalized == "exec_command" ||
+		normalized == "write_stdin" || strings.Contains(normalized, "shell") ||
+		strings.Contains(normalized, "command"):
+		return agenttypes.ToolKindExecute
+	case normalized == "update_plan" || normalized == "plan":
+		return agenttypes.ToolKindThink
+	case strings.Contains(normalized, "request_user_input") ||
+		strings.Contains(normalized, "ask_user"):
+		return agenttypes.ToolKindAskUser
+	default:
+		return agenttypes.ToolKindOther
+	}
+}
+
+func importedCodexToolInputContent(kind agenttypes.ToolKind, input any) []agenttypes.ToolCallContentItem {
+	if kind != agenttypes.ToolKindEdit {
+		return nil
+	}
+	text := strings.TrimSpace(asString(input))
+	if text == "" {
+		if encoded, err := json.Marshal(input); err == nil {
+			text = strings.TrimSpace(string(encoded))
+		}
+	}
+	if text == "" || text == "null" {
+		return nil
+	}
+	return []agenttypes.ToolCallContentItem{{Type: "text", Text: text}}
+}
+
+func importedCodexStructuredEditContent(input any) []agenttypes.ToolCallContentItem {
+	decoded := importedCodexInputObject(input)
+	if decoded == nil {
+		return nil
+	}
+	path := strings.TrimSpace(asString(decoded["path"]))
+	if path == "" {
+		path = strings.TrimSpace(asString(decoded["file_path"]))
+	}
+	if path == "" {
+		return nil
+	}
+
+	oldText, hasOldText := decoded["old_string"].(string)
+	newText, hasNewText := decoded["new_string"].(string)
+	if hasOldText || hasNewText {
+		return []agenttypes.ToolCallContentItem{{
+			Type:    "diff",
+			Path:    path,
+			OldText: &oldText,
+			NewText: newText,
+		}}
+	}
+	if text, ok := decoded["content"].(string); ok {
+		return []agenttypes.ToolCallContentItem{{
+			Type:       "text",
+			Text:       text,
+			Path:       path,
+			ChangeKind: "add",
+		}}
+	}
+	return nil
+}
+
+func importedCodexWrappedExecCommand(input any, sessionShell string) (string, bool) {
+	script := strings.TrimSpace(asString(input))
+	args := importedCodexJavaScriptCallObject(script, "tools.exec_command")
+	if args == nil {
+		return "", false
+	}
+	command := strings.TrimSpace(asString(args["cmd"]))
+	if command == "" {
+		return "", false
+	}
+	shell := strings.TrimSpace(asString(args["shell"]))
+	if shell == "" {
+		shell = strings.TrimSpace(sessionShell)
+	}
+	flag := "-lc"
+	if login, ok := args["login"].(bool); ok && !login {
+		flag = "-c"
+	}
+	if shell == "" {
+		return command, true
+	}
+	return shell + " " + flag + " " + quoteImportedShellCommand(command), true
+}
+
+func importedCodexWorldStateShell(raw map[string]any) string {
+	payload, _ := raw["payload"].(map[string]any)
+	state, _ := payload["state"].(map[string]any)
+	environmentsState, _ := state["environments"].(map[string]any)
+	environments, _ := environmentsState["environments"].(map[string]any)
+	local, _ := environments["local"].(map[string]any)
+	return strings.TrimSpace(asString(local["shell"]))
+}
+
+func importedCodexJavaScriptCallObject(script, callName string) map[string]any {
+	callIndex := strings.Index(script, callName)
+	if callIndex < 0 {
+		return nil
+	}
+	remainder := script[callIndex+len(callName):]
+	openIndex := strings.IndexByte(remainder, '{')
+	if openIndex < 0 {
+		return nil
+	}
+
+	start := callIndex + len(callName) + openIndex
+	depth := 0
+	inString := false
+	escaped := false
+	for index := start; index < len(script); index++ {
+		switch char := script[index]; {
+		case inString && escaped:
+			escaped = false
+		case inString && char == '\\':
+			escaped = true
+		case char == '"':
+			inString = !inString
+		case inString:
+		case char == '{':
+			depth++
+		case char == '}':
+			depth--
+			if depth == 0 {
+				var decoded map[string]any
+				if json.Unmarshal([]byte(script[start:index+1]), &decoded) == nil {
+					return decoded
+				}
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+func quoteImportedShellCommand(command string) string {
+	return "'" + strings.ReplaceAll(command, "'", "'\\''") + "'"
+}
+
+func parseImportedCodexPatch(input any) ([]agenttypes.ToolCallLocation, []agenttypes.ToolCallContentItem) {
+	patch := importedCodexPatchText(input)
+	if patch == "" {
+		return nil, nil
+	}
+
+	type patchSection struct {
+		kind    string
+		path    string
+		oldPath string
+		lines   []string
+	}
+
+	var sections []patchSection
+	var current *patchSection
+	flush := func() {
+		if current == nil || strings.TrimSpace(current.path) == "" {
+			current = nil
+			return
+		}
+		sections = append(sections, *current)
+		current = nil
+	}
+
+	for _, line := range strings.Split(strings.ReplaceAll(patch, "\r\n", "\n"), "\n") {
+		switch {
+		case strings.HasPrefix(line, "*** Add File: "):
+			flush()
+			current = &patchSection{kind: "add", path: strings.TrimSpace(strings.TrimPrefix(line, "*** Add File: "))}
+		case strings.HasPrefix(line, "*** Delete File: "):
+			flush()
+			current = &patchSection{kind: "delete", path: strings.TrimSpace(strings.TrimPrefix(line, "*** Delete File: "))}
+		case strings.HasPrefix(line, "*** Update File: "):
+			flush()
+			path := strings.TrimSpace(strings.TrimPrefix(line, "*** Update File: "))
+			current = &patchSection{kind: "update", path: path, oldPath: path}
+		case strings.HasPrefix(line, "*** Move to: "):
+			if current != nil {
+				nextPath := strings.TrimSpace(strings.TrimPrefix(line, "*** Move to: "))
+				if nextPath != "" {
+					current.path = nextPath
+				}
+			}
+		case line == "*** Begin Patch", line == "*** End Patch", line == "*** End of File":
+			// Container markers are not part of a file diff.
+		default:
+			if current != nil {
+				current.lines = append(current.lines, line)
+			}
+		}
+	}
+	flush()
+
+	locations := make([]agenttypes.ToolCallLocation, 0, len(sections))
+	content := make([]agenttypes.ToolCallContentItem, 0, len(sections))
+	for _, section := range sections {
+		locations = append(locations, agenttypes.ToolCallLocation{Path: section.path})
+		switch section.kind {
+		case "add":
+			content = append(content, agenttypes.ToolCallContentItem{
+				Type:       "text",
+				Text:       stripImportedPatchPrefixes(section.lines, "+"),
+				Path:       section.path,
+				ChangeKind: "add",
+			})
+		case "delete":
+			content = append(content, agenttypes.ToolCallContentItem{
+				Type:       "text",
+				Text:       stripImportedPatchPrefixes(section.lines, "-"),
+				Path:       section.path,
+				ChangeKind: "delete",
+			})
+		default:
+			oldPath := section.oldPath
+			if oldPath == "" {
+				oldPath = section.path
+			}
+			diffLines := []string{"--- a/" + oldPath, "+++ b/" + section.path}
+			diffLines = append(diffLines, section.lines...)
+			content = append(content, agenttypes.ToolCallContentItem{
+				Type:       "text",
+				Text:       strings.Join(diffLines, "\n"),
+				Path:       section.path,
+				ChangeKind: "update",
+			})
+		}
+	}
+	return locations, content
+}
+
+func importedCodexPatchText(input any) string {
+	text := strings.TrimSpace(asString(input))
+	if decoded := importedCodexInputObject(input); decoded != nil {
+		for _, key := range []string{"patch", "input"} {
+			if candidate := strings.TrimSpace(asString(decoded[key])); candidate != "" {
+				return candidate
+			}
+		}
+	}
+	return text
+}
+
+func stripImportedPatchPrefixes(lines []string, prefix string) string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.HasPrefix(line, prefix) {
+			line = strings.TrimPrefix(line, prefix)
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func importedCodexInputText(input any) string {
+	if input == nil {
+		return ""
+	}
+	if text := strings.TrimSpace(asString(input)); text != "" {
+		return text
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return ""
+	}
+	text := strings.TrimSpace(string(encoded))
+	if text == "null" {
+		return ""
+	}
+	return text
+}
+
+func importedCodexInputObject(input any) map[string]any {
+	if object, ok := input.(map[string]any); ok {
+		return object
+	}
+	text := strings.TrimSpace(asString(input))
+	if text == "" {
+		return nil
+	}
+	var object map[string]any
+	if json.Unmarshal([]byte(text), &object) != nil {
+		return nil
+	}
+	return object
+}
+
+func importedCodexToolOutput(raw any) (string, bool) {
+	if blocks, ok := raw.([]any); ok {
+		return importedCodexOutputBlockText(blocks), false
+	}
+	text := strings.TrimSpace(asString(raw))
+	if text == "" {
+		if encoded, err := json.Marshal(raw); err == nil {
+			text = strings.TrimSpace(string(encoded))
+		}
+	}
+	if text == "" || text == "null" {
+		return "", false
+	}
+	var blocks []any
+	if json.Unmarshal([]byte(text), &blocks) == nil {
+		return importedCodexOutputBlockText(blocks), false
+	}
+	var decoded map[string]any
+	if json.Unmarshal([]byte(text), &decoded) == nil {
+		failed := false
+		if value, ok := decoded["is_error"].(bool); ok {
+			failed = value
+		}
+		if exitCode, ok := decoded["exit_code"].(float64); ok && exitCode != 0 {
+			failed = true
+		}
+		if metadata, ok := decoded["metadata"].(map[string]any); ok {
+			if exitCode, ok := metadata["exit_code"].(float64); ok && exitCode != 0 {
+				failed = true
+			}
+		}
+		if errText := strings.TrimSpace(asString(decoded["error"])); errText != "" {
+			failed = true
+		}
+		if output := strings.TrimSpace(asString(decoded["output"])); output != "" {
+			return output, failed
+		}
+		return text, failed
+	}
+	return text, false
+}
+
+func importedCodexOutputBlockText(blocks []any) string {
+	var output strings.Builder
+	for _, block := range blocks {
+		item, _ := block.(map[string]any)
+		if item == nil {
+			continue
+		}
+		text := asString(item["text"])
+		if text == "" {
+			continue
+		}
+		if output.Len() > 0 {
+			current := output.String()
+			if !strings.HasSuffix(current, "\n") && !strings.HasPrefix(text, "\n") {
+				output.WriteByte('\n')
+			}
+		}
+		output.WriteString(text)
+	}
+	return strings.TrimSpace(output.String())
+}
+
+func cleanImportedCodexExecOutput(output string) string {
+	normalized := strings.ReplaceAll(output, "\r\n", "\n")
+	lines := strings.Split(normalized, "\n")
+	if len(lines) >= 3 &&
+		strings.TrimSpace(lines[0]) == "Script completed" &&
+		strings.HasPrefix(strings.TrimSpace(lines[1]), "Wall time ") &&
+		strings.TrimSpace(lines[2]) == "Output:" {
+		return strings.TrimSpace(strings.Join(lines[3:], "\n"))
+	}
+	return strings.TrimSpace(normalized)
+}
+
+func importedCodexAssistantLine(content string) int {
+	if content == "" {
+		return 0
+	}
+	return strings.Count(content, "\n") + 1
 }
 
 func buildImportedTurns(items []importedExchangeLocator) []importedTurn {
@@ -629,14 +1495,70 @@ func extractCodexMessageText(raw any) string {
 	return strings.TrimSpace(strings.Join(lines, "\n\n"))
 }
 
+func extractCodexUserPreview(raw any) string {
+	parts, _ := raw.([]any)
+	for index := len(parts) - 1; index >= 0; index-- {
+		item, _ := parts[index].(map[string]any)
+		if item == nil {
+			continue
+		}
+		switch strings.TrimSpace(asString(item["type"])) {
+		case "input_text", "text":
+			text := strings.TrimSpace(asString(item["text"]))
+			if isMeaningfulCodexUserText(text) {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func extractCodexImportedUserText(raw any) string {
+	if text := strings.TrimSpace(asString(raw)); text != "" {
+		if isMeaningfulCodexUserText(text) {
+			return text
+		}
+		return ""
+	}
+	parts, _ := raw.([]any)
+	texts := make([]string, 0, len(parts))
+	for _, value := range parts {
+		item, _ := value.(map[string]any)
+		if item == nil {
+			continue
+		}
+		switch strings.TrimSpace(asString(item["type"])) {
+		case "input_text", "text":
+			text := strings.TrimSpace(asString(item["text"]))
+			if isMeaningfulCodexUserText(text) {
+				texts = append(texts, text)
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(texts, "\n\n"))
+}
+
 func isMeaningfulCodexUserText(text string) bool {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return false
 	}
-	return !strings.HasPrefix(text, "# AGENTS.md instructions") &&
-		!strings.HasPrefix(text, "<environment_context>") &&
-		!strings.HasPrefix(text, "<permissions instructions>")
+	for _, tags := range [][2]string{
+		{"<recommended_plugins>", "</recommended_plugins>"},
+		{"<environment_context>", "</environment_context>"},
+		{"<permissions instructions>", "</permissions instructions>"},
+		{"<skills_instructions>", "</skills_instructions>"},
+		{"<apps_instructions>", "</apps_instructions>"},
+		{"<plugins_instructions>", "</plugins_instructions>"},
+	} {
+		if strings.HasPrefix(text, tags[0]) && strings.HasSuffix(text, tags[1]) {
+			return false
+		}
+	}
+	if strings.HasPrefix(text, "# AGENTS.md instructions") && strings.HasSuffix(text, "</INSTRUCTIONS>") {
+		return false
+	}
+	return true
 }
 
 func appendSortedCodexSession(items []codexSessionFile, item codexSessionFile) []codexSessionFile {

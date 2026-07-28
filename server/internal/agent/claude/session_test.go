@@ -280,6 +280,14 @@ func TestClaudeTaskCreateAndUpdateToolUseMapToTaskKind(t *testing.T) {
 	}
 }
 
+func TestClaudePlanToolsMapToThinkKind(t *testing.T) {
+	for _, name := range []string{"Think", "UpdatePlan", "update_plan", "EnterPlanMode", "ExitPlanMode"} {
+		if got := mapToolKind(name); got != types.ToolKindThink {
+			t.Fatalf("mapToolKind(%q) = %q, want think", name, got)
+		}
+	}
+}
+
 func TestClaudeTaskCreateResultUsesReturnedTaskID(t *testing.T) {
 	parentID := "call-create-1"
 	s := &session{}

@@ -195,11 +195,7 @@ func (s *Service) ImportExternalSession(ctx context.Context, in ImportExternalSe
 		return ImportExternalSessionOutput{}, err
 	}
 	for _, exchange := range imported.Exchanges {
-		role := strings.TrimSpace(exchange.Role)
-		if role != "user" && role != "agent" {
-			continue
-		}
-		if err := manager.AddExchangeForAgentAt(ctx, created, role, exchange.Content, in.Agent, "", "", "", exchange.Timestamp); err != nil {
+		if _, err := appendImportedExchange(ctx, manager, created, in.Agent, exchange); err != nil {
 			return ImportExternalSessionOutput{}, err
 		}
 	}
@@ -209,6 +205,9 @@ func (s *Service) ImportExternalSession(ctx context.Context, in ImportExternalSe
 	}
 	importedCount := len(current.Exchanges)
 	if err := manager.UpdateAgentState(ctx, created, in.Agent, importedCount, imported.AgentSessionID); err != nil {
+		return ImportExternalSessionOutput{}, err
+	}
+	if _, err := syncImportedSubagentSessions(ctx, manager, created, in.Agent, imported.Subagents); err != nil {
 		return ImportExternalSessionOutput{}, err
 	}
 	return ImportExternalSessionOutput{
@@ -326,34 +325,120 @@ func (s *Service) SyncExternalSessionDelta(ctx context.Context, in SyncExternalS
 	}
 	importedCount := 0
 	for _, exchange := range delta {
-		role := strings.TrimSpace(exchange.Role)
-		if role != "user" && role != "agent" {
-			continue
-		}
-		if err := manager.AddExchangeForAgentAt(ctx, current, role, exchange.Content, agentName, "", "", "", exchange.Timestamp); err != nil {
+		added, err := appendImportedExchange(ctx, manager, current, agentName, exchange)
+		if err != nil {
 			return out, err
 		}
-		importedCount++
+		if added {
+			importedCount++
+		}
 	}
-	if importedCount == 0 {
-		return out, nil
+	latest := current
+	if importedCount > 0 {
+		latest, err = manager.Get(ctx, current.Key, 0)
+		if err != nil {
+			return out, err
+		}
+		agentSessionID := strings.TrimSpace(imported.AgentSessionID)
+		if agentSessionID == "" {
+			agentSessionID = binding.AgentSessionID
+		}
+		if err := manager.UpdateAgentState(ctx, latest, agentName, len(latest.Exchanges), agentSessionID); err != nil {
+			return out, err
+		}
 	}
-
-	latest, err := manager.Get(ctx, current.Key, 0)
+	subagentCount, err := syncImportedSubagentSessions(ctx, manager, latest, agentName, imported.Subagents)
 	if err != nil {
 		return out, err
 	}
-	agentSessionID := strings.TrimSpace(imported.AgentSessionID)
-	if agentSessionID == "" {
-		agentSessionID = binding.AgentSessionID
-	}
-	if err := manager.UpdateAgentState(ctx, latest, agentName, len(latest.Exchanges), agentSessionID); err != nil {
-		return out, err
-	}
-	out.ImportedCount = importedCount
+	out.ImportedCount = importedCount + subagentCount
 	out.LastTimestamp = lastExternalSyncTimestamp(latest.Exchanges)
-	log.Printf("[session/sync] external delta imported root=%s session=%s agent=%s agent_session_id=%s count=%d", strings.TrimSpace(in.RootID), strings.TrimSpace(in.Key), agentName, agentSessionID, importedCount)
+	if out.ImportedCount > 0 {
+		log.Printf("[session/sync] external delta imported root=%s session=%s agent=%s agent_session_id=%s count=%d", strings.TrimSpace(in.RootID), strings.TrimSpace(in.Key), agentName, binding.AgentSessionID, out.ImportedCount)
+	}
 	return out, nil
+}
+
+func syncImportedSubagentSessions(
+	ctx context.Context,
+	manager *session.Manager,
+	rootSession *session.Session,
+	agentName string,
+	items []agenttypes.ImportedSubagentSession,
+) (int, error) {
+	if len(items) == 0 {
+		return 0, nil
+	}
+	sessionsByAgentID := make(map[string]*session.Session, len(items))
+	pending := append([]agenttypes.ImportedSubagentSession(nil), items...)
+	importedCount := 0
+	for len(pending) > 0 {
+		progressed := false
+		next := make([]agenttypes.ImportedSubagentSession, 0, len(pending))
+		for _, item := range pending {
+			agentSessionID := strings.TrimSpace(item.AgentSessionID)
+			if agentSessionID == "" {
+				continue
+			}
+			parent := rootSession
+			if parentAgentSessionID := strings.TrimSpace(item.ParentAgentSessionID); parentAgentSessionID != "" {
+				parent = sessionsByAgentID[parentAgentSessionID]
+				if parent == nil {
+					next = append(next, item)
+					continue
+				}
+			}
+			binding, err := manager.FindAgentBindingByAgentSession(ctx, agentName, agentSessionID)
+			if err != nil {
+				return importedCount, err
+			}
+			var child *session.Session
+			start := 0
+			if binding == nil {
+				name := strings.TrimSpace(item.Title)
+				if name == "" {
+					name = "Subagent"
+				}
+				child, err = manager.Create(ctx, session.CreateInput{
+					Type:             session.TypeChat,
+					ParentSessionKey: parent.Key,
+					ParentToolCallID: strings.TrimSpace(item.ParentToolCallID),
+					Agent:            agentName,
+					Model:            strings.TrimSpace(item.Model),
+					Name:             name,
+				})
+			} else {
+				child, err = manager.Get(ctx, binding.SessionKey, 0)
+				start = binding.AgentCtxSeq
+			}
+			if err != nil {
+				return importedCount, err
+			}
+			for _, exchange := range externalSessionDeltaAfterCtxSeq(item.Exchanges, start) {
+				added, err := appendImportedExchange(ctx, manager, child, agentName, exchange)
+				if err != nil {
+					return importedCount, err
+				}
+				if added {
+					importedCount++
+				}
+			}
+			latest, err := manager.Get(ctx, child.Key, 0)
+			if err != nil {
+				return importedCount, err
+			}
+			if err := manager.UpdateAgentState(ctx, latest, agentName, len(latest.Exchanges), agentSessionID); err != nil {
+				return importedCount, err
+			}
+			sessionsByAgentID[agentSessionID] = latest
+			progressed = true
+		}
+		if !progressed {
+			return importedCount, errors.New("imported subagent parent session not found")
+		}
+		pending = next
+	}
+	return importedCount, nil
 }
 
 func externalSessionDeltaAfterCtxSeq(exchanges []agenttypes.ImportedExchange, agentCtxSeq int) []agenttypes.ImportedExchange {
@@ -364,6 +449,67 @@ func externalSessionDeltaAfterCtxSeq(exchanges []agenttypes.ImportedExchange, ag
 		return nil
 	}
 	return exchanges[agentCtxSeq:]
+}
+
+func appendImportedExchange(
+	ctx context.Context,
+	manager *session.Manager,
+	target *session.Session,
+	agentName string,
+	exchange agenttypes.ImportedExchange,
+) (bool, error) {
+	role := strings.TrimSpace(exchange.Role)
+	if role != "user" && role != "agent" {
+		return false, nil
+	}
+	if role == "user" && strings.TrimSpace(exchange.Content) == "" {
+		return false, nil
+	}
+	if err := manager.AddExchangeForAgentAt(
+		ctx,
+		target,
+		role,
+		exchange.Content,
+		agentName,
+		"",
+		"",
+		"",
+		exchange.Timestamp,
+	); err != nil {
+		return false, err
+	}
+	seq := len(target.Exchanges)
+	for _, importedAux := range exchange.Aux {
+		if importedAux.Plan != nil {
+			plan := *importedAux.Plan
+			if err := manager.AddExchangeAux(ctx, target.Key, session.ExchangeAux{
+				Seq:  seq,
+				Line: importedAux.Line,
+				Plan: &plan,
+			}); err != nil {
+				return false, err
+			}
+			continue
+		}
+		if importedAux.ToolCall == nil {
+			continue
+		}
+		toolCall := *importedAux.ToolCall
+		if toolCall.Kind != agenttypes.ToolKindExecute &&
+			toolCall.Kind != agenttypes.ToolKindEdit &&
+			toolCall.Kind != agenttypes.ToolKindThink &&
+			toolCall.Kind != agenttypes.ToolKindAskUser {
+			continue
+		}
+		if err := manager.AddExchangeAux(ctx, target.Key, session.ExchangeAux{
+			Seq:      seq,
+			Line:     importedAux.Line,
+			ToolCall: &toolCall,
+		}); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func (s *Service) resolveExternalSessionImporter(agentName string) (agenttypes.ExternalSessionImporter, error) {

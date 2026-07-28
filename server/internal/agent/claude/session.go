@@ -2558,13 +2558,13 @@ func mapToolKind(name string) types.ToolKind {
 		return types.ToolKindExecute
 	case "webfetch", "fetch":
 		return types.ToolKindFetch
-	case "task", "taskcreate", "taskupdate", "tasklist", "taskget":
+	case "agent", "task", "taskcreate", "taskupdate", "tasklist", "taskget":
 		return types.ToolKindTask
 	case "askuserquestion":
 		return types.ToolKindAskUser
 	case "todowrite", "todos":
 		return types.ToolKindTodo
-	case "think":
+	case "think", "updateplan", "enterplanmode", "exitplanmode":
 		return types.ToolKindThink
 	case "switchmode":
 		return types.ToolKindSwitchMode
