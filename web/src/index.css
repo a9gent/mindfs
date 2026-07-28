@@ -439,6 +439,45 @@ html {
 
 * {
   box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  button,
+  a,
+  input,
+  select,
+  textarea,
+  label,
+  summary,
+  [role="button"],
+  [tabindex]:not([tabindex="-1"]) {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button,
+  [role="button"] {
+    touch-action: manipulation;
+  }
+
+  input,
+  select,
+  textarea,
+  [contenteditable="true"] {
+    outline: none;
+  }
+
+  input:focus,
+  select:focus,
+  textarea:focus,
+  [contenteditable="true"]:focus,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [contenteditable="true"]:focus-visible {
+    outline: none;
+    box-shadow: none !important;
+  }
 }
 
 .mindfs-sidebar-resize-rail {
