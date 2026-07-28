@@ -75,6 +75,14 @@ func (s *AppContext) GetRootContext(rootID string) (*RootContext, error) {
 	if root.ID == "" {
 		return nil, errors.New("invalid root")
 	}
+	exists, err := managedRootExists(root)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		s.removeMissingRoot(root)
+		return nil, errors.New("root not found")
+	}
 
 	s.mu.RLock()
 	if ctx, ok := s.roots[root.ID]; ok {
@@ -592,7 +600,50 @@ func (s *AppContext) ListRoots() []fs.RootInfo {
 	if s.Dirs == nil {
 		return []fs.RootInfo{}
 	}
-	return s.Dirs.List()
+	roots := s.Dirs.List()
+	active := make([]fs.RootInfo, 0, len(roots))
+	for _, root := range roots {
+		exists, err := managedRootExists(root)
+		if err != nil {
+			log.Printf("[registry] stat.root.error root=%s path=%s err=%v", root.ID, root.RootPath, err)
+			active = append(active, root)
+			continue
+		}
+		if exists {
+			active = append(active, root)
+			continue
+		}
+		s.removeMissingRoot(root)
+	}
+	return active
+}
+
+func managedRootExists(root fs.RootInfo) (bool, error) {
+	path := strings.TrimSpace(root.RootPath)
+	if path == "" {
+		return false, nil
+	}
+	info, err := os.Stat(filepath.Clean(path))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return info.IsDir(), nil
+}
+
+func (s *AppContext) removeMissingRoot(root fs.RootInfo) {
+	if s == nil || s.Dirs == nil {
+		return
+	}
+	dir, err := s.RemoveRoot(root.RootPath)
+	if err != nil {
+		log.Printf("[registry] remove.missing_root.error root=%s path=%s err=%v", root.ID, root.RootPath, err)
+		s.ReleaseRootResources(root.ID)
+		return
+	}
+	log.Printf("[registry] remove.missing_root root=%s path=%s", dir.ID, dir.RootPath)
 }
 
 func (s *AppContext) AddFileChangeListener(listener func(fs.FileChangeEvent)) {
