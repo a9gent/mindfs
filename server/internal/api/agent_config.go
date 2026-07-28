@@ -378,18 +378,18 @@ func switchAgentConfig(req agentConfigSwitchRequest, app *AppContext) (agentConf
 			return agentConfigManifestEntry{}, false, err
 		}
 		env = parsedEnv
-		if err := updateAgentEnvConfig(entry.Agent, env); err != nil {
+	}
+	if err := updateAgentEnvConfig(entry.Agent, env); err != nil {
+		return agentConfigManifestEntry{}, false, err
+	}
+	if app != nil && app.GetAgentPool() != nil {
+		if err := app.GetAgentPool().SetAgentEnv(entry.Agent, env); err != nil {
 			return agentConfigManifestEntry{}, false, err
 		}
-		if app != nil && app.GetAgentPool() != nil {
-			if err := app.GetAgentPool().SetAgentEnv(entry.Agent, env); err != nil {
-				return agentConfigManifestEntry{}, false, err
-			}
-		}
-		if app != nil && app.GetProber() != nil {
-			if err := app.GetProber().SetAgentEnv(entry.Agent, env); err != nil {
-				return agentConfigManifestEntry{}, false, err
-			}
+	}
+	if app != nil && app.GetProber() != nil {
+		if err := app.GetProber().SetAgentEnv(entry.Agent, env); err != nil {
+			return agentConfigManifestEntry{}, false, err
 		}
 	}
 	if app != nil && app.GetAgentPool() != nil {
