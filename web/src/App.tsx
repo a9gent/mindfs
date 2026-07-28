@@ -135,7 +135,7 @@ import {
   ProjectAddPopover,
   type ProjectAddMode,
 } from "./components/ProjectAddPopover";
-import { fetchAgents, type AgentStatus } from "./services/agents";
+import { fetchAgents, restartAgent, type AgentStatus } from "./services/agents";
 import { fetchCandidates, type CandidateItem } from "./services/candidates";
 import {
   createTask,
@@ -6440,6 +6440,13 @@ export function App({ onGoHome }: AppProps) {
       t,
     ],
   );
+
+  const handleRestartAgent = useCallback(async (agentName: string) => {
+    await restartAgent(agentName);
+    const items = await fetchAgents(true);
+    setAvailableAgents(items);
+    setAgentsVersion((v) => v + 1);
+  }, []);
 
   const handleCancelCurrentTurn = useCallback(
     async (sessionKey: string) => {
@@ -13828,6 +13835,7 @@ export function App({ onGoHome }: AppProps) {
             multiProjectSessionsEnabled={multiProjectSessionsEnabled}
             onMultiProjectSessionsChange={setMultiProjectSessionsEnabled}
             onRunAgentLifecycleCommand={handleRunAgentLifecycleCommand}
+            onRestartAgent={handleRestartAgent}
             onGoHome={onGoHome}
           />
         }

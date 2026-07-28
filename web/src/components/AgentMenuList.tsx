@@ -32,10 +32,17 @@ export function AgentMenuList({
       {agents.map((item) => {
         const selected = item.name === selectedAgent;
         return (
-          <button
+          <div
             key={item.name}
-            type="button"
+            role="button"
+            tabIndex={0}
             onClick={() => onSelect(item.name)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onSelect(item.name);
+              }
+            }}
             style={{
               display: "flex",
               alignItems: "center",
@@ -87,7 +94,7 @@ export function AgentMenuList({
               </span>
             ) : null}
             {renderEnd ? renderEnd(item) : null}
-          </button>
+          </div>
         );
       })}
     </div>
