@@ -14,23 +14,24 @@ const (
 )
 
 type Session struct {
-	Key              string           `json:"key"`
-	Type             string           `json:"type"`
-	ParentSessionKey string           `json:"parent_session_key,omitempty"`
-	ParentToolCallID string           `json:"parent_tool_call_id,omitempty"`
-	Source           string           `json:"source,omitempty"`
-	TaskID           string           `json:"task_id,omitempty"`
-	AgentCtxSeq      map[string]int   `json:"agent_ctx_seq,omitempty"`
-	Model            string           `json:"model,omitempty"`
-	Shell            string           `json:"shell,omitempty"`
-	PlanMode         bool             `json:"plan_mode,omitempty"`
-	Name             string           `json:"name"`
-	Exchanges        []Exchange       `json:"exchanges"`
-	RelatedFiles     []RelatedFile    `json:"related_files"`
-	RelatedWorktree  *RelatedWorktree `json:"related_worktree,omitempty"`
-	CreatedAt        time.Time        `json:"created_at"`
-	UpdatedAt        time.Time        `json:"updated_at"`
-	ClosedAt         *time.Time       `json:"closed_at,omitempty"`
+	Key               string                   `json:"key"`
+	Type              string                   `json:"type"`
+	ParentSessionKey  string                   `json:"parent_session_key,omitempty"`
+	ParentToolCallID  string                   `json:"parent_tool_call_id,omitempty"`
+	Source            string                   `json:"source,omitempty"`
+	TaskID            string                   `json:"task_id,omitempty"`
+	AgentCtxSeq       map[string]int           `json:"agent_ctx_seq,omitempty"`
+	Model             string                   `json:"model,omitempty"`
+	Shell             string                   `json:"shell,omitempty"`
+	PlanMode          bool                     `json:"plan_mode,omitempty"`
+	Name              string                   `json:"name"`
+	Exchanges         []Exchange               `json:"exchanges"`
+	RelatedFiles      []RelatedFile            `json:"related_files"`
+	RelatedWorktree   *RelatedWorktree         `json:"related_worktree,omitempty"`
+	LastContextWindow agenttypes.ContextWindow `json:"last_context_window,omitempty"`
+	CreatedAt         time.Time                `json:"created_at"`
+	UpdatedAt         time.Time                `json:"updated_at"`
+	ClosedAt          *time.Time               `json:"closed_at,omitempty"`
 }
 
 type Exchange struct {

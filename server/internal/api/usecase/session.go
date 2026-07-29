@@ -738,17 +738,24 @@ func (s *Service) GetSessionContextWindow(ctx context.Context, in GetSessionCont
 	}
 	pool := s.Registry.GetAgentPool()
 	if pool == nil {
-		return agenttypes.ContextWindow{}, nil
+		return current.LastContextWindow, nil
 	}
 	agentName := strings.TrimSpace(session.InferAgentFromSession(current))
 	if agentName == "" {
-		return agenttypes.ContextWindow{}, nil
+		return current.LastContextWindow, nil
 	}
 	sess, ok := pool.Get(agentPoolSessionKey(in.Key, agentName))
 	if !ok || sess == nil {
-		return agenttypes.ContextWindow{}, nil
+		return current.LastContextWindow, nil
 	}
-	return sess.ContextWindow(ctx)
+	contextWindow, err := sess.ContextWindow(ctx)
+	if err != nil {
+		return agenttypes.ContextWindow{}, err
+	}
+	if contextWindow.TotalTokens <= 0 || contextWindow.ModelContextWindow <= 0 {
+		return current.LastContextWindow, nil
+	}
+	return contextWindow, nil
 }
 
 type GetSessionRelatedFilesInput struct {
@@ -2002,6 +2009,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	})
 	var responseText string
 	sawAssistantChunk := false
+	var lastContextWindow agenttypes.ContextWindow
 	plannedAssistantSeq := len(current.Exchanges) + 2
 	auxBuffer := make([]session.ExchangeAux, 0, 8)
 	defer manager.ClearPendingExchangeAux(context.Background(), current.Key)
@@ -2136,6 +2144,10 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 					responseText = appendResponseChunk(responseText, lastResponseUpdateType, chunk.Content)
 					lastResponseUpdateType = string(update.Type)
 				}
+			} else if update.Type == agenttypes.EventTypeMessageDone {
+				if done, ok := update.Data.(agenttypes.MessageDone); ok {
+					lastContextWindow = done.ContextWindow
+				}
 			} else if update.Type == agenttypes.EventTypeThoughtChunk ||
 				update.Type == agenttypes.EventTypeToolCall ||
 				update.Type == agenttypes.EventTypeToolUpdate ||
@@ -2225,6 +2237,9 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	}
 	if err := manager.AddExchangeForAgent(exchangeCtx, current, "agent", responseText, in.Agent, resolvedMode, resolvedEffort, resolvedFastService); err != nil {
 		log.Printf("[session] persist.agent.error root=%s session=%s agent=%s err=%v", in.RootID, current.Key, in.Agent, err)
+		return err
+	}
+	if err := manager.UpdateLastContextWindow(ctx, current, lastContextWindow); err != nil {
 		return err
 	}
 	for _, aux := range dedupeExchangeAuxBuffer(auxBuffer) {

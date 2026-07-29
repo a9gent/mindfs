@@ -1742,6 +1742,39 @@ func TestIsNonRecoverableAgentError(t *testing.T) {
 	}
 }
 
+func TestGetSessionContextWindowFallsBackToPersistedValue(t *testing.T) {
+	rootDir := t.TempDir()
+	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)
+	manager := session.NewManager(root)
+	current, err := manager.Create(context.Background(), session.CreateInput{
+		Type:  session.TypeChat,
+		Agent: "codex",
+		Name:  "chat",
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	want := agenttypes.ContextWindow{
+		TotalTokens:        321,
+		ModelContextWindow: 200000,
+	}
+	if err := manager.UpdateLastContextWindow(context.Background(), current, want); err != nil {
+		t.Fatalf("update context window: %v", err)
+	}
+
+	service := Service{Registry: &commandTestRegistry{root: root, manager: manager}}
+	got, err := service.GetSessionContextWindow(context.Background(), GetSessionContextWindowInput{
+		RootID: root.ID,
+		Key:    current.Key,
+	})
+	if err != nil {
+		t.Fatalf("get context window: %v", err)
+	}
+	if got != want {
+		t.Fatalf("context window = %#v, want %#v", got, want)
+	}
+}
+
 func TestRecoverAgentTurnStopsOnNonRecoverableError(t *testing.T) {
 	rootDir := t.TempDir()
 	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)

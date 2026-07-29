@@ -265,6 +265,38 @@ func TestManagerPersistsExchangeModelDisplayName(t *testing.T) {
 	}
 }
 
+func TestManagerPersistsLastContextWindow(t *testing.T) {
+	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
+	manager := NewManager(root)
+
+	created, err := manager.Create(context.Background(), CreateInput{
+		Type:  TypeChat,
+		Agent: "codex",
+		Model: "gpt-test",
+		Name:  "Chat",
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	want := agenttypes.ContextWindow{
+		TotalTokens:        12345,
+		ModelContextWindow: 200000,
+	}
+	if err := manager.UpdateLastContextWindow(context.Background(), created, want); err != nil {
+		t.Fatalf("update context window: %v", err)
+	}
+	manager.sessions = map[string]*Session{}
+
+	loaded, err := manager.Get(context.Background(), created.Key, 0)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if loaded.LastContextWindow != want {
+		t.Fatalf("LastContextWindow = %#v, want %#v", loaded.LastContextWindow, want)
+	}
+}
+
 func TestManagerStoresFullToolCallAndReturnsCompactedAux(t *testing.T) {
 	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
 	manager := NewManager(root)
