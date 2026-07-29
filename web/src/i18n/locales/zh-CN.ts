@@ -648,6 +648,8 @@ export const zhCN = {
   "task.stage.user": "用户输入",
   "task.templates": "任务模板",
   "task.all": "全部",
+  "task.worktreeTitle": "已开启worktree",
+  "task.noWorktreeTitle": "未开启worktree",
   "task.unnamedTemplate": "未命名模板",
   "task.templateMenu": "任务模板菜单",
   "task.createTemplate": "创建任务模板",

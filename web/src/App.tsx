@@ -12438,6 +12438,7 @@ export function App({ onGoHome }: AppProps) {
                     const taskCanComplete = !taskTerminal && task.status === "waiting_user" && isTaskAtLastKnownStage(task);
                     const showTaskAdvanceButton = !taskTerminal && !taskStageRunning && !taskQueued;
                     const taskStatusText = taskStatusLabel(task.status || "", t);
+                    const taskWorktreeEnabled = task.create_worktree === true;
 	                    const taskNumberLabel = task.task_number ? `#${task.task_number}` : "";
 	                    const taskStageName = task.current_stage_name || (task.current_stage_index >= 0 ? t("task.stageLabel", { index: task.current_stage_index + 1 }) : "");
 	                    const showStageName = isAllTaskTemplateFilter ? column.name === t("task.column.running") : Boolean(taskStageName);
@@ -12514,7 +12515,15 @@ export function App({ onGoHome }: AppProps) {
 	                                  </button>
 	                                ) : null}
 	                              </>
-	                            ) : null}
+                            ) : null}
+                            <span
+                              title={taskWorktreeEnabled ? t("task.worktreeTitle") : t("task.noWorktreeTitle")}
+                              aria-label={taskWorktreeEnabled ? t("task.worktreeTitle") : t("task.noWorktreeTitle")}
+                              style={taskWorktreeTagStyle(taskWorktreeEnabled)}
+                            >
+                              {taskWorktreeEnabled ? null : <NoWorktreeIcon />}
+                              worktree
+                            </span>
                           </div>
                         ) : null}
                         <div
@@ -12540,6 +12549,16 @@ export function App({ onGoHome }: AppProps) {
                                 : {}),
                             }}
                           >
+                            {!isAllTaskTemplateFilter ? (
+                              <span
+                                title={taskWorktreeEnabled ? t("task.worktreeTitle") : t("task.noWorktreeTitle")}
+                                aria-label={taskWorktreeEnabled ? t("task.worktreeTitle") : t("task.noWorktreeTitle")}
+                                style={{ ...taskWorktreeTagStyle(taskWorktreeEnabled), float: "right", marginLeft: "6px" }}
+                              >
+                                {taskWorktreeEnabled ? null : <NoWorktreeIcon />}
+                                worktree
+                              </span>
+                            ) : null}
                             {!isAllTaskTemplateFilter && taskNumberLabel ? (
                               <span style={{ color: "#0ea5e9", fontWeight: 800, marginRight: "6px" }}>{taskNumberLabel}</span>
                             ) : null}
@@ -14762,6 +14781,25 @@ function TaskSessionErrorIcon() {
   );
 }
 
+function NoWorktreeIcon() {
+  return (
+    <svg
+      width="8"
+      height="8"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="8" />
+      <path d="M7 17L17 7" />
+    </svg>
+  );
+}
+
 function DeleteIcon() {
   return (
     <svg
@@ -14831,6 +14869,24 @@ function taskAuxBadgeStyle(attention = false): React.CSSProperties {
     background: attention ? "rgba(239, 68, 68, 0.10)" : "transparent",
     color: "var(--text-secondary)",
     animation: attention ? "mindfs-task-ask-user-pulse 2.2s ease-in-out infinite" : "none",
+  };
+}
+
+function taskWorktreeTagStyle(enabled: boolean): React.CSSProperties {
+  return {
+    flex: "0 0 auto",
+    marginLeft: "auto",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "1px",
+    border: enabled ? "1px solid rgba(22, 163, 74, 0.28)" : "1px solid rgba(217, 119, 6, 0.28)",
+    borderRadius: "4px",
+    background: enabled ? "rgba(22, 163, 74, 0.08)" : "rgba(217, 119, 6, 0.08)",
+    color: enabled ? "#15803d" : "#b45309",
+    fontSize: "9px",
+    fontWeight: 800,
+    lineHeight: "12px",
+    padding: enabled ? "0 4px" : "0 3px 0 2px",
   };
 }
 

@@ -650,6 +650,8 @@ export const enUS = {
   "task.stage.user": "User input",
   "task.templates": "Task templates",
   "task.all": "All",
+  "task.worktreeTitle": "Worktree enabled",
+  "task.noWorktreeTitle": "No worktree",
   "task.unnamedTemplate": "Unnamed template",
   "task.templateMenu": "Task template menu",
   "task.createTemplate": "Create task template",
