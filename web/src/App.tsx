@@ -154,6 +154,7 @@ import {
   type StageTemplate,
   type TaskTemplate,
 } from "./services/tasks";
+import { mergeRelatedFileGroups, taskIdsForUpdatedSession } from "./services/taskRelatedFiles";
 import { useI18n, type MessageKey, type MessageParams } from "./i18n";
 
 // 类型定义
@@ -1569,6 +1570,8 @@ export function App({ onGoHome }: AppProps) {
 	  const [taskFirstInputById, setTaskFirstInputById] = useState<Record<string, string>>({});
 	  const [taskSessionKeysById, setTaskSessionKeysById] = useState<Record<string, string[]>>({});
 	  const [taskRelatedFilesById, setTaskRelatedFilesById] = useState<Record<string, RelatedFile[]>>({});
+	  const taskDetailsByIdRef = useRef<Record<string, TaskDetail>>({});
+	  const taskSessionKeysByIdRef = useRef<Record<string, string[]>>({});
 	  const [selectedKanbanTaskId, setSelectedKanbanTaskId] = useState("");
 	  const [expandedTaskInputIds, setExpandedTaskInputIds] = useState<Set<string>>(() => new Set());
   const [collapsedTaskCompletionGroups, setCollapsedTaskCompletionGroups] = useState<Set<string>>(() => new Set(["success", "fail", "cancelled"]));
@@ -1579,11 +1582,11 @@ export function App({ onGoHome }: AppProps) {
   const [taskInlineCandidateIndex, setTaskInlineCandidateIndex] = useState(0);
   const [taskInlineSaving, setTaskInlineSaving] = useState(false);
   const [taskInlineUploadProgress, setTaskInlineUploadProgress] = useState<UploadProgress | null>(null);
-  const [directoryUploadProgress, setDirectoryUploadProgress] = useState<UploadProgress | null>(null);
-  const [taskWorktreeBranches, setTaskWorktreeBranches] = useState<GitBranchesPayload>({ branches: [] });
-  const [taskWorktreeBranchesLoading, setTaskWorktreeBranchesLoading] = useState(false);
-  const [taskWorktreeBranchError, setTaskWorktreeBranchError] = useState("");
-  const [kanbanTasksLoading, setKanbanTasksLoading] = useState(false);
+	  const [directoryUploadProgress, setDirectoryUploadProgress] = useState<UploadProgress | null>(null);
+	  const [taskWorktreeBranches, setTaskWorktreeBranches] = useState<GitBranchesPayload>({ branches: [] });
+	  const [taskWorktreeBranchesLoading, setTaskWorktreeBranchesLoading] = useState(false);
+	  const [taskWorktreeBranchError, setTaskWorktreeBranchError] = useState("");
+	  const [kanbanTasksLoading, setKanbanTasksLoading] = useState(false);
   const [taskTemplateFilter, setTaskTemplateFilter] = useState("");
   const [taskTemplateActionMenuOpen, setTaskTemplateActionMenuOpen] = useState(false);
   const [taskTemplateConcurrencyOpen, setTaskTemplateConcurrencyOpen] = useState(false);
@@ -1591,8 +1594,16 @@ export function App({ onGoHome }: AppProps) {
   const taskInlineEditorRef = useRef<TokenEditorHandle | null>(null);
   const taskInlineCandidateItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const taskInlineAttachmentInputRef = useRef<HTMLInputElement | null>(null);
-  const taskInlineUploadAbortRef = useRef<AbortController | null>(null);
-  const directoryUploadAbortRef = useRef<AbortController | null>(null);
+	  const taskInlineUploadAbortRef = useRef<AbortController | null>(null);
+	  const directoryUploadAbortRef = useRef<AbortController | null>(null);
+
+	  useEffect(() => {
+	    taskDetailsByIdRef.current = taskDetailsById;
+	  }, [taskDetailsById]);
+
+	  useEffect(() => {
+	    taskSessionKeysByIdRef.current = taskSessionKeysById;
+	  }, [taskSessionKeysById]);
   const knownTaskWorktreePathsRef = useRef<Set<string>>(new Set());
   const [selectedSession, setSelectedSession] = useState<SessionItem | null>(
     null,
@@ -8439,6 +8450,45 @@ export function App({ onGoHome }: AppProps) {
 	    ],
 	  );
 
+	  const refreshTaskRelatedFiles = useCallback(async (
+	    root: string,
+	    taskId: string,
+	    sessionKeys: string[],
+	  ) => {
+	    const keys = Array.from(new Set(
+	      sessionKeys
+	        .map((key) => String(key || "").trim())
+	        .filter(Boolean),
+	    ));
+	    if (!root || !taskId || keys.length === 0) return;
+	    const relatedFileGroups = await Promise.all(
+	      keys.map(async (sessionKey) => {
+	        const relatedFiles = await sessionService.getSessionRelatedFiles(root, sessionKey);
+	        await setCachedSessionRelatedFiles(root, sessionKey, relatedFiles);
+	        updateSessionRelatedFilesForKey(root, sessionKey, relatedFiles);
+	        return relatedFiles;
+	      }),
+	    );
+	    setTaskRelatedFilesById((prev) => ({ ...prev, [taskId]: mergeRelatedFileGroups(relatedFileGroups) }));
+	  }, [updateSessionRelatedFilesForKey]);
+
+	  const refreshTasksForRelatedSession = useCallback((root: string, sessionKey: string) => {
+	    const taskIds = taskIdsForUpdatedSession(taskSessionKeysByIdRef.current, sessionKey);
+	    taskIds.forEach((taskId) => {
+	      const detail = taskDetailsByIdRef.current[taskId];
+	      const task = detail?.task;
+	      if (!task || task.root_id !== root) return;
+	      const sessionKeys = Array.from(new Set(
+	        [...(taskSessionKeysByIdRef.current[taskId] || []), task.main_session_key]
+	          .map((key) => String(key || "").trim())
+	          .filter(Boolean),
+	      ));
+	      void refreshTaskRelatedFiles(root, taskId, sessionKeys).catch((error) => {
+	        console.error("[task.related_files] refresh from session event failed", { root, taskId, sessionKey, error });
+	      });
+	    });
+	  }, [refreshTaskRelatedFiles]);
+
 	  const handleSelectKanbanTask = useCallback((task: KanbanTask) => {
 	    const taskId = String(task.id || "");
 	    if (!taskId) return;
@@ -8450,35 +8500,11 @@ export function App({ onGoHome }: AppProps) {
 	        .filter(Boolean),
 	    ));
 	    if (!root || sessionKeys.length === 0) return;
-	    void Promise.all(
-	      sessionKeys.map(async (sessionKey) => {
-	        const relatedFiles = await sessionService.getSessionRelatedFiles(root, sessionKey);
-	        await setCachedSessionRelatedFiles(root, sessionKey, relatedFiles);
-	        updateSessionRelatedFilesForKey(root, sessionKey, relatedFiles);
-	        return relatedFiles;
-	      }),
-	    )
-	      .then((relatedFileGroups) => {
-	        const seen = new Set<string>();
-	        const merged: RelatedFile[] = [];
-	        relatedFileGroups.flat().forEach((file) => {
-	          const key = [
-	            file.root_id || "",
-	            file.repo_kind || "",
-	            file.repo_path || "",
-	            file.head || "",
-	            file.path || "",
-	          ].join("\0");
-	          if (!file.path || seen.has(key)) return;
-	          seen.add(key);
-	          merged.push(file);
-	        });
-	        setTaskRelatedFilesById((prev) => ({ ...prev, [taskId]: merged }));
-	      })
+	    void refreshTaskRelatedFiles(root, taskId, sessionKeys)
 	      .catch((error) => {
 	        console.error("[task.related_files] failed", { root, taskId, sessionKeys, error });
 	      });
-	  }, [taskSessionKeysById, updateSessionRelatedFilesForKey]);
+	  }, [refreshTaskRelatedFiles, taskSessionKeysById]);
 
 	  useEffect(() => {
     function openReplySession(detail: any) {
@@ -9974,6 +10000,7 @@ export function App({ onGoHome }: AppProps) {
             typeof payload?.session_key === "string" ? payload.session_key : "";
           if (rootID && sessionKey) {
             void refreshSessionRelatedFiles(rootID, sessionKey);
+            refreshTasksForRelatedSession(rootID, sessionKey);
             const cachedSession =
               sessionCacheRef.current[rootSessionKey(rootID, sessionKey)];
             const parentSessionKey = String(
@@ -9981,6 +10008,7 @@ export function App({ onGoHome }: AppProps) {
             ).trim();
             if (parentSessionKey) {
               void refreshSessionRelatedFiles(rootID, parentSessionKey);
+              refreshTasksForRelatedSession(rootID, parentSessionKey);
             }
             if (payload?.related_worktree && typeof payload.related_worktree === "object") {
               updateSessionRelatedWorktreeForKey(
@@ -10082,6 +10110,7 @@ export function App({ onGoHome }: AppProps) {
     refreshManagedRoots,
     updateSessionRelatedWorktreeForKey,
     updateSessionRelatedFilesForKey,
+    refreshTasksForRelatedSession,
     updateSessionAgentForKey,
     treeCacheKey,
     t,
