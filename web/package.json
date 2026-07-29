@@ -27,6 +27,7 @@
     "@lexical/react": "^0.41.0",
     "@lexical/selection": "^0.41.0",
     "@lexical/utils": "^0.41.0",
+    "diff": "^9.0.0",
     "katex": "^0.16.47",
     "lexical": "^0.41.0",
     "mermaid": "^11.14.0",

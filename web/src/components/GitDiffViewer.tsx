@@ -1,6 +1,13 @@
 import React from "react";
 import type { GitDiffPayload } from "../services/git";
 import { rootBadgeStyle } from "./rootBadgeStyle";
+import {
+  buildDiffLines,
+  buildSideBySideRows,
+  buildUnifiedRows,
+  getInlineDiffSegments,
+  type DiffLine,
+} from "./gitDiffModel";
 
 type GitDiffViewerProps = {
   diff: GitDiffPayload;
@@ -87,106 +94,6 @@ function renderStatusLabel(status: string): string {
   return status;
 }
 
-type DiffLine = {
-  kind: "hunk" | "add" | "del" | "ctx";
-  text: string;
-  oldLine?: number;
-  newLine?: number;
-};
-
-type SideBySideDiffRow = {
-  kind: "hunk" | "change" | "ctx";
-  hunkText?: string;
-  left?: DiffLine;
-  right?: DiffLine;
-};
-
-function buildDiffLines(content: string): DiffLine[] {
-  const source = String(content || "").split("\n");
-  const filtered = source.filter((line) => !/^(diff --git|index |--- |\+\+\+ )/.test(line));
-  const lines: DiffLine[] = [];
-  let oldLine = 0;
-  let newLine = 0;
-
-  filtered.forEach((line) => {
-    const hunkMatch = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-    if (hunkMatch) {
-      oldLine = Number.parseInt(hunkMatch[1], 10) || 0;
-      newLine = Number.parseInt(hunkMatch[2], 10) || 0;
-      lines.push({ kind: "hunk", text: line });
-      return;
-    }
-    if (/^\+[^+]/.test(line)) {
-      lines.push({ kind: "add", text: line.slice(1), newLine });
-      newLine += 1;
-      return;
-    }
-    if (/^-[^-]/.test(line)) {
-      lines.push({ kind: "del", text: line.slice(1), oldLine });
-      oldLine += 1;
-      return;
-    }
-    lines.push({
-      kind: "ctx",
-      text: line.startsWith(" ") ? line.slice(1) : line,
-      oldLine: oldLine || undefined,
-      newLine: newLine || undefined,
-    });
-    if (oldLine > 0) {
-      oldLine += 1;
-    }
-    if (newLine > 0) {
-      newLine += 1;
-    }
-  });
-
-  return lines;
-}
-
-function buildSideBySideRows(lines: DiffLine[]): SideBySideDiffRow[] {
-  const rows: SideBySideDiffRow[] = [];
-  let index = 0;
-
-  while (index < lines.length) {
-    const line = lines[index];
-    if (line.kind === "hunk") {
-      rows.push({ kind: "hunk", hunkText: line.text });
-      index += 1;
-      continue;
-    }
-    if (line.kind === "ctx") {
-      rows.push({ kind: "ctx", left: line, right: line });
-      index += 1;
-      continue;
-    }
-    if (line.kind === "del" || line.kind === "add") {
-      const deleted: DiffLine[] = [];
-      const added: DiffLine[] = [];
-      while (index < lines.length && (lines[index].kind === "del" || lines[index].kind === "add")) {
-        const current = lines[index];
-        if (current.kind === "del") {
-          deleted.push(current);
-        } else {
-          added.push(current);
-        }
-        index += 1;
-      }
-      const count = Math.max(deleted.length, added.length);
-      for (let rowIndex = 0; rowIndex < count; rowIndex += 1) {
-        rows.push({
-          kind: "change",
-          left: deleted[rowIndex],
-          right: added[rowIndex],
-        });
-      }
-      continue;
-    }
-    index += 1;
-  }
-
-  return rows;
-}
-
 function lineBackground(kind: DiffLine["kind"]): string {
   switch (kind) {
     case "add":
@@ -217,6 +124,9 @@ function displayLineNumber(line: DiffLine): string {
   if (line.kind === "add" && typeof line.newLine === "number") {
     return String(line.newLine);
   }
+  if (line.kind === "ctx" && typeof line.newLine === "number") {
+    return String(line.newLine);
+  }
   return "";
 }
 
@@ -226,6 +136,47 @@ function displayOldLineNumber(line?: DiffLine): string {
 
 function displayNewLineNumber(line?: DiffLine): string {
   return line && typeof line.newLine === "number" ? String(line.newLine) : "";
+}
+
+function inlineSegmentBackground(kind: DiffLine["kind"], segmentKind: "ctx" | "add" | "del"): string {
+  if (kind === "add" && segmentKind === "add") {
+    return "rgba(22, 163, 74, 0.22)";
+  }
+  if (kind === "del" && segmentKind === "del") {
+    return "rgba(220, 38, 38, 0.22)";
+  }
+  return "transparent";
+}
+
+function renderDiffLineContent(line: DiffLine, counterpart?: DiffLine, includePrefix = true): React.ReactNode {
+  const prefix = line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ";
+  if (!counterpart || line.kind === "ctx" || counterpart.kind === "ctx") {
+    return `${includePrefix ? prefix : ""}${line.text || " "}`;
+  }
+
+  const oldText = line.kind === "del" ? line.text : counterpart.text;
+  const newText = line.kind === "add" ? line.text : counterpart.text;
+  const hiddenKind = line.kind === "add" ? "del" : "add";
+  const visibleSegments = getInlineDiffSegments(oldText, newText).filter((segment) => segment.kind !== hiddenKind);
+
+  return (
+    <>
+      {includePrefix ? <span>{prefix}</span> : null}
+      {visibleSegments.length > 0
+        ? visibleSegments.map((segment, index) => (
+          <span
+            key={`${index}-${segment.kind}-${segment.text}`}
+            style={{
+              background: inlineSegmentBackground(line.kind, segment.kind),
+              borderRadius: segment.kind === "ctx" ? 0 : "3px",
+            }}
+          >
+            {segment.text}
+          </span>
+        ))
+        : <span>{line.text || " "}</span>}
+    </>
+  );
 }
 
 function normalizeRelatedSessions(raw: unknown): RelatedSession[] {
@@ -270,6 +221,7 @@ function normalizeRelatedSessions(raw: unknown): RelatedSession[] {
 export function GitDiffViewer({ diff, root, sideBySide = false, onPathClick, onSessionClick, onSelectionChange }: GitDiffViewerProps) {
   const lines = React.useMemo(() => buildDiffLines(diff.content), [diff.content]);
   const sideBySideRows = React.useMemo(() => buildSideBySideRows(lines), [lines]);
+  const unifiedRows = React.useMemo(() => buildUnifiedRows(lines), [lines]);
   const relatedSessions = React.useMemo(() => normalizeRelatedSessions(diff.file_meta), [diff.file_meta]);
   const displayPath = diff.display_path || diff.path;
   const contentRootRef = React.useRef<HTMLDivElement | null>(null);
@@ -494,7 +446,7 @@ export function GitDiffViewer({ diff, root, sideBySide = false, onPathClick, onS
                             borderRight: "1px solid var(--border-color)",
                           }}
                         >
-                          {row.left ? `${row.left.kind === "del" ? "-" : " "}${row.left.text || " "}` : " "}
+                          {row.left ? renderDiffLineContent(row.left, row.right) : " "}
                         </div>
                         <div
                           style={{
@@ -518,44 +470,64 @@ export function GitDiffViewer({ diff, root, sideBySide = false, onPathClick, onS
                             color: row.right ? lineColor(rightKind) : "var(--text-secondary)",
                           }}
                         >
-                          {row.right ? `${row.right.kind === "add" ? "+" : " "}${row.right.text || " "}` : " "}
+                          {row.right ? renderDiffLineContent(row.right, row.left) : " "}
                         </div>
                       </div>
                     );
                   })
                 ) : (
-                  lines.map((line, index) => (
-                    <div
-                      key={`${index}-${line.kind}-${line.oldLine || 0}-${line.newLine || 0}`}
-                      data-line-number={line.kind === "add" && typeof line.newLine === "number" ? line.newLine : undefined}
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "34px 14px minmax(0, 1fr)",
-                        alignItems: "stretch",
-                        background: lineBackground(line.kind),
-                        color: lineColor(line.kind),
-                      }}
-                    >
+                  unifiedRows.map((row, index) => {
+                    if (row.kind === "hunk") {
+                      return (
+                        <div
+                          key={`${index}-hunk`}
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "minmax(0, 1fr)",
+                            background: lineBackground("hunk"),
+                            color: lineColor("hunk"),
+                          }}
+                        >
+                          <div style={{ padding: "0 12px", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                            {row.hunkText || " "}
+                          </div>
+                        </div>
+                      );
+                    }
+                    const line = row.line;
+                    return (
                       <div
+                        key={`${index}-${line.kind}-${line.oldLine || 0}-${line.newLine || 0}`}
+                        data-line-number={typeof line.newLine === "number" ? line.newLine : undefined}
                         style={{
-                          padding: "0 4px 0 0",
-                          textAlign: "right",
-                          color: "var(--text-secondary)",
-                          opacity: 0.55,
-                          userSelect: "none",
-                          fontVariantNumeric: "tabular-nums",
+                          display: "grid",
+                          gridTemplateColumns: "34px 14px minmax(0, 1fr)",
+                          alignItems: "stretch",
+                          background: lineBackground(line.kind),
+                          color: lineColor(line.kind),
                         }}
                       >
-                        {line.kind === "add" ? displayLineNumber(line) : ""}
+                        <div
+                          style={{
+                            padding: "0 4px 0 0",
+                            textAlign: "right",
+                            color: "var(--text-secondary)",
+                            opacity: 0.55,
+                            userSelect: "none",
+                            fontVariantNumeric: "tabular-nums",
+                          }}
+                        >
+                          {displayLineNumber(line)}
+                        </div>
+                        <div style={{ padding: "0", userSelect: "none", fontWeight: 700 }}>
+                          {line.kind === "add" ? "+" : line.kind === "del" ? "-" : line.kind === "ctx" ? " " : ""}
+                        </div>
+                        <div style={{ padding: "0 12px 0 4px", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                          {renderDiffLineContent(line, row.counterpart, false)}
+                        </div>
                       </div>
-                      <div style={{ padding: "0", userSelect: "none", fontWeight: 700 }}>
-                        {line.kind === "add" ? "+" : line.kind === "del" ? "-" : line.kind === "ctx" ? " " : ""}
-                      </div>
-                      <div style={{ padding: "0 12px 0 4px", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                        {line.text || " "}
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
