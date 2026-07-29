@@ -1135,6 +1135,7 @@ func openBrowser(target string) error {
 	default:
 		cmd = exec.Command("xdg-open", target)
 	}
+	configureBrowserCommand(cmd)
 	return cmd.Start()
 }
 

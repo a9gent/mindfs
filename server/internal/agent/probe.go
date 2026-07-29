@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -256,7 +257,11 @@ func (s *probeSessionStore) saveLocked() error {
 // Start 启动定期探测
 func (p *Prober) Start(ctx context.Context) {
 	// 首次全量探测放到后台，避免阻塞服务启动和请求处理。
-	go p.safeProbeAll(ctx)
+	// Windows 下深度探测会启动外部 Agent CLI；部分 SDK/CLI 无法由 MindFS
+	// 注入 CREATE_NO_WINDOW，后台启动时会出现空白控制台窗口。
+	if shouldRunBackgroundRuntimeProbe(runtime.GOOS) {
+		go p.safeProbeAll(ctx)
+	}
 
 	// 启动定期探测：只重试未安装命令。运行时失败不做主动恢复探测，
 	// 避免周期性打开 agent probe session。
@@ -310,9 +315,13 @@ func (p *Prober) UpdateConfig(ctx context.Context, cfg *Config) {
 		}
 	}
 	p.mu.Unlock()
-	if len(installed) > 0 {
+	if len(installed) > 0 && shouldRunBackgroundRuntimeProbe(runtime.GOOS) {
 		go p.probeInstalledAgents(ctx, installed)
 	}
+}
+
+func shouldRunBackgroundRuntimeProbe(goos string) bool {
+	return goos != "windows"
 }
 
 // ProbeAll 探测所有配置的 Agent

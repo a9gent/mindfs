@@ -5,6 +5,7 @@ package acp
 import (
 	"os"
 	"os/exec"
+	"syscall"
 )
 
 func killProcessTree(proc *os.Process) error {
@@ -15,5 +16,11 @@ func killProcessTree(proc *os.Process) error {
 }
 
 func configurePlatformProcessCommand(cmd *exec.Cmd) {
-	_ = cmd
+	if cmd == nil {
+		return
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: windowsACPProcessCreationFlags(),
+	}
 }

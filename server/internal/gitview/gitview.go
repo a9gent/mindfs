@@ -510,7 +510,7 @@ func RemoveWorktree(ctx context.Context, rootPath string) error {
 		return errors.New("empty git common dir")
 	}
 	cleanRoot := filepath.Clean(rootPath)
-	cmd := exec.CommandContext(ctx, "git", "--git-dir", commonDir, "worktree", "remove", cleanRoot)
+	cmd := newGitCommand(ctx, "--git-dir", commonDir, "worktree", "remove", cleanRoot)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("[git] command.error dir=%q args=%q err=%v output=%q", "", cmd.Args[1:], err, strings.TrimSpace(string(output)))
@@ -1273,7 +1273,7 @@ func diffAgainstEmptyFile(ctx context.Context, repoRoot, targetPath string) (str
 	tmpName := tmpFile.Name()
 	tmpFile.Close()
 	defer os.Remove(tmpName)
-	cmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "diff", "--no-index", "--no-ext-diff", "--", tmpName, targetPath)
+	cmd := newGitCommand(ctx, "-C", repoRoot, "diff", "--no-index", "--no-ext-diff", "--", tmpName, targetPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// git diff --no-index returns exit code 1 when differences exist.
@@ -1315,7 +1315,7 @@ func runGitBytes(ctx context.Context, dir string, args ...string) ([]byte, error
 		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd := newGitCommand(ctx, append([]string{"-C", dir}, args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("[git] command.error dir=%q args=%q err=%v output=%q", dir, append([]string{"-C", dir}, args...), err, strings.TrimSpace(string(out)))
