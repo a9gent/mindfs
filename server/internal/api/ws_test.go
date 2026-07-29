@@ -252,6 +252,24 @@ func TestStreamHubSetPendingUserAtUsesProvidedTimestamp(t *testing.T) {
 	}
 }
 
+func TestReserveClientRequestKeepsOriginalTimestamp(t *testing.T) {
+	handler := &WSHandler{}
+
+	firstTimestamp, firstReserved := handler.reserveClientRequest("request-1")
+	time.Sleep(time.Millisecond)
+	secondTimestamp, secondReserved := handler.reserveClientRequest("request-1")
+
+	if !firstReserved {
+		t.Fatal("first request was not reserved")
+	}
+	if secondReserved {
+		t.Fatal("duplicate request was reserved again")
+	}
+	if !secondTimestamp.Equal(firstTimestamp) {
+		t.Fatalf("duplicate timestamp = %s, want %s", secondTimestamp.Format(time.RFC3339Nano), firstTimestamp.Format(time.RFC3339Nano))
+	}
+}
+
 func TestRequireWSProofAcceptsValidProof(t *testing.T) {
 	clientID := "web-test"
 	key := []byte("0123456789abcdef0123456789abcdef")

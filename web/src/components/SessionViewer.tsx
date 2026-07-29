@@ -966,35 +966,6 @@ function timelineItemSpacing(
   return "16px";
 }
 
-function collectAssistantFlowMarkdown(
-  timeline: TimelineItem[],
-  startIndex: number,
-): string {
-  const segments: string[] = [];
-
-  for (let index = startIndex; index >= 0; index -= 1) {
-    const item = timeline[index];
-    if (item.type === "user_text") {
-      break;
-    }
-    if (item.type === "assistant_text" && item.content) {
-      segments.unshift(item.content);
-    }
-  }
-
-  for (let index = startIndex + 1; index < timeline.length; index += 1) {
-    const item = timeline[index];
-    if (item.type === "user_text") {
-      break;
-    }
-    if (item.type === "assistant_text" && item.content) {
-      segments.push(item.content);
-    }
-  }
-
-  return segments.join("").trim();
-}
-
 function shouldDefaultCollapseRelatedFiles(
   isMobile: boolean,
   relatedFileCount: number,
@@ -1731,9 +1702,7 @@ if (useInnerScrollContainer && !container) {
     const userMessageWidth =
       imageAttachments.length > 0 ? "min(320px, 100%)" : "auto";
     const hasRichUserAttachments = imageAttachments.length > 0;
-    const assistantMarkdownContent = !isUser
-      ? collectAssistantFlowMarkdown(timeline, idx)
-      : "";
+    const assistantMarkdownContent = !isUser ? (item.content || "").trim() : "";
     const assistantExchangeMeta = !isUser
       ? formatAssistantExchangeMeta(item, agents)
       : "";
