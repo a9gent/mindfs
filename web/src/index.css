@@ -84,6 +84,83 @@
   }
 }
 
+.mindfs-git-status-header {
+  overflow: visible;
+}
+
+.mindfs-git-branch-wrap {
+  width: min(180px, 100%);
+}
+
+.mindfs-git-branch-wrap[data-branch-tooltip]:hover::after,
+.mindfs-git-branch-wrap[data-branch-tooltip]:focus-within::after {
+  content: attr(data-branch-tooltip);
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 80;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 6px 8px;
+  border: 1px solid var(--menu-border);
+  border-radius: 7px;
+  background: var(--menu-bg);
+  color: var(--text-primary);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  white-space: normal;
+}
+
+.mindfs-git-branch-wrap[data-branch-tooltip]:hover::before,
+.mindfs-git-branch-wrap[data-branch-tooltip]:focus-within::before {
+  content: "";
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 14px;
+  z-index: 81;
+  width: 8px;
+  height: 8px;
+  border-left: 1px solid var(--menu-border);
+  border-top: 1px solid var(--menu-border);
+  background: var(--menu-bg);
+  pointer-events: none;
+  transform: rotate(45deg);
+}
+
+.mindfs-git-branch-wrap-compact {
+  width: min(112px, 100%);
+}
+
+.mindfs-git-branch-button {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.mindfs-git-branch-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+  .mindfs-git-branch-wrap {
+    width: min(34vw, 136px, 100%);
+  }
+
+  .mindfs-git-branch-wrap-compact {
+    width: min(28vw, 96px, 100%);
+  }
+}
+
 html {
   height: 100%;
   height: var(--mindfs-viewport-height, 100dvh);

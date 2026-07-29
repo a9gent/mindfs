@@ -304,8 +304,20 @@ export function GitStatusPanel({
   return (
     <section style={{ padding: 0, flexShrink: 0, minWidth: 0 }}>
       {showHeader ? (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: compact ? "6px" : "12px", marginBottom: headerMarginBottom, padding: compact ? "0 4px 0 0" : "0 10px", minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+      <div
+        className="mindfs-git-status-header"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) auto",
+          alignItems: "center",
+          gap: compact ? "6px" : "12px",
+          marginBottom: headerMarginBottom,
+          padding: compact ? "0 4px 0 0" : "0 10px",
+          minWidth: 0,
+          width: "100%",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: compact ? "6px" : "8px", minWidth: 0, overflow: "visible" }}>
           <span
             title={t("git.changes")}
             aria-label={t("git.changes")}
@@ -327,9 +339,16 @@ export function GitStatusPanel({
             </svg>
           </span>
           {status?.branch ? (
-            <div ref={branchMenuRef} style={{ position: "relative", minWidth: 0 }}>
+            <div
+              ref={branchMenuRef}
+              className={compact ? "mindfs-git-branch-wrap mindfs-git-branch-wrap-compact" : "mindfs-git-branch-wrap"}
+              data-branch-tooltip={branchMenuOpen ? undefined : status.branch}
+              style={{ position: "relative", minWidth: 0, flex: "1 1 auto", maxWidth: "100%" }}
+            >
               <button
                 type="button"
+                className="mindfs-git-branch-button"
+                aria-label={`当前分支：${status.branch}`}
                 onClick={() => {
                   if (enableBranchMenu && rootId && onSwitchBranch) {
                     setBranchMenuOpen((open) => !open);
@@ -345,12 +364,11 @@ export function GitStatusPanel({
                   display: "inline-flex",
                   alignItems: "center",
                   gap: "4px",
-                  minWidth: 0,
-                  maxWidth: "180px",
+                  width: "100%",
                   cursor: enableBranchMenu && rootId && onSwitchBranch ? "pointer" : "default",
                 }}
               >
-                <span style={{ fontSize: "12px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span className="mindfs-git-branch-label" style={{ fontSize: "12px", fontWeight: 600 }}>
                   {status.branch}
                 </span>
                 {enableBranchMenu && onSwitchBranch ? (
@@ -404,6 +422,7 @@ export function GitStatusPanel({
                       <button
                         key={branch.name}
                         type="button"
+                        title={branch.name}
                         disabled={active || !!switchingBranch}
                         onClick={async () => {
                           setSwitchingBranch(branch.name);
@@ -445,7 +464,7 @@ export function GitStatusPanel({
             </div>
           ) : null}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "1px", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "1px", flex: "0 0 auto", minWidth: "fit-content" }}>
           {showHeaderActions ? (
             <>
               <GitIconButton
