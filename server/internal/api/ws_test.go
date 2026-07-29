@@ -231,6 +231,27 @@ func TestStreamHubUnfreezeQueueAllowsAutomaticPop(t *testing.T) {
 	}
 }
 
+func TestStreamHubSetPendingUserAtUsesProvidedTimestamp(t *testing.T) {
+	hub := NewStreamHub(nil)
+	want := time.Date(2026, 7, 29, 10, 0, 0, int(456*time.Millisecond), time.UTC)
+
+	pending := hub.SetPendingUserAt("root", "session", "Session", "codex", "gpt-test", "", "", "", false, "hello", want)
+
+	if pending == nil {
+		t.Fatal("SetPendingUserAt returned nil")
+	}
+	if !pending.Timestamp.Equal(want) {
+		t.Fatalf("pending timestamp = %s, want %s", pending.Timestamp.Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
+	}
+	exchange := hub.GetPendingUserExchange("session")
+	if exchange == nil {
+		t.Fatal("pending exchange is nil")
+	}
+	if !exchange.Timestamp.Equal(want) {
+		t.Fatalf("exchange timestamp = %s, want %s", exchange.Timestamp.Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
+	}
+}
+
 func TestRequireWSProofAcceptsValidProof(t *testing.T) {
 	clientID := "web-test"
 	key := []byte("0123456789abcdef0123456789abcdef")

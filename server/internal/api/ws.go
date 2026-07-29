@@ -845,21 +845,22 @@ func (h *WSHandler) runSessionMessage(job sessionMessageJob) {
 	}
 
 	err := uc.SendMessage(msgCtx, usecase.SendMessageInput{
-		RootID:       rootID,
-		Key:          key,
-		Agent:        job.User.Agent,
-		Model:        job.User.Model,
-		Mode:         job.User.Mode,
-		Effort:       job.User.Effort,
-		FastService:  job.User.FastService,
-		PlanMode:     &job.User.PlanMode,
-		Shell:        job.Shell,
-		TerminalCols: job.TerminalCols,
-		Content:      job.User.Content,
-		ClientCtx:    job.ClientCtx,
+		RootID:        rootID,
+		Key:           key,
+		Agent:         job.User.Agent,
+		Model:         job.User.Model,
+		Mode:          job.User.Mode,
+		Effort:        job.User.Effort,
+		FastService:   job.User.FastService,
+		PlanMode:      &job.User.PlanMode,
+		Shell:         job.Shell,
+		TerminalCols:  job.TerminalCols,
+		Content:       job.User.Content,
+		UserTimestamp: job.User.Timestamp,
+		ClientCtx:     job.ClientCtx,
 		OnStart: func() {
 			h.AppContext.ClearTaskAuxFlagsForSession(rootID, key)
-			streamHub.BroadcastSessionUserMessage(rootID, key, job.SessionType, job.SessionName, job.User.Agent, job.User.Model, job.User.Mode, job.User.Effort, job.User.FastService, job.User.PlanMode, job.User.Content, job.ExcludeClientID, job.Queued)
+			streamHub.BroadcastSessionUserMessageAt(rootID, key, job.SessionType, job.SessionName, job.User.Agent, job.User.Model, job.User.Mode, job.User.Effort, job.User.FastService, job.User.PlanMode, job.User.Content, job.User.Timestamp, job.ExcludeClientID, job.Queued)
 		},
 		OnUpdate: func(update agenttypes.Event) {
 			updateTracker.Begin()

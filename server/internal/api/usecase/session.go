@@ -1045,12 +1045,23 @@ type SendMessageInput struct {
 	Shell                  string
 	TerminalCols           int
 	Content                string
+	UserTimestamp          time.Time
 	ClientCtx              ClientContext
 	OnStart                func()
 	OnUpdate               func(agenttypes.Event)
 	OnSubSessionCreated    func(*session.Session)
 	OnSubSessionUpdate     func(sessionKey string, update agenttypes.Event)
 	OnAgentDefaultsChanged func(agentName string)
+}
+
+func sendMessageUserTimestamp(in SendMessageInput, fallback time.Time) time.Time {
+	if !in.UserTimestamp.IsZero() {
+		return in.UserTimestamp.UTC()
+	}
+	if fallback.IsZero() {
+		return time.Now().UTC()
+	}
+	return fallback.UTC()
 }
 
 type RunTransientSlashCommandInput struct {
@@ -1926,6 +1937,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	if err := s.ensureRegistry(); err != nil {
 		return err
 	}
+	userTimestamp := sendMessageUserTimestamp(in, time.Now().UTC())
 	sendLock := getSessionSendLock(in.Key)
 	sendLock.Lock()
 	defer sendLock.Unlock()
@@ -2207,7 +2219,7 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	resolvedMode := resolveRuntimeMode(current, in.Mode)
 	modelDisplayName := s.resolveExchangeModelDisplayName(in.Agent, resolvedModel)
 	exchangeCtx := session.WithExchangeModelDisplayName(ctx, modelDisplayName)
-	if err := manager.AddExchangeForAgent(exchangeCtx, current, "user", in.Content, in.Agent, resolvedMode, resolvedEffort, resolvedFastService); err != nil {
+	if err := manager.AddExchangeForAgentAt(exchangeCtx, current, "user", in.Content, in.Agent, resolvedMode, resolvedEffort, resolvedFastService, userTimestamp); err != nil {
 		log.Printf("[session] persist.user.error root=%s session=%s agent=%s err=%v", in.RootID, current.Key, in.Agent, err)
 		return err
 	}
@@ -2919,6 +2931,7 @@ func (s *Service) sendCommandMessage(ctx context.Context, in SendMessageInput, m
 	if strings.TrimSpace(in.Content) == "" {
 		return errors.New("command required")
 	}
+	userTimestamp := sendMessageUserTimestamp(in, time.Now().UTC())
 	root := manager.Root()
 	rootAbs, err := root.RootDir()
 	if err != nil {
@@ -2966,7 +2979,7 @@ func (s *Service) sendCommandMessage(ctx context.Context, in SendMessageInput, m
 			in.OnUpdate(agenttypes.Event{Type: agenttypes.EventTypeToolUpdate, Data: final})
 			in.OnUpdate(agenttypes.Event{Type: agenttypes.EventTypeMessageDone, Data: agenttypes.MessageDone{}})
 		}
-		if persistErr := persistCommandTurn(ctx, manager, current, in.Content, final, plannedAssistantSeq); persistErr != nil {
+		if persistErr := persistCommandTurn(ctx, manager, current, in.Content, final, plannedAssistantSeq, userTimestamp); persistErr != nil {
 			return persistErr
 		}
 		return err
@@ -3048,7 +3061,7 @@ func (s *Service) sendCommandMessage(ctx context.Context, in SendMessageInput, m
 		in.OnUpdate(agenttypes.Event{Type: agenttypes.EventTypeToolUpdate, Data: final})
 		in.OnUpdate(agenttypes.Event{Type: agenttypes.EventTypeMessageDone, Data: agenttypes.MessageDone{}})
 	}
-	if err := persistCommandTurn(context.Background(), manager, current, in.Content, final, plannedAssistantSeq); err != nil {
+	if err := persistCommandTurn(context.Background(), manager, current, in.Content, final, plannedAssistantSeq, userTimestamp); err != nil {
 		log.Printf("[command] persist.error root=%s session=%s call=%s err=%v", in.RootID, current.Key, callID, err)
 		return err
 	}
@@ -3141,8 +3154,8 @@ func configuredShells(registry Registry) []commandexec.ShellSpec {
 	return shells
 }
 
-func persistCommandTurn(ctx context.Context, manager *session.Manager, current *session.Session, command string, final agenttypes.ToolCall, plannedAssistantSeq int) error {
-	if err := manager.AddExchangeForAgent(ctx, current, "user", command, "", "", "", ""); err != nil {
+func persistCommandTurn(ctx context.Context, manager *session.Manager, current *session.Session, command string, final agenttypes.ToolCall, plannedAssistantSeq int, userTimestamp time.Time) error {
+	if err := manager.AddExchangeForAgentAt(ctx, current, "user", command, "", "", "", "", userTimestamp); err != nil {
 		return err
 	}
 	if err := manager.AddExchangeForAgent(ctx, current, "agent", "", "", "", "", ""); err != nil {

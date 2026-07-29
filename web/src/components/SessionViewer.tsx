@@ -14,6 +14,7 @@ import { rootBadgeButtonStyle } from "./rootBadgeStyle";
 import { copyText } from "../services/clipboard";
 import type { AgentStatus } from "../services/agents";
 import { useI18n, type Locale } from "../i18n";
+import { formatSessionDuration } from "../services/sessionDuration";
 
 type SessionItem = {
   key?: string;
@@ -325,6 +326,16 @@ function ContextWindowBadge({
       </span>
     </span>
   );
+}
+
+function previousUserTimestamp(timeline: TimelineItem[], index: number): string {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const item = timeline[i];
+    if (item.type === "user_text") {
+      return item.timestamp || "";
+    }
+  }
+  return "";
 }
 
 const formatTime = (isoString: string | undefined, locale: Locale) => {
@@ -1726,6 +1737,9 @@ if (useInnerScrollContainer && !container) {
     const assistantExchangeMeta = !isUser
       ? formatAssistantExchangeMeta(item, agents)
       : "";
+    const assistantDurationLabel = !isUser
+      ? formatSessionDuration(previousUserTimestamp(timeline, idx), item.timestamp)
+      : "";
     const canForkAgentMessage = !isUser && Number(item.seq || 0) > 0 && !!onForkAgentMessage;
     return (
       <div
@@ -2149,7 +2163,7 @@ if (useInnerScrollContainer && !container) {
                 {assistantExchangeMeta ? (
                   <span>{assistantExchangeMeta}</span>
                 ) : null}
-                <span>{time}</span>
+                <span>{time}{assistantDurationLabel ? ` ${assistantDurationLabel}` : ""}</span>
                 <ContextWindowBadge contextWindow={item.contextWindow} />
               </span>
             )}

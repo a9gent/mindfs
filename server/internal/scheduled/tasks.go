@@ -28,6 +28,7 @@ type SessionActivityBroadcaster interface {
 	BroadcastSessionMetaUpdated(rootID string, sess *session.Session)
 	SetSessionPendingReply(rootID, sessionKey, sessionTitle string)
 	BroadcastSessionUserMessage(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, fastService string, planMode bool, content string)
+	BroadcastSessionUserMessageAt(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, fastService string, planMode bool, content string, timestamp time.Time)
 	BroadcastSessionUpdate(rootID, sessionKey string, update agenttypes.Event)
 	BroadcastSessionError(rootID, sessionKey, message string)
 	BroadcastSessionDone(rootID, sessionKey, requestID string)
@@ -478,20 +479,22 @@ func (s *Service) runTask(ctx context.Context, task Task, force bool) error {
 		}
 	}
 	sessionName := current.Name
+	userTimestamp := time.Now().UTC()
 	err = s.usecase.SendMessage(ctx, usecase.SendMessageInput{
-		RootID:      current.RootID,
-		Key:         sessionKey,
-		Agent:       current.Agent,
-		Model:       current.Model,
-		Mode:        current.Mode,
-		Effort:      current.Effort,
-		FastService: current.FastService,
-		Content:     current.Prompt,
+		RootID:        current.RootID,
+		Key:           sessionKey,
+		Agent:         current.Agent,
+		Model:         current.Model,
+		Mode:          current.Mode,
+		Effort:        current.Effort,
+		FastService:   current.FastService,
+		Content:       current.Prompt,
+		UserTimestamp: userTimestamp,
 		ClientCtx: usecase.ClientContext{
 			CurrentRoot: current.RootID,
 		},
 		OnStart: func() {
-			broadcaster.BroadcastSessionUserMessage(current.RootID, sessionKey, session.TypeChat, sessionName, current.Agent, current.Model, current.Mode, current.Effort, current.FastService, false, current.Prompt)
+			broadcaster.BroadcastSessionUserMessageAt(current.RootID, sessionKey, session.TypeChat, sessionName, current.Agent, current.Model, current.Mode, current.Effort, current.FastService, false, current.Prompt, userTimestamp)
 		},
 		OnUpdate: func(update agenttypes.Event) {
 			broadcaster.BroadcastSessionUpdate(current.RootID, sessionKey, update)

@@ -1700,6 +1700,27 @@ func TestAppendResponseChunk(t *testing.T) {
 	}
 }
 
+func TestSendMessageUserTimestampUsesInputWhenPresent(t *testing.T) {
+	fallback := time.Date(2026, 7, 29, 10, 0, 30, 0, time.UTC)
+	actual := time.Date(2026, 7, 29, 10, 0, 0, int(123*time.Millisecond), time.FixedZone("CST", 8*60*60))
+
+	got := sendMessageUserTimestamp(SendMessageInput{UserTimestamp: actual}, fallback)
+
+	if !got.Equal(actual.UTC()) {
+		t.Fatalf("sendMessageUserTimestamp = %s, want %s", got.Format(time.RFC3339Nano), actual.UTC().Format(time.RFC3339Nano))
+	}
+}
+
+func TestSendMessageUserTimestampFallsBackToStartTime(t *testing.T) {
+	fallback := time.Date(2026, 7, 29, 10, 0, 30, 0, time.UTC)
+
+	got := sendMessageUserTimestamp(SendMessageInput{}, fallback)
+
+	if !got.Equal(fallback) {
+		t.Fatalf("sendMessageUserTimestamp = %s, want fallback %s", got.Format(time.RFC3339Nano), fallback.Format(time.RFC3339Nano))
+	}
+}
+
 func TestIsNonRecoverableAgentError(t *testing.T) {
 	testCases := []struct {
 		err  error

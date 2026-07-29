@@ -347,8 +347,17 @@ func (h *StreamHub) getAllClientIDs() []string {
 }
 
 func (h *StreamHub) SetPendingUser(rootID, sessionKey, sessionTitle, agent, model, mode, effort, fastService string, planMode bool, content string) *PendingUserMessage {
+	return h.SetPendingUserAt(rootID, sessionKey, sessionTitle, agent, model, mode, effort, fastService, planMode, content, time.Now().UTC())
+}
+
+func (h *StreamHub) SetPendingUserAt(rootID, sessionKey, sessionTitle, agent, model, mode, effort, fastService string, planMode bool, content string, timestamp time.Time) *PendingUserMessage {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if timestamp.IsZero() {
+		timestamp = time.Now().UTC()
+	} else {
+		timestamp = timestamp.UTC()
+	}
 	state := h.ensurePendingSessionLocked(sessionKey)
 	delete(h.completed, sessionKey)
 	state.RootID = rootID
@@ -362,7 +371,7 @@ func (h *StreamHub) SetPendingUser(rootID, sessionKey, sessionTitle, agent, mode
 		FastService: fastService,
 		PlanMode:    planMode,
 		Content:     content,
-		Timestamp:   time.Now().UTC(),
+		Timestamp:   timestamp,
 	}
 	state.ReplyingList = nil
 	state.Summary = ""
@@ -815,7 +824,26 @@ func (h *StreamHub) BroadcastSessionUserMessage(
 	excludeClientID string,
 	queued bool,
 ) {
-	pendingUser := h.SetPendingUser(rootID, sessionKey, sessionName, agentName, model, mode, effort, fastService, planMode, content)
+	h.BroadcastSessionUserMessageAt(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, fastService, planMode, content, time.Now().UTC(), excludeClientID, queued)
+}
+
+func (h *StreamHub) BroadcastSessionUserMessageAt(
+	rootID string,
+	sessionKey string,
+	sessionType string,
+	sessionName string,
+	agentName string,
+	model string,
+	mode string,
+	effort string,
+	fastService string,
+	planMode bool,
+	content string,
+	timestamp time.Time,
+	excludeClientID string,
+	queued bool,
+) {
+	pendingUser := h.SetPendingUserAt(rootID, sessionKey, sessionName, agentName, model, mode, effort, fastService, planMode, content, timestamp)
 	resp := buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, fastService, planMode, content, pendingUser.Timestamp, queued)
 	for _, clientID := range h.GetSessionClientIDs(sessionKey, false) {
 		if clientID == excludeClientID {
