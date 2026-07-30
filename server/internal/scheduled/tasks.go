@@ -493,8 +493,8 @@ func (s *Service) runTask(ctx context.Context, task Task, force bool) error {
 		ClientCtx: usecase.ClientContext{
 			CurrentRoot: current.RootID,
 		},
-		OnStart: func() {
-			broadcaster.BroadcastSessionUserMessageAt(current.RootID, sessionKey, session.TypeChat, sessionName, current.Agent, current.Model, current.Mode, current.Effort, current.FastService, false, current.Prompt, userTimestamp)
+		OnStart: func(start usecase.MessageStart) {
+			broadcaster.BroadcastSessionUserMessageAt(current.RootID, sessionKey, session.TypeChat, sessionName, current.Agent, start.Model, start.Mode, start.Effort, start.FastService, false, current.Prompt, userTimestamp)
 		},
 		OnUpdate: func(update agenttypes.Event) {
 			broadcaster.BroadcastSessionUpdate(current.RootID, sessionKey, update)

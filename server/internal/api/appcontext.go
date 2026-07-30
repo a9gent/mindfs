@@ -287,8 +287,8 @@ func (s *AppContext) RunAgentStage(ctx context.Context, exec kanban.AgentStageEx
 		PlanMode:        &planMode,
 		Content:         exec.Prompt,
 		UserTimestamp:   userTimestamp,
-		OnStart: func() {
-			s.BroadcastSessionUserMessageAt(exec.RootID, sessionKey, session.TypeChat, sessionName, exec.Stage.Agent, exec.Stage.Model, exec.Stage.Mode, exec.Stage.Effort, exec.Stage.FastService, planMode, exec.Prompt, userTimestamp)
+		OnStart: func(start usecase.MessageStart) {
+			s.BroadcastSessionUserMessageAt(exec.RootID, sessionKey, session.TypeChat, sessionName, exec.Stage.Agent, start.Model, start.Mode, start.Effort, start.FastService, planMode, exec.Prompt, userTimestamp)
 		},
 		OnUpdate: func(update agenttypes.Event) {
 			updateTracker.Begin()
