@@ -353,6 +353,59 @@ func TestSearchSessionsMultiRootAppliesGlobalLimit(t *testing.T) {
 	}
 }
 
+func TestListSessionsReturnsPinnedSnapshotWithAfterTime(t *testing.T) {
+	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
+	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	manager := session.NewManager(root, session.WithClock(func() time.Time { return now }))
+	registry := &commandTestRegistry{root: root, manager: manager}
+	service := Service{Registry: registry}
+
+	oldPinned, err := manager.Create(context.Background(), session.CreateInput{Type: session.TypeChat, Name: "Pinned old"})
+	if err != nil {
+		t.Fatalf("create pinned session: %v", err)
+	}
+	now = now.Add(1 * time.Minute)
+	pinned, err := manager.SetPinned(context.Background(), oldPinned.Key, true)
+	if err != nil {
+		t.Fatalf("pin session: %v", err)
+	}
+	afterTime := pinned.UpdatedAt.Add(30 * time.Second)
+
+	now = afterTime.Add(1 * time.Minute)
+	fresh, err := manager.Create(context.Background(), session.CreateInput{Type: session.TypeChat, Name: "Fresh"})
+	if err != nil {
+		t.Fatalf("create fresh session: %v", err)
+	}
+
+	out, err := service.ListSessions(context.Background(), ListSessionsInput{
+		RootID:    root.ID,
+		AfterTime: afterTime,
+		Limit:     50,
+	})
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(out.Sessions) != 1 || out.Sessions[0].Key != fresh.Key {
+		t.Fatalf("Sessions = %v, want only fresh %s", usecaseSessionKeys(out.Sessions), fresh.Key)
+	}
+	if len(out.PinnedSessions) != 1 || out.PinnedSessions[0].Key != oldPinned.Key {
+		t.Fatalf("PinnedSessions = %v, want %s", usecaseSessionKeys(out.PinnedSessions), oldPinned.Key)
+	}
+	if len(out.PinnedKeys) != 1 || out.PinnedKeys[0] != oldPinned.Key {
+		t.Fatalf("PinnedKeys = %#v, want [%s]", out.PinnedKeys, oldPinned.Key)
+	}
+}
+
+func usecaseSessionKeys(items []*session.Session) []string {
+	keys := make([]string, 0, len(items))
+	for _, item := range items {
+		if item != nil {
+			keys = append(keys, item.Key)
+		}
+	}
+	return keys
+}
+
 func TestSendCommandMessagePersistsCancelledSuggestion(t *testing.T) {
 	rootDir := t.TempDir()
 	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)

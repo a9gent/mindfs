@@ -313,6 +313,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/sessions/{key}/sync", h.protectedEndpoint(h.handleSessionSync))
 	r.Get("/api/sessions/{key}", h.protectedEndpoint(h.handleSessionGet))
 	r.Get("/api/sessions/{key}/related-files", h.protectedEndpoint(h.handleSessionRelatedFilesGet))
+	r.Post("/api/sessions/{key}/pin", h.protectedEndpoint(h.handleSessionPin))
 	r.Post("/api/sessions/{key}/rename", h.protectedEndpoint(h.handleSessionRename))
 	r.Delete("/api/sessions/{key}/related-files", h.protectedEndpoint(h.handleSessionRelatedFilesDelete))
 	r.Delete("/api/sessions/{key}", h.protectedEndpoint(h.handleSessionDelete))
@@ -425,9 +426,15 @@ func (h *HTTPHandler) handleSessions(w http.ResponseWriter, r *http.Request) {
 	for _, s := range out.Sessions {
 		payload = append(payload, h.sessionListResponse(s))
 	}
+	pinnedPayload := make([]map[string]any, 0, len(out.PinnedSessions))
+	for _, s := range out.PinnedSessions {
+		pinnedPayload = append(pinnedPayload, h.sessionListResponse(s))
+	}
 	respondJSON(w, http.StatusOK, map[string]any{
-		"items":       payload,
-		"total_count": out.TotalCount,
+		"items":        payload,
+		"pinned_items": pinnedPayload,
+		"pinned_keys":  out.PinnedKeys,
+		"total_count":  out.TotalCount,
 	})
 }
 
@@ -455,11 +462,19 @@ func (h *HTTPHandler) handleMultiRootSessions(w http.ResponseWriter, r *http.Req
 			item["root_id"] = group.RootID
 			items = append(items, item)
 		}
+		pinnedItems := make([]map[string]any, 0, len(group.PinnedSessions))
+		for _, s := range group.PinnedSessions {
+			item := h.sessionListResponse(s)
+			item["root_id"] = group.RootID
+			pinnedItems = append(pinnedItems, item)
+		}
 		groups = append(groups, map[string]any{
 			"root_id":             group.RootID,
 			"root_name":           group.RootName,
 			"latest_session_time": group.LatestSessionTime,
 			"items":               items,
+			"pinned_items":        pinnedItems,
+			"pinned_keys":         group.PinnedKeys,
 			"total_count":         group.TotalCount,
 		})
 	}
@@ -987,12 +1002,48 @@ func (h *HTTPHandler) handleSessionRename(w http.ResponseWriter, r *http.Request
 					"effort":       session.InferEffortFromSession(renamed),
 					"fast_service": session.InferFastServiceFromSession(renamed),
 					"plan_mode":    renamed.PlanMode,
+					"pinned_at":    renamed.PinnedAt,
 					"updated_at":   renamed.UpdatedAt,
 				},
 			},
 		})
 	}
 	respondJSON(w, http.StatusOK, h.sessionListResponse(renamed))
+}
+
+func (h *HTTPHandler) handleSessionPin(w http.ResponseWriter, r *http.Request) {
+	rootID := r.URL.Query().Get("root")
+	key := chi.URLParam(r, "key")
+	if strings.TrimSpace(key) == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("session key required"))
+		return
+	}
+	var req struct {
+		Pinned bool `json:"pinned"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json body"))
+		return
+	}
+	updated, err := h.service().PinSession(r.Context(), usecase.PinSessionInput{
+		RootID: rootID,
+		Key:    key,
+		Pinned: req.Pinned,
+	})
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	if h.AppContext != nil {
+		h.AppContext.GetSessionStreamHub().BroadcastAll(WSResponse{
+			Type: "session.meta.updated",
+			Payload: map[string]any{
+				"root_id": rootID,
+				"session": h.sessionListResponse(updated),
+			},
+		})
+	}
+	respondJSON(w, http.StatusOK, h.sessionListResponse(updated))
 }
 
 func (h *HTTPHandler) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
@@ -1054,6 +1105,7 @@ func (h *HTTPHandler) sessionResponse(
 		"related_files":       s.RelatedFiles,
 		"related_worktree":    s.RelatedWorktree,
 		"context_window":      contextWindow,
+		"pinned_at":           s.PinnedAt,
 		"created_at":          s.CreatedAt,
 		"updated_at":          s.UpdatedAt,
 		"closed_at":           s.ClosedAt,
@@ -1080,6 +1132,7 @@ func (h *HTTPHandler) sessionListResponse(s *session.Session) map[string]any {
 		"shell":               h.commandShellForSession(s),
 		"name":                s.Name,
 		"related_worktree":    s.RelatedWorktree,
+		"pinned_at":           s.PinnedAt,
 		"created_at":          s.CreatedAt,
 		"updated_at":          s.UpdatedAt,
 		"closed_at":           s.ClosedAt,

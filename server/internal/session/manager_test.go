@@ -232,6 +232,53 @@ func TestManagerPersistsParentSessionMetadata(t *testing.T) {
 	}
 }
 
+func TestManagerPersistsPinnedAtWithoutChangingUpdatedAt(t *testing.T) {
+	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
+	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	manager := NewManager(root, WithClock(func() time.Time { return now }))
+
+	created, err := manager.Create(context.Background(), CreateInput{Type: TypeChat, Name: "Pinned"})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	originalUpdatedAt := created.UpdatedAt
+
+	pinnedAt := now.Add(5 * time.Minute)
+	manager.now = func() time.Time { return pinnedAt }
+	pinned, err := manager.SetPinned(context.Background(), created.Key, true)
+	if err != nil {
+		t.Fatalf("pin session: %v", err)
+	}
+	if pinned.PinnedAt == nil || !pinned.PinnedAt.Equal(pinnedAt) {
+		t.Fatalf("PinnedAt = %v, want %v", pinned.PinnedAt, pinnedAt)
+	}
+	if !pinned.UpdatedAt.Equal(originalUpdatedAt) {
+		t.Fatalf("UpdatedAt changed on pin: got %v, want %v", pinned.UpdatedAt, originalUpdatedAt)
+	}
+
+	manager.sessions = map[string]*Session{}
+	loaded, err := manager.Get(context.Background(), created.Key, 0)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if loaded.PinnedAt == nil || !loaded.PinnedAt.Equal(pinnedAt) {
+		t.Fatalf("reloaded PinnedAt = %v, want %v", loaded.PinnedAt, pinnedAt)
+	}
+
+	clearedAt := now.Add(10 * time.Minute)
+	manager.now = func() time.Time { return clearedAt }
+	cleared, err := manager.SetPinned(context.Background(), created.Key, false)
+	if err != nil {
+		t.Fatalf("unpin session: %v", err)
+	}
+	if cleared.PinnedAt != nil {
+		t.Fatalf("PinnedAt after unpin = %v, want nil", cleared.PinnedAt)
+	}
+	if !cleared.UpdatedAt.Equal(originalUpdatedAt) {
+		t.Fatalf("UpdatedAt changed on unpin: got %v, want %v", cleared.UpdatedAt, originalUpdatedAt)
+	}
+}
+
 func TestManagerPersistsExchangeModelDisplayName(t *testing.T) {
 	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
 	manager := NewManager(root)

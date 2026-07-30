@@ -116,6 +116,7 @@ export type Session = {
   };
   related_files?: RelatedFile[];
   related_worktree?: RelatedWorktree | null;
+  pinned_at?: string | null;
   exchange_aux?: Record<string, ExchangeAux[]>;
   exchanges?: Array<{
     seq?: number;
@@ -260,6 +261,8 @@ type FetchSessionsOptions = {
 
 export type SessionListPayload = {
   items: Session[];
+  pinnedItems: Session[];
+  pinnedKeys: string[];
   totalCount: number;
 };
 
@@ -268,6 +271,8 @@ export type MultiRootSessionGroup = {
   rootName: string;
   latestSessionTime: string;
   items: Session[];
+  pinnedItems: Session[];
+  pinnedKeys: string[];
   totalCount: number;
 };
 
@@ -1047,14 +1052,18 @@ class SessionService {
       }
       const data = await protectedJSON<any>(appURL("/api/sessions", params));
       if (Array.isArray(data)) {
-        return { items: data, totalCount: data.length };
+        return { items: data, pinnedItems: [], pinnedKeys: [], totalCount: data.length };
       }
       const items = Array.isArray(data?.items) ? data.items : [];
+      const pinnedItems = Array.isArray(data?.pinned_items) ? data.pinned_items : [];
+      const pinnedKeys = Array.isArray(data?.pinned_keys)
+        ? data.pinned_keys.map((key: unknown) => String(key || "")).filter(Boolean)
+        : pinnedItems.map((item: any) => String(item?.key || item?.session_key || "")).filter(Boolean);
       const totalCount = Number(data?.total_count ?? data?.totalCount ?? items.length) || 0;
-      return { items, totalCount };
+      return { items, pinnedItems, pinnedKeys, totalCount };
     } catch (err) {
       console.error("[Session] Failed to fetch sessions:", err);
-      return { items: [], totalCount: 0 };
+      return { items: [], pinnedItems: [], pinnedKeys: [], totalCount: 0 };
     }
   }
 
@@ -1071,6 +1080,12 @@ class SessionService {
         rootName: String(group?.root_name || group?.rootName || ""),
         latestSessionTime: String(group?.latest_session_time || group?.latestSessionTime || ""),
         items: Array.isArray(group?.items) ? group.items : [],
+        pinnedItems: Array.isArray(group?.pinned_items) ? group.pinned_items : [],
+        pinnedKeys: Array.isArray(group?.pinned_keys)
+          ? group.pinned_keys.map((key: unknown) => String(key || "")).filter(Boolean)
+          : Array.isArray(group?.pinned_items)
+            ? group.pinned_items.map((item: any) => String(item?.key || item?.session_key || "")).filter(Boolean)
+            : [],
         totalCount: Number(group?.total_count ?? group?.totalCount ?? 0) || 0,
       })).filter((group: MultiRootSessionGroup) => !!group.rootId);
     } catch (err) {
@@ -1299,6 +1314,33 @@ class SessionService {
       return data as Session;
     } catch (err) {
       console.error("[Session] Failed to rename session:", err);
+      return null;
+    }
+  }
+
+  async setSessionPinned(
+    rootId: string,
+    sessionKey: string,
+    pinned: boolean,
+  ): Promise<Session | null> {
+    try {
+      const params = new URLSearchParams({ root: rootId });
+      const data = await protectedJSON<Session>(
+        appURL(
+          `/api/sessions/${encodeURIComponent(sessionKey)}/pin`,
+          params,
+        ),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ pinned }),
+        },
+      );
+      return data as Session;
+    } catch (err) {
+      console.error("[Session] Failed to update session pin:", err);
       return null;
     }
   }

@@ -46,8 +46,10 @@ type ListSessionsInput struct {
 }
 
 type ListSessionsOutput struct {
-	Sessions   []*session.Session
-	TotalCount int
+	Sessions       []*session.Session
+	PinnedSessions []*session.Session
+	PinnedKeys     []string
+	TotalCount     int
 }
 
 type ListMultiRootSessionsInput struct {
@@ -59,6 +61,8 @@ type SessionRootGroup struct {
 	RootName          string
 	LatestSessionTime time.Time
 	Sessions          []*session.Session
+	PinnedSessions    []*session.Session
+	PinnedKeys        []string
 	TotalCount        int
 }
 
@@ -134,10 +138,16 @@ func (s *Service) ListSessions(ctx context.Context, in ListSessionsInput) (ListS
 			return ListSessionsOutput{}, err
 		}
 	}
-	if err := fillCommandShells(ctx, manager, items); err != nil {
+	pinnedItems, err := manager.ListPinned(ctx, session.ListOptions{TopLevelOnly: in.TopLevelOnly})
+	if err != nil {
 		return ListSessionsOutput{}, err
 	}
-	return ListSessionsOutput{Sessions: items, TotalCount: totalCount}, nil
+	pinnedKeys := pinnedSessionKeys(pinnedItems)
+	allForShells := append(append([]*session.Session{}, items...), pinnedItems...)
+	if err := fillCommandShells(ctx, manager, allForShells); err != nil {
+		return ListSessionsOutput{}, err
+	}
+	return ListSessionsOutput{Sessions: items, PinnedSessions: pinnedItems, PinnedKeys: pinnedKeys, TotalCount: totalCount}, nil
 }
 
 func (s *Service) ListMultiRootSessions(ctx context.Context, in ListMultiRootSessionsInput) (ListMultiRootSessionsOutput, error) {
@@ -169,7 +179,13 @@ func (s *Service) ListMultiRootSessions(ctx context.Context, in ListMultiRootSes
 		if err != nil {
 			return ListMultiRootSessionsOutput{}, err
 		}
-		if err := fillCommandShells(ctx, manager, items); err != nil {
+		pinnedItems, err := manager.ListPinned(ctx, session.ListOptions{TopLevelOnly: true})
+		if err != nil {
+			return ListMultiRootSessionsOutput{}, err
+		}
+		pinnedKeys := pinnedSessionKeys(pinnedItems)
+		allForShells := append(append([]*session.Session{}, items...), pinnedItems...)
+		if err := fillCommandShells(ctx, manager, allForShells); err != nil {
 			return ListMultiRootSessionsOutput{}, err
 		}
 		latest := time.Time{}
@@ -181,6 +197,8 @@ func (s *Service) ListMultiRootSessions(ctx context.Context, in ListMultiRootSes
 			RootName:          root.Name,
 			LatestSessionTime: latest,
 			Sessions:          items,
+			PinnedSessions:    pinnedItems,
+			PinnedKeys:        pinnedKeys,
 			TotalCount:        totalCount,
 		})
 	}
@@ -188,6 +206,17 @@ func (s *Service) ListMultiRootSessions(ctx context.Context, in ListMultiRootSes
 		return groups[i].LatestSessionTime.After(groups[j].LatestSessionTime)
 	})
 	return ListMultiRootSessionsOutput{Groups: groups}, nil
+}
+
+func pinnedSessionKeys(items []*session.Session) []string {
+	keys := make([]string, 0, len(items))
+	for _, item := range items {
+		if item == nil || strings.TrimSpace(item.Key) == "" {
+			continue
+		}
+		keys = append(keys, item.Key)
+	}
+	return keys
 }
 
 func (s *Service) ListChildSessions(ctx context.Context, in ListChildSessionsInput) (ListSessionsOutput, error) {
@@ -993,6 +1022,23 @@ func (s *Service) RenameSession(ctx context.Context, in RenameSessionInput) (*se
 		return nil, err
 	}
 	return manager.Rename(ctx, in.Key, in.Name)
+}
+
+type PinSessionInput struct {
+	RootID string
+	Key    string
+	Pinned bool
+}
+
+func (s *Service) PinSession(ctx context.Context, in PinSessionInput) (*session.Session, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return nil, err
+	}
+	manager, err := s.Registry.GetSessionManager(in.RootID)
+	if err != nil {
+		return nil, err
+	}
+	return manager.SetPinned(ctx, in.Key, in.Pinned)
 }
 
 type BuildPromptInput struct {

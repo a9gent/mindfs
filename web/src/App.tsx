@@ -106,6 +106,10 @@ import {
 } from "./services/nativeCacheControl";
 import { storeRelayNodes } from "./services/launcherNodeSync";
 import { isNativeShellRuntime } from "./services/runtime";
+import {
+  applyPinnedSnapshotToSessions,
+  mergeSessionItems,
+} from "./services/sessionListMerge";
 // 直接导入标准组件
 import { AppShell } from "./layout/AppShell";
 import { ModeIcon } from "./components/ModeIcon";
@@ -313,6 +317,7 @@ export type SessionItem = {
   purpose?: string;
   created_at?: string;
   updated_at?: string;
+  pinned_at?: string | null;
   closed_at?: string;
   title?: string;
   agent_session_id?: string;
@@ -481,6 +486,10 @@ function toSessionItem(
       typeof session?.created_at === "string" ? session.created_at : undefined,
     updated_at:
       typeof session?.updated_at === "string" ? session.updated_at : undefined,
+    pinned_at:
+      typeof session?.pinned_at === "string" && session.pinned_at
+        ? session.pinned_at
+        : undefined,
     closed_at:
       typeof session?.closed_at === "string" ? session.closed_at : undefined,
     context_window:
@@ -3101,30 +3110,6 @@ export function App({ onGoHome }: AppProps) {
     },
     [applyPendingToMultiProjectGroups, rootSessionKey],
   );
-  const mergeSessionItems = useCallback(
-    (current: SessionItem[], incoming: SessionItem[]) => {
-      const byKey = new Map<string, SessionItem>();
-      for (const item of current) {
-        const key = item.key || item.session_key;
-        if (key) {
-          byKey.set(key, item);
-        }
-      }
-      for (const item of incoming) {
-        const key = item.key || item.session_key;
-        if (!key) {
-          continue;
-        }
-        byKey.set(key, { ...(byKey.get(key) || {}), ...item });
-      }
-      return Array.from(byKey.values()).sort((a, b) => {
-        const left = Date.parse(a.updated_at || "") || 0;
-        const right = Date.parse(b.updated_at || "") || 0;
-        return right - left;
-      });
-    },
-    [],
-  );
   const resolveRootForSessionKey = useCallback(
     (sessionKey: string): string | null => {
       if (!sessionKey) return null;
@@ -4641,17 +4626,22 @@ export function App({ onGoHome }: AppProps) {
           beforeTime: options?.beforeTime,
           afterTime: options?.afterTime,
         });
-        const next = payload.items as SessionItem[];
+        const next = [
+          ...payload.items,
+          ...payload.pinnedItems,
+        ].map((item) => toSessionItem(rootID, item)).filter((item): item is SessionItem => !!item);
         if (!options?.force && currentRootIdRef.current !== rootID) return;
-        setHasMoreSessions(payload.totalCount > next.length);
+        setHasMoreSessions(payload.totalCount > payload.items.length);
         if (options?.replace || (!options?.beforeTime && !options?.afterTime)) {
-          setSessions(next);
+          setSessions(applyPinnedSnapshotToSessions(mergeSessionItems([], next), rootID, payload.pinnedKeys));
           return;
         }
-        setSessions((prev) => mergeSessionItems(prev, next));
+        setSessions((prev) =>
+          applyPinnedSnapshotToSessions(mergeSessionItems(prev, next), rootID, payload.pinnedKeys),
+        );
       } catch {}
     },
-    [mergeSessionItems],
+    [],
   );
 
   const loadChildSessionsForParent = useCallback(
@@ -4703,8 +4693,16 @@ export function App({ onGoHome }: AppProps) {
         rootId: group.rootId,
         rootName: group.rootName || managedRootByIdRef.current[group.rootId]?.display_name || group.rootId,
         latestSessionTime: group.latestSessionTime,
-        sessions: group.items
-          .map((item) => toSessionItem(group.rootId, { ...(item as any), root_id: group.rootId }))
+        sessions: applyPinnedSnapshotToSessions(
+          mergeSessionItems(
+            [],
+            [...group.items, ...group.pinnedItems]
+              .map((item) => toSessionItem(group.rootId, { ...(item as any), root_id: group.rootId }))
+              .filter((item): item is SessionItem => !!item),
+          ),
+          group.rootId,
+          group.pinnedKeys,
+        )
           .filter((item): item is SessionItem => !!item),
         totalCount: group.totalCount,
       }));
@@ -4731,6 +4729,7 @@ export function App({ onGoHome }: AppProps) {
         includeChildren: true,
       });
       const nextItems = payload.items
+        .concat(payload.pinnedItems)
         .map((item) => toSessionItem(group.rootId, { ...(item as any), root_id: group.rootId }))
         .filter((item): item is SessionItem => !!item);
       setMultiProjectSessionGroups((prev) =>
@@ -4739,7 +4738,11 @@ export function App({ onGoHome }: AppProps) {
             if (current.rootId !== group.rootId) {
               return current;
             }
-            const sessions = mergeSessionItems(current.sessions, nextItems);
+            const sessions = applyPinnedSnapshotToSessions(
+              mergeSessionItems(current.sessions, nextItems),
+              group.rootId,
+              payload.pinnedKeys,
+            );
             return {
               ...current,
               sessions,
@@ -5523,6 +5526,70 @@ export function App({ onGoHome }: AppProps) {
     [bumpCacheVersion, rootSessionKey, setDrawerSessionForRoot],
   );
 
+  const handlePinSession = useCallback(
+    async (session: SessionItem, pinned: boolean) => {
+      const sessionKey = session?.key || session?.session_key;
+      const rootID =
+        (session?.root_id as string | undefined) || currentRootIdRef.current;
+      if (!rootID || !sessionKey) return false;
+
+      const updated = await sessionService.setSessionPinned(rootID, sessionKey, pinned);
+      if (!updated) {
+        reportError("session.pin_failed", t("session.pinFailed"));
+        return false;
+      }
+
+      const nextItem = toSessionItem(rootID, updated);
+      if (nextItem) {
+        setSessions((prev) => mergeSessionItems(prev, [nextItem]));
+        setMultiProjectSessionGroups((prev) =>
+          prev.map((group) =>
+            group.rootId === rootID
+              ? {
+                  ...group,
+                  sessions: mergeSessionItems(group.sessions, [nextItem]),
+                }
+              : group,
+          ),
+        );
+      }
+
+      const cacheKey = rootSessionKey(rootID, sessionKey);
+      const cached = sessionCacheRef.current[cacheKey];
+      if (cached) {
+        sessionCacheRef.current[cacheKey] = {
+          ...cached,
+          pinned_at: updated.pinned_at || undefined,
+        } as Session;
+      }
+
+      if (
+        (selectedSessionRef.current?.key ||
+          selectedSessionRef.current?.session_key) === sessionKey
+      ) {
+        setSelectedSession((prev) =>
+          prev
+            ? ({
+                ...prev,
+                pinned_at: updated.pinned_at || undefined,
+              } as SessionItem)
+            : prev,
+        );
+      }
+
+      if (boundSessionByRootRef.current[rootID] === sessionKey) {
+        const latest = sessionCacheRef.current[cacheKey];
+        if (latest) {
+          setDrawerSessionForRoot(rootID, latest);
+        }
+      }
+
+      bumpCacheVersion();
+      return true;
+    },
+    [bumpCacheVersion, rootSessionKey, setDrawerSessionForRoot, t],
+  );
+
   const handleSyncSession = useCallback(
     async (session: SessionItem) => {
       const sessionKey = session?.key || session?.session_key;
@@ -5841,9 +5908,11 @@ export function App({ onGoHome }: AppProps) {
         exitImportMode();
       }
       const payload = await sessionService.fetchSessions(rootID, {});
-      const next = payload.items as SessionItem[];
-      setHasMoreSessions(payload.totalCount > next.length);
-      setSessions(next);
+      const next = [...payload.items, ...payload.pinnedItems]
+        .map((item) => toSessionItem(rootID, item))
+        .filter((item): item is SessionItem => !!item);
+      setHasMoreSessions(payload.totalCount > payload.items.length);
+      setSessions(applyPinnedSnapshotToSessions(mergeSessionItems([], next), rootID, payload.pinnedKeys));
       const firstImported = successItems[0];
       if (firstImported?.session_key) {
         const source = externalSessionsRef.current.find((item) =>
@@ -9927,6 +9996,10 @@ export function App({ onGoHome }: AppProps) {
                   payload.session.related_worktree !== undefined
                     ? payload.session.related_worktree
                     : (cached as any).related_worktree,
+                pinned_at:
+                  payload.session.pinned_at !== undefined
+                    ? payload.session.pinned_at || undefined
+                    : (cached as any).pinned_at,
                 updated_at: payload.session.updated_at || cached.updated_at,
               } as Session;
               bumpCacheVersion();
@@ -9986,6 +10059,10 @@ export function App({ onGoHome }: AppProps) {
                         payload.session.related_worktree !== undefined
                           ? payload.session.related_worktree
                           : (prev as any).related_worktree,
+                      pinned_at:
+                        payload.session.pinned_at !== undefined
+                          ? payload.session.pinned_at || undefined
+                          : (prev as any).pinned_at,
                       updated_at: payload.session.updated_at || prev.updated_at,
                     } as SessionItem)
                   : prev,
@@ -10148,13 +10225,17 @@ export function App({ onGoHome }: AppProps) {
       const payload = await sessionService.fetchSessions(rootID, {
         beforeTime: oldest,
       });
-      const next = payload.items as SessionItem[];
-      setHasMoreSessions(payload.totalCount > next.length);
-      setSessions((prev) => mergeSessionItems(prev, next));
+      const next = [...payload.items, ...payload.pinnedItems]
+        .map((item) => toSessionItem(rootID, item))
+        .filter((item): item is SessionItem => !!item);
+      setHasMoreSessions(payload.totalCount > payload.items.length);
+      setSessions((prev) =>
+        applyPinnedSnapshotToSessions(mergeSessionItems(prev, next), rootID, payload.pinnedKeys),
+      );
     } finally {
       setLoadingOlderSessions(false);
     }
-  }, [loadingOlderSessions, mergeSessionItems]);
+  }, [loadingOlderSessions]);
 
   useEffect(() => {
     if (didInitRef.current) {
@@ -13538,6 +13619,7 @@ export function App({ onGoHome }: AppProps) {
           if (isMobile) setIsRightOpen(false);
         }}
         onSync={handleSyncSession}
+        onPin={handlePinSession}
         onRename={handleRenameSession}
         onDelete={handleDeleteSession}
         onProjectClick={(rootId) => {
@@ -13623,6 +13705,7 @@ export function App({ onGoHome }: AppProps) {
           if (isMobile) setIsRightOpen(false);
         }}
         onSync={handleSyncSession}
+        onPin={handlePinSession}
         onRename={handleRenameSession}
         onDelete={handleDeleteSession}
         onLoadChildren={

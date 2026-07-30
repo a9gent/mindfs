@@ -381,6 +381,7 @@ func (h *WSHandler) broadcastSessionMetaUpdated(rootID string, sess *session.Ses
 				"fast_service":        session.InferFastServiceFromSession(sess),
 				"plan_mode":           sess.PlanMode,
 				"related_worktree":    sess.RelatedWorktree,
+				"pinned_at":           sess.PinnedAt,
 				"updated_at":          sess.UpdatedAt,
 			},
 		},

@@ -29,6 +29,7 @@ type Session struct {
 	RelatedFiles      []RelatedFile            `json:"related_files"`
 	RelatedWorktree   *RelatedWorktree         `json:"related_worktree,omitempty"`
 	LastContextWindow agenttypes.ContextWindow `json:"last_context_window,omitempty"`
+	PinnedAt          *time.Time               `json:"pinned_at,omitempty"`
 	CreatedAt         time.Time                `json:"created_at"`
 	UpdatedAt         time.Time                `json:"updated_at"`
 	ClosedAt          *time.Time               `json:"closed_at,omitempty"`
