@@ -23,6 +23,12 @@ export type UnifiedDiffRow =
   | { kind: "hunk"; hunkText: string }
   | { kind: "line"; line: DiffLine; counterpart?: DiffLine };
 
+export type DiffCodeRow = {
+  kind: "meta" | "hunk" | "ctx" | "add" | "del";
+  text: string;
+  segments?: InlineDiffSegment[];
+};
+
 export function buildDiffLines(content: string): DiffLine[] {
   const source = String(content || "").split("\n");
   const filtered = source.filter((line) => !/^(diff --git|index |--- |\+\+\+ )/.test(line));
@@ -142,6 +148,27 @@ export function buildUnifiedRows(lines: DiffLine[]): UnifiedDiffRow[] {
   });
 }
 
+export function buildDiffCodeRows(content: string): DiffCodeRow[] {
+  const metaRows = String(content || "")
+    .split("\n")
+    .filter((line) => /^(diff --git|index |--- |\+\+\+ )/.test(line))
+    .map((line): DiffCodeRow => ({ kind: "meta", text: line }));
+
+  const diffRows = buildUnifiedRows(buildDiffLines(content)).map((row): DiffCodeRow => {
+    if (row.kind === "hunk") {
+      return { kind: "hunk", text: row.hunkText };
+    }
+    const line = row.line;
+    return {
+      kind: line.kind === "add" ? "add" : line.kind === "del" ? "del" : "ctx",
+      text: line.text,
+      segments: buildVisibleInlineSegments(line, row.counterpart),
+    };
+  });
+
+  return [...metaRows, ...diffRows];
+}
+
 function alignChangeBlock(deleted: DiffLine[], added: DiffLine[]): SideBySideDiffRow[] {
   if (deleted.length === 0) {
     return added.map((right) => ({ kind: "change", right }));
@@ -189,6 +216,16 @@ function alignChangeBlock(deleted: DiffLine[], added: DiffLine[]): SideBySideDif
   }
 
   return rows;
+}
+
+function buildVisibleInlineSegments(line: DiffLine, counterpart?: DiffLine): InlineDiffSegment[] | undefined {
+  if (!counterpart || line.kind === "ctx" || counterpart.kind === "ctx") {
+    return undefined;
+  }
+  const oldText = line.kind === "del" ? line.text : counterpart.text;
+  const newText = line.kind === "add" ? line.text : counterpart.text;
+  const hiddenKind = line.kind === "add" ? "del" : "add";
+  return getInlineDiffSegments(oldText, newText).filter((segment) => segment.kind !== hiddenKind);
 }
 
 function buildPairedChangeRow(left: DiffLine, right: DiffLine): SideBySideDiffRow {

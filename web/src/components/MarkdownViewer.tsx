@@ -10,6 +10,7 @@ import { copyText } from "../services/clipboard";
 import { fetchProofProtectedBlob } from "../services/file";
 import { openExternalURL } from "../services/platformNavigation";
 import { useI18n } from "../i18n";
+import { buildDiffCodeRows, type DiffCodeRow } from "./gitDiffModel";
 import "prismjs/themes/prism.css";
 import "katex/dist/katex.min.css";
 // Reuse the language imports from global Prism context (since they are imported in CodeViewer, they might be available if loaded, 
@@ -147,27 +148,61 @@ function MermaidBlock({ chart }: { chart: string }) {
   );
 }
 
+function diffCodeRowPrefix(kind: DiffCodeRow["kind"]): string {
+  if (kind === "add") return "+";
+  if (kind === "del") return "-";
+  if (kind === "ctx") return " ";
+  return "";
+}
+
+function diffCodeRowStyle(kind: DiffCodeRow["kind"]): { background: string; color: string } {
+  if (kind === "add") {
+    return { background: "rgba(34, 197, 94, 0.14)", color: "#166534" };
+  }
+  if (kind === "del") {
+    return { background: "rgba(239, 68, 68, 0.14)", color: "#991b1b" };
+  }
+  if (kind === "hunk") {
+    return { background: "rgba(59, 130, 246, 0.10)", color: "#1d4ed8" };
+  }
+  if (kind === "meta") {
+    return { background: "rgba(100, 116, 139, 0.10)", color: "#475569" };
+  }
+  return { background: "transparent", color: "inherit" };
+}
+
+function diffCodeSegmentBackground(rowKind: DiffCodeRow["kind"], segmentKind: "ctx" | "add" | "del"): string {
+  if (rowKind === "add" && segmentKind === "add") {
+    return "rgba(22, 163, 74, 0.22)";
+  }
+  if (rowKind === "del" && segmentKind === "del") {
+    return "rgba(220, 38, 38, 0.22)";
+  }
+  return "transparent";
+}
+
 function renderDiffCode(rawContent: string) {
-  const lines = rawContent.split("\n");
-  return lines.map((line, index) => {
-    let background = "transparent";
-    let color = "inherit";
-    if (/^\+[^+]/.test(line)) {
-      background = "rgba(34, 197, 94, 0.14)";
-      color = "#166534";
-    } else if (/^-[^-]/.test(line)) {
-      background = "rgba(239, 68, 68, 0.14)";
-      color = "#991b1b";
-    } else if (/^@@/.test(line)) {
-      background = "rgba(59, 130, 246, 0.10)";
-      color = "#1d4ed8";
-    } else if (/^(diff --git|index |--- |\+\+\+ )/.test(line)) {
-      background = "rgba(100, 116, 139, 0.10)";
-      color = "#475569";
-    }
+  const rows = buildDiffCodeRows(rawContent);
+  return rows.map((row, index) => {
+    const { background, color } = diffCodeRowStyle(row.kind);
+    const prefix = diffCodeRowPrefix(row.kind);
+    const content = row.segments?.length
+      ? row.segments.map((segment, segmentIndex) => (
+        <span
+          key={`${segmentIndex}-${segment.kind}-${segment.text}`}
+          style={{
+            background: diffCodeSegmentBackground(row.kind, segment.kind),
+            borderRadius: segment.kind === "ctx" ? 0 : "3px",
+          }}
+        >
+          {segment.text}
+        </span>
+      ))
+      : row.text || " ";
+
     return (
       <span
-        key={`${index}-${line}`}
+        key={`${index}-${row.kind}-${row.text}`}
         style={{
           display: "block",
           margin: "0 -8px",
@@ -176,7 +211,7 @@ function renderDiffCode(rawContent: string) {
           color,
         }}
       >
-        {line || " "}
+        {prefix}{content}
       </span>
     );
   });

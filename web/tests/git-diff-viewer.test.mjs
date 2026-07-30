@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  buildDiffCodeRows,
   buildDiffLines,
   buildSideBySideRows,
   buildUnifiedRows,
@@ -43,6 +44,24 @@ assert.deepEqual(
 assert.deepEqual(
   contentRows.map((row) => row.counterpart?.text.trimStart().split(/\s+/)[0] || ""),
   [""],
+);
+
+const agentReplyDiff = [
+  "--- a/session.go",
+  "+++ b/session.go",
+  "-  Content:   job.User.Content,",
+  "-  ClientCtx: job.ClientCtx,",
+  "+  Content:       job.User.Content,",
+  "+  UserTimestamp: job.User.Timestamp,",
+  "+  ClientCtx:     job.ClientCtx,",
+].join("\n");
+
+const agentReplyRows = buildDiffCodeRows(agentReplyDiff);
+const agentReplyChangedRows = agentReplyRows.filter((row) => row.kind === "add" || row.kind === "del");
+
+assert.deepEqual(
+  agentReplyChangedRows.map((row) => row.text.trimStart().split(/\s+/)[0]),
+  ["UserTimestamp:"],
 );
 
 const insertedArgument = getInlineDiffSegments(
