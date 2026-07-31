@@ -159,6 +159,7 @@ import {
   type StageTemplate,
   type TaskTemplate,
 } from "./services/tasks";
+import { shouldApplyTaskDetail } from "./services/taskDetailOrder";
 import { mergeRelatedFileGroups, taskIdsForUpdatedSession } from "./services/taskRelatedFiles";
 import { useI18n, type MessageKey, type MessageParams } from "./i18n";
 
@@ -1836,36 +1837,47 @@ export function App({ onGoHome }: AppProps) {
   }, [currentRootId, taskInlineActiveToken, taskTemplateFilter, taskTemplates]);
 
   const applyTaskDetails = useCallback((rootId: string, details: TaskDetail[], persist = true) => {
-    const valid = details.filter((detail) => detail?.task?.id);
-    if (valid.length === 0) return;
+    const accepted = details.filter(
+      (detail) =>
+        detail?.task?.id &&
+        shouldApplyTaskDetail(taskDetailsByIdRef.current[detail.task.id], detail),
+    );
+    if (accepted.length === 0) return;
+    const nextSnapshot = { ...taskDetailsByIdRef.current };
+    accepted.forEach((detail) => {
+      nextSnapshot[detail.task.id] = detail;
+    });
+    taskDetailsByIdRef.current = nextSnapshot;
     setTaskDetailsById((prev) => {
       const next = { ...prev };
-      valid.forEach((detail) => {
-        next[detail.task.id] = detail;
+      accepted.forEach((detail) => {
+        if (shouldApplyTaskDetail(next[detail.task.id], detail)) {
+          next[detail.task.id] = detail;
+        }
       });
       return next;
     });
     setTaskFirstInputById((prev) => {
       const next = { ...prev };
-      valid.forEach((detail) => {
+      accepted.forEach((detail) => {
         next[detail.task.id] = firstTaskInputFromDetail(detail);
       });
       return next;
     });
     setTaskSessionKeysById((prev) => {
       const next = { ...prev };
-      valid.forEach((detail) => {
+      accepted.forEach((detail) => {
         next[detail.task.id] = taskSessionKeysFromDetail(detail);
       });
       return next;
     });
     setKanbanTaskCountItems((prev) => {
       const byId = new Map(prev.map((task) => [task.id, task]));
-      valid.forEach((detail) => byId.set(detail.task.id, detail.task));
+      accepted.forEach((detail) => byId.set(detail.task.id, detail.task));
       return Array.from(byId.values()).sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
     });
     if (persist) {
-      void upsertCachedTaskDetails(rootId, valid);
+      void upsertCachedTaskDetails(rootId, accepted);
     }
   }, []);
 
@@ -9951,14 +9963,12 @@ export function App({ onGoHome }: AppProps) {
             if (detail?.task?.id) {
               applyTaskDetails(payload.root_id, [detail]);
             } else {
-              setTaskDetailsById((prev) => ({
-                ...prev,
-                [nextTask.id]: {
-                  task: nextTask,
-                  stage_runs: prev[nextTask.id]?.stage_runs || [],
-                  events: prev[nextTask.id]?.events || [],
-                },
-              }));
+              const current = taskDetailsByIdRef.current[nextTask.id];
+              applyTaskDetails(payload.root_id, [{
+                task: nextTask,
+                stage_runs: current?.stage_runs || [],
+                events: current?.events || [],
+              }]);
             }
             if (nextTask.worktree_path) {
               void refreshTaskWorktree(payload.root_id, nextTask.worktree_path, false);
