@@ -808,6 +808,11 @@ class SessionService {
     context?: Record<string, unknown>,
     shell?: string,
     requestId = this.createRequestId("msg"),
+    newSessionWorktree?: {
+      create: boolean;
+      branchMode: "new" | "existing";
+      branch?: string;
+    },
   ): Promise<boolean> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.warn("[session/send] blocked", {
@@ -834,6 +839,9 @@ class SessionService {
         fast_service: fastService,
         shell,
         terminal_cols: type === "command" ? estimateCommandTerminalCols() : undefined,
+        create_worktree: !sessionKey && newSessionWorktree?.create === true,
+        worktree_branch_mode: newSessionWorktree?.branchMode,
+        worktree_branch: newSessionWorktree?.branch || "",
         context: this.compactContext(sessionKey, context),
       },
     };

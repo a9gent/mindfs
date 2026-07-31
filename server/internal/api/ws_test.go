@@ -12,6 +12,7 @@ import (
 	"mindfs/server/internal/agent"
 	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/e2ee"
+	"mindfs/server/internal/session"
 )
 
 func TestParseClientContext(t *testing.T) {
@@ -107,6 +108,27 @@ func TestSessionMessageContextUsesAgentPoolLifecycle(t *testing.T) {
 	case <-ctx.Done():
 	default:
 		t.Fatal("expected session message context to be canceled when agent pool closes")
+	}
+}
+
+func TestSessionRuntimeRootPathUsesRelatedWorktree(t *testing.T) {
+	current := &session.Session{
+		Source: "worktree",
+		RelatedWorktree: &session.RelatedWorktree{
+			Path: "  /tmp/project-worktree  ",
+		},
+	}
+	if got := sessionRuntimeRootPath(current); got != "/tmp/project-worktree" {
+		t.Fatalf("sessionRuntimeRootPath() = %q, want %q", got, "/tmp/project-worktree")
+	}
+	if got := sessionRuntimeRootPath(&session.Session{}); got != "" {
+		t.Fatalf("sessionRuntimeRootPath() without worktree = %q, want empty", got)
+	}
+	relatedOnly := &session.Session{
+		RelatedWorktree: &session.RelatedWorktree{Path: "/tmp/observed-worktree"},
+	}
+	if got := sessionRuntimeRootPath(relatedOnly); got != "" {
+		t.Fatalf("sessionRuntimeRootPath() for incidental relation = %q, want empty", got)
 	}
 }
 

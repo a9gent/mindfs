@@ -4,9 +4,31 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"mindfs/server/internal/fs"
 )
+
+func TestNextSessionWorktreeNameUsesDateAndNextSequence(t *testing.T) {
+	now := time.Date(2026, time.July, 30, 15, 30, 0, 0, time.Local)
+	got := nextSessionWorktreeName(now, []string{
+		"task-12",
+		"session-0729-09",
+		"session-0730-01",
+		"session-0730-03",
+		"session-0730-invalid",
+	})
+	if got != "session-0730-04" {
+		t.Fatalf("nextSessionWorktreeName() = %q, want %q", got, "session-0730-04")
+	}
+}
+
+func TestNextSessionWorktreeNameStartsAtOne(t *testing.T) {
+	now := time.Date(2026, time.July, 30, 15, 30, 0, 0, time.Local)
+	if got := nextSessionWorktreeName(now, nil); got != "session-0730-01" {
+		t.Fatalf("nextSessionWorktreeName() = %q, want %q", got, "session-0730-01")
+	}
+}
 
 func TestListRootsRemovesDeletedManagedDirWithoutRecreatingIt(t *testing.T) {
 	parent := t.TempDir()

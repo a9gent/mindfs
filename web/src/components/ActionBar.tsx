@@ -17,6 +17,7 @@ import TokenEditor, {
 import { renderToolIcon } from "./stream/ToolCallCard";
 import { useI18n, type MessageKey } from "../i18n";
 import { CompactUploadProgress } from "./CompactUploadProgress";
+import { fetchGitBranches, type GitBranchesPayload } from "../services/git";
 
 type SessionInfo = {
   key: string;
@@ -69,6 +70,7 @@ type ActionBarProps = {
   status?: WSStatus;
   agentsVersion?: number;
   currentRootId?: string | null;
+  currentRootIsGitRepo?: boolean;
   currentSession?: SessionInfo | null;
   pendingPlanMode?: boolean;
   attachedFileContext?: AttachedFileContext | null;
@@ -91,6 +93,11 @@ type ActionBarProps = {
     effort?: string,
     fastService?: "" | "on" | "off",
     shell?: string,
+    newSessionWorktree?: {
+      create: boolean;
+      branchMode: "new" | "existing";
+      branch: string;
+    },
   ) => void | Promise<void>;
   onSetPlanMode?: (
     enabled: boolean,
@@ -389,6 +396,7 @@ export function ActionBar({
   status = "disconnected",
   agentsVersion = 0,
   currentRootId,
+  currentRootIsGitRepo = false,
   currentSession,
   pendingPlanMode = false,
   attachedFileContext,
@@ -442,6 +450,12 @@ export function ActionBar({
   const [candidates, setCandidates] = useState<CandidateItem[]>([]);
   const [activeCandidateIndex, setActiveCandidateIndex] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [createWorktree, setCreateWorktree] = useState(false);
+  const [worktreeBranchMode, setWorktreeBranchMode] = useState<"new" | "existing">("new");
+  const [worktreeBranch, setWorktreeBranch] = useState("");
+  const [worktreeBranches, setWorktreeBranches] = useState<GitBranchesPayload>({ branches: [] });
+  const [worktreeBranchesLoading, setWorktreeBranchesLoading] = useState(false);
+  const [worktreeBranchError, setWorktreeBranchError] = useState("");
   const dragStartRef = useRef(0);
   const syncedSessionSignatureRef = useRef<string>("");
   const editorRef = useRef<TokenEditorHandle>(null);
@@ -518,7 +532,45 @@ export function ActionBar({
     if (!currentSession?.pending) {
       setCancelling(false);
     }
-  }, [currentSession?.pending]);
+    if (currentSession) {
+      setCreateWorktree(false);
+      setWorktreeBranchMode("new");
+      setWorktreeBranch("");
+    }
+  }, [currentSession?.key, currentSession?.session_key, currentSession?.pending]);
+
+  useEffect(() => {
+    setCreateWorktree(false);
+    setWorktreeBranchMode("new");
+    setWorktreeBranch("");
+    setWorktreeBranches({ branches: [] });
+    setWorktreeBranchError("");
+  }, [currentRootId]);
+
+  useEffect(() => {
+    if (!createWorktree || currentSession || mode === "command" || !currentRootId || !currentRootIsGitRepo) {
+      setWorktreeBranchError("");
+      return;
+    }
+    let active = true;
+    setWorktreeBranchesLoading(true);
+    setWorktreeBranchError("");
+    fetchGitBranches(currentRootId)
+      .then((payload) => {
+        if (active) setWorktreeBranches(payload);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setWorktreeBranches({ branches: [] });
+        setWorktreeBranchError(error instanceof Error ? error.message : t("worktree.loadBranchFailed"));
+      })
+      .finally(() => {
+        if (active) setWorktreeBranchesLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [createWorktree, currentRootId, currentRootIsGitRepo, currentSession, mode, t]);
 
   useEffect(() => {
     Promise.all([fetchAgents(true), fetchShells(true)])
@@ -893,6 +945,13 @@ export function ActionBar({
         supportsEffort ? effort || undefined : undefined,
         supportsServiceTier ? fastService : undefined,
         mode === "command" ? shell || undefined : undefined,
+        !currentSession && mode !== "command" && currentRootIsGitRepo
+          ? {
+              create: createWorktree,
+              branchMode: worktreeBranchMode,
+              branch: worktreeBranchMode === "existing" ? worktreeBranch : "",
+            }
+          : undefined,
       );
       editorRef.current?.clear();
       setSerializedInput("");
@@ -910,6 +969,9 @@ export function ActionBar({
         return [];
       });
       setIsMultiLine(false);
+      setCreateWorktree(false);
+      setWorktreeBranchMode("new");
+      setWorktreeBranch("");
       if (isMobile) {
         requestAnimationFrame(() => editorRef.current?.blur());
       }
@@ -925,7 +987,7 @@ export function ActionBar({
         requestAnimationFrame(() => editorRef.current?.focus());
       }
     }
-  }, [serializedInput, pendingAttachments, isConnected, sending, mode, agent, currentRootId, planSessionKey, planRootId, onSetPlanMode, isMobile, model, agentMode, onSendMessage, supportsEffort, effort, supportsServiceTier, fastService, shell, t]);
+  }, [serializedInput, pendingAttachments, isConnected, sending, mode, agent, currentRootId, planSessionKey, planRootId, onSetPlanMode, isMobile, model, agentMode, onSendMessage, supportsEffort, effort, supportsServiceTier, fastService, shell, t, currentSession, currentRootIsGitRepo, createWorktree, worktreeBranchMode, worktreeBranch]);
 
   const handleCancel = useCallback(async () => {
     const sessionKey = currentSession?.key;
@@ -1341,7 +1403,7 @@ export function ActionBar({
               display: "flex",
               flexDirection: "column",
               alignItems: "flex-start",
-              gap: planModeActive ? "4px" : 0,
+              gap: planModeActive || (!currentSession && currentRootIsGitRepo && mode !== "command") ? "4px" : 0,
               minWidth: 0,
             }}
           >
@@ -1390,6 +1452,73 @@ export function ActionBar({
                     <path fill="currentColor" fillRule="evenodd" d="M21 12a9 9 0 1 1-18 0a9 9 0 0 1 18 0M7.293 16.707a1 1 0 0 1 0-1.414L10.586 12L7.293 8.707a1 1 0 0 1 1.414-1.414L12 10.586l3.293-3.293a1 1 0 1 1 1.414 1.414L13.414 12l3.293 3.293a1 1 0 0 1-1.414 1.414L12 13.414l-3.293 3.293a1 1 0 0 1-1.414 0" clipRule="evenodd" />
                   </svg>
                 </button>
+              </div>
+            ) : null}
+
+            {!currentSession && currentRootIsGitRepo && mode !== "command" ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0, paddingLeft: "2px" }}>
+                <button
+                  type="button"
+                  onClick={() => setCreateWorktree((value) => !value)}
+                  disabled={sending}
+                  style={{
+                    height: "24px",
+                    borderRadius: "6px",
+                    border: createWorktree ? "1px solid var(--accent-color)" : "1px solid var(--border-color)",
+                    background: createWorktree ? "rgba(37, 99, 235, 0.10)" : "rgba(100, 116, 139, 0.10)",
+                    color: createWorktree ? "var(--accent-color)" : "var(--text-secondary)",
+                    padding: "0 8px",
+                    fontSize: "11px",
+                    fontWeight: 800,
+                    cursor: sending ? "not-allowed" : "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {createWorktree ? t("worktree.enableNew") : t("worktree.disableNew")}
+                </button>
+                {createWorktree ? (
+                  <>
+                    <select
+                      value={worktreeBranchMode === "new" ? "__new__" : worktreeBranch}
+                      disabled={sending}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        if (value === "__new__") {
+                          setWorktreeBranchMode("new");
+                          setWorktreeBranch("");
+                        } else {
+                          setWorktreeBranchMode("existing");
+                          setWorktreeBranch(value);
+                        }
+                      }}
+                      style={{
+                        height: "24px",
+                        minWidth: "92px",
+                        maxWidth: isMobile ? "150px" : "240px",
+                        borderRadius: "6px",
+                        border: "1px solid var(--border-color)",
+                        background: "var(--menu-bg)",
+                        color: "var(--text-primary)",
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        padding: "0 7px",
+                        outline: "none",
+                      }}
+                    >
+                      <option value="__new__">{t("worktree.createBranch")}</option>
+                      {worktreeBranches.branches.map((branch) => (
+                        <option key={branch.name} value={branch.name}>
+                          {branch.current ? `${branch.name} ${t("worktree.current")}` : branch.name}
+                        </option>
+                      ))}
+                    </select>
+                    {worktreeBranchesLoading ? (
+                      <span style={{ fontSize: "11px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{t("common.loading")}</span>
+                    ) : worktreeBranchError ? (
+                      <span title={worktreeBranchError} style={{ fontSize: "11px", color: "#b45309", whiteSpace: "nowrap" }}>{t("common.loadingFailed")}</span>
+                    ) : null}
+                  </>
+                ) : null}
               </div>
             ) : null}
 

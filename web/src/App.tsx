@@ -517,6 +517,15 @@ function toSessionItem(
       session?.search_match_type === "reply"
         ? session.search_match_type
         : undefined,
+    related_files: Array.isArray(session?.related_files)
+      ? session.related_files
+      : undefined,
+    related_worktree:
+      session?.related_worktree === null
+        ? null
+        : session?.related_worktree && typeof session.related_worktree === "object"
+          ? session.related_worktree
+          : undefined,
     pending: typeof session?.pending === "boolean" ? session.pending : undefined,
   };
 }
@@ -3700,14 +3709,26 @@ export function App({ onGoHome }: AppProps) {
           ? selected.name
           : "") ||
         t("session.new");
+      const realExchanges = Array.isArray((realCached as any)?.exchanges)
+        ? ((realCached as any).exchanges as Exchange[])
+        : [];
+      const pendingExchanges = Array.isArray((pendingCached as any)?.exchanges)
+        ? ((pendingCached as any).exchanges as Exchange[])
+        : [];
       const latestReal =
-        realCached || pendingCached || fallback || drawer;
+        pendingCached && realCached
+          ? ({
+              ...(pendingCached as any),
+              ...(realCached as any),
+              exchanges:
+                realExchanges.length > 0 ? realExchanges : pendingExchanges,
+            } as Session)
+          : realCached || pendingCached || fallback || drawer;
       let cacheChanged = false;
 
       if (pendingCached) {
         sessionCacheRef.current[realCacheKey] = {
-          ...(pendingCached as any),
-          ...(realCached as any),
+          ...(latestReal as any),
           key: sessionKey,
           name:
             (typeof (realCached as any)?.name === "string" &&
@@ -5953,6 +5974,11 @@ export function App({ onGoHome }: AppProps) {
       effort?: string,
       fastService?: "" | "on" | "off",
       shell?: string,
+      newSessionWorktree?: {
+        create: boolean;
+        branchMode: "new" | "existing";
+        branch: string;
+      },
     ) => {
       const activeRoot = currentRootIdRef.current;
       if (!activeRoot) return;
@@ -6412,6 +6438,7 @@ export function App({ onGoHome }: AppProps) {
         context,
         effectiveShell || undefined,
         requestId,
+        newSessionWorktree,
       );
       if (sent && applyPendingPlanPrefix) {
         setPendingPlanMode(false);
@@ -9945,9 +9972,21 @@ export function App({ onGoHome }: AppProps) {
             const rootID = payload.root_id;
             const sessionKey = payload.session.key;
             const cacheKey = rootSessionKey(rootID, sessionKey);
-            const cached = sessionCacheRef.current[cacheKey];
-            if (cached) {
-              sessionCacheRef.current[cacheKey] = {
+            const cached =
+              sessionCacheRef.current[cacheKey] ||
+              ({
+                key: sessionKey,
+                root_id: rootID,
+                type: normalizeMode(payload.session.type),
+                name:
+                  typeof payload.session.name === "string"
+                    ? payload.session.name
+                    : "",
+                created_at: payload.session.updated_at || new Date().toISOString(),
+                updated_at: payload.session.updated_at || new Date().toISOString(),
+                exchanges: [],
+              } as Session);
+            sessionCacheRef.current[cacheKey] = {
                 ...cached,
                 name:
                   typeof payload.session.name === "string"
@@ -10002,8 +10041,7 @@ export function App({ onGoHome }: AppProps) {
                     : (cached as any).pinned_at,
                 updated_at: payload.session.updated_at || cached.updated_at,
               } as Session;
-              bumpCacheVersion();
-            }
+            bumpCacheVersion();
             if (
               (selectedSessionRef.current?.key ||
                 selectedSessionRef.current?.session_key) === sessionKey
@@ -10073,6 +10111,13 @@ export function App({ onGoHome }: AppProps) {
               if (latest) {
                 setDrawerSessionForRoot(rootID, latest);
               }
+            }
+            const relatedWorktreePath =
+              typeof payload.session.related_worktree?.path === "string"
+                ? payload.session.related_worktree.path.trim()
+                : "";
+            if (relatedWorktreePath) {
+              void refreshTaskWorktree(rootID, relatedWorktreePath, false);
             }
             const newest = sessionsRef.current[0]?.updated_at || "";
             void loadSessionsForRoot(
@@ -14057,6 +14102,7 @@ export function App({ onGoHome }: AppProps) {
               status={status}
               agentsVersion={agentsVersion}
               currentRootId={currentRootId}
+              currentRootIsGitRepo={managedRootByIdRef.current[currentRootId || ""]?.is_git_repo === true}
               currentSession={actionBarSession}
               pendingPlanMode={pendingPlanMode}
               attachedFileContext={attachedFileContext}
