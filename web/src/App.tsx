@@ -131,6 +131,7 @@ import { ToastContainer } from "./components/Toast";
 import { BottomSheet } from "./components/BottomSheet";
 import { ScheduledAgentTaskDialog } from "./components/ScheduledAgentTaskDialog";
 import { TaskTemplateDialog } from "./components/TaskTemplateDialog";
+import { WorktreeBranchSelector } from "./components/WorktreeBranchSelector";
 import { renderToolIcon } from "./components/stream/ToolCallCard";
 import TokenEditor, { type TokenEditorHandle } from "./components/editor/TokenEditor";
 import {
@@ -14395,44 +14396,22 @@ export function App({ onGoHome }: AppProps) {
                     </button>
                     {taskInlineEdit.createWorktree ? (
                       <div style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
-	                        <select
-	                          value={taskInlineEdit.worktreeBranchMode === "new" ? "__new__" : taskInlineEdit.worktreeBranch}
-	                          disabled={taskInlineSaving || !taskWorktreeControlsEditable}
-                          onChange={(event) => {
-                            const value = event.target.value;
+	                        <WorktreeBranchSelector
+	                          branchMode={taskInlineEdit.worktreeBranchMode}
+	                          branch={taskInlineEdit.worktreeBranch}
+	                          branches={taskWorktreeBranches.branches}
+                          disabled={taskInlineSaving || !taskWorktreeControlsEditable}
+                          height={26}
+                          maxWidth={isMobile ? 160 : 240}
+                          menuAlign={isMobile ? "left" : "right"}
+                          menuPlacement="bottom"
+                          onChange={(nextMode, nextBranch) => {
                             setTaskInlineEdit((prev) => {
                               if (!prev) return prev;
-                              if (value === "__new__") {
-                                return { ...prev, worktreeBranchMode: "new", worktreeBranch: "" };
-                              }
-                              return { ...prev, worktreeBranchMode: "existing", worktreeBranch: value };
+                              return { ...prev, worktreeBranchMode: nextMode, worktreeBranch: nextBranch };
                             });
                           }}
-                          style={{
-                            height: "26px",
-                            width: "auto",
-                            minWidth: "92px",
-                            maxWidth: isMobile ? "160px" : "240px",
-                            borderRadius: "6px",
-                            border: "1px solid var(--border-color)",
-                            background: "var(--menu-bg)",
-                            color: "var(--text-primary)",
-                            fontSize: "12px",
-                            fontWeight: 700,
-                            padding: "0 7px",
-                            outline: "none",
-	                          }}
-	                        >
-	                          <option value="__new__">{t("worktree.createBranch")}</option>
-	                          {!taskWorktreeControlsEditable && taskInlineEdit.worktreeBranchMode === "existing" && taskInlineEdit.worktreeBranch ? (
-	                            <option value={taskInlineEdit.worktreeBranch}>{taskInlineEdit.worktreeBranch}</option>
-	                          ) : null}
-	                          {taskWorktreeBranches.branches.map((branch) => (
-	                            <option key={branch.name} value={branch.name}>
-                              {branch.current ? `${branch.name} ${t("worktree.current")}` : branch.name}
-                            </option>
-                          ))}
-                        </select>
+                        />
                         {taskWorktreeBranchesLoading ? (
                           <span style={{ fontSize: "11px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{t("common.loading")}</span>
                         ) : taskWorktreeBranchError ? (
