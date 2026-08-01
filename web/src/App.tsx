@@ -132,6 +132,7 @@ import { BottomSheet } from "./components/BottomSheet";
 import { ScheduledAgentTaskDialog } from "./components/ScheduledAgentTaskDialog";
 import { TaskTemplateDialog } from "./components/TaskTemplateDialog";
 import { WorktreeBranchSelector } from "./components/WorktreeBranchSelector";
+import { NoWorktreeIcon } from "./components/NoWorktreeIcon";
 import { renderToolIcon } from "./components/stream/ToolCallCard";
 import TokenEditor, { type TokenEditorHandle } from "./components/editor/TokenEditor";
 import {
@@ -14938,25 +14939,6 @@ function TaskSessionErrorIcon() {
       <circle cx="12" cy="12" r="9" />
       <path d="M12 7v6" />
       <path d="M12 17h.01" />
-    </svg>
-  );
-}
-
-function NoWorktreeIcon() {
-  return (
-    <svg
-      width="8"
-      height="8"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="8" />
-      <path d="M7 17L17 7" />
     </svg>
   );
 }

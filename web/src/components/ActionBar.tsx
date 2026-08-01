@@ -19,6 +19,7 @@ import { useI18n, type MessageKey } from "../i18n";
 import { CompactUploadProgress } from "./CompactUploadProgress";
 import { fetchGitBranches, type GitBranchesPayload } from "../services/git";
 import { WorktreeBranchSelector } from "./WorktreeBranchSelector";
+import { NoWorktreeIcon } from "./NoWorktreeIcon";
 
 type SessionInfo = {
   key: string;
@@ -1462,20 +1463,31 @@ export function ActionBar({
                   type="button"
                   onClick={() => setCreateWorktree((value) => !value)}
                   disabled={sending}
+                  aria-label={createWorktree ? t("task.worktreeTitle") : t("task.noWorktreeTitle")}
+                  title={createWorktree ? t("task.worktreeTitle") : t("task.noWorktreeTitle")}
                   style={{
                     height: "24px",
                     borderRadius: "6px",
-                    border: createWorktree ? "1px solid var(--accent-color)" : "1px solid var(--border-color)",
-                    background: createWorktree ? "rgba(37, 99, 235, 0.10)" : "rgba(100, 116, 139, 0.10)",
-                    color: createWorktree ? "var(--accent-color)" : "var(--text-secondary)",
-                    padding: "0 8px",
+                    border: createWorktree ? "1px solid rgba(22, 163, 74, 0.28)" : "1px solid var(--border-color)",
+                    background: createWorktree ? "rgba(22, 163, 74, 0.08)" : "rgba(100, 116, 139, 0.10)",
+                    color: createWorktree ? "#15803d" : "var(--text-secondary)",
+                    padding: createWorktree ? "0 8px" : "0 8px 0 5px",
                     fontSize: "11px",
                     fontWeight: 800,
                     cursor: sending ? "not-allowed" : "pointer",
                     whiteSpace: "nowrap",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "3px",
                   }}
                 >
-                  {createWorktree ? t("worktree.enableNew") : t("worktree.disableNew")}
+                  {createWorktree ? "worktree" : (
+                    <>
+                      <NoWorktreeIcon size={12} />
+                      worktree
+                    </>
+                  )}
                 </button>
                 {createWorktree ? (
                   <>
