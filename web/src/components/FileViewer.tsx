@@ -3,6 +3,8 @@ import { MarkdownViewer } from "./MarkdownViewer";
 import { CodeViewer, supportsLineSelection } from "./CodeViewer";
 import { ImageViewer } from "./ImageViewer";
 import { BinaryViewer } from "./BinaryViewer";
+import { DocumentViewer } from "./DocumentViewer";
+import { getDocumentPreviewKind } from "../services/documentPreview";
 import { rootBadgeStyle } from "./rootBadgeStyle";
 import { downloadFile } from "../services/download";
 import { isNativeShellRuntime } from "../services/runtime";
@@ -191,6 +193,7 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onS
   }, [fileScrollKey, onScrollTopChange]);
 
   const ext = file?.ext || (file?.path.includes(".") ? `.${file.path.split(".").pop()}` : "");
+  const documentPreviewKind = getDocumentPreviewKind(ext, file?.mime);
   const usesMarkdownViewer = ext === ".md" || ext === ".markdown";
   const lineSelectionEnabled = !!file
     && !usesMarkdownViewer
@@ -261,6 +264,33 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onS
     };
   }, [file, onSelectionChange, updateSelection]);
 
+  const [downloadToast, setDownloadToast] = useState<{ msg: string; ok: boolean } | null>(null);
+
+  const showToast = useCallback((msg: string, ok: boolean) => {
+    setDownloadToast({ msg, ok });
+    window.setTimeout(() => setDownloadToast(null), 3000);
+  }, []);
+
+  const handleDownload = useCallback(async () => {
+    if (!file?.root || !file.path || isDownloading) {
+      return;
+    }
+    try {
+      setIsDownloading(true);
+      await downloadFile({
+        rootId: file.root,
+        path: file.path,
+        name: file.name,
+      });
+      showToast(isNativeShellRuntime() ? t("fileViewer.downloadSavedNative") : t("fileViewer.downloadStarted"), true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t("fileViewer.downloadFailed");
+      showToast(message, false);
+    } finally {
+      setIsDownloading(false);
+    }
+  }, [file, isDownloading, showToast, t]);
+
   if (!file) {
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", flexDirection: "column", gap: "12px" }}>
@@ -308,33 +338,6 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onS
 
   const relatedSessions = normalizeRelatedSessions((file as any).file_meta);
   const visibleRelatedSessions = relatedSessions.slice(0, isMobile ? 2 : 3);
-
-  const [downloadToast, setDownloadToast] = useState<{ msg: string; ok: boolean } | null>(null);
-
-  const showToast = useCallback((msg: string, ok: boolean) => {
-    setDownloadToast({ msg, ok });
-    window.setTimeout(() => setDownloadToast(null), 3000);
-  }, []);
-
-  const handleDownload = useCallback(async () => {
-    if (!file?.root || !file.path || isDownloading) {
-      return;
-    }
-    try {
-      setIsDownloading(true);
-      await downloadFile({
-        rootId: file.root,
-        path: file.path,
-        name: file.name,
-      });
-      showToast(isNativeShellRuntime() ? t("fileViewer.downloadSavedNative") : t("fileViewer.downloadStarted"), true);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : t("fileViewer.downloadFailed");
-      showToast(message, false);
-    } finally {
-      setIsDownloading(false);
-    }
-  }, [file, isDownloading, showToast, t]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, background: "transparent" }}>
@@ -463,9 +466,11 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onS
         </div>
       </header>
 
-      <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto", position: "relative", WebkitOverflowScrolling: "touch" }}>
-        <div style={{ minWidth: "100%", display: "block", background: "transparent" }}>
-          {file.mime?.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].includes(ext.toLowerCase()) ? (
+      <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflow: documentPreviewKind === "powerpoint" ? "hidden" : "auto", position: "relative", WebkitOverflowScrolling: "touch" }}>
+        <div style={{ minWidth: "100%", height: documentPreviewKind === "powerpoint" ? "100%" : undefined, display: "block", background: "transparent" }}>
+          {documentPreviewKind ? (
+            <DocumentViewer key={`${file.root || ""}:${file.path}`} path={file.path} root={file.root} kind={documentPreviewKind} />
+          ) : file.mime?.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].includes(ext.toLowerCase()) ? (
             <div style={{ padding: "24px 16px" }}><ImageViewer path={file.path} root={file.root} /></div>
           ) : file.encoding === "binary" ? (
             <div style={{ padding: "24px 16px" }}><BinaryViewer /></div>

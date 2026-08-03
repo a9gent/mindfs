@@ -152,6 +152,9 @@ export const enUS = {
   "fileViewer.downloadFailed": "Download failed",
   "fileViewer.downloadFile": "Download file",
   "fileViewer.downloading": "Downloading...",
+  "fileViewer.previewLoading": "Loading preview...",
+  "fileViewer.previewFailed": "This file could not be previewed. Download it to open it.",
+  "fileViewer.pdfPage": "PDF page {page}",
 
   "login.updateAvailable": "{packageLabel} {version} is available",
   "login.updateDownloading": "Downloading...",
