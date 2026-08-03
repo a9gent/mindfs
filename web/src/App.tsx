@@ -14389,21 +14389,32 @@ export function App({ onGoHome }: AppProps) {
 	                        setTaskInlineEdit((prev) => prev ? { ...prev, createWorktree: !prev.createWorktree } : prev);
 	                      }}
 	                      disabled={taskInlineSaving || !taskWorktreeControlsEditable}
+                      aria-label={taskInlineEdit.createWorktree ? t("task.worktreeTitle") : t("task.noWorktreeTitle")}
+                      title={taskInlineEdit.createWorktree ? t("task.worktreeTitle") : t("task.noWorktreeTitle")}
                       style={{
                         height: "26px",
                         borderRadius: "6px",
-                        border: taskInlineEdit.createWorktree ? "1px solid var(--accent-color)" : "1px solid var(--border-color)",
-                        background: taskInlineEdit.createWorktree ? "rgba(37, 99, 235, 0.10)" : "rgba(100, 116, 139, 0.10)",
-                        color: taskInlineEdit.createWorktree ? "var(--accent-color)" : "var(--text-secondary)",
-                        padding: "0 8px",
+                        border: taskInlineEdit.createWorktree ? "1px solid rgba(22, 163, 74, 0.28)" : "1px solid var(--border-color)",
+                        background: taskInlineEdit.createWorktree ? "rgba(22, 163, 74, 0.08)" : "rgba(100, 116, 139, 0.10)",
+                        color: taskInlineEdit.createWorktree ? "#15803d" : "var(--text-secondary)",
+                        padding: taskInlineEdit.createWorktree ? "0 8px" : "0 8px 0 5px",
                         fontSize: "12px",
                         fontWeight: 800,
 	                        cursor: taskInlineSaving || !taskWorktreeControlsEditable ? "not-allowed" : "pointer",
 	                        whiteSpace: "nowrap",
 	                        opacity: taskInlineSaving || !taskWorktreeControlsEditable ? 0.72 : 1,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "3px",
                       }}
                     >
-                      {taskInlineEdit.createWorktree ? t("worktree.enableNew") : t("worktree.disableNew")}
+                      {taskInlineEdit.createWorktree ? "worktree" : (
+                        <>
+                          <NoWorktreeIcon size={12} />
+                          worktree
+                        </>
+                      )}
                     </button>
                     {taskInlineEdit.createWorktree ? (
                       <div style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
