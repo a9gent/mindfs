@@ -7,10 +7,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/windows"
 )
+
+const windowsStillActive = 259
 
 func platformStateDir() (string, error) {
 	base, err := os.UserConfigDir()
@@ -101,11 +106,31 @@ func processNameForPID(pid int) (string, error) {
 	if pid <= 0 {
 		return "", errors.New("invalid pid")
 	}
-	cmd := exec.Command("tasklist", "/FI", "PID eq "+strconv.Itoa(pid), "/FO", "CSV", "/NH")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	output, err := cmd.Output()
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {
-		return "", err
+		if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+			return "", os.ErrProcessDone
+		}
+		return "", fmt.Errorf("open process %d: %w", pid, err)
 	}
-	return parseTasklistImageName(output, pid)
+	defer windows.CloseHandle(handle)
+
+	var exitCode uint32
+	if err := windows.GetExitCodeProcess(handle, &exitCode); err != nil {
+		return "", fmt.Errorf("query process %d exit code: %w", pid, err)
+	}
+	if exitCode != windowsStillActive {
+		return "", os.ErrProcessDone
+	}
+
+	buffer := make([]uint16, 32768)
+	size := uint32(len(buffer))
+	if err := windows.QueryFullProcessImageName(handle, 0, &buffer[0], &size); err != nil {
+		return "", fmt.Errorf("query process %d image name: %w", pid, err)
+	}
+	name := filepath.Base(windows.UTF16ToString(buffer[:size]))
+	if name == "" {
+		return "", os.ErrProcessDone
+	}
+	return name, nil
 }
