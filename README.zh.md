@@ -119,6 +119,7 @@ MindFS 本身不包含 AI 模型，需要在本机安装至少一个 Agent CLI�
 | **Pi** | https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent, and acp adatper: https://github.com/svkozak/pi-acp |
 | **Hermes** | https://hermes-agent.nousresearch.com/docs/user-guide/features/acp |
 | **Reasonix** | https://github.com/esengine/DeepSeek-Reasonix |
+| **Grok Build** | https://x.ai/cli |
 
 MindFS 已整理常见流行 Agent，在本地 UI 中可以直接安装和更新。打开文件树菜单，选择 **Agent 安装和更新**，即可按当前平台生成安装/更新命令；命令会进入 MindFS 命令执行模式，方便你在当前工作区中确认并运行。
 
