@@ -1,3 +1,15 @@
+# MindFS v0.4.6
+
+## 新功能
+- office，pdf 文件支持预览
+
+## 优化和修复
+- worktree 选择 ui 优化
+- 修复任务开始后一直展示为排队中
+- 优化Windows 上 -status 展示
+- agent 选择框默认展开模型选择
+
+
 # MindFS v0.4.5
 
 ## 新功能
