@@ -92,7 +92,90 @@ function WordPreview({ blob }: { blob: Blob }) {
     const container = containerRef.current;
     if (!container) return undefined;
     let cancelled = false;
+    let rendered = false;
     container.replaceChildren();
+
+    const fitPages = () => {
+      if (!rendered || cancelled) return;
+      const wrapper = container.querySelector<HTMLElement>(".mindfs-docx-wrapper");
+      if (!wrapper) return;
+      const wrapperStyle = window.getComputedStyle(wrapper);
+      const horizontalPadding = Number.parseFloat(wrapperStyle.paddingLeft || "0")
+        + Number.parseFloat(wrapperStyle.paddingRight || "0");
+      const availableWidth = Math.max(1, wrapper.clientWidth - horizontalPadding);
+      wrapper.querySelectorAll<HTMLElement>("section.mindfs-docx").forEach((page) => {
+        if (page.dataset.mindfsOriginalPaddingLeft === undefined) {
+          page.dataset.mindfsOriginalPaddingLeft = page.style.paddingLeft;
+          page.dataset.mindfsOriginalPaddingRight = page.style.paddingRight;
+        }
+        page.style.setProperty("padding-left", page.dataset.mindfsOriginalPaddingLeft ?? "");
+        page.style.setProperty("padding-right", page.dataset.mindfsOriginalPaddingRight ?? "");
+        page.style.removeProperty("transform");
+        const intrinsicPageWidth = page.offsetWidth;
+        if (intrinsicPageWidth > 0) {
+          const pageStyle = window.getComputedStyle(page);
+          const previewMargin = Math.max(32, Math.min(64, intrinsicPageWidth * 0.06));
+          if (Number.parseFloat(pageStyle.paddingLeft || "0") > previewMargin) {
+            page.style.paddingLeft = `${previewMargin}px`;
+          }
+          if (Number.parseFloat(pageStyle.paddingRight || "0") > previewMargin) {
+            page.style.paddingRight = `${previewMargin}px`;
+          }
+        }
+
+        page.querySelectorAll<HTMLElement>("article > table").forEach((table) => {
+          if (table.dataset.mindfsOriginalWidth === undefined) {
+            table.dataset.mindfsOriginalWidth = table.style.width;
+            table.dataset.mindfsOriginalMaxWidth = table.style.maxWidth;
+            table.dataset.mindfsOriginalTableLayout = table.style.tableLayout;
+          }
+          table.style.setProperty("width", table.dataset.mindfsOriginalWidth ?? "");
+          table.style.setProperty("max-width", table.dataset.mindfsOriginalMaxWidth ?? "");
+          table.style.setProperty("table-layout", table.dataset.mindfsOriginalTableLayout ?? "");
+          const columns = Array.from(table.querySelectorAll<HTMLElement>("col"));
+          columns.forEach((column) => {
+            if (column.dataset.mindfsOriginalWidth === undefined) {
+              column.dataset.mindfsOriginalWidth = column.style.width;
+            }
+            column.style.setProperty("width", column.dataset.mindfsOriginalWidth ?? "");
+          });
+          const article = table.parentElement;
+          if (article && table.scrollWidth > article.clientWidth + 1) {
+            const columnWidths = columns.map((column) => column.getBoundingClientRect().width);
+            const totalColumnWidth = columnWidths.reduce((sum, width) => sum + width, 0);
+            if (totalColumnWidth > 0) {
+              columns.forEach((column, index) => {
+                column.style.setProperty("width", `${columnWidths[index] / totalColumnWidth * 100}%`, "important");
+              });
+            }
+            table.style.setProperty("width", "100%", "important");
+            table.style.setProperty("max-width", "100%", "important");
+            table.style.setProperty("table-layout", "fixed");
+          }
+        });
+
+        let shell = page.parentElement;
+        if (!shell?.classList.contains("mindfs-docx-page-shell")) {
+          shell = window.document.createElement("div");
+          shell.className = "mindfs-docx-page-shell";
+          page.before(shell);
+          shell.appendChild(page);
+        }
+
+        page.style.removeProperty("zoom");
+        const pageWidth = page.offsetWidth;
+        const pageHeight = Math.max(page.offsetHeight, page.scrollHeight);
+        if (pageWidth <= 0 || pageHeight <= 0) return;
+        const scale = Math.min(1.5, availableWidth / pageWidth);
+        page.style.transform = `scale(${scale})`;
+        page.style.transformOrigin = "top left";
+        shell.style.width = `${pageWidth * scale}px`;
+        shell.style.height = `${pageHeight * scale}px`;
+      });
+    };
+
+    const resizeObserver = new ResizeObserver(fitPages);
+    resizeObserver.observe(container);
     void import("docx-preview")
       .then(({ renderAsync }) => renderAsync(blob, container, undefined, {
         className: "mindfs-docx",
@@ -101,11 +184,16 @@ function WordPreview({ blob }: { blob: Blob }) {
         ignoreLastRenderedPageBreak: false,
         useBase64URL: true,
       }))
+      .then(() => {
+        rendered = true;
+        fitPages();
+      })
       .catch(() => {
         if (!cancelled) setError(true);
       });
     return () => {
       cancelled = true;
+      resizeObserver.disconnect();
       container.replaceChildren();
     };
   }, [blob]);

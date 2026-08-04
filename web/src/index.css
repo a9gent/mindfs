@@ -997,14 +997,20 @@ body[data-plugin-theme="1"] [data-slot="drawer-content"] {
   box-shadow: 0 6px 24px rgba(15, 23, 42, 0.14);
 }
 
-.document-preview-word .docx-wrapper {
+.document-preview-word .mindfs-docx-wrapper {
   padding: 16px !important;
   background: transparent !important;
 }
 
-.document-preview-word .docx-wrapper > section.docx {
+.document-preview-word .mindfs-docx-page-shell {
+  flex: 0 0 auto;
+  position: relative;
   margin: 0 auto 18px;
-  max-width: 100%;
+}
+
+.document-preview-word .mindfs-docx-page-shell > section.mindfs-docx {
+  margin: 0;
+  max-width: none;
   box-shadow: 0 6px 24px rgba(15, 23, 42, 0.14);
 }
 
@@ -1100,7 +1106,7 @@ body[data-plugin-theme="1"] [data-slot="drawer-content"] {
     padding: 10px 8px 24px;
   }
 
-  .document-preview-word .docx-wrapper {
+  .document-preview-word .mindfs-docx-wrapper {
     padding: 4px !important;
   }
 }
