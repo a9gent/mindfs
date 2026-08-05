@@ -1,6 +1,6 @@
 # MindFS
 
-[English](./README.md) | [简体中文](./README.zh.md) | [官网](https://relay.a9gent.com/) | [Discord](https://discord.gg/YPJMqeWSn) | [Twitter](https://x.com/yandc18) | [【微信群】](#微信群)
+[English](./README.md) | [简体中文](./README.zh.md) | [官网](https://relay.a9gent.com/) | [Discord](https://discord.gg/YPJMqeWSn) | [Twitter](https://x.com/yandc18) | [【微信群】](#微信群) | [竞品对比报告](./docs/remote-vibe-project-comparison.md) | [竞品对比ppt](./docs/remote-vibe-project-comparison.pdf)
 
 > **AI Agent 远程访问网关 · 结果可视化**
 
