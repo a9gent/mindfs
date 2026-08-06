@@ -179,6 +179,14 @@ type AgentConfigSwitchTab = "backup" | "api_provider";
 type AgentConfigSwitchSelection = { type: "backup" | "api_provider"; id: string };
 type AgentLifecycleCommandAction = "install" | "update";
 
+const AGENT_API_PROVIDER_PRESETS = [
+  {
+    id: "atlas-cloud",
+    name: "Atlas Cloud",
+    baseURL: "https://api.atlascloud.ai/v1",
+  },
+] as const;
+
 function isAgentConfigBackupConflict(error: unknown): boolean {
   const maybeError = error as { status?: unknown; message?: unknown; payload?: { error?: unknown; message?: unknown } } | null;
   if (!maybeError) {
@@ -847,6 +855,32 @@ function AgentConfigPopover({
             </>
           ) : (
             <>
+              <div style={agentConfigFieldStyle}>
+                <label style={agentConfigLabelStyle}>{t("agentConfig.providerPreset")}</label>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "6px" }}>
+                  {AGENT_API_PROVIDER_PRESETS.map((preset) => {
+                    const active = apiProviderName === preset.name && apiProviderBaseURL === preset.baseURL;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          onAPIProviderNameChange(preset.name);
+                          onAPIProviderBaseURLChange(preset.baseURL);
+                        }}
+                        style={{
+                          ...agentConfigSecondaryButtonStyle(busy),
+                          background: active ? "var(--selection-bg)" : "transparent",
+                          color: active ? "var(--accent-color)" : "var(--text-secondary)",
+                        }}
+                      >
+                        {preset.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               <div style={agentConfigFieldStyle}>
                 <label style={agentConfigLabelStyle}>{t("agentConfig.providerName")}</label>
                 <input

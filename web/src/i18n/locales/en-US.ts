@@ -94,6 +94,7 @@ export const enUS = {
   "agentConfig.env": "Environment variables",
   "agentConfig.envPlaceholder": "KEY=value, one per line",
   "agentConfig.providerName": "Provider name",
+  "agentConfig.providerPreset": "Provider preset",
   "agentConfig.validateAndSave": "Validate and save",
   "agentConfig.noSwitchableConfig": "No switchable configs",
   "agentConfig.noBackups": "No config backups",
