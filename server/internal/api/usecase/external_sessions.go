@@ -311,8 +311,17 @@ func (s *Service) SyncExternalSessionDelta(ctx context.Context, in SyncExternalS
 		Agent:          agentName,
 		AgentSessionID: binding.AgentSessionID,
 	}
+	// Child-agent JSONL files may keep growing without changing the root file.
+	// Keep the root cursor fast path only when there are no imported children.
+	children, err := manager.List(ctx, session.ListOptions{ParentSessionKey: current.Key, Limit: 1})
+	if err != nil {
+		return out, err
+	}
 	if !in.Full {
 		importInput.AfterTimestamp = lastTimestamp
+		if len(children) == 0 {
+			importInput.Cursor = binding.ExternalCursor()
+		}
 	}
 	imported, err := importer.ImportExternalSession(ctx, importInput)
 	if err != nil {
@@ -350,6 +359,11 @@ func (s *Service) SyncExternalSessionDelta(ctx context.Context, in SyncExternalS
 	subagentCount, err := syncImportedSubagentSessions(ctx, manager, latest, agentName, imported.Subagents)
 	if err != nil {
 		return out, err
+	}
+	if imported.Cursor.SourcePath != "" {
+		if err := manager.UpdateExternalSessionCursor(ctx, current.Key, agentName, imported.Cursor); err != nil {
+			return out, err
+		}
 	}
 	out.ImportedCount = importedCount + subagentCount
 	out.LastTimestamp = lastExternalSyncTimestamp(latest.Exchanges)

@@ -35,6 +35,32 @@ func TestManagerUsesSessionDBLink(t *testing.T) {
 	}
 }
 
+func TestManagerExternalCursorSurvivesAgentStateUpdate(t *testing.T) {
+	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
+	manager := NewManager(root)
+	created, err := manager.Create(context.Background(), CreateInput{Type: TypeChat, Agent: "codex", Name: "Cursor"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.UpsertAgentBinding(context.Background(), AgentBinding{SessionKey: created.Key, Agent: "codex", AgentSessionID: "external-1"}); err != nil {
+		t.Fatal(err)
+	}
+	cursor := agenttypes.ExternalSessionCursor{SourcePath: "/tmp/session.jsonl", Offset: 1234, ModTimeUnixNano: 5678}
+	if err := manager.UpdateExternalSessionCursor(context.Background(), created.Key, "codex", cursor); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.UpdateAgentState(context.Background(), created, "codex", 3, "external-1"); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := manager.GetAgentBinding(context.Background(), created.Key, "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.ExternalCursor() != cursor {
+		t.Fatalf("cursor = %#v, want %#v", binding.ExternalCursor(), cursor)
+	}
+}
+
 func TestManagerRecordRelatedWorktreeDoesNotOverwriteExisting(t *testing.T) {
 	rootDir := t.TempDir()
 	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)

@@ -89,6 +89,9 @@ CREATE TABLE IF NOT EXISTS session_agent_bindings (
 	agent TEXT NOT NULL,
 	agent_session_id TEXT NOT NULL,
 	agent_ctx_seq INTEGER NOT NULL DEFAULT 0,
+	external_source_path TEXT NOT NULL DEFAULT '',
+	external_source_offset INTEGER NOT NULL DEFAULT 0,
+	external_source_mtime_ns INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (session_key, agent)
 );`
 	upsertAgentBindingSQL = `
@@ -99,15 +102,15 @@ ON CONFLICT(session_key, agent) DO UPDATE SET
 	agent_session_id = excluded.agent_session_id,
 	agent_ctx_seq = excluded.agent_ctx_seq`
 	selectAgentBindingSQL = `
-SELECT session_key, agent, agent_session_id, agent_ctx_seq
+SELECT session_key, agent, agent_session_id, agent_ctx_seq, external_source_path, external_source_offset, external_source_mtime_ns
 FROM session_agent_bindings
 WHERE session_key = ? AND agent = ?`
 	selectAgentBindingsBySessionSQL = `
-SELECT session_key, agent, agent_session_id, agent_ctx_seq
+SELECT session_key, agent, agent_session_id, agent_ctx_seq, external_source_path, external_source_offset, external_source_mtime_ns
 FROM session_agent_bindings
 WHERE session_key = ?`
 	selectBindingByAgentSessionSQL = `
-SELECT session_key, agent, agent_session_id, agent_ctx_seq
+SELECT session_key, agent, agent_session_id, agent_ctx_seq, external_source_path, external_source_offset, external_source_mtime_ns
 FROM session_agent_bindings
 WHERE agent = ? AND agent_session_id = ?
 LIMIT 1`
@@ -148,10 +151,17 @@ type CreateInput struct {
 }
 
 type AgentBinding struct {
-	SessionKey     string `json:"session_key"`
-	Agent          string `json:"agent"`
-	AgentSessionID string `json:"agent_session_id"`
-	AgentCtxSeq    int    `json:"agent_ctx_seq"`
+	SessionKey            string `json:"session_key"`
+	Agent                 string `json:"agent"`
+	AgentSessionID        string `json:"agent_session_id"`
+	AgentCtxSeq           int    `json:"agent_ctx_seq"`
+	ExternalSourcePath    string `json:"external_source_path,omitempty"`
+	ExternalSourceOffset  int64  `json:"external_source_offset,omitempty"`
+	ExternalSourceMtimeNS int64  `json:"external_source_mtime_ns,omitempty"`
+}
+
+func (b AgentBinding) ExternalCursor() agenttypes.ExternalSessionCursor {
+	return agenttypes.ExternalSessionCursor{SourcePath: b.ExternalSourcePath, Offset: b.ExternalSourceOffset, ModTimeUnixNano: b.ExternalSourceMtimeNS}
 }
 
 type ListOptions struct {
@@ -772,6 +782,18 @@ func (m *Manager) UpsertAgentBinding(_ context.Context, binding AgentBinding) er
 	return m.upsertAgentBindingUnsafe(binding)
 }
 
+func (m *Manager) UpdateExternalSessionCursor(_ context.Context, sessionKey, agent string, cursor agenttypes.ExternalSessionCursor) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	db, err := m.ensureSessionMetaDBUnsafe()
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`UPDATE session_agent_bindings SET external_source_path = ?, external_source_offset = ?, external_source_mtime_ns = ? WHERE session_key = ? AND agent = ?`,
+		strings.TrimSpace(cursor.SourcePath), cursor.Offset, cursor.ModTimeUnixNano, strings.TrimSpace(sessionKey), strings.TrimSpace(agent))
+	return err
+}
+
 func (m *Manager) GetAgentBinding(_ context.Context, sessionKey, agent string) (*AgentBinding, error) {
 	if strings.TrimSpace(sessionKey) == "" {
 		return nil, errors.New("session key required")
@@ -787,7 +809,7 @@ func (m *Manager) GetAgentBinding(_ context.Context, sessionKey, agent string) (
 	}
 	row := db.QueryRow(selectAgentBindingSQL, strings.TrimSpace(sessionKey), strings.TrimSpace(agent))
 	var binding AgentBinding
-	if err := row.Scan(&binding.SessionKey, &binding.Agent, &binding.AgentSessionID, &binding.AgentCtxSeq); err != nil {
+	if err := scanAgentBinding(row, &binding); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errSessionNotFound
 		}
@@ -818,11 +840,12 @@ func (m *Manager) FindAgentBindingByAgentSession(_ context.Context, agent, agent
 		return nil, err
 	}
 	var binding AgentBinding
-	err = db.QueryRow(
+	row := db.QueryRow(
 		selectBindingByAgentSessionSQL,
 		strings.TrimSpace(agent),
 		strings.TrimSpace(agentSessionID),
-	).Scan(&binding.SessionKey, &binding.Agent, &binding.AgentSessionID, &binding.AgentCtxSeq)
+	)
+	err = scanAgentBinding(row, &binding)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -854,7 +877,7 @@ func (m *Manager) listAgentBindingsUnsafe(sessionKey string) ([]AgentBinding, er
 	bindings := make([]AgentBinding, 0)
 	for rows.Next() {
 		var binding AgentBinding
-		if err := rows.Scan(&binding.SessionKey, &binding.Agent, &binding.AgentSessionID, &binding.AgentCtxSeq); err != nil {
+		if err := scanAgentBinding(rows, &binding); err != nil {
 			return nil, err
 		}
 		bindings = append(bindings, binding)
@@ -863,6 +886,10 @@ func (m *Manager) listAgentBindingsUnsafe(sessionKey string) ([]AgentBinding, er
 		return nil, err
 	}
 	return bindings, nil
+}
+
+func scanAgentBinding(scanner rowScanner, binding *AgentBinding) error {
+	return scanner.Scan(&binding.SessionKey, &binding.Agent, &binding.AgentSessionID, &binding.AgentCtxSeq, &binding.ExternalSourcePath, &binding.ExternalSourceOffset, &binding.ExternalSourceMtimeNS)
 }
 
 func (m *Manager) upsertAgentBindingUnsafe(binding AgentBinding) error {
@@ -1761,6 +1788,9 @@ func openSessionMetaDB(dbFile string) (db *sql.DB, err error) {
 		`ALTER TABLE sessions ADD COLUMN last_context_window_total_tokens INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE sessions ADD COLUMN last_context_window_model_context_window INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE sessions ADD COLUMN pinned_at TEXT`,
+		`ALTER TABLE session_agent_bindings ADD COLUMN external_source_path TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE session_agent_bindings ADD COLUMN external_source_offset INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE session_agent_bindings ADD COLUMN external_source_mtime_ns INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 			db.Close()

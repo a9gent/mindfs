@@ -119,7 +119,7 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		return agenttypes.ImportedExternalSession{}, errors.New("agent session id required")
 	}
 	if file, ok := i.lookupSessionFile(targetID, rootPath); ok {
-		return i.importSessionFile(file, in.AfterTimestamp)
+		return i.importSessionFile(file, in.AfterTimestamp, in.Cursor)
 	}
 	files, err := i.scanSessionFiles(context.Background(), rootPath, time.Time{}, time.Time{}, int(^uint(0)>>1), nil)
 	if err != nil {
@@ -129,12 +129,19 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		if file.AgentSessionID != targetID {
 			continue
 		}
-		return i.importSessionFile(file, in.AfterTimestamp)
+		return i.importSessionFile(file, in.AfterTimestamp, in.Cursor)
 	}
 	return agenttypes.ImportedExternalSession{}, errors.New("external session not found")
 }
 
-func (i *Importer) importSessionFile(file claudeSessionFile, after time.Time) (agenttypes.ImportedExternalSession, error) {
+func (i *Importer) importSessionFile(file claudeSessionFile, after time.Time, previous agenttypes.ExternalSessionCursor) (agenttypes.ImportedExternalSession, error) {
+	cursor, unchanged, err := externalSessionFileCursor(file.Path, previous)
+	if err != nil {
+		return agenttypes.ImportedExternalSession{}, err
+	}
+	if unchanged {
+		return agenttypes.ImportedExternalSession{Agent: i.agentName, AgentSessionID: file.AgentSessionID, Cwd: file.Cwd, Cursor: cursor}, nil
+	}
 	exchanges, err := readClaudeImportedExchanges(file.Path, after)
 	if err != nil {
 		log.Printf("[agent/claude/importer] import session read failed session_id=%s path=%s err=%v", file.AgentSessionID, file.Path, err)
@@ -151,7 +158,18 @@ func (i *Importer) importSessionFile(file claudeSessionFile, after time.Time) (a
 		Cwd:            file.Cwd,
 		Exchanges:      exchanges,
 		Subagents:      subagents,
+		Cursor:         cursor,
 	}, nil
+}
+
+func externalSessionFileCursor(path string, previous agenttypes.ExternalSessionCursor) (agenttypes.ExternalSessionCursor, bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return agenttypes.ExternalSessionCursor{}, false, err
+	}
+	cursor := agenttypes.ExternalSessionCursor{SourcePath: filepath.Clean(path), Offset: info.Size(), ModTimeUnixNano: info.ModTime().UnixNano()}
+	unchanged := previous.Offset > 0 && filepath.Clean(previous.SourcePath) == cursor.SourcePath && previous.Offset == cursor.Offset && previous.ModTimeUnixNano == cursor.ModTimeUnixNano
+	return cursor, unchanged, nil
 }
 
 type claudeSubagentRelation struct {

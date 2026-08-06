@@ -30,6 +30,26 @@ func TestInspectCodexSessionFileSkipsInjectedUserPromptBlocks(t *testing.T) {
 	}
 }
 
+func TestExternalSessionFileCursorDetectsUnchangedAndChangedFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(path, []byte("one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cursor, unchanged, err := externalSessionFileCursor(path, agenttypes.ExternalSessionCursor{})
+	if err != nil || unchanged {
+		t.Fatalf("first cursor: unchanged=%v err=%v", unchanged, err)
+	}
+	if _, unchanged, err = externalSessionFileCursor(path, cursor); err != nil || !unchanged {
+		t.Fatalf("second cursor: unchanged=%v err=%v", unchanged, err)
+	}
+	if err := os.WriteFile(path, []byte("one\ntwo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, unchanged, err = externalSessionFileCursor(path, cursor); err != nil || unchanged {
+		t.Fatalf("changed cursor: unchanged=%v err=%v", unchanged, err)
+	}
+}
+
 func TestExtractCodexImportedUserTextDropsOnlyInjectedBlocks(t *testing.T) {
 	raw := []any{
 		map[string]any{"type": "input_text", "text": "<recommended_plugins>internal</recommended_plugins>"},

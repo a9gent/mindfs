@@ -343,6 +343,7 @@ func (s *Service) runSession(ctx context.Context, creds RelayCredentials) error 
 
 	wsConn := NewWebSocketNetConn(conn)
 	yamuxConfig := yamux.DefaultConfig()
+	yamuxConfig.MaxStreamWindowSize = 4 << 20
 	yamuxConfig.ConnectionWriteTimeout = 60 * time.Second
 	yamuxConfig.EnableKeepAlive = true
 	yamuxConfig.KeepAliveInterval = 30 * time.Second
