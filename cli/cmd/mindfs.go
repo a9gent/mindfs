@@ -76,6 +76,10 @@ func main() {
 	configFlag := flag.String("config", "", "mindfs startup config file; command-line flags override file values")
 	agentConfigFlag := flag.String("agent-config", "", "extra agents.json file for customizable agent(ACP-protocol) and shell")
 	notifyScriptFlag := flag.String("notify-script", "", "executable script for notification events; receives JSON payload on stdin")
+	feishuWebhookFlag := flag.String("feishu-webhook", "", "Feishu/Lark bot webhook URL for outbound notifications")
+	feishuAppIDFlag := flag.String("feishu-app-id", "", "Feishu app id for outbound IM notifications")
+	feishuAppSecretFlag := flag.String("feishu-app-secret", "", "Feishu app secret for outbound IM notifications")
+	feishuChatIDFlag := flag.String("feishu-chat-id", "", "Feishu chat id (receive_id) for outbound IM notifications")
 	remove := flag.Bool("remove", false, "remove the managed directory")
 	taskNumber := flag.String("task", "", "task number for task stage control; defaults to status when set")
 	taskNext := flag.Bool("next", false, "advance task to next stage")
@@ -90,7 +94,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
-	applyStartupConfig(startupCfg, explicitFlags, addr, noRelayer, e2eeFlag, webPushFlag, foreground, bindRelay, tlsFlag, certFlag, keyFlag, agentConfigFlag, notifyScriptFlag)
+	applyStartupConfig(startupCfg, explicitFlags, addr, noRelayer, e2eeFlag, webPushFlag, foreground, bindRelay, tlsFlag, certFlag, keyFlag, agentConfigFlag, notifyScriptFlag, feishuWebhookFlag, feishuAppIDFlag, feishuAppSecretFlag, feishuChatIDFlag)
 	if *versionFlag {
 		printVersion()
 		return
@@ -285,6 +289,10 @@ func main() {
 			E2EEConfig:      e2eeResult.Config,
 			WebPushEnabled:  *webPushFlag,
 			NotifyScript:    *notifyScriptFlag,
+			FeishuWebhook:   *feishuWebhookFlag,
+			FeishuAppID:     *feishuAppIDFlag,
+			FeishuAppSecret: *feishuAppSecretFlag,
+			FeishuChatID:    *feishuChatIDFlag,
 			UseTLS:          *tlsFlag,
 			CertFile:        resolvedCert,
 			KeyFile:         resolvedKey,
@@ -389,8 +397,12 @@ type startupConfig struct {
 	TLS           *bool   `json:"tls"`
 	Cert          *string `json:"cert"`
 	Key           *string `json:"key"`
-	AgentConfig   *string `json:"agent-config"`
-	NotifyScript  *string `json:"notify-script"`
+	AgentConfig     *string `json:"agent-config"`
+	NotifyScript    *string `json:"notify-script"`
+	FeishuWebhook   *string `json:"feishu-webhook"`
+	FeishuAppID     *string `json:"feishu-app-id"`
+	FeishuAppSecret *string `json:"feishu-app-secret"`
+	FeishuChatID    *string `json:"feishu-chat-id"`
 }
 
 func loadStartupConfig(path string) (startupConfig, error) {
@@ -431,6 +443,10 @@ func applyStartupConfig(
 	key *string,
 	agentConfig *string,
 	notifyScript *string,
+	feishuWebhook *string,
+	feishuAppID *string,
+	feishuAppSecret *string,
+	feishuChatID *string,
 ) {
 	if cfg.Addr != nil && !explicit["addr"] {
 		*addr = strings.TrimSpace(*cfg.Addr)
@@ -464,6 +480,18 @@ func applyStartupConfig(
 	}
 	if cfg.NotifyScript != nil && !explicit["notify-script"] {
 		*notifyScript = strings.TrimSpace(*cfg.NotifyScript)
+	}
+	if cfg.FeishuWebhook != nil && !explicit["feishu-webhook"] {
+		*feishuWebhook = strings.TrimSpace(*cfg.FeishuWebhook)
+	}
+	if cfg.FeishuAppID != nil && !explicit["feishu-app-id"] {
+		*feishuAppID = strings.TrimSpace(*cfg.FeishuAppID)
+	}
+	if cfg.FeishuAppSecret != nil && !explicit["feishu-app-secret"] {
+		*feishuAppSecret = strings.TrimSpace(*cfg.FeishuAppSecret)
+	}
+	if cfg.FeishuChatID != nil && !explicit["feishu-chat-id"] {
+		*feishuChatID = strings.TrimSpace(*cfg.FeishuChatID)
 	}
 }
 
