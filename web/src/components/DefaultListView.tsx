@@ -357,6 +357,7 @@ function Breadcrumbs({
             </span>
           ) : (
             <span
+              data-onboarding="project-home"
               onClick={() => onPathClick?.(".")}
               style={{
                 ...rootBadgeStyle,
@@ -612,6 +613,7 @@ export function DefaultListView({
           <div ref={menuRef} style={{ position: "relative" }}>
             <button
               type="button"
+              data-onboarding="main-menu"
               onClick={() => {
                 setIsMenuOpen((open) => {
                   const nextOpen = !open;

@@ -68,6 +68,8 @@ export function ExternalSessionList({
     <div
       style={{
         flex: 1,
+        width: "100%",
+        minWidth: 0,
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
@@ -75,6 +77,7 @@ export function ExternalSessionList({
       }}
     >
       <div
+        data-onboarding="session-actions"
         style={{
           height: "36px",
           display: "flex",

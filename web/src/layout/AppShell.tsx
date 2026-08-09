@@ -44,6 +44,7 @@ const sidebarStyle: React.CSSProperties = {
   flexDirection: "column",
   position: "relative",
   zIndex: 10,
+  minWidth: 0,
 };
 
 const mainStyle: React.CSSProperties = {
@@ -68,6 +69,7 @@ const rightStyle: React.CSSProperties = {
   flexDirection: "column",
   position: "relative",
   zIndex: 10,
+  minWidth: 0,
 };
 
 const footerStyle: React.CSSProperties = {
@@ -181,7 +183,7 @@ export function AppShell({
   };
 
   return (
-    <div style={shellStyle}>
+    <div style={shellStyle} data-onboarding="shell">
       {isMobile && <div style={overlayStyle} onClick={() => { onCloseLeft?.(); onCloseRight?.(); }} />}
 
       {(!isMobile || physicalLeftOpen) && physicalLeftContent ? (

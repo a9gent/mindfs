@@ -451,6 +451,8 @@ export function SessionList({
     <div
       style={{
         flex: 1,
+        width: "100%",
+        minWidth: 0,
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
@@ -459,6 +461,7 @@ export function SessionList({
     >
       {/* 统一的 Header 边栏 */}
       <div
+        data-onboarding="session-actions"
         style={{
           height: "36px",
           display: "flex",
@@ -957,8 +960,9 @@ export function MultiProjectSessionList({
   };
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "transparent" }}>
+    <div style={{ flex: 1, width: "100%", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", background: "transparent" }}>
       <div
+        data-onboarding="session-actions"
         style={{
           height: "36px",
           display: "flex",

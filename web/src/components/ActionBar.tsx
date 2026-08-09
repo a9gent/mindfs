@@ -1235,7 +1235,7 @@ export function ActionBar({
   ) : null;
 
   return (
-    <div style={{ width: "100%", minWidth: 0, padding: isMobile ? "0 0 var(--mindfs-actionbar-bottom-padding, calc(env(safe-area-inset-bottom, 0px) + 2px))" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
+    <div data-onboarding="action-bar" style={{ width: "100%", minWidth: 0, padding: isMobile ? "0 0 var(--mindfs-actionbar-bottom-padding, calc(env(safe-area-inset-bottom, 0px) + 2px))" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
       <div style={{ width: "100%", minWidth: 0, display: "flex", flexDirection: "column", gap: isMobile ? "0" : "6px" }}>
         {queuedMessages.length > 0 ? (
           <div
@@ -1516,6 +1516,7 @@ export function ActionBar({
 
             <div
               data-mindfs-command-input-width="1"
+              data-onboarding="message-input"
               style={{
                 background: "var(--panel-bg)",
                 border: isFocused
@@ -1668,8 +1669,9 @@ export function ActionBar({
               }}
             />
 
-            <div style={{ position: "absolute", right: isMobile ? "4px" : "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: isMobile ? "0px" : "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
+            <div data-onboarding="input-controls" style={{ position: "absolute", right: isMobile ? "4px" : "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: isMobile ? "0px" : "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
               <div
+                data-onboarding="session-ring"
                 onMouseDown={handleDragStart}
                 onTouchStart={handleDragStart}
                 onClick={() => {
@@ -1746,10 +1748,11 @@ export function ActionBar({
                 ) : null}
               </div>
 
-              <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} />
-              {mode !== "command" ? (
-                <div>
-                  <AgentSelector
+              <>
+                <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} onboardingId="mode-selector" />
+                {mode !== "command" ? (
+                  <div>
+                    <AgentSelector
                     agent={agent}
                     model={model}
                     mode={agentMode}
@@ -1776,18 +1779,22 @@ export function ActionBar({
                     compact={true}
                     warnUnavailable={isSelectedAgentUnavailable}
                     defaultExpandOptions
+                    onboardingId="agent-selector"
+                    />
+                  </div>
+                ) : (
+                  <ShellSelector
+                    shell={shell}
+                    shells={shells}
+                    onShellChange={setShell}
+                    compact={true}
                   />
-                </div>
-              ) : (
-                <ShellSelector
-                  shell={shell}
-                  shells={shells}
-                  onShellChange={setShell}
-                  compact={true}
-                />
-              )}
+                )}
+              </>
 
-              <button
+              <>
+                <button
+                data-onboarding="attachment-action"
                 type="button"
                 onClick={() => attachmentInputRef.current?.click()}
                 disabled={!currentRootId || sending}
@@ -1815,8 +1822,9 @@ export function ActionBar({
                   <path d="M12 5v14" />
                   <path d="M5 12h14" />
                 </svg>
-              </button>
-              <button
+                </button>
+                <button
+                data-onboarding="send-action"
                 type="button"
                 onClick={showCancel ? handleCancel : handleSend}
                 disabled={showCancel ? cancelling : !canSend}
@@ -1829,7 +1837,8 @@ export function ActionBar({
                 ) : (
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
                 )}
-              </button>
+                </button>
+              </>
               <input
                 ref={attachmentInputRef}
                 type="file"

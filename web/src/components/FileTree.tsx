@@ -140,6 +140,7 @@ type FileTreeProps = {
   creatingRootSubmitOnBlur?: boolean;
   onCreateRootStart?: () => void;
   onOpenProjectAdd?: () => void;
+  onStartOnboarding?: () => void;
   onCreateRootNameChange?: (name: string) => void;
   onCreateRootSubmit?: () => void;
   onCreateRootCancel?: () => void;
@@ -488,6 +489,15 @@ function TrashIcon() {
       <path d="M19 6l-1 14H6L5 6" />
       <path d="M10 11v5" />
       <path d="M14 11v5" />
+    </svg>
+  );
+}
+
+function OnboardingGuideIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 2048 2048" aria-hidden="true">
+      <path d="M0 0h2048v2048H0z" fill="none" />
+      <path fill="currentColor" d="M2048 512v1536H0V512h517q-2-16-3-32t-2-32q0-93 35-174t96-143t142-96T960 0q93 0 174 35t143 96t96 142t35 175q0 16-1 32t-4 32zM960 128q-66 0-124 25t-102 69t-69 102t-25 124t25 124t68 102t102 69t125 25t124-25t101-68t69-102t26-125t-25-124t-69-101t-102-69t-124-26m960 512h-555q-25 52-62 97t-85 77q103 40 186 106t140 152t89 188t31 212v64h-128v-64q0-123-44-228t-121-183t-182-121t-229-44q-111 0-210 38t-176 107t-126 162t-61 205h648l-230-230l91-90l384 384l-384 384l-91-90l230-230H256v-64q0-110 31-211t90-187t141-152t185-107q-98-69-148-175H128v1280h1792z" />
     </svg>
   );
 }
@@ -1318,6 +1328,7 @@ export function FileTree({
   creatingRootSubmitOnBlur = true,
   onCreateRootStart,
   onOpenProjectAdd,
+  onStartOnboarding,
   onCreateRootNameChange,
   onCreateRootSubmit,
   onCreateRootCancel,
@@ -2494,6 +2505,7 @@ export function FileTree({
         <div style={{ display: "flex", alignItems: "center", minWidth: 0, flex: "1 1 auto", maxWidth: "calc(100% - 34px)" }}>
           <div
             role="tablist"
+            data-onboarding="project-tabs"
             aria-label={t("fileTree.projectTabs")}
             style={{
               display: "flex",
@@ -2560,6 +2572,7 @@ export function FileTree({
         <div ref={menuRef} style={{ position: "relative", flexShrink: 0 }}>
           <button
             type="button"
+            data-onboarding="sidebar-menu"
             onClick={() => {
               setIsMenuOpen((open) => {
                 const nextOpen = !open;
@@ -2878,6 +2891,22 @@ export function FileTree({
                 );
               }) : null}
               <div style={{ height: "1px", background: "var(--border-color)", margin: "6px 4px" }} />
+              {onStartOnboarding ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onStartOnboarding();
+                    setIsMenuOpen(false);
+                    setIsAppearanceMenuOpen(false);
+                    setIsLocaleMenuOpen(false);
+                    setIsSortMenuOpen(false);
+                  }}
+                  style={fileTreeMenuButtonStyle}
+                >
+                  <OnboardingGuideIcon />
+                  <span>{t("onboarding.menu")}</span>
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => {

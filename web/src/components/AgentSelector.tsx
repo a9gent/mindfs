@@ -27,6 +27,7 @@ type AgentSelectorProps = {
   menuPlacement?: "top" | "bottom";
   showChevron?: boolean;
   defaultExpandOptions?: boolean;
+  onboardingId?: string;
 };
 
 const AGENT_MENU_MAX_BODY_HEIGHT = 344;
@@ -138,6 +139,7 @@ export function AgentSelector({
   menuPlacement = "top",
   showChevron = false,
   defaultExpandOptions = false,
+  onboardingId,
 }: AgentSelectorProps) {
   const { t } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
@@ -401,7 +403,7 @@ export function AgentSelector({
   );
 
   return (
-    <div ref={dropdownRef} style={{ position: "relative" }}>
+    <div ref={dropdownRef} data-onboarding={onboardingId} style={{ position: "relative" }}>
       <style>{`
         @keyframes agent-refresh-spin {
           from { transform: rotate(0deg); }

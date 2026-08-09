@@ -9,6 +9,7 @@ type ModeSelectorProps = {
   onModeChange: (mode: SessionMode) => void;
   compact?: boolean;
   disabled?: boolean;
+  onboardingId?: string;
 };
 
 const modeLabelKeys: Record<SessionMode, MessageKey> = {
@@ -22,6 +23,7 @@ export function ModeSelector({
   onModeChange,
   compact = false,
   disabled = false,
+  onboardingId,
 }: ModeSelectorProps) {
   const { t } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
@@ -54,7 +56,7 @@ export function ModeSelector({
   );
 
   return (
-    <div ref={dropdownRef} style={{ position: "relative" }}>
+    <div ref={dropdownRef} data-onboarding={onboardingId} style={{ position: "relative" }}>
       <button
         type="button"
         onClick={() => {
