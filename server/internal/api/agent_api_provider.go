@@ -390,9 +390,9 @@ func applyAgentAPIProvider(agentName string, provider agentAPIProvider, app *App
 			return err
 		}
 	case "claude":
-		env, err := mergeAgentEnvConfig(agentName, map[string]string{
-			"ANTHROPIC_BASE_URL": provider.BaseURL,
-			"ANTHROPIC_API_KEY":  provider.APIKey,
+		env, err := replaceAgentConfiguredEnv(agentName, map[string]string{
+			"ANTHROPIC_BASE_URL":   provider.BaseURL,
+			"ANTHROPIC_AUTH_TOKEN": provider.APIKey,
 		})
 		if err != nil {
 			return err
@@ -862,6 +862,14 @@ func applyHermesAPIProvider(provider agentAPIProvider) error {
 }
 
 func mergeAgentEnvConfig(agentName string, updates map[string]string) (map[string]string, error) {
+	return writeAgentEnvConfig(agentName, updates, false)
+}
+
+func replaceAgentConfiguredEnv(agentName string, updates map[string]string) (map[string]string, error) {
+	return writeAgentEnvConfig(agentName, updates, true)
+}
+
+func writeAgentEnvConfig(agentName string, updates map[string]string, clearConfigured bool) (map[string]string, error) {
 	path, err := agent.ResolveConfigPath()
 	if err != nil {
 		return nil, err
@@ -880,6 +888,11 @@ func mergeAgentEnvConfig(agentName string, updates map[string]string) (map[strin
 		merged = cloneStringMap(cfg.Agents[i].Env)
 		if merged == nil {
 			merged = map[string]string{}
+		}
+		if clearConfigured {
+			for _, key := range cfg.Agents[i].ConfigBackup.EnvKeys {
+				delete(merged, key)
+			}
 		}
 		for key, value := range updates {
 			if strings.TrimSpace(value) == "" {
