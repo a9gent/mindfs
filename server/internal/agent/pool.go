@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -263,6 +264,51 @@ func (p *Pool) Config() Config {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.cfg
+}
+
+func (p *Pool) CodexRateLimits(ctx context.Context, agentName string) (codex.RateLimitStatus, error) {
+	opts, err := p.codexRuntimeOptions(agentName)
+	if err != nil {
+		return codex.RateLimitStatus{}, err
+	}
+	return p.codex.ReadRateLimits(ctx, opts)
+}
+
+func (p *Pool) ConsumeCodexRateLimitReset(ctx context.Context, agentName, idempotencyKey, creditID string) (codex.ConsumeRateLimitResetResult, error) {
+	opts, err := p.codexRuntimeOptions(agentName)
+	if err != nil {
+		return codex.ConsumeRateLimitResetResult{}, err
+	}
+	return p.codex.ConsumeRateLimitReset(ctx, opts, idempotencyKey, creditID)
+}
+
+func (p *Pool) codexRuntimeOptions(agentName string) (codex.OpenOptions, error) {
+	agentName = strings.TrimSpace(agentName)
+	if agentName == "" {
+		return codex.OpenOptions{}, errors.New("agent required")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return codex.OpenOptions{}, errors.New("agent pool closed")
+	}
+	def, ok := p.cfg.GetAgent(agentName)
+	if !ok {
+		return codex.OpenOptions{}, errors.New("agent not configured: " + agentName)
+	}
+	protocol := def.Protocol
+	if protocol == "" {
+		protocol = DefaultProtocol(agentName)
+	}
+	if protocol != ProtocolCodexSDK {
+		return codex.OpenOptions{}, errors.New("agent does not use codex-sdk: " + agentName)
+	}
+	return codex.OpenOptions{
+		AgentName: agentName,
+		Command:   def.Command,
+		Args:      append([]string(nil), def.Args...),
+		Env:       cloneEnv(def.Env),
+	}, nil
 }
 
 func (p *Pool) UpdateConfig(cfg Config) Config {

@@ -138,6 +138,7 @@ type FileTreeProps = {
   renderRootRelatedContent?: (rootId: string) => React.ReactNode;
   projectTreeTabRequest?: { tab: ProjectTreeTab; nonce: number } | null;
   agentConfigSwitchRequest?: AgentConfigSwitchRequest | null;
+  onAgentConfigSwitched?: (agent: string) => void;
   onProjectTreeTabChange?: (tab: ProjectTreeTab) => void;
   creatingRootName?: string | null;
   creatingRootBusy?: boolean;
@@ -1326,6 +1327,7 @@ export function FileTree({
   renderRootRelatedContent,
   projectTreeTabRequest = null,
   agentConfigSwitchRequest = null,
+  onAgentConfigSwitched,
   onProjectTreeTabChange,
   creatingRootName = null,
   creatingRootBusy = false,
@@ -2196,6 +2198,7 @@ export function FileTree({
     try {
       if (agentConfigSwitchSelection.type === "api_provider") {
         await switchAgentAPIProvider({ agent: agentConfigAgent, providerID: agentConfigSwitchSelection.id });
+        onAgentConfigSwitched?.(agentConfigAgent);
         closeAgentConfigFlow();
         return;
       }
@@ -2205,13 +2208,14 @@ export function FileTree({
         setAgentConfigStep("confirm");
         return;
       }
+      onAgentConfigSwitched?.(agentConfigAgent);
       closeAgentConfigFlow();
     } catch (error) {
       setAgentConfigError(error instanceof Error ? error.message : t("agentConfig.switchFailed"));
     } finally {
       setAgentConfigBusy(false);
     }
-  }, [agentConfigAgent, agentConfigSwitchSelection, closeAgentConfigFlow, t]);
+  }, [agentConfigAgent, agentConfigSwitchSelection, closeAgentConfigFlow, onAgentConfigSwitched, t]);
 
   const deleteSelectedAgentConfigBackup = React.useCallback(async (id: string) => {
     const trimmedID = String(id || "").trim();

@@ -107,7 +107,7 @@ export function WorktreeBranchSelector({
           height: `${height}px`,
           borderRadius: "6px",
           border: open ? "1px solid var(--accent-color)" : "1px solid var(--border-color)",
-          background: "var(--menu-bg)",
+          background: "var(--mobile-overlay-bg)",
           color: "var(--text-primary)",
           display: "flex",
           alignItems: "center",

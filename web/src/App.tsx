@@ -1654,6 +1654,7 @@ export function App({ onGoHome }: AppProps) {
     "main",
   );
   const [agentsVersion, setAgentsVersion] = useState(0);
+  const [codexRateLimitsRefreshToken, setCodexRateLimitsRefreshToken] = useState(0);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const { isMobile, isTablet } = useResponsive();
   const [mobileEnterKeySends, setMobileEnterKeySends] = useState(loadMobileEnterKeySends);
@@ -9198,6 +9199,7 @@ export function App({ onGoHome }: AppProps) {
             event.data?.contextWindow,
           );
           tokenStationRefreshRef.current?.();
+          setCodexRateLimitsRefreshToken((value) => value + 1);
           break;
         case "error":
           reportError(
@@ -11259,6 +11261,12 @@ export function App({ onGoHome }: AppProps) {
     );
   };
   const currentRootSlashCommandResult = slashCommandResultForSession(currentRootId, null);
+  const sessionViewerComposerOverlayInset =
+    String((actionBarSession as any)?.agent || "").toLowerCase() === "codex" ||
+    (actionBarSession as any)?.plan_mode ||
+    pendingPlanMode
+      ? 20
+      : 0;
   const sessionView = (
     <SessionViewer
       session={selectedSessionSnapshot}
@@ -11269,6 +11277,7 @@ export function App({ onGoHome }: AppProps) {
       )}
       targetSeq={selectedSession?.search_seq}
       targetSeqRequestKey={selectedSession?.search_target_id}
+      composerOverlayInset={sessionViewerComposerOverlayInset}
       loading={selectedSessionLoading}
       rootId={selectedSession?.root_id || currentRootId}
       rootPath={
@@ -14077,6 +14086,11 @@ export function App({ onGoHome }: AppProps) {
             renderRootRelatedContent={renderRootRelatedContent}
             projectTreeTabRequest={projectTreeTabRequest}
             agentConfigSwitchRequest={agentConfigSwitchRequest}
+            onAgentConfigSwitched={(agentName) => {
+              if (agentName.trim().toLowerCase() === "codex") {
+                setCodexRateLimitsRefreshToken((value) => value + 1);
+              }
+            }}
             onProjectTreeTabChange={setProjectTreeTab}
             relayActionLabel={relayActionLabel}
             relayActionDisabled={relayActionDisabled}
@@ -14181,6 +14195,7 @@ export function App({ onGoHome }: AppProps) {
             <ActionBar
               status={status}
               agentsVersion={agentsVersion}
+              codexRateLimitsRefreshToken={codexRateLimitsRefreshToken}
               currentRootId={currentRootId}
               currentRootIsGitRepo={managedRootByIdRef.current[currentRootId || ""]?.is_git_repo === true}
               currentSession={actionBarSession}
