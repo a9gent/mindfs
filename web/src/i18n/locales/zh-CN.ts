@@ -282,6 +282,7 @@ export const zhCN = {
   "sessionList.pin": "置顶",
   "sessionList.unpin": "取消置顶",
   "sessionList.childCount": "{count} 个子会话",
+  "sessionList.confirmRename": "确认重命名",
   "sessionList.cancelRename": "取消重命名",
   "sessionList.syncing": "同步中",
   "sessionList.sync": "同步",

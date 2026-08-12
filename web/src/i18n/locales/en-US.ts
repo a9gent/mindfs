@@ -284,6 +284,7 @@ export const enUS = {
   "sessionList.pin": "Pin",
   "sessionList.unpin": "Unpin",
   "sessionList.childCount": "{count} child sessions",
+  "sessionList.confirmRename": "Confirm rename",
   "sessionList.cancelRename": "Cancel rename",
   "sessionList.syncing": "Syncing",
   "sessionList.sync": "Sync",

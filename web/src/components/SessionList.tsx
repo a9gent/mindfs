@@ -1349,7 +1349,7 @@ function SessionCard({
       <div
         style={{
           textAlign: "left" as const,
-          padding: "7px 4px 7px 2px",
+          padding: editing ? "7px 0 7px 2px" : "7px 4px 7px 2px",
           borderRadius: "8px",
           border: "1px solid transparent",
           background: rowBackground,
@@ -1588,9 +1588,40 @@ function SessionCard({
               flexShrink: 0,
               display: "inline-flex",
               alignItems: "center",
-              gap: "4px",
+              gap: 0,
             }}
           >
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => {
+                e.stopPropagation();
+                void submitRename();
+              }}
+              disabled={saving}
+              aria-label={t("sessionList.confirmRename")}
+              style={{
+                ...inlineActionStyle,
+                width: "18px",
+                color: "var(--accent-color)",
+                opacity: saving ? 0.6 : 1,
+                cursor: saving ? "default" : "pointer",
+              }}
+            >
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            </button>
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
@@ -1602,6 +1633,7 @@ function SessionCard({
               aria-label={t("sessionList.cancelRename")}
               style={{
                 ...inlineActionStyle,
+                width: "18px",
                 opacity: saving ? 0.6 : 1,
                 cursor: saving ? "default" : "pointer",
               }}
