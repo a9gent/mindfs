@@ -8590,20 +8590,48 @@ export function App({ onGoHome }: AppProps) {
       interactionModeRef.current = "drawer";
       setInteractionMode("drawer");
       setDrawerOpenForRoot(root, true);
-      void restoreActiveSession(root, key).then((restored) => {
-        if (!restored) return;
+      const applyDrawerSession = (session: Session) => {
+        const activeDrawer = drawerSessionByRootRef.current[root];
+        if ((activeDrawer?.key || activeDrawer?.session_key) !== key) return;
         setDrawerSessionForRoot(root, {
-          ...(restored as any),
+          ...(activeDrawer as any),
+          ...(session as any),
           key,
           session_key: key,
           root_id: root,
-          task_id: (restored as any)?.task_id || taskId || "",
+          task_id: (session as any)?.task_id || taskId || "",
         } as Session);
+      };
+      void (async () => {
+        const restorePromise = restoreActiveSession(root, key);
+        if (!hasSessionExchanges(cached)) {
+          const persisted = await getCachedSession(root, key);
+          const latest = sessionCacheRef.current[cacheKey];
+          const immediate = hasSessionExchanges(latest) ? latest : persisted;
+          if (immediate) {
+            sessionCacheRef.current[cacheKey] = {
+              ...(immediate as any),
+              key,
+            } as Session;
+            bumpCacheVersion();
+            applyDrawerSession(immediate);
+          }
+        }
+        const restored = await restorePromise;
+        if (!restored) return;
+        applyDrawerSession(restored);
         loadedSessionRef.current[cacheKey] = true;
         clearSessionStale(root, key);
+      })().catch((error) => {
+        console.error("[task.session] failed to open drawer session", {
+          root,
+          sessionKey: key,
+          error,
+        });
       });
     },
     [
+      bumpCacheVersion,
       clearSessionStale,
       restoreActiveSession,
       rootSessionKey,
