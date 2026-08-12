@@ -12771,10 +12771,19 @@ export function App({ onGoHome }: AppProps) {
                             fontSize: "12px",
                             lineHeight: "18px",
                             fontWeight: firstInput ? 700 : 500,
+                            ...(!isAllTaskTemplateFilter
+                              ? {
+                                  display: "flex",
+                                  alignItems: "flex-start",
+                                  gap: "6px",
+                                  minWidth: 0,
+                                }
+                              : {}),
                           }}
                         >
                           <div
                             style={{
+                              ...(!isAllTaskTemplateFilter ? { flex: "1 1 auto", minWidth: 0 } : {}),
                               whiteSpace: "pre-wrap",
                               wordBreak: "break-word",
                               ...(!inputExpanded
@@ -12787,21 +12796,21 @@ export function App({ onGoHome }: AppProps) {
                                 : {}),
                             }}
                           >
-                            {!isAllTaskTemplateFilter ? (
-                              <span
-                                title={taskWorktreeEnabled ? t("task.worktreeTitle") : t("task.noWorktreeTitle")}
-                                aria-label={taskWorktreeEnabled ? t("task.worktreeTitle") : t("task.noWorktreeTitle")}
-                                style={{ ...taskWorktreeTagStyle(taskWorktreeEnabled), float: "right", marginLeft: "6px" }}
-                              >
-                                {taskWorktreeEnabled ? null : <NoWorktreeIcon />}
-                                worktree
-                              </span>
-                            ) : null}
                             {!isAllTaskTemplateFilter && taskNumberLabel ? (
                               <span style={{ color: "#0ea5e9", fontWeight: 800, marginRight: "6px" }}>{taskNumberLabel}</span>
                             ) : null}
                             {firstInput ? <InlineTokenText content={firstInput} /> : <span>{t("task.noInput")}</span>}
                           </div>
+                          {!isAllTaskTemplateFilter ? (
+                            <span
+                              title={taskWorktreeEnabled ? t("task.worktreeTitle") : t("task.noWorktreeTitle")}
+                              aria-label={taskWorktreeEnabled ? t("task.worktreeTitle") : t("task.noWorktreeTitle")}
+                              style={taskWorktreeTagStyle(taskWorktreeEnabled)}
+                            >
+                              {taskWorktreeEnabled ? null : <NoWorktreeIcon />}
+                              worktree
+                            </span>
+                          ) : null}
                         </div>
                         <div style={{ marginTop: "8px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "4px" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
