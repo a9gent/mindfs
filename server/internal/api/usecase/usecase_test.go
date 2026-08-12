@@ -1599,6 +1599,36 @@ func TestBuildUserPromptSelectionOnly(t *testing.T) {
 	}
 }
 
+func TestBuildPromptAddsReplyTipsOnlyToInitialStandardMessage(t *testing.T) {
+	service := &Service{}
+
+	initial := service.BuildPrompt(BuildPromptInput{
+		Message:   "hello",
+		IsInitial: true,
+	})
+	if !strings.HasPrefix(initial, replyTips+"\n\n[USER_PROMPT]\nhello") {
+		t.Fatalf("initial prompt does not begin with reply tips and user prompt marker: %q", initial)
+	}
+
+	followup := service.BuildPrompt(BuildPromptInput{
+		Message: "hello again",
+	})
+	if strings.Contains(followup, "[REPLY_TIPS]") {
+		t.Fatalf("follow-up prompt unexpectedly contains reply tips: %q", followup)
+	}
+
+	plugin := service.BuildPrompt(BuildPromptInput{
+		Message:   "build a plugin",
+		IsInitial: true,
+		ClientContext: ClientContext{
+			PluginCatalog: "plugin catalog",
+		},
+	})
+	if strings.Contains(plugin, "[REPLY_TIPS]") {
+		t.Fatalf("plugin prompt unexpectedly contains reply tips: %q", plugin)
+	}
+}
+
 func TestSessionNameScore(t *testing.T) {
 	testCases := []struct {
 		name    string

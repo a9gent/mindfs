@@ -1057,6 +1057,8 @@ func (s *Service) BuildPrompt(in BuildPromptInput) string {
 	prompt := buildUserPrompt(in.Message, clientCtx)
 	if strings.TrimSpace(clientCtx.PluginCatalog) != "" {
 		prompt = buildPluginPrompt(clientCtx.PluginCatalog, in.Message, in.IsInitial)
+	} else if in.IsInitial {
+		prompt = prependReplyTips(prompt)
 	}
 	return prependSwitchHint(in, prompt)
 }
@@ -1578,6 +1580,15 @@ func cancelRuntimeAfterNonRecoverableError(sess agenttypes.Session, pool *agent.
 
 func contextLineCount(exchanges []session.Exchange) int {
 	return len(exchanges)
+}
+
+const replyTips = "[REPLY_TIPS]\n\n" +
+	"- MindFS supports GitHub-flavored Markdown, fenced `mermaid` diagrams, mathematical formulas, and Markdown images.\n" +
+	"- When a useful workspace image exists, embed it with `![alt](path)` and prefer a workspace-root-relative path.\n" +
+	"- Never invent file paths or URLs. Use images or diagrams only when they materially improve the reply."
+
+func prependReplyTips(prompt string) string {
+	return replyTips + "\n\n[USER_PROMPT]\n" + strings.TrimSpace(prompt)
 }
 
 func buildUserPrompt(message string, clientCtx ClientContext) string {
