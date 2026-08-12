@@ -21,7 +21,13 @@ type Store struct {
 }
 
 type UserPreferences struct {
-	Agents map[string]AgentDefaults `json:"agents,omitempty"`
+	Agents        map[string]AgentDefaults `json:"agents,omitempty"`
+	SessionNaming SessionNamingDefaults    `json:"session_naming,omitempty"`
+}
+
+type SessionNamingDefaults struct {
+	Agent string `json:"agent,omitempty"`
+	Model string `json:"model,omitempty"`
 }
 
 type AgentDefaults struct {
@@ -137,6 +143,35 @@ func (s *Store) UpdateAgentLastConfigSelection(agentName string, selection LastC
 	}
 	next.LastConfigSelection = &selection
 	s.data.Agents[agentName] = next
+	return s.saveLocked()
+}
+
+func (s *Store) SessionNamingDefaults() SessionNamingDefaults {
+	if s == nil {
+		return SessionNamingDefaults{}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.SessionNaming
+}
+
+func (s *Store) UpdateSessionNamingDefaults(agentName, model string) error {
+	if s == nil {
+		return nil
+	}
+	next := SessionNamingDefaults{
+		Agent: strings.TrimSpace(agentName),
+		Model: strings.TrimSpace(model),
+	}
+	if next.Agent == "" {
+		return errors.New("session naming agent is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.SessionNaming == next {
+		return nil
+	}
+	s.data.SessionNaming = next
 	return s.saveLocked()
 }
 

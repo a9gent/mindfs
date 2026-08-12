@@ -1210,6 +1210,7 @@ type SuggestSessionNameInput struct {
 	RootID       string
 	SessionKey   string
 	Agent        string
+	Model        string
 	FirstMessage string
 }
 
@@ -1345,6 +1346,7 @@ func sessionNameRunner(ctx context.Context, pool *agent.Pool, rootAbs string, in
 	sess, err := pool.GetOrCreate(ctx, agenttypes.OpenSessionInput{
 		SessionKey: sessionKey,
 		AgentName:  agentName,
+		Model:      strings.TrimSpace(in.Model),
 		RootPath:   tmpRoot,
 	})
 	if err != nil {
@@ -1378,9 +1380,19 @@ func (s *Service) SuggestSessionName(ctx context.Context, in SuggestSessionNameI
 		return nil, nil
 	}
 	agentName := strings.TrimSpace(in.Agent)
+	model := strings.TrimSpace(in.Model)
+	if prefs := s.Registry.GetPreferences(); prefs != nil {
+		namingDefaults := prefs.SessionNamingDefaults()
+		if strings.TrimSpace(namingDefaults.Agent) != "" {
+			agentName = strings.TrimSpace(namingDefaults.Agent)
+			model = strings.TrimSpace(namingDefaults.Model)
+		}
+	}
 	if agentName == "" {
 		return nil, nil
 	}
+	in.Agent = agentName
+	in.Model = model
 	message := normalizeSessionNameCandidate(in.FirstMessage)
 	if sessionNameScore(message) < sessionNameMinMessageLen {
 		return nil, nil
@@ -1413,14 +1425,8 @@ func (s *Service) SuggestSessionName(ctx context.Context, in SuggestSessionNameI
 
 	rawName, err := sessionNameRunner(nameCtx, pool, rootAbs, in)
 	if err != nil {
-		log.Printf("[session-name] suggest.error root=%s session=%s agent=%s err=%v", in.RootID, in.SessionKey, agentName, err)
-		if prober := s.Registry.GetProber(); prober != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-			prober.ReportRuntimeFailure(agentName, err)
-		}
+		log.Printf("[session-name] suggest.error root=%s session=%s agent=%s model=%q err=%v", in.RootID, in.SessionKey, agentName, model, err)
 		return nil, nil
-	}
-	if prober := s.Registry.GetProber(); prober != nil {
-		prober.ReportSuccess(agentName)
 	}
 
 	name := normalizeSessionNameCandidate(rawName)

@@ -6,6 +6,7 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
+import { createPortal } from "react-dom";
 import { AgentIcon } from "./AgentIcon";
 import type { AgentStatus } from "../services/agents";
 import { useI18n } from "../i18n";
@@ -28,6 +29,8 @@ type AgentSelectorProps = {
   showChevron?: boolean;
   defaultExpandOptions?: boolean;
   onboardingId?: string;
+  viewportMenu?: boolean;
+  allowDefaultModel?: boolean;
 };
 
 const AGENT_MENU_MAX_BODY_HEIGHT = 344;
@@ -37,6 +40,19 @@ const AGENT_MENU_MIN_VISIBLE_ROWS = 3;
 const AGENT_MENU_MIN_BODY_HEIGHT =
   AGENT_MENU_HEADER_HEIGHT +
   AGENT_MENU_ROW_HEIGHT * AGENT_MENU_MIN_VISIBLE_ROWS;
+
+function AgentMenuPortal({
+  enabled,
+  children,
+}: {
+  enabled: boolean;
+  children: React.ReactNode;
+}) {
+  if (enabled && typeof document !== "undefined") {
+    return createPortal(children, document.body);
+  }
+  return <>{children}</>;
+}
 
 function hasAgentOptions(agent?: AgentStatus): boolean {
   return !!(
@@ -140,6 +156,8 @@ export function AgentSelector({
   showChevron = false,
   defaultExpandOptions = false,
   onboardingId,
+  viewportMenu = false,
+  allowDefaultModel = false,
 }: AgentSelectorProps) {
   const { t } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
@@ -153,6 +171,10 @@ export function AgentSelector({
   const [restartingAgent, setRestartingAgent] = useState<string | null>(null);
   const [menuBodyHeight, setMenuBodyHeight] = useState<number | null>(null);
   const [menuHorizontalOffset, setMenuHorizontalOffset] = useState(0);
+  const [viewportMenuPosition, setViewportMenuPosition] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const agentColumnRef = useRef<HTMLDivElement>(null);
@@ -228,7 +250,8 @@ export function AgentSelector({
     const handlePointerOutside = (e: PointerEvent) => {
       if (
         dropdownRef.current &&
-        !dropdownRef.current.contains(e.target as Node)
+        !dropdownRef.current.contains(e.target as Node) &&
+        !menuRef.current?.contains(e.target as Node)
       ) {
         setIsOpen(false);
         setSubmenuAgent(null);
@@ -268,6 +291,31 @@ export function AgentSelector({
       return;
     }
 
+    if (viewportMenu) {
+      const anchor = dropdownRef.current?.getBoundingClientRect();
+      const menu = menuRef.current.getBoundingClientRect();
+      if (!anchor) return;
+      const viewport = window.visualViewport;
+      const viewportLeft = viewport?.offsetLeft ?? 0;
+      const viewportTop = viewport?.offsetTop ?? 0;
+      const viewportWidth = viewport?.width ?? window.innerWidth;
+      const viewportHeight = viewport?.height ?? window.innerHeight;
+      const margin = 8;
+      const maxLeft = viewportLeft + viewportWidth - menu.width - margin;
+      const left = Math.max(viewportLeft + margin, Math.min(anchor.left, maxLeft));
+      const below = anchor.bottom + 8;
+      const above = anchor.top - menu.height - 8;
+      const top = menuPlacement === "bottom" && below + menu.height <= viewportTop + viewportHeight - margin
+        ? below
+        : Math.max(viewportTop + margin, above);
+      setViewportMenuPosition((current) =>
+        current && Math.abs(current.top - top) < 0.5 && Math.abs(current.left - left) < 0.5
+          ? current
+          : { top, left },
+      );
+      return;
+    }
+
     const viewport = window.visualViewport;
     const viewportLeft = viewport?.offsetLeft ?? 0;
     const viewportRight = viewportLeft + (viewport?.width ?? window.innerWidth);
@@ -290,7 +338,9 @@ export function AgentSelector({
     isOpen,
     menuBodyHeight,
     menuHorizontalOffset,
+    menuPlacement,
     submenuAgent,
+    viewportMenu,
   ]);
 
   const handleAgentSelect = useCallback(
@@ -309,9 +359,14 @@ export function AgentSelector({
 
   const handleAgentRowClick = useCallback(
     (entry: AgentStatus) => {
-      handleAgentSelect(entry.name, entry.default_model_id || entry.current_model_id || "");
+      handleAgentSelect(
+        entry.name,
+        allowDefaultModel
+          ? ""
+          : entry.default_model_id || entry.current_model_id || "",
+      );
     },
-    [handleAgentSelect],
+    [allowDefaultModel, handleAgentSelect],
   );
 
   const handleSubmenuToggle = useCallback((entry: AgentStatus) => {
@@ -509,14 +564,20 @@ export function AgentSelector({
       </button>
 
       {isOpen && (
-        <div
-          ref={menuRef}
-          style={{
-            position: "absolute",
-            ...(menuPlacement === "bottom"
-              ? { top: "calc(100% + 8px)" }
-              : { bottom: "calc(100% + 8px)" }),
-            right: 0,
+        <AgentMenuPortal enabled={viewportMenu}>
+          <div
+            ref={menuRef}
+            style={{
+            position: viewportMenu ? "fixed" : "absolute",
+            ...(viewportMenu
+              ? {
+                  top: viewportMenuPosition?.top ?? 0,
+                  left: viewportMenuPosition?.left ?? 0,
+                  visibility: viewportMenuPosition ? "visible" : "hidden",
+                }
+              : menuPlacement === "bottom"
+                ? { top: "calc(100% + 8px)", right: 0 }
+                : { bottom: "calc(100% + 8px)", right: 0 }),
             background: "var(--menu-bg)",
             border: "1px solid var(--menu-border)",
             borderRadius: "12px",
@@ -532,11 +593,11 @@ export function AgentSelector({
             height: menuBodyHeight ? `${menuBodyHeight + 16}px` : "auto",
             maxHeight: "360px",
             transform:
-              menuHorizontalOffset === 0
+              viewportMenu || menuHorizontalOffset === 0
                 ? undefined
                 : `translateX(${menuHorizontalOffset}px)`,
-          }}
-        >
+            }}
+          >
           <div
             ref={agentColumnRef}
             style={{
@@ -858,13 +919,35 @@ export function AgentSelector({
                   title={t("agent.model")}
                   expanded={modelSectionExpanded}
                   onToggle={() => setModelSectionExpanded((prev) => !prev)}
-                  value={submenuSelectedModel?.id || undefined}
+                  value={
+                    allowDefaultModel && submenuAgentStatus.name === agent && !model
+                      ? t("agent.defaultModel")
+                      : submenuSelectedModel?.id || undefined
+                  }
                 />
                 {modelSectionExpanded ? (
                   <>
+                    {allowDefaultModel ? (
+                      <button
+                        type="button"
+                        onClick={() => handleAgentSelect(submenuAgentStatus.name, "")}
+                        style={sectionItemStyle(
+                          submenuAgentStatus.name === agent && !model,
+                          false,
+                        )}
+                      >
+                        <span style={{ fontSize: "13px", fontWeight: 500 }}>
+                          {t("agent.defaultModel")}
+                        </span>
+                        <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
+                          {t("agent.defaultModelDescription")}
+                        </span>
+                      </button>
+                    ) : null}
                     {submenuModels.map((item, index) => {
                       const isSelected =
                         submenuAgentStatus.name === agent &&
+                        !!model &&
                         item.id === (submenuSelectedModel?.id || "");
                       return (
                         <button
@@ -875,7 +958,7 @@ export function AgentSelector({
                           }
                           style={sectionItemStyle(
                             isSelected,
-                            index > 0,
+                            allowDefaultModel || index > 0,
                             item.hidden ? 0.66 : 1,
                           )}
                           title={item.description || item.id}
@@ -1045,7 +1128,8 @@ export function AgentSelector({
               </>
             ) : null}
           </div>
-        </div>
+          </div>
+        </AgentMenuPortal>
       )}
     </div>
   );

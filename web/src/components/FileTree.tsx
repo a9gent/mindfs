@@ -20,6 +20,7 @@ import {
 import { useI18n, type Locale, type MessageKey } from "../i18n";
 import { AgentMenuList } from "./AgentMenuList";
 import { AgentIcon } from "./AgentIcon";
+import { AgentSelector } from "./AgentSelector";
 import { SymlinkBadge } from "./SymlinkBadge";
 import { RelayLocalServicesDialog } from "./RelayLocalServicesDialog";
 import { fetchAgentCatalog, fetchAgents, type AgentStatus } from "../services/agents";
@@ -44,6 +45,10 @@ import {
   webPushReasonLabel,
   type WebPushStatus,
 } from "../services/webPush";
+import {
+  fetchSessionNamingPreference,
+  updateSessionNamingPreference,
+} from "../services/preferences";
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -1381,6 +1386,12 @@ export function FileTree({
   const [isAppearanceMenuOpen, setIsAppearanceMenuOpen] = React.useState(false);
   const [isLocaleMenuOpen, setIsLocaleMenuOpen] = React.useState(false);
   const [isSortMenuOpen, setIsSortMenuOpen] = React.useState(false);
+  const [sessionNamingOpen, setSessionNamingOpen] = React.useState(false);
+  const [sessionNamingAgents, setSessionNamingAgents] = React.useState<AgentStatus[]>([]);
+  const [sessionNamingAgent, setSessionNamingAgent] = React.useState("");
+  const [sessionNamingModel, setSessionNamingModel] = React.useState("");
+  const [sessionNamingBusy, setSessionNamingBusy] = React.useState(false);
+  const [sessionNamingError, setSessionNamingError] = React.useState("");
   const [appearanceMode, setAppearanceModeState] = React.useState<AppearanceMode>(() => getAppearanceMode());
   const [isUpdateNotesOpen, setIsUpdateNotesOpen] = React.useState(false);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = React.useState<BeforeInstallPromptEvent | null>(null);
@@ -1880,6 +1891,46 @@ export function FileTree({
       })
       .finally(() => setAgentConfigBusy(false));
   }, [t]);
+
+  const openSessionNaming = React.useCallback(() => {
+    setAgentConfigFlow(null);
+    setAgentLifecycleOpen(false);
+    setRelayServicesOpen(false);
+    setIsMenuOpen(false);
+    setSessionNamingOpen(true);
+    setSessionNamingBusy(true);
+    setSessionNamingError("");
+    Promise.all([fetchAgents(true), fetchSessionNamingPreference()])
+      .then(([items, preference]) => {
+        const installed = items.filter((item) => item.installed);
+        setSessionNamingAgents(installed);
+        const selected = installed.find((item) => item.name === preference.agent) || installed[0];
+        const selectedModel = selected?.models?.find((item) => item.id === preference.model)?.id || "";
+        setSessionNamingAgent(selected?.name || "");
+        setSessionNamingModel(selectedModel);
+      })
+      .catch((error) => {
+        setSessionNamingError(error instanceof Error ? error.message : t("sessionNaming.loadFailed"));
+      })
+      .finally(() => setSessionNamingBusy(false));
+  }, [t]);
+
+  const saveSessionNaming = React.useCallback(async () => {
+    if (!sessionNamingAgent || sessionNamingBusy) return;
+    setSessionNamingBusy(true);
+    setSessionNamingError("");
+    try {
+      await updateSessionNamingPreference({
+        agent: sessionNamingAgent,
+        model: sessionNamingModel,
+      });
+      setSessionNamingOpen(false);
+    } catch (error) {
+      setSessionNamingError(error instanceof Error ? error.message : t("sessionNaming.saveFailed"));
+    } finally {
+      setSessionNamingBusy(false);
+    }
+  }, [sessionNamingAgent, sessionNamingBusy, sessionNamingModel, t]);
 
   React.useEffect(() => {
     if (!agentConfigSwitchRequest) {
@@ -2680,6 +2731,19 @@ export function FileTree({
                 </button>
                 <button
                   type="button"
+                  onClick={openSessionNaming}
+                  style={fileTreeMenuButtonStyle}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M4 6h16" />
+                    <path d="M4 12h10" />
+                    <path d="M4 18h7" />
+                    <path d="m17 16 2 2 3-4" />
+                  </svg>
+                  <span>{t("fileTree.sessionNamingAgent")}</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => {
                     setRelayServicesOpen(true);
                     setRelayServicesEditing(false);
@@ -3120,6 +3184,83 @@ export function FileTree({
               }}
               onCancel={closeAgentConfigFlow}
             />
+          </div>
+        ) : null}
+        {sessionNamingOpen ? (
+          <div
+            style={{
+              position: "absolute",
+              top: "calc(100% + 6px)",
+              left: "8px",
+              right: "3px",
+              zIndex: 40,
+              padding: "14px",
+              borderRadius: "12px",
+              border: "1px solid var(--border-color)",
+              background: "var(--menu-bg)",
+              boxShadow: "0 16px 36px rgba(15, 23, 42, 0.18)",
+            }}
+          >
+            <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)" }}>
+              {t("sessionNaming.title")}
+            </div>
+            <div
+              style={{
+                marginTop: "12px",
+                minHeight: "42px",
+                padding: "6px 8px",
+                border: "1px solid var(--border-color)",
+                borderRadius: "10px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-start",
+                gap: "8px",
+              }}
+            >
+              {sessionNamingAgent ? (
+                <AgentSelector
+                  agent={sessionNamingAgent}
+                  model={sessionNamingModel}
+                  agents={sessionNamingAgents}
+                  onAgentChange={(agent, model) => {
+                    setSessionNamingAgent(agent);
+                    setSessionNamingModel(model || "");
+                  }}
+                  compact
+                  showChevron
+                  menuPlacement="bottom"
+                  defaultExpandOptions
+                  viewportMenu
+                  allowDefaultModel
+                />
+              ) : null}
+              <span style={{ minWidth: 0, marginLeft: "auto", fontSize: "12px", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {sessionNamingBusy ? t("common.loading") : sessionNamingModel || t("agent.defaultModel")}
+              </span>
+            </div>
+            {sessionNamingError ? (
+              <div style={{ marginTop: "8px", color: "#dc2626", fontSize: "11px", lineHeight: 1.4 }}>
+                {sessionNamingError}
+              </div>
+            ) : null}
+            <div style={{ ...agentConfigActionRowStyle, marginTop: "12px" }}>
+              <button
+                type="button"
+                disabled={sessionNamingBusy}
+                onClick={() => setSessionNamingOpen(false)}
+                style={agentConfigSecondaryButtonStyle(sessionNamingBusy)}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                type="button"
+                disabled={sessionNamingBusy || !sessionNamingAgent}
+                onClick={() => void saveSessionNaming()}
+                style={agentConfigPrimaryButtonStyle(sessionNamingBusy || !sessionNamingAgent)}
+              >
+                {sessionNamingBusy ? t("common.saving") : t("common.save")}
+              </button>
+            </div>
           </div>
         ) : null}
         {relayServicesOpen ? (
