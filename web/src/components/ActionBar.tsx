@@ -1081,7 +1081,9 @@ export function ActionBar({
 
   const handleEditorEnter = useCallback((event: KeyboardEvent | null) => {
     if (isCompositionActive(event)) {
-      return false;
+      // Stop Lexical's plain-text Enter handler without preventing the native
+      // event, so an IME can finish committing its composition text.
+      return true;
     }
     if (event?.shiftKey) {
       return false;

@@ -12,6 +12,7 @@ import {
   $isLineBreakNode,
   $isRangeSelection,
   $isTextNode,
+  $setCompositionKey,
   COMMAND_PRIORITY_HIGH,
   KEY_BACKSPACE_COMMAND,
   KEY_DELETE_COMMAND,
@@ -675,6 +676,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
     },
     clear() {
       editorRef.current?.update(() => {
+        $setCompositionKey(null);
         $replaceWithPlainText("");
       });
     },
