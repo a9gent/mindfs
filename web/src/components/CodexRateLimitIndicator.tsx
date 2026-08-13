@@ -31,6 +31,17 @@ function formatResetTime(unixSeconds: number | undefined): string {
   }).format(new Date(unixSeconds * 1000));
 }
 
+function formatResetCountdown(unixSeconds: number | undefined, nowMs: number): string {
+  if (!unixSeconds) return "";
+  const remainingMinutes = Math.max(0, Math.ceil((unixSeconds * 1000 - nowMs) / 60_000));
+  const days = Math.floor(remainingMinutes / (24 * 60));
+  const hours = Math.floor((remainingMinutes % (24 * 60)) / 60);
+  const minutes = remainingMinutes % 60;
+  if (days > 0) return `${days}d·${hours}h`;
+  if (hours > 0) return `${hours}h·${minutes}m`;
+  return `${minutes}m`;
+}
+
 export function CodexRateLimitIndicator({ agent, refreshToken = 0, onStatusChange }: Props) {
   const { t } = useI18n();
   const [status, setStatus] = useState<CodexRateLimitStatus | null>(null);
@@ -39,6 +50,7 @@ export function CodexRateLimitIndicator({ agent, refreshToken = 0, onStatusChang
   const [resetting, setResetting] = useState(false);
   const [resetOutcome, setResetOutcome] = useState("");
   const [error, setError] = useState("");
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const requestRef = useRef(0);
   const activeRequestsRef = useRef(0);
   const lastSuccessfulFetchAtRef = useRef(0);
@@ -104,9 +116,17 @@ export function CodexRateLimitIndicator({ agent, refreshToken = 0, onStatusChang
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [confirmOpen, resetting]);
 
+  useEffect(() => {
+    if (!status?.weekly?.resets_at) return;
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [status?.weekly?.resets_at]);
+
   const remaining = remainingPercent(status);
   const resetCount = Math.max(0, status?.reset_credits?.available_count ?? 0);
   const resetTime = formatResetTime(status?.weekly?.resets_at);
+  const resetCountdown = formatResetCountdown(status?.weekly?.resets_at, nowMs);
   const canReset = resetCount > 0 && !loading;
   const firstCredit = useMemo(
     () => status?.reset_credits?.credits?.find((credit) => credit.status === "available") || status?.reset_credits?.credits?.[0],
@@ -200,7 +220,7 @@ export function CodexRateLimitIndicator({ agent, refreshToken = 0, onStatusChang
           {t("codexLimit.weekly")} {loading && remaining === null ? "··" : remaining === null ? "—" : `${remaining}%`}
         </div>
         <button type="button" disabled={!canReset} onClick={() => { setResetOutcome(""); setError(""); setConfirmOpen(true); }} title={canReset ? t("codexLimit.resetAvailable", { count: resetCount }) : error || t("codexLimit.resetUnavailable")} aria-label={canReset ? t("codexLimit.resetAvailable", { count: resetCount }) : t("codexLimit.resetUnavailable")} style={{ display: "inline-flex", alignItems: "center", height: "20px", padding: "0 8px", borderRadius: "999px", border: canReset ? "1px solid rgba(180, 83, 9, 0.24)" : "1px solid var(--border-color)", background: canReset ? "linear-gradient(rgba(245, 158, 11, 0.10), rgba(245, 158, 11, 0.10)), var(--mobile-overlay-bg)" : "linear-gradient(rgba(100, 116, 139, 0.08), rgba(100, 116, 139, 0.08)), var(--mobile-overlay-bg)", color: canReset ? "#b45309" : "var(--text-secondary)", fontSize: "11px", fontWeight: 700, lineHeight: 1, whiteSpace: "nowrap", cursor: canReset ? "pointer" : "default" }}>
-          {t("codexLimit.reset")} {loading && !status ? "·" : resetCount}
+          {t("codexLimit.reset")} {loading && !status ? "·" : resetCount}{resetCountdown ? ` · ${resetCountdown}` : ""}
         </button>
       </div>
       {modal}
