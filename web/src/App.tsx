@@ -98,6 +98,7 @@ import {
   saveTrustedPluginSet,
 } from "./plugins/trust";
 import { appPath, appURL, isRelayNodePage } from "./services/base";
+import { useRefreshSpin } from "./hooks";
 import { copyText } from "./services/clipboard";
 import { triggerUpdate, type UpdateState } from "./services/update";
 import {
@@ -1928,6 +1929,8 @@ export function App({ onGoHome }: AppProps) {
       setKanbanTasksLoading(false);
     }
   }, [applyTaskDetails, t]);
+
+  const kanbanRefreshSpin = useRefreshSpin(() => loadKanbanTasks(currentRootId));
 
 	  useEffect(() => {
 	    void loadKanbanTasks(currentRootId);
@@ -12503,13 +12506,16 @@ export function App({ onGoHome }: AppProps) {
           type="button"
           title={t("task.refresh")}
           aria-label={t("task.refresh")}
-          onClick={() => void loadKanbanTasks(currentRootId)}
+          onClick={() => void kanbanRefreshSpin.handleClick()}
+          onMouseDown={() => kanbanRefreshSpin.setPressed(true)}
+          onMouseUp={() => kanbanRefreshSpin.setPressed(false)}
+          onMouseLeave={() => kanbanRefreshSpin.setPressed(false)}
           style={{
             width: "28px",
             height: "28px",
             borderRadius: "8px",
             border: "none",
-            background: "transparent",
+            background: kanbanRefreshSpin.pressed || kanbanRefreshSpin.refreshing ? "rgba(0, 0, 0, 0.06)" : "transparent",
             color: "var(--text-color)",
             display: "inline-flex",
             alignItems: "center",
@@ -12519,7 +12525,9 @@ export function App({ onGoHome }: AppProps) {
             padding: 0,
           }}
         >
-          <SyncIcon />
+          <SyncIcon
+            style={kanbanRefreshSpin.refreshing ? { animation: "mindfs-update-spin 0.8s linear infinite" } : undefined}
+          />
         </button>
         <div ref={taskCreateTemplateMenuRef} style={{ position: "relative", flexShrink: 0 }}>
           <button
@@ -14087,6 +14095,12 @@ export function App({ onGoHome }: AppProps) {
             showHiddenFiles={showHiddenFiles}
             onSortModeChange={setTreeSortMode}
             onShowHiddenFilesChange={setShowHiddenFiles}
+            onRefresh={() => {
+              if (currentRootId) {
+                const dir = selectedDirRef.current === currentRootId ? "." : (selectedDirRef.current || ".");
+                void refreshTreeDir(currentRootId, dir, true);
+              }
+            }}
             selectedDirKey={selectedDirKey}
             selectedPath={file?.path}
             rootId={currentRootId}
@@ -15294,7 +15308,7 @@ function RunNowIcon() {
   );
 }
 
-function SyncIcon() {
+function SyncIcon({ style }: { style?: React.CSSProperties }) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -15302,6 +15316,7 @@ function SyncIcon() {
       height="13"
       viewBox="0 0 24 24"
       aria-hidden="true"
+      style={style}
     >
       <path
         fill="currentColor"
