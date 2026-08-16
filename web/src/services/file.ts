@@ -614,6 +614,11 @@ export async function fetchFile(params: FetchFileParams): Promise<FilePayload | 
   }
 }
 
+// 404 失败缓存：避免对同一缺失路径（如已删除的图片）在组件重挂载时反复请求。
+// 短 TTL，成功后清除，不影响文件后续被创建的情况。
+const rawFileFailures = new Map<string, number>();
+const RAW_FILE_FAILURE_TTL_MS = 60_000;
+
 export async function fetchProofProtectedBlob(params: {
   rootId: string;
   path: string;
@@ -621,6 +626,11 @@ export async function fetchProofProtectedBlob(params: {
 }): Promise<Blob> {
   const request = createFetchOptions(params.timeoutMs);
   try {
+    const cacheKey = `${params.rootId}:${params.path}`;
+    const failedAt = rawFileFailures.get(cacheKey);
+    if (failedAt !== undefined && Date.now() - failedAt < RAW_FILE_FAILURE_TTL_MS) {
+      throw new Error("open raw file failed: status=404 (cached)");
+    }
     const baseURL = buildFileURL(params.rootId, params.path, "full", 0);
     const rawURL = withRawFlag(
       baseURL,
@@ -630,6 +640,9 @@ export async function fetchProofProtectedBlob(params: {
       : undefined;
     const response = await fetchResponse(rawURL, { ...request.init, headers });
     if (!response.ok) {
+      if (response.status === 404) {
+        rawFileFailures.set(cacheKey, Date.now());
+      }
       if (response.status === 401 && e2eeService.isRequired()) {
         const payload = (await response.json().catch(() => ({}))) as { error?: string };
         if (e2eeService.handleServerError(String(payload.error || ""))) {
@@ -638,6 +651,7 @@ export async function fetchProofProtectedBlob(params: {
       }
       throw new Error(`open raw file failed: status=${response.status}`);
     }
+    rawFileFailures.delete(cacheKey);
     return response.blob();
   } finally {
     if (request.timer !== null) {

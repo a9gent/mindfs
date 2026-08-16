@@ -59,6 +59,19 @@ async function ensureMermaidInitialized() {
   mermaidInitialized = true;
 }
 
+/**
+ * mermaid 11.x 无法解析 flowchart 节点标签里的裸竖线（`B[|μ|]` 会报
+ * "Syntax error in text"，`|` 被当成边标签分隔符）。这里仅对 flowchart/graph
+ * 中未加引号的 `[]` 标签做引号包裹；已引号/含引号/其他图类型的输入原样保留。
+ */
+function makeMermaidSafe(source: string): string {
+  if (!/^\s*(flowchart|graph)\b/m.test(source)) return source;
+  return source.replace(
+    /\b([A-Za-z_][\w-]*)\[([^\[\]"]*\|[^\[\]"]*)\]/g,
+    (_, id, label) => `${id}["${label}"]`,
+  );
+}
+
 function MermaidBlock({ chart }: { chart: string }) {
   const [svg, setSvg] = useState("");
   const [error, setError] = useState("");
@@ -67,7 +80,7 @@ function MermaidBlock({ chart }: { chart: string }) {
     let cancelled = false;
 
     const renderChart = async () => {
-      const source = chart.trim();
+      const source = makeMermaidSafe(chart.trim());
       if (!source) {
         setSvg("");
         setError("");

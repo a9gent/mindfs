@@ -1598,6 +1598,11 @@ func (h *HTTPHandler) handleTree(w http.ResponseWriter, r *http.Request) {
 		Dir:    r.URL.Query().Get("dir"),
 	})
 	if err != nil {
+		// 目录不存在时返回空树，而非 400：前端会轮询 .mindfs/plugins 等可选目录
+		if errors.Is(err, os.ErrNotExist) {
+			respondJSON(w, http.StatusOK, map[string]any{"entries": []any{}})
+			return
+		}
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -1644,7 +1649,12 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 			Path:   path,
 		})
 		if err != nil {
-			respondError(w, http.StatusBadRequest, err)
+			// 文件不存在 → 404（资源不存在语义），而非 400
+			status := http.StatusBadRequest
+			if errors.Is(err, os.ErrNotExist) {
+				status = http.StatusNotFound
+			}
+			respondError(w, status, err)
 			return
 		}
 		defer rawOut.File.Close()
@@ -1668,7 +1678,11 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 			Path:   path,
 		})
 		if err != nil {
-			respondError(w, http.StatusBadRequest, err)
+			status := http.StatusBadRequest
+			if errors.Is(err, os.ErrNotExist) {
+				status = http.StatusNotFound
+			}
+			respondError(w, status, err)
 			return
 		}
 		if info.MTime.Equal(cachedMTime) {
@@ -1684,7 +1698,11 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 		ReadMode: readMode,
 	})
 	if err != nil {
-		respondError(w, http.StatusBadRequest, err)
+		status := http.StatusBadRequest
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+		}
+		respondError(w, status, err)
 		return
 	}
 	payload := map[string]any{
