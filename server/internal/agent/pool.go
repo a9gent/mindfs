@@ -33,6 +33,10 @@ type sessionEntry struct {
 	sessionKey string
 	protocol   Protocol
 	session    agenttypes.Session
+	lastUsedAt time.Time
+	activeUses int
+	closing    bool
+	closeDone  chan struct{}
 }
 
 // NewPool creates a new agent pool.
@@ -57,11 +61,24 @@ func (p *Pool) GetOrCreate(ctx context.Context, in agenttypes.OpenSessionInput) 
 	}
 
 	p.mu.Lock()
+retryExisting:
 	if p.closed {
 		p.mu.Unlock()
 		return nil, errors.New("agent pool closed")
 	}
 	if entry, ok := p.sessions[in.SessionKey]; ok {
+		if entry.closing {
+			done := entry.closeDone
+			p.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-done:
+			}
+			p.mu.Lock()
+			goto retryExisting
+		}
+		entry.lastUsedAt = time.Now()
 		p.mu.Unlock()
 		return entry.session, nil
 	}
@@ -91,8 +108,9 @@ func (p *Pool) GetOrCreate(ctx context.Context, in agenttypes.OpenSessionInput) 
 	// Another goroutine may have created the same session while the lock was released.
 	if entry, ok := p.sessions[in.SessionKey]; ok {
 		existing := entry.session
+		entry.lastUsedAt = time.Now()
 		p.mu.Unlock()
-		if protocol != ProtocolACP {
+		if protocol == ProtocolClaudeSDK {
 			_ = sess.Close()
 		}
 		return existing, nil
@@ -102,9 +120,100 @@ func (p *Pool) GetOrCreate(ctx context.Context, in agenttypes.OpenSessionInput) 
 		sessionKey: in.SessionKey,
 		protocol:   protocol,
 		session:    sess,
+		lastUsedAt: time.Now(),
 	}
 	p.mu.Unlock()
 	return sess, nil
+}
+
+// BeginSessionUse prevents idle cleanup while a turn is using the session.
+// The returned function must be called when that use finishes.
+func (p *Pool) BeginSessionUse(sessionKey string) func() {
+	p.mu.Lock()
+	entry := p.sessions[sessionKey]
+	if entry == nil || entry.closing {
+		p.mu.Unlock()
+		return func() {}
+	}
+	entry.activeUses++
+	entry.lastUsedAt = time.Now()
+	p.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			p.mu.Lock()
+			if current := p.sessions[sessionKey]; current == entry {
+				if current.activeUses > 0 {
+					current.activeUses--
+				}
+				current.lastUsedAt = time.Now()
+			}
+			p.mu.Unlock()
+		})
+	}
+}
+
+// ReleaseIdleSessions closes inactive runtime sessions without changing the
+// persisted MindFS session or its closed_at metadata.
+func (p *Pool) ReleaseIdleSessions(idleFor time.Duration, now time.Time) int {
+	if idleFor <= 0 {
+		return 0
+	}
+	cutoff := now.Add(-idleFor)
+	p.mu.Lock()
+	entries := make([]*sessionEntry, 0)
+	for _, entry := range p.sessions {
+		if entry == nil || entry.closing || entry.activeUses > 0 || entry.lastUsedAt.After(cutoff) {
+			continue
+		}
+		entry.closing = true
+		entry.closeDone = make(chan struct{})
+		entries = append(entries, entry)
+	}
+	p.mu.Unlock()
+
+	released := 0
+	for _, entry := range entries {
+		err := entry.session.Close()
+		p.mu.Lock()
+		current := p.sessions[entry.sessionKey]
+		if current == entry {
+			if err == nil {
+				delete(p.sessions, entry.sessionKey)
+				released++
+			} else {
+				entry.closing = false
+				entry.lastUsedAt = now
+			}
+		}
+		close(entry.closeDone)
+		p.mu.Unlock()
+		if err != nil {
+			log.Printf("[agent/pool] idle_release.error session=%s agent=%s protocol=%s err=%v", entry.sessionKey, entry.agentName, entry.protocol, err)
+		} else {
+			log.Printf("[agent/pool] idle_release.done session=%s agent=%s protocol=%s idle_for=%s", entry.sessionKey, entry.agentName, entry.protocol, idleFor)
+		}
+	}
+	return released
+}
+
+func (p *Pool) StartIdleReleaseLoop(ctx context.Context, idleFor func() time.Duration) {
+	if p == nil || idleFor == nil {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				p.ReleaseIdleSessions(idleFor(), now)
+			}
+		}
+	}()
 }
 
 func (p *Pool) openSession(ctx context.Context, protocol Protocol, def Definition, in agenttypes.OpenSessionInput) (agenttypes.Session, error) {
@@ -228,11 +337,6 @@ func (p *Pool) Close(sessionKey string) {
 		return
 	}
 	p.closeSessions(entries)
-	for _, entry := range entries {
-		if entry.protocol == ProtocolACP {
-			p.acp.CloseSession(sessionKey)
-		}
-	}
 }
 
 func (p *Pool) takeSessions(match func(*sessionEntry) bool) []*sessionEntry {

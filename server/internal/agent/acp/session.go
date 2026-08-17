@@ -65,19 +65,19 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 	}
 	if strings.TrimSpace(opts.Model) != "" {
 		if err := proc.SetModel(ctx, opts.SessionKey, opts.Model); err != nil {
-			proc.CloseSession(opts.SessionKey)
+			proc.ForgetSession(opts.SessionKey)
 			return nil, err
 		}
 	}
 	if strings.TrimSpace(opts.Mode) != "" {
 		if err := proc.SetMode(ctx, opts.SessionKey, opts.Mode); err != nil {
-			proc.CloseSession(opts.SessionKey)
+			proc.ForgetSession(opts.SessionKey)
 			return nil, err
 		}
 	}
 	if strings.TrimSpace(opts.Effort) != "" {
 		if err := proc.SetThoughtLevel(ctx, opts.SessionKey, opts.Effort); err != nil {
-			proc.CloseSession(opts.SessionKey)
+			proc.ForgetSession(opts.SessionKey)
 			return nil, err
 		}
 	}
@@ -149,7 +149,9 @@ func mapModeState(state *acpsdk.SessionModeState) types.ModeList {
 
 func (r *Runtime) CloseSession(sessionKey string) {
 	for _, proc := range r.listProcesses() {
-		proc.CloseSession(sessionKey)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = proc.CloseSession(ctx, sessionKey)
+		cancel()
 	}
 }
 
@@ -394,8 +396,9 @@ func (s *session) RuntimeDefaults(context.Context) (types.RuntimeDefaults, error
 }
 
 func (s *session) Close() error {
-	s.proc.CloseSession(s.sessionKey)
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.proc.CloseSession(ctx, s.sessionKey)
 }
 
 func (s *session) logRawToolUpdate(update SessionUpdate) {

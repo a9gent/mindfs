@@ -45,7 +45,6 @@ type SessionListProps = {
   onSearchBlur?: () => void;
   syncingSessionKeys?: Set<string>;
   onSelect?: (session: SessionItem) => void;
-  onRestore?: (session: SessionItem) => void;
   onSync?: (session: SessionItem) => Promise<void> | void;
   onPin?: (session: SessionItem, pinned: boolean) => Promise<boolean> | boolean;
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;

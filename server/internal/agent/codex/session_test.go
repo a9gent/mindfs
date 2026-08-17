@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -9,6 +10,37 @@ import (
 	codexsdk "github.com/fanwenlin/codex-go-sdk/codex"
 	codextypes "github.com/fanwenlin/codex-go-sdk/types"
 )
+
+type closeSessionRPCExec struct {
+	method string
+	params map[string]any
+}
+
+func (e *closeSessionRPCExec) Run(codexsdk.CodexExecArgs) <-chan codexsdk.ExecResult {
+	return make(chan codexsdk.ExecResult)
+}
+
+func (e *closeSessionRPCExec) RPCCall(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+	e.method = method
+	e.params, _ = params.(map[string]any)
+	return json.RawMessage(`{}`), nil
+}
+
+func TestSessionCloseUnsubscribesCodexThread(t *testing.T) {
+	exec := &closeSessionRPCExec{}
+	client := codexsdk.NewCodexWithExec(exec, codexsdk.CodexOptions{})
+	s := &session{
+		client:   client,
+		thread:   client.ResumeThread("thread-1", codexsdk.ThreadOptions{}),
+		threadID: "thread-1",
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if exec.method != "thread/unsubscribe" || exec.params["threadId"] != "thread-1" {
+		t.Fatalf("RPC = %q %#v", exec.method, exec.params)
+	}
+}
 
 func TestCodexListModelsParamsIncludesHiddenModels(t *testing.T) {
 	params := codexListModelsParams()

@@ -126,7 +126,6 @@ func (s *AppContext) GetSessionManager(rootID string) (*session.Manager, error) 
 		return rootCtx.Session, nil
 	}
 	mgr := session.NewManager(rootCtx.Root)
-	mgr.StartIdleLoop(context.Background())
 	rootCtx.Session = mgr
 
 	return mgr, nil

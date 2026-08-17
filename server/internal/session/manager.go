@@ -125,15 +125,10 @@ var mindFSConfigDir = configpkg.MindFSConfigDir
 type Manager struct {
 	root             fs.RootInfo
 	mu               sync.Mutex
-	loopOnce         sync.Once
 	db               *sql.DB
 	sessions         map[string]*Session
 	pendingToolCalls map[string]map[string]agenttypes.ToolCall
 	now              func() time.Time
-	idleInterval     time.Duration
-	idleFor          time.Duration
-	closeFor         time.Duration
-	maxIdleSessions  int
 }
 
 type CreateInput struct {
@@ -178,10 +173,6 @@ func NewManager(root fs.RootInfo, opts ...Option) *Manager {
 		sessions:         make(map[string]*Session),
 		pendingToolCalls: make(map[string]map[string]agenttypes.ToolCall),
 		now:              time.Now,
-		idleInterval:     1 * time.Minute,
-		idleFor:          10 * time.Minute,
-		closeFor:         7 * 24 * time.Hour,
-		maxIdleSessions:  3,
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -194,23 +185,6 @@ type Option func(*Manager)
 func WithClock(now func() time.Time) Option {
 	return func(m *Manager) {
 		m.now = now
-	}
-}
-
-func WithIdlePolicy(interval, idleFor, closeFor time.Duration, maxIdleSessions int) Option {
-	return func(m *Manager) {
-		if interval > 0 {
-			m.idleInterval = interval
-		}
-		if idleFor > 0 {
-			m.idleFor = idleFor
-		}
-		if closeFor > 0 {
-			m.closeFor = closeFor
-		}
-		if maxIdleSessions > 0 {
-			m.maxIdleSessions = maxIdleSessions
-		}
 	}
 }
 
@@ -1111,52 +1085,6 @@ func (m *Manager) deleteSessionUnsafe(key string) error {
 		return err
 	}
 	return nil
-}
-
-func (m *Manager) CheckIdle(ctx context.Context, idleAfter, closeAfter time.Duration) ([]*Session, []*Session, error) {
-	if idleAfter <= 0 || closeAfter <= 0 {
-		return nil, nil, errors.New("idle and close thresholds required")
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	sessions, err := m.listSessionsUnsafe(ListOptions{})
-	if err != nil {
-		return nil, nil, err
-	}
-	now := m.now().UTC()
-	closed := []*Session{}
-	for _, s := range sessions {
-		if s.ClosedAt != nil {
-			continue
-		}
-		if now.Sub(s.UpdatedAt) >= closeAfter {
-			updated, err := m.closeSessionUnsafe(s.Key)
-			if err == nil {
-				closed = append(closed, updated)
-			}
-		}
-	}
-	return []*Session{}, closed, nil
-}
-
-func (m *Manager) StartIdleLoop(ctx context.Context) {
-	if ctx == nil {
-		return
-	}
-	m.loopOnce.Do(func() {
-		ticker := time.NewTicker(m.idleInterval)
-		go func() {
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					m.CheckIdle(ctx, m.idleFor, m.closeFor)
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-	})
 }
 
 func (m *Manager) Shutdown() error {

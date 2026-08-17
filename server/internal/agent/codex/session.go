@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"mindfs/server/internal/agent/logs"
 	types "mindfs/server/internal/agent/types"
@@ -868,7 +869,14 @@ func (s *session) ContextWindow(_ context.Context) (types.ContextWindow, error) 
 	return s.contextWindow, nil
 }
 
-func (s *session) Close() error { return nil }
+func (s *session) Close() error {
+	if s == nil || s.thread == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.thread.Close(ctx)
+}
 
 func (s *session) updateThreadIDFromThread() {
 	if s == nil || s.thread == nil {

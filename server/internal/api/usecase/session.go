@@ -2287,6 +2287,8 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	}
 	sendWithAttachedUpdates := func(runtime agenttypes.Session, content string) error {
 		attachSessionUpdates(runtime)
+		finishUse := agentPool.BeginSessionUse(agentPoolSessionKey(current.Key, in.Agent))
+		defer finishUse()
 		return runtime.SendMessage(turnCtx, content)
 	}
 	sendErr := sendWithAttachedUpdates(sess, prompt)
@@ -2458,6 +2460,8 @@ func (s *Service) RunTransientSlashCommand(ctx context.Context, in RunTransientS
 		}
 		err = loginSess.LoginChatGPTDeviceCode(turnCtx)
 	} else {
+		finishUse := agentPool.BeginSessionUse(agentPoolSessionKey(current.Key, agentName))
+		defer finishUse()
 		err = sess.SendMessage(turnCtx, "/"+command)
 	}
 	if err != nil && !isCanceledTurnError(err) {
@@ -2909,6 +2913,8 @@ func (s *Service) startSubagentSubscription(in subagentSessionInput, child *sess
 			log.Printf("[subagent] subscription.open.error root=%s session=%s receiver=%s err=%v", in.RootID, child.Key, receiverThreadID, err)
 			return
 		}
+		finishUse := in.Pool.BeginSessionUse(agentPoolSessionKey(child.Key, in.Agent))
+		defer finishUse()
 		setActiveTurnSession(in.RootID, child.Key, runtime)
 		subscriber, ok := runtime.(agenttypes.ThreadEventSubscriber)
 		if !ok {

@@ -101,6 +101,13 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	if err != nil {
 		log.Printf("[preferences] init.error err=%v", err)
 	}
+	agentPool.StartIdleReleaseLoop(ctx, func() time.Duration {
+		hours := preferences.DefaultIdleSessionResourceReleaseHours
+		if prefs != nil {
+			hours = prefs.IdleSessionResourceReleaseHours()
+		}
+		return time.Duration(hours) * time.Hour
+	})
 	webPushStore, err := webpush.NewStore()
 	if err != nil {
 		log.Printf("[webpush] init.error err=%v", err)

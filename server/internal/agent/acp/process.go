@@ -49,6 +49,8 @@ type CapabilitySnapshot struct {
 	PromptSupportsAudio   bool
 	PromptSupportsImage   bool
 	PromptSupportsContext bool
+	SupportsSessionClose  bool
+	SupportsSessionResume bool
 }
 
 type stderrHintState struct {
@@ -464,6 +466,8 @@ func (p *Process) Initialize(ctx context.Context) error {
 		PromptSupportsAudio:   resp.AgentCapabilities.PromptCapabilities.Audio,
 		PromptSupportsImage:   resp.AgentCapabilities.PromptCapabilities.Image,
 		PromptSupportsContext: resp.AgentCapabilities.PromptCapabilities.EmbeddedContext,
+		SupportsSessionClose:  resp.AgentCapabilities.SessionCapabilities.Close != nil,
+		SupportsSessionResume: resp.AgentCapabilities.LoadSession,
 	}
 	return nil
 }
@@ -616,14 +620,35 @@ func (p *Process) CancelCurrentTurn(sessionKey string) error {
 	})
 }
 
-// CloseSession removes a session from the process.
-func (p *Process) CloseSession(sessionKey string) {
+// ForgetSession removes only MindFS' local bookkeeping for a session.
+func (p *Process) ForgetSession(sessionKey string) {
 	p.mu.Lock()
 	if sess, ok := p.sessions[sessionKey]; ok {
 		delete(p.sessionsByID, string(sess.ID))
 		delete(p.sessions, sessionKey)
 	}
 	p.mu.Unlock()
+}
+
+// CloseSession asks an ACP agent to cancel outstanding work and release the
+// session resources it owns. Local bookkeeping is removed only after the agent
+// confirms the close.
+func (p *Process) CloseSession(ctx context.Context, sessionKey string) error {
+	if !p.capability.SupportsSessionClose {
+		return errors.New("ACP agent does not support session/close")
+	}
+	if !p.capability.SupportsSessionResume {
+		return errors.New("ACP agent cannot safely release a resumable session")
+	}
+	sess := p.getSessionByKey(sessionKey)
+	if sess == nil {
+		return nil
+	}
+	if _, err := p.conn.CloseSession(ctx, acp.CloseSessionRequest{SessionId: sess.ID}); err != nil {
+		return err
+	}
+	p.ForgetSession(sessionKey)
+	return nil
 }
 
 // Close terminates the process.

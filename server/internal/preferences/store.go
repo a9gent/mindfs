@@ -14,6 +14,9 @@ import (
 
 const preferencesFileName = "preferences.json"
 
+const DefaultIdleSessionResourceReleaseHours = 72
+const MaxIdleSessionResourceReleaseHours = 2_562_047
+
 type Store struct {
 	mu   sync.RWMutex
 	path string
@@ -21,8 +24,37 @@ type Store struct {
 }
 
 type UserPreferences struct {
-	Agents        map[string]AgentDefaults `json:"agents,omitempty"`
-	SessionNaming SessionNamingDefaults    `json:"session_naming,omitempty"`
+	Agents                          map[string]AgentDefaults `json:"agents,omitempty"`
+	SessionNaming                   SessionNamingDefaults    `json:"session_naming,omitempty"`
+	IdleSessionResourceReleaseHours int                      `json:"idle_session_resource_release_hours,omitempty"`
+}
+
+func (s *Store) IdleSessionResourceReleaseHours() int {
+	if s == nil {
+		return DefaultIdleSessionResourceReleaseHours
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.data.IdleSessionResourceReleaseHours <= 0 {
+		return DefaultIdleSessionResourceReleaseHours
+	}
+	return s.data.IdleSessionResourceReleaseHours
+}
+
+func (s *Store) UpdateIdleSessionResourceReleaseHours(hours int) error {
+	if s == nil {
+		return nil
+	}
+	if hours <= 0 || hours > MaxIdleSessionResourceReleaseHours {
+		return errors.New("idle session resource release hours are out of range")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.IdleSessionResourceReleaseHours == hours {
+		return nil
+	}
+	s.data.IdleSessionResourceReleaseHours = hours
+	return s.saveLocked()
 }
 
 type SessionNamingDefaults struct {

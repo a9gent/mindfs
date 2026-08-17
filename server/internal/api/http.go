@@ -32,6 +32,7 @@ import (
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/gitview"
+	"mindfs/server/internal/preferences"
 	"mindfs/server/internal/relay"
 	"mindfs/server/internal/session"
 
@@ -304,6 +305,8 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/sessions", h.protectedEndpoint(h.handleSessions))
 	r.Get("/api/preferences/session-naming", h.protectedEndpoint(h.handleSessionNamingPreferenceGet))
 	r.Put("/api/preferences/session-naming", h.protectedEndpoint(h.handleSessionNamingPreferencePut))
+	r.Get("/api/preferences/idle-session-resource-release", h.protectedEndpoint(h.handleIdleSessionResourceReleasePreferenceGet))
+	r.Put("/api/preferences/idle-session-resource-release", h.protectedEndpoint(h.handleIdleSessionResourceReleasePreferencePut))
 	r.Get("/api/replying-sessions", h.protectedEndpoint(h.handleReplyingSessions))
 	r.Get("/api/sessions/search", h.protectedEndpoint(h.handleSessionSearch))
 	r.Get("/api/sessions/children", h.protectedEndpoint(h.handleSessionChildren))
@@ -1232,6 +1235,41 @@ func (h *HTTPHandler) handleAgentsList(w http.ResponseWriter, r *http.Request) {
 type sessionNamingPreferenceRequest struct {
 	Agent string `json:"agent"`
 	Model string `json:"model"`
+}
+
+type idleSessionResourceReleasePreferenceRequest struct {
+	Hours int `json:"hours"`
+}
+
+func (h *HTTPHandler) handleIdleSessionResourceReleasePreferenceGet(w http.ResponseWriter, _ *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetPreferences() == nil {
+		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("preferences not configured"))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"hours": h.AppContext.GetPreferences().IdleSessionResourceReleaseHours(),
+	})
+}
+
+func (h *HTTPHandler) handleIdleSessionResourceReleasePreferencePut(w http.ResponseWriter, r *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetPreferences() == nil {
+		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("preferences not configured"))
+		return
+	}
+	var req idleSessionResourceReleasePreferenceRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest(err.Error()))
+		return
+	}
+	if req.Hours <= 0 || req.Hours > preferences.MaxIdleSessionResourceReleaseHours {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("hours are out of range"))
+		return
+	}
+	if err := h.AppContext.GetPreferences().UpdateIdleSessionResourceReleaseHours(req.Hours); err != nil {
+		respondError(w, http.StatusInternalServerError, errInvalidRequest(err.Error()))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"hours": req.Hours})
 }
 
 func (h *HTTPHandler) handleSessionNamingPreferenceGet(w http.ResponseWriter, _ *http.Request) {
