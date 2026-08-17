@@ -23,7 +23,7 @@
 
 ### Agent 会话
 
-- **多 Agent 支持**：Claude Code · OpenAI Codex · Gemini CLI · Grok · Cursor · Copilot · Cline · Augment · Kimi · Kiro · Qwen · Qoder · OMP · Pi · Hermes · Reasonix · OpenCode · OpenClaw，自动探测已安装的 Agent。
+- **多 Agent 支持**：Claude Code · OpenAI Codex · Gemini CLI · Grok · Cursor · Copilot · Cline · Augment · Kimi · Kiro · Qwen · Qoder · OMP · Pi · Hermes · DeepSeek Harness（DSH）· Reasonix · OpenCode · OpenClaw，自动探测已安装的 Agent。
 - **实时流式输出**：逐 token 推送，工具调用、思考过程、权限请求均以结构化卡片实时渲染，上下文窗口实时余量。
 - **灵活切换**：会话中随时切换 Agent 或模型，多 Agent 共享同一上下文，无需重新描述背景。
 - **会话搜索**：支持按会话标题或对话内容搜索，并可直接跳转到命中的会话和片段。
@@ -118,10 +118,13 @@ MindFS 本身不包含 AI 模型，需要在本机安装至少一个 Agent CLI�
 | **OMP** | https://github.com/can1357/oh-my-pi（`omp acp`） |
 | **Pi** | https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent, and acp adatper: https://github.com/svkozak/pi-acp |
 | **Hermes** | https://hermes-agent.nousresearch.com/docs/user-guide/features/acp |
+| **DeepSeek Harness（DSH）** | https://github.com/deepseek-ai/deepseek-harness，配合 https://github.com/openma-ai/deepseek-harness-acp 适配器 |
 | **Reasonix** | https://github.com/esengine/DeepSeek-Reasonix |
 | **Grok Build** | https://x.ai/cli |
 
 MindFS 已整理常见流行 Agent，在本地 UI 中可以直接安装和更新。打开文件树菜单，选择 **Agent 安装和更新**，即可按当前平台生成安装/更新命令；命令会进入 MindFS 命令执行模式，方便你在当前工作区中确认并运行。
+
+对于 DSH，生成的命令会把 OpenMA ACP 适配器安装到独立的 `mindfs-acp` Profile。Provider、API Key 和默认模型仍在 `dsh web` 中配置；MindFS 与 DSH Web 共用每个用户自己的 `$DSH_HOME/settings.yaml` 和 `$DSH_HOME/.credentials.yaml`。独立 Profile 只隔离 ACP 组合，不会替换或写死用户的 DSH Web 配置。
 
 安装好 Agent 后，即可启动 MindFS 并通过浏览器与之交互。
 

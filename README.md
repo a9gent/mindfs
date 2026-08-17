@@ -23,7 +23,7 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 
 ### Agent Sessions
 
-- **Multi-Agent support**: Claude Code · OpenAI Codex · Gemini CLI · Grok · Cursor · GitHub Copilot · Cline · Augment · Kimi · Kiro · Qwen · Qoder · OMP · Pi · Hermes · Reasonix · OpenCode · OpenClaw — installed agents are detected automatically.
+- **Multi-Agent support**: Claude Code · OpenAI Codex · Gemini CLI · Grok · Cursor · GitHub Copilot · Cline · Augment · Kimi · Kiro · Qwen · Qoder · OMP · Pi · Hermes · DeepSeek Harness (DSH) · Reasonix · OpenCode · OpenClaw — installed agents are detected automatically.
 - **Real-time streaming**: Token-by-token output pushed to the browser; tool calls, thought traces, permission prompts, and remaining context-window capacity are rendered live as structured, collapsible cards.
 - **Flexible switching**: Switch agents or models mid-session; all agents share the same context — no need to re-explain the background.
 - **Session search**: Search by session title or conversation content, then jump straight to the matched session and snippet.
@@ -118,10 +118,13 @@ MindFS does not include any AI model — you need at least one Agent CLI install
 | **OMP** | https://github.com/can1357/oh-my-pi (`omp acp`) |
 | **Pi** | https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent, and acp adatper: https://github.com/svkozak/pi-acp |
 | **Hermes** | https://hermes-agent.nousresearch.com/docs/user-guide/features/acp |
+| **DeepSeek Harness (DSH)** | https://github.com/deepseek-ai/deepseek-harness, with the https://github.com/openma-ai/deepseek-harness-acp adapter |
 | **Reasonix** | https://github.com/esengine/DeepSeek-Reasonix |
 | **Grok Build** | https://x.ai/cli |
 
 MindFS also collects commonly used agents in the local UI. Open the file-tree menu, choose **Agent Install & Update**, then use the generated install/update commands for your platform. The commands are launched in MindFS command mode so you can review and run them from the same workspace.
+
+For DSH, the generated commands install the OpenMA ACP adapter into a dedicated `mindfs-acp` profile. Configure the provider, API key, and default model in `dsh web`; MindFS uses the same per-user `$DSH_HOME/settings.yaml` and `$DSH_HOME/.credentials.yaml`. The dedicated profile isolates the ACP composition only—it does not replace or hard-code the user's DSH Web configuration.
 
 Once an agent is installed, start MindFS and interact with it through the browser.
 
