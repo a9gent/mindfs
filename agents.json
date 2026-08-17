@@ -411,6 +411,38 @@
       }
     },
     {
+      "name": "dsh",
+      "brief": "DeepSeek 官方的插件化 agent harness；通过完整 ACP 适配器接入 MindFS，共用 DSH Web 的 provider、凭据和模型目录，支持会话内选择模型。",
+      "installCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g @deepseek-ai/dsh@next" },
+        { "os": ["darwin", "linux", "windows"], "command": "dsh plugin --profile mindfs-acp add -w @openma/deepseek-harness-acp@0.4.9" },
+        { "os": ["darwin", "linux", "windows"], "command": "node -e \"const fs=require('node:fs'),os=require('node:os'),path=require('node:path');const root=process.env.DSH_HOME||path.join(os.homedir(),'.dsh');const file=path.join(root,'profiles','mindfs-acp','cordis.patch.yml');fs.writeFileSync(file,'# Managed by MindFS for the dedicated ACP profile.\\n- id: acp-bridge\\n  config:\\n    provider: !!js ctx.agentDefaultModel.currentSelection().provider\\n')\"" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g @deepseek-ai/dsh@next" },
+        { "os": ["darwin", "linux", "windows"], "command": "dsh plugin --profile mindfs-acp add -w @openma/deepseek-harness-acp@0.4.9" },
+        { "os": ["darwin", "linux", "windows"], "command": "node -e \"const fs=require('node:fs'),os=require('node:os'),path=require('node:path');const root=process.env.DSH_HOME||path.join(os.homedir(),'.dsh');const file=path.join(root,'profiles','mindfs-acp','cordis.patch.yml');fs.writeFileSync(file,'# Managed by MindFS for the dedicated ACP profile.\\n- id: acp-bridge\\n  config:\\n    provider: !!js ctx.agentDefaultModel.currentSelection().provider\\n')\"" }
+      ],
+      "command": "dsh",
+      "protocol": "acp",
+      "args": [
+        "--profile", "mindfs-acp"
+      ],
+      "configBackup": {
+        "fileSources": [
+          "~/.dsh/settings.yaml",
+          "~/.dsh/.credentials.yaml",
+          "~/.dsh/profiles/mindfs-acp/cordis.patch.yml"
+        ],
+        "envKeys": [
+          "DEEPSEEK_API_KEY",
+          "DEEPSEEK_BASE_URL",
+          "DSH_HOME",
+          "DSH_PERMISSION_MODE"
+        ]
+      }
+    },
+    {
       "name": "reasonix",
       "brief": "DeepSeek 原生终端 coding agent，重点在长会话推理和 prefix-cache 友好工作流；适合追求低成本、可持续上下文和推理型代码任务。",
       "installCommands": [
