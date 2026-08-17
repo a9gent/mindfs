@@ -5209,11 +5209,17 @@ export function App({ onGoHome }: AppProps) {
   );
 
   const handleSelectSession = useCallback(
-    async (session: any) => {
+    async (
+      session: any,
+      options?: { preserveTaskSelection?: boolean },
+    ) => {
       const key = session?.key || session?.session_key;
       const targetRoot =
         (session?.root_id as string | undefined) || currentRootIdRef.current;
       if (!targetRoot || !key) return;
+      if (!options?.preserveTaskSelection) {
+        setSelectedKanbanTaskId("");
+      }
       if (currentRootIdRef.current !== targetRoot) {
         setCurrentRootId(targetRoot);
       }
@@ -14298,7 +14304,11 @@ export function App({ onGoHome }: AppProps) {
               setDrawerOpenForRoot(currentRootIdRef.current, false);
             }}
             onExpand={() => {
-              handleSelectSession(currentSession);
+              handleSelectSession(currentSession, {
+                preserveTaskSelection:
+                  !!currentSession?.task_id &&
+                  currentSession.task_id === selectedKanbanTaskId,
+              });
               setDrawerOpenForRoot(currentRootIdRef.current, false);
             }}
           >

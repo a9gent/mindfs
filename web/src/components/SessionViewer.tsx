@@ -1020,7 +1020,6 @@ function SessionViewerInner({
   composerOverlayInset = 0,
 }: SessionViewerProps) {
   const { locale, t } = useI18n();
-  const [showAllFiles, setShowAllFiles] = useState(false);
   const [relatedFilesCollapsed, setRelatedFilesCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === "undefined") {
@@ -1497,7 +1496,7 @@ function SessionViewerInner({
     );
   }
 
-  const displayFiles = showAllFiles ? relatedFiles : relatedFiles.slice(0, 10);
+  const displayFiles = relatedFiles;
   const displayFileGroups = (() => {
     const currentRootPath = String(rootPath || "").replace(/[\\/]+$/, "");
     const repoGroups = displayFiles.reduce<
@@ -1557,7 +1556,6 @@ function SessionViewerInner({
       })),
     );
   })();
-  const hasMoreFiles = relatedFiles.length > 10;
   const displayName =
     session.name ||
     session.purpose ||
@@ -2526,25 +2524,6 @@ function SessionViewerInner({
                       gap: "10px",
                     }}
                   >
-                    {hasMoreFiles ? (
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setShowAllFiles(!showAllFiles);
-                        }}
-                        style={{
-                          background: "none",
-                          border: "none",
-                          padding: 0,
-                          cursor: "pointer",
-                          color: "var(--text-secondary)",
-                          fontSize: "11px",
-                        }}
-                      >
-                        {showAllFiles ? t("session.less") : t("session.more")}
-                      </button>
-                    ) : null}
                     <button
                       type="button"
                       onClick={(event) => {

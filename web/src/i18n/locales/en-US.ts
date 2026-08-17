@@ -363,8 +363,6 @@ export const enUS = {
   "session.generating": "Generating...",
   "session.sentWaiting": "Sent, waiting for response...",
   "session.relatedFiles": "Related files {count}",
-  "session.more": "More",
-  "session.less": "Less",
   "session.expandRelatedFiles": "Expand related files",
   "session.collapseRelatedFiles": "Collapse related files",
   "session.nonGit": "Non-Git",

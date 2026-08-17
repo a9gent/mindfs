@@ -361,8 +361,6 @@ export const zhCN = {
   "session.generating": "正在生成...",
   "session.sentWaiting": "已发送，等待响应...",
   "session.relatedFiles": "关联文件 {count}",
-  "session.more": "更多",
-  "session.less": "收起",
   "session.expandRelatedFiles": "展开关联文件",
   "session.collapseRelatedFiles": "折叠关联文件",
   "session.nonGit": "非 Git",
