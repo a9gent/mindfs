@@ -1636,6 +1636,9 @@ export function App({ onGoHome }: AppProps) {
     null,
   );
   const [selectedSessionLoading, setSelectedSessionLoading] = useState(false);
+  const [drawerLoadingSessionByRoot, setDrawerLoadingSessionByRoot] = useState<
+    Record<string, string>
+  >({});
   const [activeBoundSessionKey, setActiveBoundSessionKey] = useState<
     string | null
   >(null);
@@ -8579,6 +8582,10 @@ export function App({ onGoHome }: AppProps) {
         root_id: root,
         task_id: taskId || "",
       };
+      setDrawerLoadingSessionByRoot((prev) => ({
+        ...prev,
+        [root]: hasSessionExchanges(initial) ? "" : key,
+      }));
       setDrawerSessionForRoot(root, {
         ...(initial as any),
         key,
@@ -8593,6 +8600,9 @@ export function App({ onGoHome }: AppProps) {
       const applyDrawerSession = (session: Session) => {
         const activeDrawer = drawerSessionByRootRef.current[root];
         if ((activeDrawer?.key || activeDrawer?.session_key) !== key) return;
+        setDrawerLoadingSessionByRoot((prev) =>
+          prev[root] === key ? { ...prev, [root]: "" } : prev,
+        );
         setDrawerSessionForRoot(root, {
           ...(activeDrawer as any),
           ...(session as any),
@@ -8618,11 +8628,19 @@ export function App({ onGoHome }: AppProps) {
           }
         }
         const restored = await restorePromise;
-        if (!restored) return;
+        if (!restored) {
+          setDrawerLoadingSessionByRoot((prev) =>
+            prev[root] === key ? { ...prev, [root]: "" } : prev,
+          );
+          return;
+        }
         applyDrawerSession(restored);
         loadedSessionRef.current[cacheKey] = true;
         clearSessionStale(root, key);
       })().catch((error) => {
+        setDrawerLoadingSessionByRoot((prev) =>
+          prev[root] === key ? { ...prev, [root]: "" } : prev,
+        );
         console.error("[task.session] failed to open drawer session", {
           root,
           sessionKey: key,
@@ -14294,7 +14312,11 @@ export function App({ onGoHome }: AppProps) {
                 )}
                 targetSeq={currentSession?.search_seq}
                 targetSeqRequestKey={currentSession?.search_target_id}
-                loading={false}
+                composerOverlayInset={sessionViewerComposerOverlayInset}
+                loading={
+                  drawerLoadingSessionByRoot[currentRootId || ""] ===
+                  (drawerSessionSnapshot.key || drawerSessionSnapshot.session_key)
+                }
                 rootId={currentRootId}
                 rootPath={
                   managedRootByIdRef.current[currentRootId || ""]?.root_path ||

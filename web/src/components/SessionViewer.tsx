@@ -1036,7 +1036,6 @@ function SessionViewerInner({
   >({});
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const useInnerScrollContainer = interactionMode !== "drawer";
   const onFileClickRef = useRef(onFileClick);
   const copyResetTimersRef = useRef<Record<string, number>>({});
   const relatedFilesDefaultStateRef = useRef<string>("");
@@ -1111,7 +1110,7 @@ function SessionViewerInner({
       window.clearTimeout(timer),
     );
     copyResetTimersRef.current = {};
-  }, [sessionKey, useInnerScrollContainer]);
+  }, [sessionKey]);
 
   const userMessageSummaries = useMemo(
     () =>
@@ -1266,7 +1265,7 @@ function SessionViewerInner({
 
   useEffect(() => {
     const container = scrollRef.current;
-if (useInnerScrollContainer && !container) {
+    if (!container) {
       return;
     }
     if (!scrollEndRef.current) {
@@ -1281,11 +1280,11 @@ if (useInnerScrollContainer && !container) {
     if (shouldStickToBottomRef.current) {
       stickSessionToBottom("auto");
     }
-  }, [sessionKey, timeline, isStreaming, streamVersion, slashCommandResult, useInnerScrollContainer]);
+  }, [sessionKey, timeline, isStreaming, streamVersion, slashCommandResult]);
 
   useEffect(() => {
     const container = scrollRef.current;
-    if (!useInnerScrollContainer || !container || typeof window === "undefined") {
+    if (!container || typeof window === "undefined") {
       return;
     }
     const queueStickToBottom = () => {
@@ -1315,11 +1314,11 @@ if (useInnerScrollContainer && !container) {
         viewportStickFrameRef.current = null;
       }
     };
-  }, [sessionKey, useInnerScrollContainer]);
+  }, [sessionKey]);
 
   useEffect(() => {
     const el = scrollRef.current;
-    if (!useInnerScrollContainer || !el) {
+    if (!el) {
       shouldStickToBottomRef.current = true;
       setShowJumpToLatest(false);
       return;
@@ -1350,7 +1349,7 @@ if (useInnerScrollContainer && !container) {
     return () => {
       el.removeEventListener("scroll", updateStickiness);
     };
-  }, [refreshCurrentUserMessageIndex, sessionKey, useInnerScrollContainer]);
+  }, [refreshCurrentUserMessageIndex, sessionKey]);
 
   useEffect(() => {
     if (!targetSeq) {
@@ -2409,7 +2408,7 @@ if (useInnerScrollContainer && !container) {
 
       {/* 滚动容器 */}
       <div style={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative" }}>
-        <div ref={scrollRef} style={{ flex: 1, minHeight: 0, minWidth: 0, height: "100%", overflowY: useInnerScrollContainer ? "auto" : "visible", overflowX: "hidden", position: "relative", WebkitOverflowScrolling: "touch" }}>
+        <div ref={scrollRef} style={{ flex: 1, minHeight: 0, minWidth: 0, height: "100%", overflowY: "auto", overflowX: "hidden", position: "relative", WebkitOverflowScrolling: "touch" }}>
           <div style={{
             width: "100%",
             minWidth: 0,
@@ -2780,7 +2779,7 @@ if (useInnerScrollContainer && !container) {
           </div>
           </div>
         </div>
-        {interactionMode !== "drawer" && (userMessageSummaries.length > 0 || showJumpToLatest) ? (
+        {userMessageSummaries.length > 0 || showJumpToLatest ? (
           <div
             style={{
               position: "absolute",

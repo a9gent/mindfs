@@ -104,7 +104,7 @@ export function BottomSheet({
         </div>
 
         {/* Content */}
-        <div style={{ flex: 1, overflow: "auto", WebkitOverflowScrolling: "touch", minHeight: 0 }}>
+        <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
           {children}
         </div>
 
