@@ -512,7 +512,9 @@ func appendImportedExchange(
 		if toolCall.Kind != agenttypes.ToolKindExecute &&
 			toolCall.Kind != agenttypes.ToolKindEdit &&
 			toolCall.Kind != agenttypes.ToolKindThink &&
-			toolCall.Kind != agenttypes.ToolKindAskUser {
+			toolCall.Kind != agenttypes.ToolKindAskUser &&
+			toolCall.Kind != agenttypes.ToolKindWebSearch &&
+			toolCall.Kind != agenttypes.ToolKindOther {
 			continue
 		}
 		if err := manager.AddExchangeAux(ctx, target.Key, session.ExchangeAux{

@@ -373,6 +373,75 @@ text(r.output);`
 	}
 }
 
+func TestParseImportedCodexToolCallUnwrapsJavaScriptObjectExec(t *testing.T) {
+	input := `const r = await tools.exec_command({cmd:"node -e 'const value={ok:true}; console.log(value)'",workdir:"/tmp/project",yield_time_ms:30000}); text(r.output);`
+	toolCall, ok := parseImportedCodexToolCall(map[string]any{
+		"type":    "custom_tool_call",
+		"name":    "exec",
+		"call_id": "call-exec",
+		"input":   input,
+	}, 0, "zsh")
+	if !ok {
+		t.Fatal("parseImportedCodexToolCall returned false")
+	}
+	wantCommand := `zsh -lc 'node -e '\''const value={ok:true}; console.log(value)'\'''`
+	if toolCall.Kind != agenttypes.ToolKindExecute ||
+		toolCall.Title != wantCommand ||
+		toolCall.Meta["command"] != wantCommand ||
+		toolCall.Meta["tool"] != "exec_command" {
+		t.Fatalf("exec tool call = %#v", toolCall)
+	}
+}
+
+func TestParseImportedCodexToolCallClassifiesWrappedTools(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantKind  agenttypes.ToolKind
+		wantTitle string
+		wantPath  string
+	}{
+		{
+			name:      "web search",
+			input:     `const r = await tools.web__run({search_query:[{q:"DeepSeek Harness ACP"}],response_length:"long"}); text(r);`,
+			wantKind:  agenttypes.ToolKindWebSearch,
+			wantTitle: "DeepSeek Harness ACP",
+		},
+		{
+			name:      "patch variable",
+			input:     `const patch = "*** Begin Patch\n*** Update File: server/main.go\n@@\n-const tool = tools.exec_command\n+const tool = realCommand\n*** End Patch"; text(await tools.apply_patch(patch));`,
+			wantKind:  agenttypes.ToolKindEdit,
+			wantTitle: "main.go",
+			wantPath:  "server/main.go",
+		},
+		{
+			name:      "write stdin",
+			input:     `const r = await tools.write_stdin({session_id:33334,chars:"",yield_time_ms:30000}); text(r);`,
+			wantKind:  agenttypes.ToolKindExecute,
+			wantTitle: "write_stdin",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			toolCall, ok := parseImportedCodexToolCall(map[string]any{
+				"type":    "custom_tool_call",
+				"name":    "exec",
+				"call_id": "call-1",
+				"input":   tt.input,
+			}, 0)
+			if !ok {
+				t.Fatal("parseImportedCodexToolCall returned false")
+			}
+			if toolCall.Kind != tt.wantKind || toolCall.Title != tt.wantTitle || toolCall.Meta["tool"] == nil {
+				t.Fatalf("tool call = %#v", toolCall)
+			}
+			if tt.wantPath != "" && (len(toolCall.Locations) != 1 || toolCall.Locations[0].Path != tt.wantPath) {
+				t.Fatalf("locations = %#v, want %q", toolCall.Locations, tt.wantPath)
+			}
+		})
+	}
+}
+
 func TestImportedCodexToolOutputFlattensExecContentBlocks(t *testing.T) {
 	raw := []any{
 		map[string]any{

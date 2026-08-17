@@ -151,6 +151,22 @@ func TestImportExternalSessionOnlyPersistsSelectedAuxKinds(t *testing.T) {
 						Status: "complete",
 						Kind:   agenttypes.ToolKindAskUser,
 					},
+				}, {
+					Line: 0,
+					ToolCall: &agenttypes.ToolCall{
+						CallID: "web-1",
+						Title:  "DeepSeek Harness ACP",
+						Status: "complete",
+						Kind:   agenttypes.ToolKindWebSearch,
+					},
+				}, {
+					Line: 0,
+					ToolCall: &agenttypes.ToolCall{
+						CallID: "other-1",
+						Title:  "view_image",
+						Status: "complete",
+						Kind:   agenttypes.ToolKindOther,
+					},
 				}},
 			},
 		},
@@ -196,6 +212,20 @@ func TestImportExternalSessionOnlyPersistsSelectedAuxKinds(t *testing.T) {
 	}
 	if askCall.Kind != agenttypes.ToolKindAskUser {
 		t.Fatalf("ask-user tool call = %#v", askCall)
+	}
+	webCall, err := manager.GetFullToolCall(context.Background(), out.SessionKey, "web-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if webCall.Kind != agenttypes.ToolKindWebSearch {
+		t.Fatalf("web tool call = %#v", webCall)
+	}
+	otherCall, err := manager.GetFullToolCall(context.Background(), out.SessionKey, "other-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherCall.Kind != agenttypes.ToolKindOther {
+		t.Fatalf("other tool call = %#v", otherCall)
 	}
 	if _, err := manager.GetFullToolCall(context.Background(), out.SessionKey, "read-1"); err == nil {
 		t.Fatal("read tool call was persisted, want it filtered")

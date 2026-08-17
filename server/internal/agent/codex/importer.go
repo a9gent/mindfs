@@ -885,14 +885,6 @@ func parseImportedCodexToolCall(payload map[string]any, ordinal int, sessionShel
 	}
 
 	name := strings.TrimSpace(asString(payload["name"]))
-	title := name
-	kind := importedCodexToolKind(name)
-	if kind != agenttypes.ToolKindExecute &&
-		kind != agenttypes.ToolKindEdit &&
-		kind != agenttypes.ToolKindThink &&
-		kind != agenttypes.ToolKindAskUser {
-		return agenttypes.ToolCall{}, false
-	}
 	var input any
 	switch rawType {
 	case "function_call":
@@ -902,21 +894,43 @@ func parseImportedCodexToolCall(payload map[string]any, ordinal int, sessionShel
 	default:
 		return agenttypes.ToolCall{}, false
 	}
+
+	wrappedTool := false
+	if rawType == "custom_tool_call" && name == "exec" {
+		if innerName, innerInput, ok := importedCodexWrappedTool(input); ok {
+			name = innerName
+			input = innerInput
+			wrappedTool = true
+		}
+	}
+	title := name
+	kind := importedCodexToolKind(name)
+	if kind != agenttypes.ToolKindExecute &&
+		kind != agenttypes.ToolKindEdit &&
+		kind != agenttypes.ToolKindThink &&
+		kind != agenttypes.ToolKindAskUser &&
+		!(wrappedTool && kind == agenttypes.ToolKindWebSearch) &&
+		!(wrappedTool && kind == agenttypes.ToolKindOther) {
+		return agenttypes.ToolCall{}, false
+	}
 	if title == "" {
 		title = rawType
 	}
 
 	meta := map[string]any{"rawType": rawType}
+	if wrappedTool {
+		meta["tool"] = name
+	}
 	if inputText := importedCodexInputText(input); inputText != "" {
 		meta["input"] = inputText
 	}
 	locations := make([]agenttypes.ToolCallLocation, 0, 1)
-	if kind == agenttypes.ToolKindExecute {
+	if kind == agenttypes.ToolKindExecute && name == "exec_command" {
 		shell := ""
 		if len(sessionShell) > 0 {
 			shell = sessionShell[0]
 		}
-		if command, ok := importedCodexWrappedExecCommand(input, shell); ok {
+		if command, ok := importedCodexExecCommand(input, shell, wrappedTool); ok {
 			title = command
 			meta["command"] = command
 		}
@@ -928,7 +942,7 @@ func parseImportedCodexToolCall(payload map[string]any, ordinal int, sessionShel
 			if command == "" {
 				command = strings.TrimSpace(asString(decoded["cmd"]))
 			}
-			if command != "" {
+			if command != "" && strings.TrimSpace(asString(meta["command"])) == "" {
 				title = command
 				meta["command"] = command
 			}
@@ -946,6 +960,11 @@ func parseImportedCodexToolCall(payload map[string]any, ordinal int, sessionShel
 		case agenttypes.ToolKindAskUser:
 			if questions := decoded["questions"]; questions != nil {
 				meta["questions"] = questions
+			}
+		case agenttypes.ToolKindWebSearch:
+			if query := importedCodexWebQuery(decoded); query != "" {
+				title = query
+				meta["query"] = query
 			}
 		}
 	}
@@ -1111,6 +1130,8 @@ func importedCodexToolKind(name string) agenttypes.ToolKind {
 		normalized == "write_stdin" || strings.Contains(normalized, "shell") ||
 		strings.Contains(normalized, "command"):
 		return agenttypes.ToolKindExecute
+	case normalized == "web__run" || normalized == "web_search":
+		return agenttypes.ToolKindWebSearch
 	case normalized == "update_plan" || normalized == "plan":
 		return agenttypes.ToolKindThink
 	case strings.Contains(normalized, "request_user_input") ||
@@ -1171,9 +1192,8 @@ func importedCodexStructuredEditContent(input any) []agenttypes.ToolCallContentI
 	return nil
 }
 
-func importedCodexWrappedExecCommand(input any, sessionShell string) (string, bool) {
-	script := strings.TrimSpace(asString(input))
-	args := importedCodexJavaScriptCallObject(script, "tools.exec_command")
+func importedCodexExecCommand(input any, sessionShell string, includeShell bool) (string, bool) {
+	args := importedCodexInputObject(input)
 	if args == nil {
 		return "", false
 	}
@@ -1189,10 +1209,30 @@ func importedCodexWrappedExecCommand(input any, sessionShell string) (string, bo
 	if login, ok := args["login"].(bool); ok && !login {
 		flag = "-c"
 	}
-	if shell == "" {
+	if shell == "" || !includeShell {
 		return command, true
 	}
 	return shell + " " + flag + " " + quoteImportedShellCommand(command), true
+}
+
+func importedCodexWebQuery(input map[string]any) string {
+	for _, key := range []string{"search_query", "image_query"} {
+		items, _ := input[key].([]any)
+		for _, item := range items {
+			entry, _ := item.(map[string]any)
+			if query := strings.TrimSpace(asString(entry["q"])); query != "" {
+				return query
+			}
+		}
+	}
+	items, _ := input["open"].([]any)
+	for _, item := range items {
+		entry, _ := item.(map[string]any)
+		if refID := strings.TrimSpace(asString(entry["ref_id"])); refID != "" {
+			return refID
+		}
+	}
+	return ""
 }
 
 func importedCodexWorldStateShell(raw map[string]any) string {
@@ -1204,44 +1244,237 @@ func importedCodexWorldStateShell(raw map[string]any) string {
 	return strings.TrimSpace(asString(local["shell"]))
 }
 
-func importedCodexJavaScriptCallObject(script, callName string) map[string]any {
-	callIndex := strings.Index(script, callName)
+func importedCodexWrappedTool(input any) (string, any, bool) {
+	script := strings.TrimSpace(asString(input))
+	callIndex := importedCodexToolCallIndex(script)
 	if callIndex < 0 {
-		return nil
+		return "", nil, false
 	}
-	remainder := script[callIndex+len(callName):]
-	openIndex := strings.IndexByte(remainder, '{')
-	if openIndex < 0 {
-		return nil
+	nameStart := callIndex + len("tools.")
+	nameEnd := nameStart
+	for nameEnd < len(script) && isImportedJavaScriptIdentifierByte(script[nameEnd]) {
+		nameEnd++
 	}
-
-	start := callIndex + len(callName) + openIndex
-	depth := 0
-	inString := false
-	escaped := false
-	for index := start; index < len(script); index++ {
-		switch char := script[index]; {
-		case inString && escaped:
-			escaped = false
-		case inString && char == '\\':
-			escaped = true
-		case char == '"':
-			inString = !inString
-		case inString:
-		case char == '{':
-			depth++
-		case char == '}':
-			depth--
-			if depth == 0 {
-				var decoded map[string]any
-				if json.Unmarshal([]byte(script[start:index+1]), &decoded) == nil {
-					return decoded
-				}
-				return nil
+	name := strings.TrimSpace(script[nameStart:nameEnd])
+	if name == "" {
+		return "", nil, false
+	}
+	index := nameEnd
+	for index < len(script) && (script[index] == ' ' || script[index] == '\t' || script[index] == '\r' || script[index] == '\n') {
+		index++
+	}
+	if index >= len(script) || script[index] != '(' {
+		return "", nil, false
+	}
+	index++
+	for index < len(script) && (script[index] == ' ' || script[index] == '\t' || script[index] == '\r' || script[index] == '\n') {
+		index++
+	}
+	if index >= len(script) {
+		return name, nil, true
+	}
+	switch script[index] {
+	case '{':
+		literal, ok := importedCodexBalancedJavaScriptValue(script, index, '{', '}')
+		if !ok {
+			return name, nil, true
+		}
+		var decoded map[string]any
+		if json.Unmarshal([]byte(quoteImportedJavaScriptObjectKeys(literal)), &decoded) == nil {
+			return name, decoded, true
+		}
+	case '"', '\'', '`':
+		if value, _, ok := importedCodexJavaScriptString(script, index); ok {
+			return name, value, true
+		}
+	default:
+		end := index
+		for end < len(script) && isImportedJavaScriptIdentifierByte(script[end]) {
+			end++
+		}
+		identifier := script[index:end]
+		if identifier != "" {
+			if value, ok := importedCodexJavaScriptVariable(script[:callIndex], identifier); ok {
+				return name, value, true
 			}
 		}
 	}
-	return nil
+	return name, nil, true
+}
+
+func importedCodexToolCallIndex(script string) int {
+	var quote byte
+	escaped := false
+	for index := 0; index+len("tools.") <= len(script); index++ {
+		char := script[index]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if char == '\\' {
+				escaped = true
+			} else if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		if char == '"' || char == '\'' || char == '`' {
+			quote = char
+			continue
+		}
+		if strings.HasPrefix(script[index:], "tools.") {
+			return index
+		}
+	}
+	return -1
+}
+
+func importedCodexBalancedJavaScriptValue(script string, start int, open, close byte) (string, bool) {
+	depth := 0
+	var quote byte
+	escaped := false
+	for index := start; index < len(script); index++ {
+		char := script[index]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if char == '\\' {
+				escaped = true
+			} else if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch char {
+		case '"', '\'', '`':
+			quote = char
+		case open:
+			depth++
+		case close:
+			depth--
+			if depth == 0 {
+				return script[start : index+1], true
+			}
+		}
+	}
+	return "", false
+}
+
+func quoteImportedJavaScriptObjectKeys(literal string) string {
+	var out strings.Builder
+	out.Grow(len(literal) + 16)
+	var quote byte
+	escaped := false
+	for index := 0; index < len(literal); {
+		char := literal[index]
+		if quote != 0 {
+			out.WriteByte(char)
+			index++
+			if escaped {
+				escaped = false
+			} else if char == '\\' {
+				escaped = true
+			} else if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		if char == '"' || char == '\'' || char == '`' {
+			quote = char
+			out.WriteByte(char)
+			index++
+			continue
+		}
+		if isImportedJavaScriptIdentifierStart(char) {
+			end := index + 1
+			for end < len(literal) && isImportedJavaScriptIdentifierByte(literal[end]) {
+				end++
+			}
+			next := end
+			for next < len(literal) && (literal[next] == ' ' || literal[next] == '\t' || literal[next] == '\r' || literal[next] == '\n') {
+				next++
+			}
+			previous := index - 1
+			for previous >= 0 && (literal[previous] == ' ' || literal[previous] == '\t' || literal[previous] == '\r' || literal[previous] == '\n') {
+				previous--
+			}
+			if next < len(literal) && literal[next] == ':' && previous >= 0 && (literal[previous] == '{' || literal[previous] == ',') {
+				out.WriteByte('"')
+				out.WriteString(literal[index:end])
+				out.WriteByte('"')
+			} else {
+				out.WriteString(literal[index:end])
+			}
+			index = end
+			continue
+		}
+		out.WriteByte(char)
+		index++
+	}
+	return out.String()
+}
+
+func importedCodexJavaScriptVariable(prefix, name string) (string, bool) {
+	for _, declaration := range []string{"const ", "let ", "var "} {
+		marker := declaration + name
+		index := strings.LastIndex(prefix, marker)
+		if index < 0 {
+			continue
+		}
+		index += len(marker)
+		for index < len(prefix) && (prefix[index] == ' ' || prefix[index] == '\t' || prefix[index] == '\r' || prefix[index] == '\n') {
+			index++
+		}
+		if index >= len(prefix) || prefix[index] != '=' {
+			continue
+		}
+		index++
+		for index < len(prefix) && (prefix[index] == ' ' || prefix[index] == '\t' || prefix[index] == '\r' || prefix[index] == '\n') {
+			index++
+		}
+		if value, _, ok := importedCodexJavaScriptString(prefix, index); ok {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+func importedCodexJavaScriptString(script string, start int) (string, int, bool) {
+	if start >= len(script) || (script[start] != '"' && script[start] != '\'' && script[start] != '`') {
+		return "", start, false
+	}
+	quote := script[start]
+	escaped := false
+	for index := start + 1; index < len(script); index++ {
+		char := script[index]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if char == '\\' {
+			escaped = true
+			continue
+		}
+		if char != quote {
+			continue
+		}
+		literal := script[start : index+1]
+		if quote == '"' {
+			var decoded string
+			if json.Unmarshal([]byte(literal), &decoded) == nil {
+				return decoded, index + 1, true
+			}
+		}
+		return literal[1 : len(literal)-1], index + 1, true
+	}
+	return "", start, false
+}
+
+func isImportedJavaScriptIdentifierStart(char byte) bool {
+	return char == '_' || char == '$' || char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z'
+}
+
+func isImportedJavaScriptIdentifierByte(char byte) bool {
+	return isImportedJavaScriptIdentifierStart(char) || char >= '0' && char <= '9'
 }
 
 func quoteImportedShellCommand(command string) string {
