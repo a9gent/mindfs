@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -9,6 +10,20 @@ import (
 
 	"mindfs/server/internal/agent/types"
 )
+
+func TestClaudeModelInfoSupportsEffortWithoutModelNameWhitelist(t *testing.T) {
+	want := []string{"low", "medium", "high", "xhigh", "max"}
+	got := claudeModelInfo(claudeagent.ModelInfo{
+		Value:       "custom-provider-model",
+		DisplayName: "Custom Model",
+	})
+	if !got.SupportEffort {
+		t.Fatal("custom model should support CLI effort selection")
+	}
+	if !reflect.DeepEqual(got.Efforts, want) {
+		t.Fatalf("custom model efforts = %v, want %v", got.Efforts, want)
+	}
+}
 
 func TestClaudeCompactBoundaryEmitsCompactNotice(t *testing.T) {
 	var got types.Event
