@@ -528,15 +528,21 @@ func claudeProjectDirName(rootPath string) string {
 	return sanitizeClaudeProjectPath(rootPath)
 }
 
+// sanitizeClaudeProjectPath encodes a cwd path the same way Claude Code does
+// when creating its session folder name under ~/.claude/projects: every
+// character outside [A-Za-z0-9] (spaces, CJK chars, dots, slashes, etc.) is
+// replaced with "-".
 func sanitizeClaudeProjectPath(path string) string {
-	replacer := strings.NewReplacer(
-		"/", "-",
-		"\\", "-",
-		":", "-",
-		".", "-",
-		"_", "-",
-	)
-	return replacer.Replace(path)
+	var b strings.Builder
+	b.Grow(len(path))
+	for _, r := range path {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
 }
 
 func (i *Importer) storeSessionFiles(items []claudeSessionFile) {

@@ -171,3 +171,24 @@ func TestReadClaudeImportedSubagentsLinksAgentToolCall(t *testing.T) {
 		t.Fatalf("len(exchanges) = %d, want 2", len(item.Exchanges))
 	}
 }
+
+func TestClaudeProjectDirNameMatchesClaudeCodeOnDiskEncoding(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"ascii path keeps letters and digits", "/Users/Ye/Databases/L000", "-Users-Ye-Databases-L000"},
+		{"cjk and space chars become dashes", "/Users/Ye/HOBBIES/260817Claude Code远程访问第三方方案", "-Users-Ye-HOBBIES-260817Claude-Code---------"},
+		{"dot becomes dash", "/Users/Ye/.claude", "-Users-Ye--claude"},
+		{"underscore becomes dash", "/a_b/c", "-a-b-c"},
+		{"tailing slash stripped", "/Users/Ye/L000/", "-Users-Ye-L000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := claudeProjectDirName(tt.path); got != tt.want {
+				t.Fatalf("claudeProjectDirName(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
