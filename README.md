@@ -23,7 +23,7 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 
 ### Agent Sessions
 
-- **Multi-Agent support**: Claude Code · OpenAI Codex · Gemini CLI · Grok · Cursor · GitHub Copilot · Cline · Augment · Kimi · Kiro · Qwen · Qoder · OMP · Pi · Hermes · DeepSeek Harness (DSH) · Reasonix · OpenCode · OpenClaw — installed agents are detected automatically.
+- **Multi-Agent support**: Claude Code · OpenAI Codex · Gemini CLI · Grok · Cursor · GitHub Copilot · CodeBuddy · Cline · Augment · Kimi · Kiro · Qwen · Qoder · OMP · Pi · Hermes · DeepSeek Harness (DSH) · Reasonix · OpenCode · OpenClaw — installed agents are detected automatically.
 - **Real-time streaming**: Token-by-token output pushed to the browser; tool calls, thought traces, permission prompts, and remaining context-window capacity are rendered live as structured, collapsible cards.
 - **Flexible switching**: Switch agents or models mid-session; all agents share the same context — no need to re-explain the background.
 - **Session search**: Search by session title or conversation content, then jump straight to the matched session and snippet.
@@ -107,6 +107,7 @@ MindFS does not include any AI model — you need at least one Agent CLI install
 | **Gemini CLI** | https://geminicli.com/ |
 | **Cursor** | https://cursor.com/cn/cli |
 | **GitHub Copilot** | https://github.com/features/copilot/cli |
+| **CodeBuddy** | https://www.codebuddy.ai/docs/cli/installation (`codebuddy --acp`) |
 | **Cline** | https://cline.bot/kanban |
 | **Augment** | https://www.augmentcode.com/product/CLI |
 | **Kiro** | https://kiro.dev/cli/ |
