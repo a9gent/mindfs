@@ -42,18 +42,19 @@ type claudeTaskInfo struct {
 }
 
 type OpenOptions struct {
-	AgentName       string
-	SessionKey      string
-	Model           string
-	Effort          string
-	PlanMode        bool
-	RootPath        string
-	Command         string
-	Args            []string
-	Env             map[string]string
-	ResumeSessionID string
-	ForkSessionID   string
-	ResumeMessageID string
+	AgentName             string
+	SessionKey            string
+	Model                 string
+	Effort                string
+	PlanMode              bool
+	RootPath              string
+	Command               string
+	Args                  []string
+	Env                   map[string]string
+	DeveloperInstructions string
+	ResumeSessionID       string
+	ForkSessionID         string
+	ResumeMessageID       string
 }
 
 type Runtime struct{}
@@ -84,6 +85,7 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 		claudeagent.WithForwardSubagentText(true),
 		claudeagent.WithCanUseTool(s.handleCanUseTool),
 	}
+	optionList = appendClaudeDeveloperInstructions(optionList, opts.DeveloperInstructions)
 	if strings.TrimSpace(opts.Command) != "" {
 		optionList = append(optionList, claudeagent.WithCLIPath(opts.Command))
 	}
@@ -158,6 +160,15 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 	s.model = selectedModel
 	go s.consumeMessages()
 	return s, nil
+}
+
+func appendClaudeDeveloperInstructions(options []claudeagent.Option, developerInstructions string) []claudeagent.Option {
+	if instructions := strings.TrimSpace(developerInstructions); instructions != "" {
+		return append(options, claudeagent.WithExtraArgs(map[string]*string{
+			"append-system-prompt": &instructions,
+		}))
+	}
+	return options
 }
 
 func (r *Runtime) CloseAll() {}

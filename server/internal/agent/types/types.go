@@ -103,18 +103,19 @@ type ContextWindow struct {
 }
 
 type OpenSessionInput struct {
-	SessionKey     string
-	AgentName      string
-	Model          string
-	Mode           string
-	Effort         string
-	FastService    string
-	PlanMode       bool
-	Probe          bool
-	RootPath       string
-	AgentSessionID string
-	AgentCtxSeq    int
-	ForkPoint      ResolveForkPointOutput
+	SessionKey            string
+	AgentName             string
+	Model                 string
+	Mode                  string
+	Effort                string
+	FastService           string
+	PlanMode              bool
+	Probe                 bool
+	RootPath              string
+	DeveloperInstructions string
+	AgentSessionID        string
+	AgentCtxSeq           int
+	ForkPoint             ResolveForkPointOutput
 }
 
 type RuntimeDefaults struct {

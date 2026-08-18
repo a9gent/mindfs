@@ -40,6 +40,25 @@ func TestPoolGetOrCreateRequiresSessionKey(t *testing.T) {
 	}
 }
 
+func TestPoolSupportsDeveloperInstructionsByConfiguredProtocol(t *testing.T) {
+	pool := NewPool(Config{Agents: []Definition{
+		{Name: "codex-custom", Protocol: ProtocolCodexSDK},
+		{Name: "claude-custom", Protocol: ProtocolClaudeSDK},
+		{Name: "acp-custom", Protocol: ProtocolACP},
+	}})
+	defer pool.CloseAll()
+
+	if !pool.SupportsDeveloperInstructions("codex-custom") {
+		t.Fatal("codex-sdk should support developer instructions")
+	}
+	if !pool.SupportsDeveloperInstructions("claude-custom") {
+		t.Fatal("claude-sdk should support developer instructions")
+	}
+	if pool.SupportsDeveloperInstructions("acp-custom") {
+		t.Fatal("ACP should use the user-message compatibility path")
+	}
+}
+
 func TestPoolGetOrCreateUnknownAgent(t *testing.T) {
 	pool := NewPool(loadPoolTestConfig(t))
 	_, err := pool.GetOrCreate(context.Background(), agenttypes.OpenSessionInput{

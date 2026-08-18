@@ -25,6 +25,20 @@ func TestClaudeModelInfoSupportsEffortWithoutModelNameWhitelist(t *testing.T) {
 	}
 }
 
+func TestAppendClaudeDeveloperInstructionsUsesCLIAppendSystemPrompt(t *testing.T) {
+	options := claudeagent.DefaultOptions()
+	for _, apply := range appendClaudeDeveloperInstructions(nil, "render markdown") {
+		apply(&options)
+	}
+	if options.SystemPrompt != "" {
+		t.Fatalf("custom system prompt = %q, want empty", options.SystemPrompt)
+	}
+	value, ok := options.ExtraArgs["append-system-prompt"]
+	if !ok || value == nil || *value != "render markdown" {
+		t.Fatalf("append-system-prompt extra arg = %#v", value)
+	}
+}
+
 func TestClaudeCompactBoundaryEmitsCompactNotice(t *testing.T) {
 	var got types.Event
 	s := &session{sessionID: "claude-session", onUpdate: func(event types.Event) { got = event }}

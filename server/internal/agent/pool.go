@@ -54,6 +54,25 @@ func NewPool(cfg Config) *Pool {
 	}
 }
 
+// SupportsDeveloperInstructions reports whether the configured transport can
+// carry MindFS instructions outside the user-message history.
+func (p *Pool) SupportsDeveloperInstructions(agentName string) bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	def, ok := p.cfg.GetAgent(strings.TrimSpace(agentName))
+	if !ok {
+		return false
+	}
+	protocol := def.Protocol
+	if protocol == "" {
+		protocol = DefaultProtocol(agentName)
+	}
+	return protocol == ProtocolCodexSDK || protocol == ProtocolClaudeSDK
+}
+
 // GetOrCreate returns an existing session handle or creates a new one.
 func (p *Pool) GetOrCreate(ctx context.Context, in agenttypes.OpenSessionInput) (agenttypes.Session, error) {
 	if in.SessionKey == "" {
@@ -220,18 +239,19 @@ func (p *Pool) openSession(ctx context.Context, protocol Protocol, def Definitio
 	switch protocol {
 	case ProtocolClaudeSDK:
 		return p.claude.OpenSession(ctx, claude.OpenOptions{
-			AgentName:       in.AgentName,
-			SessionKey:      in.SessionKey,
-			Model:           in.Model,
-			Effort:          in.Effort,
-			PlanMode:        in.PlanMode,
-			RootPath:        in.RootPath,
-			Command:         def.Command,
-			Args:            append([]string{}, def.Args...),
-			Env:             cloneEnv(def.Env),
-			ResumeSessionID: in.AgentSessionID,
-			ForkSessionID:   in.ForkPoint.AgentSessionID,
-			ResumeMessageID: in.ForkPoint.ClaudeMessageUUID,
+			AgentName:             in.AgentName,
+			SessionKey:            in.SessionKey,
+			Model:                 in.Model,
+			Effort:                in.Effort,
+			PlanMode:              in.PlanMode,
+			RootPath:              in.RootPath,
+			Command:               def.Command,
+			Args:                  append([]string{}, def.Args...),
+			Env:                   cloneEnv(def.Env),
+			DeveloperInstructions: in.DeveloperInstructions,
+			ResumeSessionID:       in.AgentSessionID,
+			ForkSessionID:         in.ForkPoint.AgentSessionID,
+			ResumeMessageID:       in.ForkPoint.ClaudeMessageUUID,
 		})
 	case ProtocolCodexSDK:
 		var codexUserOrdinal *int
@@ -240,20 +260,21 @@ func (p *Pool) openSession(ctx context.Context, protocol Protocol, def Definitio
 			codexUserOrdinal = &value
 		}
 		return p.codex.OpenSession(ctx, codex.OpenOptions{
-			AgentName:        in.AgentName,
-			SessionKey:       in.SessionKey,
-			Model:            in.Model,
-			Effort:           in.Effort,
-			FastService:      in.FastService,
-			PlanMode:         in.PlanMode,
-			Probe:            in.Probe,
-			RootPath:         in.RootPath,
-			Command:          def.Command,
-			Args:             append([]string{}, def.Args...),
-			Env:              cloneEnv(def.Env),
-			ResumeSessionID:  in.AgentSessionID,
-			ForkSessionID:    in.ForkPoint.AgentSessionID,
-			CodexUserOrdinal: codexUserOrdinal,
+			AgentName:             in.AgentName,
+			SessionKey:            in.SessionKey,
+			Model:                 in.Model,
+			Effort:                in.Effort,
+			FastService:           in.FastService,
+			PlanMode:              in.PlanMode,
+			Probe:                 in.Probe,
+			RootPath:              in.RootPath,
+			Command:               def.Command,
+			Args:                  append([]string{}, def.Args...),
+			Env:                   cloneEnv(def.Env),
+			DeveloperInstructions: in.DeveloperInstructions,
+			ResumeSessionID:       in.AgentSessionID,
+			ForkSessionID:         in.ForkPoint.AgentSessionID,
+			CodexUserOrdinal:      codexUserOrdinal,
 		})
 	case ProtocolACP:
 		fallthrough
