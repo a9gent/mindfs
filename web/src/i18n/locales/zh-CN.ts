@@ -106,6 +106,7 @@ export const zhCN = {
   "agentConfig.env": "环境变量",
   "agentConfig.envPlaceholder": "KEY=value，每行一个",
   "agentConfig.providerName": "供应商名称",
+  "agentConfig.providerPreset": "供应商预设",
   "agentConfig.validateAndSave": "校验并保存",
   "agentConfig.noSwitchableConfig": "暂无可切换配置",
   "agentConfig.noBackups": "暂无配置备份",
