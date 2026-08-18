@@ -457,6 +457,28 @@
         "acp"
       ],
       "configBackup": {}
+    },
+    {
+      "name": "CodeBuddy",
+      "brief": "腾讯云的终端 coding agent，将 AI 深度融入从产品构思到发布的全流程；CLI 侧支持读写代码、执行命令和工具调用，适合中文语境下的终端协作与一站式交付。",
+      "installCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g @tencent-ai/codebuddy-code" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g @tencent-ai/codebuddy-code" }
+      ],
+      "command": "codebuddy",
+      "protocol": "acp",
+      "args": [
+        "--acp"
+      ],
+      "configBackup": {
+        "fileSources": [
+          "~/.codebuddy/mcp.json",
+          "~/.codebuddy/models.json",
+          "~/.codebuddy/settings.json"
+        ]
+      }
     }
   ],
   "relayBaseURL": "https://relay.a9gent.com",

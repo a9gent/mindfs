@@ -28,6 +28,12 @@
       "command": "omp",
       "protocol": "acp",
       "args": ["acp"]
+    },
+    {
+      "name": "CodeBuddy",
+      "command": "codebuddy",
+      "protocol": "acp",
+      "args": ["--acp"]
     }
   ]
 }

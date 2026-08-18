@@ -23,7 +23,7 @@
 
 ### Agent 会话
 
-- **多 Agent 支持**：Claude Code · OpenAI Codex · Gemini CLI · Grok · Cursor · Copilot · Cline · Augment · Kimi · Kiro · Qwen · Qoder · OMP · Pi · Hermes · DeepSeek Harness（DSH）· Reasonix · OpenCode · OpenClaw，自动探测已安装的 Agent。
+- **多 Agent 支持**：Claude Code · OpenAI Codex · Gemini CLI · Grok · Cursor · Copilot · CodeBuddy · Cline · Augment · Kimi · Kiro · Qwen · Qoder · OMP · Pi · Hermes · DeepSeek Harness（DSH）· Reasonix · OpenCode · OpenClaw，自动探测已安装的 Agent。
 - **实时流式输出**：逐 token 推送，工具调用、思考过程、权限请求均以结构化卡片实时渲染，上下文窗口实时余量。
 - **灵活切换**：会话中随时切换 Agent 或模型，多 Agent 共享同一上下文，无需重新描述背景。
 - **会话搜索**：支持按会话标题或对话内容搜索，并可直接跳转到命中的会话和片段。
@@ -107,6 +107,7 @@ MindFS 本身不包含 AI 模型，需要在本机安装至少一个 Agent CLI�
 | **Gemini CLI** | https://geminicli.com/ |
 | **Cursor** | https://cursor.com/cn/cli |
 | **GitHub Copilot** | https://github.com/features/copilot/cli |
+| **CodeBuddy** | https://www.codebuddy.ai/docs/cli/installation（`codebuddy --acp`） |
 | **Cline** | https://cline.bot/kanban |
 | **Augment** | https://www.augmentcode.com/product/CLI |
 | **Kiro** | https://kiro.dev/cli/ |

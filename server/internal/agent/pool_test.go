@@ -333,6 +333,20 @@ func TestLoadConfigReadsOMPAgent(t *testing.T) {
 	}
 }
 
+func TestLoadConfigReadsCodeBuddyAgent(t *testing.T) {
+	cfg := loadPoolTestConfig(t)
+	def, ok := cfg.GetAgent("CodeBuddy")
+	if !ok {
+		t.Fatalf("expected CodeBuddy in test agents.json")
+	}
+	if def.Command != "codebuddy" || def.Protocol != ProtocolACP {
+		t.Fatalf("CodeBuddy definition = command %q protocol %q", def.Command, def.Protocol)
+	}
+	if len(def.Args) != 1 || def.Args[0] != "--acp" {
+		t.Fatalf("CodeBuddy args = %#v", def.Args)
+	}
+}
+
 func TestMergeConfigsKeepsBundledAgentsAndAppliesUserOverrides(t *testing.T) {
 	base := Config{
 		RelayBaseURL: "https://relay.default.example.com",
