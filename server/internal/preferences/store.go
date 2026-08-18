@@ -27,6 +27,36 @@ type UserPreferences struct {
 	Agents                          map[string]AgentDefaults `json:"agents,omitempty"`
 	SessionNaming                   SessionNamingDefaults    `json:"session_naming,omitempty"`
 	IdleSessionResourceReleaseHours int                      `json:"idle_session_resource_release_hours,omitempty"`
+	NewProjectMetaLocation          string                   `json:"new_project_meta_location,omitempty"`
+}
+
+func (s *Store) NewProjectMetaLocation() string {
+	if s == nil {
+		return "project"
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.data.NewProjectMetaLocation == "home" {
+		return "home"
+	}
+	return "project"
+}
+
+func (s *Store) UpdateNewProjectMetaLocation(location string) error {
+	if s == nil {
+		return nil
+	}
+	location = strings.TrimSpace(location)
+	if location != "project" && location != "home" {
+		return errors.New("invalid new project metadata location")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.NewProjectMetaLocation == location {
+		return nil
+	}
+	s.data.NewProjectMetaLocation = location
+	return s.saveLocked()
 }
 
 func (s *Store) IdleSessionResourceReleaseHours() int {

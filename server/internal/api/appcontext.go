@@ -571,10 +571,14 @@ func (s *AppContext) GetE2EEManager() *e2ee.Manager {
 }
 
 func (s *AppContext) UpsertRoot(path string) (fs.RootInfo, error) {
+	return s.UpsertRootWithMetaLocation(path, fs.MetaLocationProject)
+}
+
+func (s *AppContext) UpsertRootWithMetaLocation(path, metaLocation string) (fs.RootInfo, error) {
 	if s.Dirs == nil {
 		return fs.RootInfo{}, errors.New("registry not configured")
 	}
-	dir, err := s.Dirs.Upsert(path)
+	dir, err := s.Dirs.UpsertWithMetaLocation(path, metaLocation)
 	if err == nil && s.Scheduled != nil {
 		if reloadErr := s.Scheduled.ReloadRoot(dir.ID); reloadErr != nil {
 			log.Printf("[scheduled-agent] reload.error root=%s err=%v", dir.ID, reloadErr)

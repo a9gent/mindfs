@@ -119,6 +119,7 @@ export function AppShell({
 
   const shellStyle: React.CSSProperties & {
     "--mindfs-actionbar-bottom-padding"?: string;
+    "--mindfs-file-menu-width"?: string;
   } = {
     display: isMobile ? "flex" : "grid",
     flexDirection: isMobile ? "column" : undefined,
@@ -140,6 +141,7 @@ export function AppShell({
     boxSizing: "border-box",
     transition: "grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
     "--mindfs-actionbar-bottom-padding": "calc(var(--mindfs-safe-area-bottom) + 12px)",
+    "--mindfs-file-menu-width": isMobile ? "52.5vw" : (isTablet ? "140px" : "182px"),
   };
 
   const mobileSidebarStyle = (side: 'left' | 'right'): React.CSSProperties => ({

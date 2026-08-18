@@ -934,7 +934,7 @@ export function ActionBar({
           signal: uploadAbort.signal,
         });
         attachmentTokens = uploaded
-          .map((file) => `[file: ${file.path}]`)
+          .map((file) => `[file: ${file.agent_path || file.path}]`)
           .join("\n");
       }
       const payload = [messageText, attachmentTokens].filter(Boolean).join("\n");

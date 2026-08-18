@@ -1114,6 +1114,14 @@ func (m *Manager) ExchangeLogPath(key string) string {
 	return filepath.ToSlash(filepath.Join(".mindfs", path))
 }
 
+func (m *Manager) ExchangeLogAbsolutePath(key string) string {
+	path, err := m.exchangePath(key)
+	if err != nil { return "" }
+	metaDir := m.root.MetaDir()
+	if metaDir == "" { return "" }
+	return filepath.Join(metaDir, filepath.FromSlash(path))
+}
+
 func (m *Manager) createSessionUnsafe(session *Session) error {
 	if session == nil {
 		return errors.New("session required")

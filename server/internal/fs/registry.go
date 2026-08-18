@@ -127,6 +127,10 @@ func (r *Registry) Get(id string) (RootInfo, bool) {
 }
 
 func (r *Registry) Upsert(root string) (RootInfo, error) {
+	return r.UpsertWithMetaLocation(root, MetaLocationProject)
+}
+
+func (r *Registry) UpsertWithMetaLocation(root, metaLocation string) (RootInfo, error) {
 	if root == "" {
 		return RootInfo{}, errors.New("root required")
 	}
@@ -139,7 +143,12 @@ func (r *Registry) Upsert(root string) (RootInfo, error) {
 	}
 	dir, ok := r.dirs[name]
 	if !ok {
+		metaLocation, err := NormalizeMetaLocation(metaLocation)
+		if err != nil {
+			return RootInfo{}, err
+		}
 		dir = NewRootInfo(name, name, root)
+		dir.MetaLocation = metaLocation
 		dir.CreatedAt = now
 		r.order = append(r.order, name)
 	} else if !sameRegistryPath(dir.RootPath, root) {
@@ -227,6 +236,10 @@ func (r *Registry) Rename(id, name, rootPath string) (RootInfo, error) {
 		previousDirs[key] = value
 	}
 	previousOrder := append([]string(nil), r.order...)
+	rollbackMeta, err := renameHomeMeta(dir, name, filepath.Clean(rootPath))
+	if err != nil {
+		return RootInfo{}, err
+	}
 
 	dir.ID = name
 	dir.Name = name
@@ -243,6 +256,7 @@ func (r *Registry) Rename(id, name, rootPath string) (RootInfo, error) {
 	if err := r.saveLocked(); err != nil {
 		r.dirs = previousDirs
 		r.order = previousOrder
+		rollbackMeta()
 		return RootInfo{}, err
 	}
 	return dir, nil

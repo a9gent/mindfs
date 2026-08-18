@@ -10,6 +10,33 @@ export type IdleSessionResourceReleasePreference = {
   hours: number;
 };
 
+export type NewProjectMetaLocation = "project" | "home";
+
+function normalizeNewProjectMetaLocation(value: unknown): NewProjectMetaLocation {
+  const location = value && typeof value === "object" && "location" in value
+    ? String((value as { location?: unknown }).location || "")
+    : "";
+  return location === "home" ? "home" : "project";
+}
+
+export async function fetchNewProjectMetaLocationPreference(): Promise<NewProjectMetaLocation> {
+  return normalizeNewProjectMetaLocation(
+    await protectedJSON(appPath("/api/preferences/new-project-meta-location")),
+  );
+}
+
+export async function updateNewProjectMetaLocationPreference(
+  location: NewProjectMetaLocation,
+): Promise<NewProjectMetaLocation> {
+  return normalizeNewProjectMetaLocation(
+    await protectedJSON(appPath("/api/preferences/new-project-meta-location"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ location }),
+    }),
+  );
+}
+
 const DEFAULT_IDLE_SESSION_RESOURCE_RELEASE_HOURS = 72;
 
 function normalizeIdleSessionResourceReleasePreference(

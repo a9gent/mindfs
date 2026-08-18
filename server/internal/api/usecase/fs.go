@@ -152,10 +152,11 @@ type SaveUploadedFilesInput struct {
 }
 
 type UploadedFile struct {
-	Path string `json:"path"`
-	Name string `json:"name"`
-	Mime string `json:"mime"`
-	Size int64  `json:"size"`
+	Path      string `json:"path"`
+	AgentPath string `json:"agent_path,omitempty"`
+	Name      string `json:"name"`
+	Mime      string `json:"mime"`
+	Size      int64  `json:"size"`
 }
 
 type SaveUploadedFilesOutput struct {
@@ -187,6 +188,11 @@ func (s *Service) SaveUploadedFiles(_ context.Context, in SaveUploadedFilesInput
 		result, err := saveUploadFile(destDir, destAbs, file)
 		if err != nil {
 			return SaveUploadedFilesOutput{}, err
+		}
+		if root.EffectiveMetaLocation() == fs.MetaLocationHome && strings.HasPrefix(result.Path, ".mindfs/") {
+			if agentPath, resolveErr := root.ResolvePath(result.Path); resolveErr == nil {
+				result.AgentPath = agentPath
+			}
 		}
 		saved = append(saved, result)
 	}
@@ -534,11 +540,10 @@ func resolveUploadDir(root fs.RootInfo, dir string) (string, string, error) {
 	if err := root.ValidateRelativePath(destDir); err != nil {
 		return "", "", err
 	}
-	rootDir, err := root.RootDir()
+	destAbs, err := root.ResolvePath(destDir)
 	if err != nil {
 		return "", "", err
 	}
-	destAbs := filepath.Join(rootDir, filepath.FromSlash(destDir))
 	return destDir, destAbs, nil
 }
 
@@ -708,6 +713,24 @@ type AddManagedDirOutput struct {
 	Dir fs.RootInfo
 }
 
+type rootMetaLocationUpserter interface {
+	UpsertRootWithMetaLocation(path, metaLocation string) (fs.RootInfo, error)
+}
+
+func preferredNewProjectMetaLocation(registry Registry) string {
+	if prefs := registry.GetPreferences(); prefs != nil {
+		return prefs.NewProjectMetaLocation()
+	}
+	return fs.MetaLocationProject
+}
+
+func upsertRootWithMetaLocation(registry Registry, path, location string) (fs.RootInfo, error) {
+	if upserter, ok := registry.(rootMetaLocationUpserter); ok {
+		return upserter.UpsertRootWithMetaLocation(path, location)
+	}
+	return registry.UpsertRoot(path)
+}
+
 func (s *Service) AddManagedDir(_ context.Context, in AddManagedDirInput) (AddManagedDirOutput, error) {
 	if err := s.ensureRegistry(); err != nil {
 		return AddManagedDirOutput{}, err
@@ -723,10 +746,16 @@ func (s *Service) AddManagedDir(_ context.Context, in AddManagedDirInput) (AddMa
 		return AddManagedDirOutput{}, err
 	}
 	name := filepath.Base(abs)
-	if _, err := fs.NewRootInfo(name, name, abs).EnsureMetaDir(); err != nil {
+	location, err := fs.MetaLocationForNewRoot(abs, preferredNewProjectMetaLocation(s.Registry))
+	if err != nil {
 		return AddManagedDirOutput{}, err
 	}
-	dir, err := s.Registry.UpsertRoot(abs)
+	pending := fs.NewRootInfo(name, name, abs)
+	pending.MetaLocation = location
+	if _, err := pending.EnsureMetaDir(); err != nil {
+		return AddManagedDirOutput{}, err
+	}
+	dir, err := upsertRootWithMetaLocation(s.Registry, abs, location)
 	if err != nil {
 		return AddManagedDirOutput{}, err
 	}

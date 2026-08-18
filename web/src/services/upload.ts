@@ -3,6 +3,7 @@ import { e2eeService } from "./e2ee";
 
 export type UploadedFile = {
   path: string;
+  agent_path?: string;
   name: string;
   mime: string;
   size: number;

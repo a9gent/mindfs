@@ -82,8 +82,12 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	if err := registry.Load(); err != nil {
 		return err
 	}
-	autoAddExternalProjectRoots(registry)
-	startExternalProjectDiscoveryLoop(ctx, registry)
+	prefs, prefsErr := preferences.NewStore()
+	if prefsErr != nil {
+		log.Printf("[preferences] init.error err=%v", prefsErr)
+	}
+	autoAddExternalProjectRoots(registry, prefs)
+	startExternalProjectDiscoveryLoop(ctx, registry, prefs)
 
 	agentConfig, err := agent.LoadConfigWithExtra(opts.AgentConfigPath)
 	if err != nil {
@@ -97,10 +101,6 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	agentProber := agent.NewProber(&agentConfig, agentPool, 5*time.Minute)
 	agentProber.Start(ctx)
 	startHostedAgentConfigLoop(ctx, relayBaseURL, agentConfig, agentPool, agentProber)
-	prefs, err := preferences.NewStore()
-	if err != nil {
-		log.Printf("[preferences] init.error err=%v", err)
-	}
 	agentPool.StartIdleReleaseLoop(ctx, func() time.Duration {
 		hours := preferences.DefaultIdleSessionResourceReleaseHours
 		if prefs != nil {
@@ -282,7 +282,7 @@ func fetchHostedAgentConfig(ctx context.Context, endpoint string, localConfig ag
 	return agent.MergeHostedConfig(hosted, localConfig), nil
 }
 
-func autoAddExternalProjectRoots(registry *fs.Registry) {
+func autoAddExternalProjectRoots(registry *fs.Registry, prefs *preferences.Store) {
 	if registry == nil {
 		return
 	}
@@ -314,7 +314,18 @@ func autoAddExternalProjectRoots(registry *fs.Registry) {
 		if err == nil && isWorktree {
 			continue
 		}
-		if _, err := registry.Upsert(projectPath); err != nil {
+		location := fs.MetaLocationProject
+		if prefs != nil {
+			location = prefs.NewProjectMetaLocation()
+		}
+		rootID := filepath.Base(filepath.Clean(projectPath))
+		pending := fs.NewRootInfo(rootID, rootID, projectPath)
+		pending.MetaLocation = location
+		if _, err := pending.EnsureMetaDir(); err != nil {
+			log.Printf("[startup/projects] auto add metadata skipped path=%s err=%v", projectPath, err)
+			continue
+		}
+		if _, err := registry.UpsertWithMetaLocation(projectPath, location); err != nil {
 			log.Printf("[startup/projects] auto add skipped path=%s err=%v", projectPath, err)
 			continue
 		}
@@ -335,7 +346,7 @@ func hasMindFSMetadataDir(projectPath string) bool {
 	return err == nil && info.IsDir()
 }
 
-func startExternalProjectDiscoveryLoop(ctx context.Context, registry *fs.Registry) {
+func startExternalProjectDiscoveryLoop(ctx context.Context, registry *fs.Registry, prefs *preferences.Store) {
 	if registry == nil {
 		return
 	}
@@ -347,7 +358,7 @@ func startExternalProjectDiscoveryLoop(ctx context.Context, registry *fs.Registr
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				autoAddExternalProjectRoots(registry)
+				autoAddExternalProjectRoots(registry, prefs)
 			}
 		}
 	}()

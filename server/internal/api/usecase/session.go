@@ -1057,7 +1057,11 @@ func (s *Service) BuildPrompt(in BuildPromptInput) string {
 	clientCtx := in.ClientContext
 	prompt := buildUserPrompt(in.Message, clientCtx)
 	if strings.TrimSpace(clientCtx.PluginCatalog) != "" {
-		prompt = buildPluginPrompt(clientCtx.PluginCatalog, in.Message, in.IsInitial)
+		pluginDir := ".mindfs/plugins"
+		if in.Manager != nil && in.Manager.Root().EffectiveMetaLocation() == fs.MetaLocationHome {
+			pluginDir = filepath.Join(in.Manager.Root().MetaDir(), "plugins")
+		}
+		prompt = buildPluginPrompt(clientCtx.PluginCatalog, in.Message, in.IsInitial, pluginDir)
 	} else if in.IsInitial && in.IncludeReplyTipsInUserMessage {
 		prompt = appendReplyTips(prompt)
 	}
@@ -1312,11 +1316,13 @@ func switchReadHintPath(manager *session.Manager, sessionKey, runtimeRootAbs str
 	if logPath == "" || runtimeRootAbs == "" {
 		return logPath
 	}
-	rootAbs, err := manager.Root().RootDir()
-	if err != nil || strings.TrimSpace(rootAbs) == "" {
+	absLogPath := manager.ExchangeLogAbsolutePath(sessionKey)
+	if strings.TrimSpace(absLogPath) == "" {
 		return logPath
 	}
-	absLogPath := filepath.Join(rootAbs, filepath.FromSlash(logPath))
+	if manager.Root().EffectiveMetaLocation() == fs.MetaLocationHome {
+		return filepath.ToSlash(absLogPath)
+	}
 	rel, err := filepath.Rel(runtimeRootAbs, absLogPath)
 	if err != nil || strings.TrimSpace(rel) == "" {
 		return logPath
@@ -1609,17 +1615,17 @@ func buildUserPrompt(message string, clientCtx ClientContext) string {
 	return strings.Join(lines, "\n")
 }
 
-func buildPluginPrompt(catalogPrompt, userMessage string, isInitial bool) string {
+func buildPluginPrompt(catalogPrompt, userMessage string, isInitial bool, pluginDir string) string {
 	if isInitial {
-		return buildPluginPromptInitial(catalogPrompt, userMessage)
+		return buildPluginPromptInitial(catalogPrompt, userMessage, pluginDir)
 	}
-	return buildPluginPromptFollowup(userMessage)
+	return buildPluginPromptFollowup(userMessage, pluginDir)
 }
 
-func buildPluginPromptFollowup(userMessage string) string {
+func buildPluginPromptFollowup(userMessage, pluginDir string) string {
 	systemPrompt := strings.TrimSpace(strings.Join([]string{
 		"You are still in view-plugin development mode.",
-		"Continue editing/refining the plugin under .mindfs/plugins/.",
+		"Continue editing/refining the plugin under " + filepath.ToSlash(pluginDir) + "/.",
 		"",
 		"Follow these strict constraints:",
 		"- If the user explicitly asks to generate/update plugin code, output JS code only (no markdown fences, no explanation text).",
@@ -1643,10 +1649,10 @@ func buildPluginPromptFollowup(userMessage string) string {
 	}, "\n")
 }
 
-func buildPluginPromptInitial(catalogPrompt, userMessage string) string {
+func buildPluginPromptInitial(catalogPrompt, userMessage, pluginDir string) string {
 	systemPrompt := strings.TrimSpace(strings.Join([]string{
 		"You are in view-plugin development mode.",
-		"The user will describe requirements. Generate a view plugin and write it under .mindfs/plugins/.",
+		"The user will describe requirements. Generate a view plugin and write it under " + filepath.ToSlash(pluginDir) + "/.",
 		"",
 		"## Plugin Spec",
 		"- Use CommonJS: module.exports = { name, match, fileLoadMode, theme, process(file) { return { data?, tree } }, viewContext?(file) { return string | object } }",
@@ -1680,7 +1686,7 @@ func buildPluginPromptInitial(catalogPrompt, userMessage string) string {
 		"- any/all for OR/AND composition",
 		"",
 		"## Output Requirement",
-		"- Use available file-write tool(s) to write plugin file to .mindfs/plugins/<name>.js",
+		"- Use available file-write tool(s) to write plugin file to " + filepath.ToSlash(pluginDir) + "/<name>.js",
 		"- tree must be valid UITree: root points to an existing element id",
 		"- For dynamic interactions (pagination/sort/filter), use action: \"navigate\"",
 		"- navigate params: { path?, cursor?, query? }",

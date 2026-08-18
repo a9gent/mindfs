@@ -47,7 +47,7 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 ### File Access
 
 - **Multiple projects**: Manage several directories at once; sessions are organized per project and stay independent.
-- **Self-hosted data**: All conversation history, file metadata, and view config are stored under the project's `.mindfs/` subdirectory — migration and backup is just a folder copy.
+- **Self-hosted data**: Conversation history, file metadata, and view config are stored in the project's `.mindfs/` by default. The sidebar menu can place metadata for new projects under `~/.mindfs/<rootId>/`; an existing project-local `.mindfs/` is always reused.
 - **File tree browser**: Full directory navigation with file preview; Markdown, images, and code all have dedicated renderers.
 
 ### Interaction

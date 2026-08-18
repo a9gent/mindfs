@@ -23,6 +23,8 @@ import (
 
 const (
 	metaDirName         = ".mindfs"
+	MetaLocationProject = "project"
+	MetaLocationHome    = "home"
 	stateFileName       = "state.json"
 	defaultMaxReadBytes = 64 * 1024
 	maxFullReadBytes    = 128 << 20
@@ -45,11 +47,12 @@ func metaFileLock(path string) *sync.Mutex {
 }
 
 type RootInfo struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	RootPath  string    `json:"root_path"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	RootPath     string    `json:"root_path"`
+	MetaLocation string    `json:"meta_location,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func NewRootInfo(id, name, rootPath string) RootInfo {
@@ -86,6 +89,38 @@ func (r RootInfo) resolveRelativePath(relPath string) (string, error) {
 		return "", errors.New("path outside root")
 	}
 	return clean, nil
+}
+
+func (r RootInfo) effectiveMetaLocation() string {
+	if strings.TrimSpace(r.MetaLocation) == MetaLocationHome {
+		return MetaLocationHome
+	}
+	return MetaLocationProject
+}
+
+// EffectiveMetaLocation returns the persisted metadata location, treating the
+// missing value used by older registry entries as project-local.
+func (r RootInfo) EffectiveMetaLocation() string {
+	return r.effectiveMetaLocation()
+}
+
+func validRootID(id string) bool {
+	id = strings.TrimSpace(id)
+	return id != "" && id != "." && id != ".." && filepath.Base(id) == id &&
+		!strings.ContainsAny(id, `/\\`)
+}
+
+var userHomeDir = os.UserHomeDir
+
+func homeMetaDir(rootID string) (string, error) {
+	if !validRootID(rootID) {
+		return "", errors.New("invalid root id")
+	}
+	home, err := userHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, metaDirName, rootID), nil
 }
 
 func (r RootInfo) relativeFromAbsolute(absPath string) (string, error) {
@@ -128,6 +163,14 @@ func (r RootInfo) NormalizePath(path string) (string, error) {
 	}
 	cleanPath := filepath.Clean(path)
 	if filepath.IsAbs(cleanPath) {
+		if r.effectiveMetaLocation() == MetaLocationHome {
+			metaDir := r.MetaDir()
+			if metaDir != "" {
+				if rel, err := filepath.Rel(metaDir, cleanPath); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					return filepath.ToSlash(filepath.Join(metaDirName, rel)), nil
+				}
+			}
+		}
 		return r.relativeFromAbsolute(cleanPath)
 	}
 	rootSlash := filepath.ToSlash(root)
@@ -144,6 +187,13 @@ func (r RootInfo) NormalizePath(path string) (string, error) {
 }
 
 func (r RootInfo) MetaDir() string {
+	if r.effectiveMetaLocation() == MetaLocationHome {
+		metaDir, err := homeMetaDir(r.ID)
+		if err != nil {
+			return ""
+		}
+		return metaDir
+	}
 	rootAbs, err := r.rootDir()
 	if err != nil {
 		return ""
@@ -171,8 +221,15 @@ func (r RootInfo) EnsureMetaDir() (string, error) {
 	if metaDir == "" {
 		return "", errors.New("root required")
 	}
-	if err := os.MkdirAll(metaDir, 0o755); err != nil {
+	mode := os.FileMode(0o755)
+	if r.effectiveMetaLocation() == MetaLocationHome {
+		mode = 0o700
+	}
+	if err := os.MkdirAll(metaDir, mode); err != nil {
 		return "", apperr.Wrap("mkdir", metaDir, err)
+	}
+	if err := r.ensureHomeMetaIdentity(); err != nil {
+		return "", err
 	}
 	return metaDir, nil
 }
@@ -181,8 +238,35 @@ func (r RootInfo) resolveMetaPath(path string) (string, error) {
 	if path == "" {
 		path = "."
 	}
-	rootRel := filepath.ToSlash(filepath.Join(metaDirName, filepath.Clean(path)))
-	return r.resolveRelativePath(rootRel)
+	clean := filepath.Clean(path)
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", errors.New("path outside metadata directory")
+	}
+	metaDir := r.MetaDir()
+	if metaDir == "" {
+		return "", errors.New("managed dir required")
+	}
+	return filepath.Join(metaDir, clean), nil
+}
+
+func isMetaLogicalPath(path string) bool {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	return clean == metaDirName || strings.HasPrefix(clean, metaDirName+"/")
+}
+
+// ResolvePath resolves a project-logical path. In home mode, .mindfs paths are
+// virtual project paths backed by ~/.mindfs/<rootId>.
+func (r RootInfo) ResolvePath(path string) (string, error) {
+	clean, err := r.NormalizePath(path)
+	if err != nil {
+		return "", err
+	}
+	if r.effectiveMetaLocation() == MetaLocationHome && isMetaLogicalPath(clean) {
+		rel := strings.TrimPrefix(filepath.ToSlash(clean), metaDirName)
+		rel = strings.TrimPrefix(rel, "/")
+		return r.resolveMetaPath(filepath.FromSlash(rel))
+	}
+	return r.resolveRelativePath(clean)
 }
 
 func (r RootInfo) ListMetaEntries(path string) ([]os.DirEntry, error) {
@@ -272,7 +356,11 @@ type Entry struct {
 }
 
 func (r RootInfo) ListEntries(dirRelPath string) ([]Entry, error) {
-	dirAbs, err := r.resolveRelativePath(dirRelPath)
+	dirRelPath, err := r.NormalizePath(dirRelPath)
+	if err != nil {
+		return nil, err
+	}
+	dirAbs, err := r.ResolvePath(dirRelPath)
 	if err != nil {
 		return nil, err
 	}
@@ -284,9 +372,9 @@ func (r RootInfo) ListEntries(dirRelPath string) ([]Entry, error) {
 	for _, entry := range entries {
 		name := entry.Name()
 		absPath := filepath.Join(dirAbs, name)
-		relPath, err := r.relativeFromAbsolute(absPath)
-		if err != nil {
-			return nil, err
+		relPath := filepath.ToSlash(filepath.Join(dirRelPath, name))
+		if dirRelPath == "." {
+			relPath = filepath.ToSlash(name)
 		}
 		info, err := entry.Info()
 		if err != nil {
@@ -348,14 +436,15 @@ func (r RootInfo) ReadFile(pathRel string, maxBytes int64, cursor int64, readMod
 	if readMode == "incremental" && maxBytes <= 0 {
 		maxBytes = defaultMaxReadBytes
 	}
-	resolved, err := r.resolveRelativePath(pathRel)
+	pathRel, err := r.NormalizePath(pathRel)
 	if err != nil {
 		return ReadResult{}, err
 	}
-	relPath, err := r.relativeFromAbsolute(resolved)
+	resolved, err := r.ResolvePath(pathRel)
 	if err != nil {
 		return ReadResult{}, err
 	}
+	relPath := filepath.ToSlash(pathRel)
 	info, err := os.Stat(resolved)
 	if err != nil {
 		return ReadResult{}, apperr.Wrap("stat", resolved, err)
@@ -715,14 +804,15 @@ func decodeUTF16Endian(buf []byte, order binary.ByteOrder) (string, bool) {
 }
 
 func (r RootInfo) OpenFile(pathRel string) (*os.File, os.FileInfo, string, error) {
-	resolved, err := r.resolveRelativePath(pathRel)
+	pathRel, err := r.NormalizePath(pathRel)
 	if err != nil {
 		return nil, nil, "", err
 	}
-	relPath, err := r.relativeFromAbsolute(resolved)
+	resolved, err := r.ResolvePath(pathRel)
 	if err != nil {
 		return nil, nil, "", err
 	}
+	relPath := filepath.ToSlash(pathRel)
 	info, err := os.Stat(resolved)
 	if err != nil {
 		return nil, nil, "", apperr.Wrap("stat", resolved, err)
@@ -738,14 +828,15 @@ func (r RootInfo) OpenFile(pathRel string) (*os.File, os.FileInfo, string, error
 }
 
 func (r RootInfo) StatFile(pathRel string) (os.FileInfo, string, error) {
-	resolved, err := r.resolveRelativePath(pathRel)
+	pathRel, err := r.NormalizePath(pathRel)
 	if err != nil {
 		return nil, "", err
 	}
-	relPath, err := r.relativeFromAbsolute(resolved)
+	resolved, err := r.ResolvePath(pathRel)
 	if err != nil {
 		return nil, "", err
 	}
+	relPath := filepath.ToSlash(pathRel)
 	info, err := os.Stat(resolved)
 	if err != nil {
 		return nil, "", apperr.Wrap("stat", resolved, err)
