@@ -215,7 +215,7 @@ export function CodexRateLimitIndicator({ agent, refreshToken = 0, onStatusChang
 
   return (
     <>
-      <div style={{ display: "inline-flex", flex: "0 0 auto", alignItems: "center", gap: "5px", height: "24px", marginBottom: "4px" }}>
+      <div style={{ display: "inline-flex", flex: "0 0 auto", alignItems: "center", gap: "5px", height: "24px" }}>
         <div title={resetTime ? t("codexLimit.weeklyTitleWithReset", { percent: remaining ?? "—", time: resetTime }) : t("codexLimit.weeklyTitle", { percent: remaining ?? "—" })} style={{ display: "inline-flex", alignItems: "center", height: "20px", padding: "0 8px", borderRadius: "999px", border: "1px solid rgba(37, 99, 235, 0.22)", background: "linear-gradient(rgba(37, 99, 235, 0.10), rgba(37, 99, 235, 0.10)), var(--mobile-overlay-bg)", color: "#2563eb", fontSize: "11px", fontWeight: 700, lineHeight: 1, whiteSpace: "nowrap" }}>
           {t("codexLimit.weekly")} {loading && remaining === null ? "··" : remaining === null ? "—" : `${remaining}%`}
         </div>

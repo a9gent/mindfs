@@ -91,6 +91,7 @@ type SessionViewerProps = {
   onForkAgentMessage?: (seq: number) => void | Promise<void>;
   targetSeqRequestKey?: string | number;
   agents?: AgentStatus[];
+  composerOverlayInset?: number;
 };
 
 type AskUserQuestionOption = {
@@ -1016,6 +1017,7 @@ function SessionViewerInner({
   onEditUserMessage,
   onForkAgentMessage,
   agents,
+  composerOverlayInset = 0,
 }: SessionViewerProps) {
   const { locale, t } = useI18n();
   const [relatedFilesCollapsed, setRelatedFilesCollapsed] = useState(false);
@@ -2761,7 +2763,7 @@ function SessionViewerInner({
             style={{
               position: "absolute",
               right: "16px",
-              bottom: "16px",
+              bottom: `${16 + composerOverlayInset}px`,
               zIndex: 4,
               display: "flex",
               alignItems: "center",
@@ -2991,6 +2993,7 @@ export const SessionViewer = memo(
     prev.interactionMode === next.interactionMode &&
     prev.targetSeq === next.targetSeq &&
     prev.targetSeqRequestKey === next.targetSeqRequestKey &&
+    prev.composerOverlayInset === next.composerOverlayInset &&
     prev.gitFileStatsByPath === next.gitFileStatsByPath &&
     prev.onRootClick === next.onRootClick,
 );

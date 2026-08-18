@@ -1241,18 +1241,21 @@ export function ActionBar({
 
   return (
     <div data-onboarding="action-bar" style={{ width: "100%", minWidth: 0, padding: isMobile ? "0 0 var(--mindfs-actionbar-bottom-padding, calc(env(safe-area-inset-bottom, 0px) + 2px))" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
-      <div style={{ width: "100%", minWidth: 0, display: "flex", flexDirection: "column", gap: 0 }}>
+      <div style={{ position: "relative", width: "100%", minWidth: 0, display: "flex", flexDirection: "column", gap: 0 }}>
         {planModeActive || (!currentSession && currentRootIsGitRepo && mode !== "command") || (mode !== "command" && agent === "codex") ? (
           <div
             style={{
-              width: "100%",
+              position: "absolute",
+              left: isMobile ? "36px" : "2px",
+              right: isMobile ? "36px" : "8px",
+              bottom: "100%",
+              zIndex: 7,
               minWidth: 0,
               display: "flex",
               alignItems: "flex-end",
               justifyContent: "space-between",
               gap: "8px",
-              padding: isMobile ? "0 36px" : "0 8px 0 2px",
-              boxSizing: "border-box",
+              pointerEvents: "none",
             }}
           >
             <div
@@ -1261,7 +1264,7 @@ export function ActionBar({
                 alignItems: "center",
                 gap: "6px",
                 minWidth: 0,
-                marginBottom: planModeActive || (!currentSession && currentRootIsGitRepo) ? "4px" : 0,
+                pointerEvents: "auto",
               }}
             >
               {planModeActive ? (
@@ -1281,7 +1284,9 @@ export function ActionBar({
                 </>
               ) : null}
             </div>
-            <CodexRateLimitIndicator agent={agent} refreshToken={codexRateLimitsRefreshToken} />
+            <div style={{ pointerEvents: "auto" }}>
+              <CodexRateLimitIndicator agent={agent} refreshToken={codexRateLimitsRefreshToken} />
+            </div>
           </div>
         ) : null}
         {queuedMessages.length > 0 ? (

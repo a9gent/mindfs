@@ -11384,6 +11384,12 @@ export function App({ onGoHome }: AppProps) {
     );
   };
   const currentRootSlashCommandResult = slashCommandResultForSession(currentRootId, null);
+  const sessionViewerComposerOverlayInset =
+    String((actionBarSession as any)?.agent || "").toLowerCase() === "codex" ||
+    (actionBarSession as any)?.plan_mode ||
+    pendingPlanMode
+      ? 20
+      : 0;
   const sessionView = (
     <SessionViewer
       session={selectedSessionSnapshot}
@@ -11394,6 +11400,7 @@ export function App({ onGoHome }: AppProps) {
       )}
       targetSeq={selectedSession?.search_seq}
       targetSeqRequestKey={selectedSession?.search_target_id}
+      composerOverlayInset={sessionViewerComposerOverlayInset}
       loading={selectedSessionLoading}
       rootId={selectedSession?.root_id || currentRootId}
       rootPath={
@@ -14485,6 +14492,7 @@ export function App({ onGoHome }: AppProps) {
                 )}
                 targetSeq={currentSession?.search_seq}
                 targetSeqRequestKey={currentSession?.search_target_id}
+                composerOverlayInset={sessionViewerComposerOverlayInset}
                 loading={
                   drawerLoadingSessionByRoot[currentRootId || ""] ===
                   (drawerSessionSnapshot.key || drawerSessionSnapshot.session_key)
