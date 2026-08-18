@@ -105,7 +105,7 @@ type RootSessionIndicator = {
   pending?: boolean;
 };
 
-type ProjectTreeTab = "files" | "git" | "worktrees" | "related";
+export type ProjectTreeTab = "files" | "git" | "worktrees" | "related";
 export type AgentConfigSwitchRequest = {
   nonce: number;
   providerIDs?: string[];
@@ -133,7 +133,7 @@ type FileTreeProps = {
   activeSessionKey?: string | null;
   onSortModeChange?: (mode: DirectorySortMode) => void;
   onShowHiddenFilesChange?: (show: boolean) => void;
-  onRefresh?: () => void | Promise<void>;
+  onRefresh?: (tab: ProjectTreeTab) => void | Promise<void>;
   onSelectFile?: (entry: FileEntry, rootId: string) => void;
   onSelectRoot?: (entry: FileEntry, rootId: string) => void;
   onToggleDir?: (entry: FileEntry, rootId: string) => void;
@@ -1373,12 +1373,6 @@ export function FileTree({
   footerTopContent,
 }: FileTreeProps) {
   const { locale, setLocale, t } = useI18n();
-  const {
-    refreshing: treeRefreshing,
-    pressed: treePressed,
-    setPressed: setTreePressed,
-    handleClick: handleRefreshClick,
-  } = useRefreshSpin(onRefresh);
   const sortLabel = React.useCallback((mode: DirectorySortMode): string => {
     const key = DIRECTORY_SORT_LABEL_KEYS[mode];
     return key ? t(key) : t("directory.defaultSort");
@@ -1396,6 +1390,16 @@ export function FileTree({
       return "files";
     }
   });
+  const handleTabRefresh = React.useCallback(
+    () => onRefresh?.(projectTreeTab),
+    [onRefresh, projectTreeTab],
+  );
+  const {
+    refreshing: treeRefreshing,
+    pressed: treePressed,
+    setPressed: setTreePressed,
+    handleClick: handleRefreshClick,
+  } = useRefreshSpin(handleTabRefresh);
   const [isAppearanceMenuOpen, setIsAppearanceMenuOpen] = React.useState(false);
   const [isLocaleMenuOpen, setIsLocaleMenuOpen] = React.useState(false);
   const [isSortMenuOpen, setIsSortMenuOpen] = React.useState(false);
@@ -2623,8 +2627,8 @@ export function FileTree({
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <div style={{ position: "relative", height: "36px", padding: "0 3px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--mindfs-topbar-bg, transparent)", boxSizing: "border-box", flexShrink: 0, gap: 6, overflow: "visible" }}>
-        <div style={{ display: "flex", alignItems: "center", minWidth: 0, flex: "1 1 auto", maxWidth: "calc(100% - 68px)" }}>
+      <div style={{ position: "relative", height: "36px", padding: "0 3px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--mindfs-topbar-bg, transparent)", boxSizing: "border-box", flexShrink: 0, gap: 0, overflow: "visible" }}>
+        <div style={{ display: "flex", alignItems: "center", minWidth: 0, flex: "1 1 auto", maxWidth: "calc(100% - 56px)", marginRight: "6px" }}>
           <div
             role="tablist"
             data-onboarding="project-tabs"
@@ -2701,33 +2705,47 @@ export function FileTree({
           aria-label={t("common.refresh")}
           title={t("common.refresh")}
           style={{
-            width: "28px",
+            width: "22px",
             height: "28px",
             borderRadius: "8px",
             border: "none",
-            background: treePressed || treeRefreshing ? "rgba(0, 0, 0, 0.06)" : "transparent",
+            background: "transparent",
             color: "var(--text-secondary)",
             display: "inline-flex",
             alignItems: "center",
-            justifyContent: "center",
+            justifyContent: "flex-end",
             cursor: "pointer",
             outline: "none",
             flexShrink: 0,
+            padding: 0,
           }}
         >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="13"
-            height="13"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-            style={treeRefreshing ? { animation: "mindfs-update-spin 0.8s linear infinite" } : undefined}
+          <span
+            data-refresh-visual
+            style={{
+              width: "18px",
+              height: "28px",
+              borderRadius: "8px",
+              background: treePressed || treeRefreshing ? "rgba(0, 0, 0, 0.06)" : "transparent",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
           >
-            <path
-              fill="currentColor"
-              d="M19.91 15.51h-4.53a1 1 0 0 0 0 2h2.4A8 8 0 0 1 4 12a1 1 0 0 0-2 0a10 10 0 0 0 16.88 7.23V21a1 1 0 0 0 2 0v-4.5a1 1 0 0 0-.97-.99M12 2a10 10 0 0 0-6.88 2.77V3a1 1 0 0 0-2 0v4.5a1 1 0 0 0 1 1h4.5a1 1 0 0 0 0-2h-2.4A8 8 0 0 1 20 12a1 1 0 0 0 2 0A10 10 0 0 0 12 2"
-            />
-          </svg>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              style={treeRefreshing ? { animation: "mindfs-update-spin 0.8s linear infinite" } : undefined}
+            >
+              <path
+                fill="currentColor"
+                d="M19.91 15.51h-4.53a1 1 0 0 0 0 2h2.4A8 8 0 0 1 4 12a1 1 0 0 0-2 0a10 10 0 0 0 16.88 7.23V21a1 1 0 0 0 2 0v-4.5a1 1 0 0 0-.97-.99M12 2a10 10 0 0 0-6.88 2.77V3a1 1 0 0 0-2 0v4.5a1 1 0 0 0 1 1h4.5a1 1 0 0 0 0-2h-2.4A8 8 0 0 1 20 12a1 1 0 0 0 2 0A10 10 0 0 0 12 2"
+              />
+            </svg>
+          </span>
         </button>
         <div ref={menuRef} style={{ position: "relative", flexShrink: 0 }}>
           <button
