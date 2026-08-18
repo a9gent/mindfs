@@ -10,7 +10,11 @@ import { Renderer } from "./renderer/Renderer";
 import {
   clearCachedSessionsForRoot,
   deleteCachedSession,
+  getCachedMultiRootSessionList,
   getCachedSession,
+  getCachedSessionList,
+  saveCachedMultiRootSessionList,
+  saveCachedSessionList,
   sessionService,
   setCachedSessionRelatedFiles,
   syncSession,
@@ -1917,14 +1921,19 @@ export function App({ onGoHome }: AppProps) {
       const cached = await getCachedTaskDetails(targetRoot);
       if (cached.length > 0) {
         applyTaskDetails(targetRoot, cached, false);
+        setKanbanTasksLoading(false);
       }
       const meta = await getCachedTaskMeta(targetRoot);
-      const details = await fetchTaskDetails(targetRoot, force ? undefined : { after: meta?.newestUpdatedAt || "" });
+      const [details, recent] = await Promise.all([
+        fetchTaskDetails(targetRoot, force ? undefined : { after: meta?.newestUpdatedAt || "" }),
+        !force && meta?.newestUpdatedAt
+          ? fetchTaskDetails(targetRoot, { limit: 20 })
+          : Promise.resolve([]),
+      ]);
       if (details.length > 0) {
         applyTaskDetails(targetRoot, details);
       }
-      if (!force && meta?.newestUpdatedAt) {
-        const recent = await fetchTaskDetails(targetRoot, { limit: 20 });
+      if (recent.length > 0) {
         applyTaskDetails(targetRoot, recent);
       }
     } catch (err) {
@@ -4730,6 +4739,23 @@ export function App({ onGoHome }: AppProps) {
       },
     ) => {
       try {
+        const shouldReplace = options?.replace || (!options?.beforeTime && !options?.afterTime);
+        if (shouldReplace) {
+          const cached = await getCachedSessionList(rootID);
+          if (cached && (options?.force || currentRootIdRef.current === rootID)) {
+            const cachedItems = [...cached.items, ...cached.pinnedItems]
+              .map((item) => toSessionItem(rootID, item))
+              .filter((item): item is SessionItem => !!item);
+            setHasMoreSessions(cached.totalCount > cached.items.length);
+            setSessions(
+              applyPinnedSnapshotToSessions(
+                mergeSessionItems([], cachedItems),
+                rootID,
+                cached.pinnedKeys,
+              ),
+            );
+          }
+        }
         const payload = await sessionService.fetchSessions(rootID, {
           beforeTime: options?.beforeTime,
           afterTime: options?.afterTime,
@@ -4740,8 +4766,9 @@ export function App({ onGoHome }: AppProps) {
         ].map((item) => toSessionItem(rootID, item)).filter((item): item is SessionItem => !!item);
         if (!options?.force && currentRootIdRef.current !== rootID) return;
         setHasMoreSessions(payload.totalCount > payload.items.length);
-        if (options?.replace || (!options?.beforeTime && !options?.afterTime)) {
+        if (shouldReplace) {
           setSessions(applyPinnedSnapshotToSessions(mergeSessionItems([], next), rootID, payload.pinnedKeys));
+          void saveCachedSessionList(rootID, payload);
           return;
         }
         setSessions((prev) =>
@@ -4796,6 +4823,30 @@ export function App({ onGoHome }: AppProps) {
     }
     setMultiProjectSessionsLoading(true);
     try {
+      const cachedGroups = await getCachedMultiRootSessionList();
+      if (cachedGroups?.length) {
+        setMultiProjectSessionGroups(
+          applyPendingToMultiProjectGroups(
+            cachedGroups.map((group): MultiProjectSessionGroup => ({
+              rootId: group.rootId,
+              rootName: group.rootName || managedRootByIdRef.current[group.rootId]?.display_name || group.rootId,
+              latestSessionTime: group.latestSessionTime,
+              sessions: applyPinnedSnapshotToSessions(
+                mergeSessionItems(
+                  [],
+                  [...group.items, ...group.pinnedItems]
+                    .map((item) => toSessionItem(group.rootId, { ...(item as any), root_id: group.rootId }))
+                    .filter((item): item is SessionItem => !!item),
+                ),
+                group.rootId,
+                group.pinnedKeys,
+              ),
+              totalCount: group.totalCount,
+            })),
+            multiProjectPendingRef.current,
+          ),
+        );
+      }
       const groups = await sessionService.fetchMultiRootSessions(MULTI_PROJECT_SESSION_LIMIT);
       const nextGroups = groups.map((group: MultiRootSessionGroup): MultiProjectSessionGroup => ({
         rootId: group.rootId,
@@ -4817,6 +4868,7 @@ export function App({ onGoHome }: AppProps) {
       setMultiProjectSessionGroups(
         applyPendingToMultiProjectGroups(nextGroups, multiProjectPendingRef.current),
       );
+      void saveCachedMultiRootSessionList(groups);
     } finally {
       setMultiProjectSessionsLoading(false);
     }

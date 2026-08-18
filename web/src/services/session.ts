@@ -1476,9 +1476,17 @@ type CachedSessionRecord = {
   session: Session;
 };
 
+type CachedSessionListRecord<T> = {
+  cacheKey: string;
+  touchedAt: number;
+  payload: T;
+};
+
 const SESSION_CACHE_DB = "mindfs-session-cache";
 const SESSION_CACHE_STORE = "sessions";
-const SESSION_CACHE_VERSION = 2;
+const SESSION_LIST_CACHE_STORE = "session-lists";
+const SESSION_CACHE_VERSION = 3;
+const MULTI_ROOT_SESSION_LIST_CACHE_KEY = "multi-root";
 let sessionDBPromise: Promise<IDBDatabase> | null = null;
 
 function buildSessionCacheKey(rootId: string, sessionKey: string): string {
@@ -1499,12 +1507,20 @@ function openSessionDB(): Promise<IDBDatabase> {
     );
     request.onerror = () =>
       reject(request.error || new Error("failed to open indexeddb"));
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result;
-      if (db.objectStoreNames.contains(SESSION_CACHE_STORE)) {
+      if (
+        (event as IDBVersionChangeEvent).oldVersion < 2 &&
+        db.objectStoreNames.contains(SESSION_CACHE_STORE)
+      ) {
         db.deleteObjectStore(SESSION_CACHE_STORE);
       }
-      db.createObjectStore(SESSION_CACHE_STORE, { keyPath: "cacheKey" });
+      if (!db.objectStoreNames.contains(SESSION_CACHE_STORE)) {
+        db.createObjectStore(SESSION_CACHE_STORE, { keyPath: "cacheKey" });
+      }
+      if (!db.objectStoreNames.contains(SESSION_LIST_CACHE_STORE)) {
+        db.createObjectStore(SESSION_LIST_CACHE_STORE, { keyPath: "cacheKey" });
+      }
     };
     request.onsuccess = () => resolve(request.result);
   });
@@ -1538,6 +1554,74 @@ function withSessionStore<T>(
       return result;
     });
   });
+}
+
+function withSessionListStore<T>(
+  mode: IDBTransactionMode,
+  run: (store: IDBObjectStore) => Promise<T>,
+): Promise<T> {
+  return openSessionDB().then((db) => {
+    const tx = db.transaction(SESSION_LIST_CACHE_STORE, mode);
+    const store = tx.objectStore(SESSION_LIST_CACHE_STORE);
+    const completion = new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () =>
+        reject(tx.error || new Error("indexeddb transaction failed"));
+      tx.onabort = () =>
+        reject(tx.error || new Error("indexeddb transaction aborted"));
+    });
+    return run(store).then(async (result) => {
+      await completion;
+      return result;
+    });
+  });
+}
+
+function buildSessionListCacheKey(rootId: string): string {
+  return `root::${rootId}`;
+}
+
+async function readCachedSessionList<T>(cacheKey: string): Promise<T | null> {
+  try {
+    const record = await withSessionListStore("readonly", (store) =>
+      sessionRequestToPromise(
+        store.get(cacheKey) as IDBRequest<CachedSessionListRecord<T> | undefined>,
+      ),
+    );
+    return record?.payload || null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCachedSessionList<T>(cacheKey: string, payload: T): Promise<void> {
+  try {
+    await withSessionListStore("readwrite", (store) =>
+      sessionRequestToPromise(store.put({
+        cacheKey,
+        touchedAt: Date.now(),
+        payload,
+      } satisfies CachedSessionListRecord<T>)),
+    );
+  } catch {}
+}
+
+export function getCachedSessionList(rootId: string): Promise<SessionListPayload | null> {
+  if (!rootId) return Promise.resolve(null);
+  return readCachedSessionList<SessionListPayload>(buildSessionListCacheKey(rootId));
+}
+
+export function saveCachedSessionList(rootId: string, payload: SessionListPayload): Promise<void> {
+  if (!rootId) return Promise.resolve();
+  return writeCachedSessionList(buildSessionListCacheKey(rootId), payload);
+}
+
+export function getCachedMultiRootSessionList(): Promise<MultiRootSessionGroup[] | null> {
+  return readCachedSessionList<MultiRootSessionGroup[]>(MULTI_ROOT_SESSION_LIST_CACHE_KEY);
+}
+
+export function saveCachedMultiRootSessionList(groups: MultiRootSessionGroup[]): Promise<void> {
+  return writeCachedSessionList(MULTI_ROOT_SESSION_LIST_CACHE_KEY, groups);
 }
 
 function getSessionMaxSeq(session: Session | null | undefined): number {
@@ -1741,6 +1825,9 @@ export async function clearCachedSessionsForRoot(rootId: string): Promise<void> 
           .map((record) => sessionRequestToPromise(store.delete(record.cacheKey))),
       );
     });
+    await withSessionListStore("readwrite", (store) =>
+      sessionRequestToPromise(store.delete(buildSessionListCacheKey(rootId))),
+    );
   } catch {}
 }
 
