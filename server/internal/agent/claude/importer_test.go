@@ -3,6 +3,7 @@ package claude
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,12 +183,32 @@ func TestClaudeProjectDirNameMatchesClaudeCodeOnDiskEncoding(t *testing.T) {
 		{"cjk and space chars become dashes", "/Users/Ye/HOBBIES/260817Claude Code远程访问第三方方案", "-Users-Ye-HOBBIES-260817Claude-Code---------"},
 		{"dot becomes dash", "/Users/Ye/.claude", "-Users-Ye--claude"},
 		{"underscore becomes dash", "/a_b/c", "-a-b-c"},
+		{"emoji becomes two dashes", "/Users/test/😀", "-Users-test---"},
+		{"supplementary cjk becomes two dashes", "/Users/test/𠀀", "-Users-test---"},
 		{"tailing slash stripped", "/Users/Ye/L000/", "-Users-Ye-L000"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := claudeProjectDirName(tt.path); got != tt.want {
 				t.Fatalf("claudeProjectDirName(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeClaudeProjectPathTruncatesAndHashesLongPaths(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"ascii", strings.Repeat("a", 201), strings.Repeat("a", 200) + "-rkvsv5"},
+		{"utf16 hash", strings.Repeat("a", 199) + "😀", strings.Repeat("a", 199) + "--rlxqg4"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sanitizeClaudeProjectPath(tt.path); got != tt.want {
+				t.Fatalf("sanitizeClaudeProjectPath(long path) = %q, want %q", got, tt.want)
 			}
 		})
 	}
