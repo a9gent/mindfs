@@ -67,6 +67,25 @@ remove_path_entry() {
   echo "  PATH    -> removed ${bin_dir} from ${rc_file}"
 }
 
+remove_autostart() {
+  local config_home="${XDG_CONFIG_HOME:-${HOME}/.config}"
+  case "$(uname -s)" in
+    Darwin)
+      rm -f "${HOME}/Library/LaunchAgents/com.a9gent.mindfs.plist"
+      ;;
+    *)
+      rm -f \
+        "${config_home}/systemd/user/default.target.wants/mindfs.service" \
+        "${config_home}/systemd/user/mindfs.service" \
+        "${config_home}/autostart/mindfs.desktop"
+      if command -v systemctl &>/dev/null; then
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+      fi
+      ;;
+  esac
+  echo "  Removed automatic startup entry."
+}
+
 uninstall_mindfs() {
   local bin_path="${PREFIX}/bin/mindfs"
   local share_dir="${PREFIX}/share/mindfs"
@@ -79,6 +98,7 @@ uninstall_mindfs() {
   echo "  Removed shared files: ${share_dir}"
   rmdir "${PREFIX}/bin" "${PREFIX}/share" "$PREFIX" 2>/dev/null || true
   remove_path_entry "${PREFIX}/bin"
+  remove_autostart
 
   if [[ "$PURGE" -eq 1 ]]; then
     rm -rf "$(config_dir)" "$(state_dir)"

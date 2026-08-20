@@ -1,6 +1,7 @@
 # MindFS v0.4.8
 
 ## 新功能
+- 支持用户开机自启，并通过环境快照与 shell rc/profile 恢复 Agent 运行环境
 - 空闲会话资源释放，可设置空闲时间，默认 72h
 - 添加 dsh(deepseek harness)（需要通过竖点菜单安装依赖）
 - 新项目的数据位置可以选择统一放在 ~/.mindfs 下

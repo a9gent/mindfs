@@ -62,6 +62,8 @@ function Uninstall-MindFS {
     Remove-Item -Force (Join-Path $Prefix "share") -ErrorAction SilentlyContinue
     Remove-Item -Force $Prefix -ErrorAction SilentlyContinue
     Remove-FromUserPath $BinDir
+    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "MindFS" -ErrorAction SilentlyContinue
+    Write-Host "  Removed automatic startup entry."
 
     if ($Purge) {
         $ConfigDir = Join-Path $env:APPDATA "mindfs"

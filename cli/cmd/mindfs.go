@@ -38,6 +38,13 @@ const (
 )
 
 func main() {
+	autoStartBoot := autoStartRequested(os.Args[1:])
+	if autoStartBoot {
+		if err := prepareAutoStartEnvironment(); err != nil {
+			log.Printf("[mindfs/autostart] environment restore warning: %v", err)
+		}
+	}
+
 	flag.Usage = func() {
 		out := flag.CommandLine.Output()
 		fmt.Fprintf(out, "Usage:\n")
@@ -66,6 +73,8 @@ func main() {
 	e2eeFlag := flag.Bool("e2ee", false, "enable end-to-end encryption for sensitive data")
 	webPushFlag := flag.Bool("web-push", true, "enable PWA Web Push notifications")
 	foreground := flag.Bool("foreground", false, "run in the foreground instead of as a background service")
+	autoStart := flag.Bool("autostart", false, "register or refresh automatic startup for this user")
+	internalAutoStartFlag := flag.Bool("internal-autostart", false, "internal flag used by the automatic startup entry")
 	stop := flag.Bool("stop", false, "stop the background mindfs service")
 	restart := flag.Bool("restart", false, "restart the background mindfs service")
 	statusFlag := flag.Bool("status", false, "show background service status")
@@ -91,6 +100,11 @@ func main() {
 		os.Exit(1)
 	}
 	applyStartupConfig(startupCfg, explicitFlags, addr, noRelayer, e2eeFlag, webPushFlag, foreground, bindRelay, tlsFlag, certFlag, keyFlag, agentConfigFlag, notifyScriptFlag)
+	internalAutoStart := autoStartBoot || *internalAutoStartFlag
+	if internalAutoStart {
+		*foreground = true
+		*autoStart = false
+	}
 	if *versionFlag {
 		printVersion()
 		return
@@ -187,9 +201,32 @@ func main() {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
-	if *e2eeFlag && strings.TrimSpace(e2eeResult.Config.PairingSecret) != "" {
+	if *e2eeFlag && !internalAutoStart && strings.TrimSpace(e2eeResult.Config.PairingSecret) != "" {
 		fmt.Fprintln(os.Stdout, "E2EE enabled")
 		fmt.Fprintln(os.Stdout, "pairing secret:", e2eeResult.Config.PairingSecret)
+	}
+	if !daemonMode && !internalRestart && !internalAutoStart {
+		autoStartExplicit := explicitFlags["autostart"]
+		if *autoStart || (!autoStartExplicit && autoStartConfigured()) {
+			autoArgs := autoStartArguments(
+				*addr,
+				*noRelayer,
+				*e2eeFlag,
+				*webPushFlag,
+				*tlsFlag,
+				*certFlag,
+				*keyFlag,
+				*agentConfigFlag,
+				*notifyScriptFlag,
+			)
+			if _, err := configureAutoStart(logPath, autoArgs); err != nil {
+				fmt.Fprintf(os.Stderr, "mindfs autostart warning: %v\n", err)
+			}
+		} else if autoStartExplicit {
+			if err := removeAutoStart(); err != nil {
+				fmt.Fprintf(os.Stderr, "mindfs autostart disable warning: %v\n", err)
+			}
+		}
 	}
 
 	if !internalRestart && !*restart && serverRunning(*addr, *tlsFlag) {
@@ -214,8 +251,10 @@ func main() {
 				fmt.Fprintln(os.Stderr, err.Error())
 				os.Exit(1)
 			}
-		} else if err := openTarget(*addr, *tlsFlag, rootID); err != nil {
-			reportOpenTargetError(os.Stderr, err)
+		} else if !internalAutoStart {
+			if err := openTarget(*addr, *tlsFlag, rootID); err != nil {
+				reportOpenTargetError(os.Stderr, err)
+			}
 		}
 		return
 	}
@@ -313,7 +352,7 @@ func main() {
 		fmt.Fprintln(os.Stdout, "added managed directory:", rootInfo.RootPath)
 	}
 
-	if !internalRestart && (*foreground || !daemonMode) {
+	if !internalRestart && !internalAutoStart && (*foreground || !daemonMode) {
 		if *bindRelay {
 			if err := printRelayBindTarget(os.Stdout, *addr, *tlsFlag, rootID); err != nil {
 				cancel()
