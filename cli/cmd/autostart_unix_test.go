@@ -17,6 +17,9 @@ func TestLaunchAgentContentEscapesArguments(t *testing.T) {
 			t.Errorf("launch agent does not contain %q:\n%s", expected, content)
 		}
 	}
+	if strings.Contains(content, "ProcessType") || strings.Contains(content, "Background") {
+		t.Fatalf("launch agent should use launchd's default Standard process type:\n%s", content)
+	}
 }
 
 func TestSystemdUnitQuotesExecutableAndArguments(t *testing.T) {

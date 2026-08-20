@@ -113,7 +113,6 @@ func launchAgentContent(exe string, args []string, logPath string) string {
 		"  <key>Label</key><string>com.a9gent.mindfs</string>\n" +
 		"  <key>ProgramArguments</key>\n  <array>\n" + arguments.String() + "  </array>\n" +
 		"  <key>RunAtLoad</key><true/>\n" +
-		"  <key>ProcessType</key><string>Background</string>\n" +
 		"  <key>StandardOutPath</key><string>" + xmlEscape(logPath) + "</string>\n" +
 		"  <key>StandardErrorPath</key><string>" + xmlEscape(logPath) + "</string>\n" +
 		"</dict>\n</plist>\n"
