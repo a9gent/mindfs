@@ -89,6 +89,29 @@ func (s *PromptStore) Append(text string) ([]string, error) {
 	return append([]string(nil), next...), nil
 }
 
+func (s *PromptStore) Delete(text string) ([]string, error) {
+	normalized := strings.TrimSpace(text)
+	if normalized == "" {
+		return nil, errors.New("prompt text required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items, err := s.loadLocked()
+	if err != nil {
+		return nil, err
+	}
+	next := make([]string, 0, len(items))
+	for _, item := range items {
+		if item != normalized {
+			next = append(next, item)
+		}
+	}
+	if err := s.saveLocked(next); err != nil {
+		return nil, err
+	}
+	return append([]string(nil), next...), nil
+}
+
 func (s *PromptStore) loadLocked() ([]string, error) {
 	if s == nil {
 		return nil, errors.New("prompt store not configured")
@@ -147,4 +170,27 @@ func (s *Service) SavePrompt(_ context.Context, in SavePromptInput) (SavePromptO
 		return SavePromptOutput{}, err
 	}
 	return SavePromptOutput{Items: items}, nil
+}
+
+type DeletePromptInput struct {
+	Text string
+}
+
+type DeletePromptOutput struct {
+	Items []string `json:"items"`
+}
+
+func (s *Service) DeletePrompt(_ context.Context, in DeletePromptInput) (DeletePromptOutput, error) {
+	if strings.TrimSpace(in.Text) == "" {
+		return DeletePromptOutput{}, errors.New("prompt text required")
+	}
+	store, err := NewPromptStore()
+	if err != nil {
+		return DeletePromptOutput{}, err
+	}
+	items, err := store.Delete(in.Text)
+	if err != nil {
+		return DeletePromptOutput{}, err
+	}
+	return DeletePromptOutput{Items: items}, nil
 }

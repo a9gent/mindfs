@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1527,6 +1528,29 @@ func TestPromptCandidateProviderSearchReturnsNewestFirst(t *testing.T) {
 	}
 	if items[1].Name != "first prompt" {
 		t.Fatalf("expected older prompt second, got %#v", items[1])
+	}
+}
+
+func TestPromptStoreDeleteRemovesOnlyMatchingPrompt(t *testing.T) {
+	store := &PromptStore{filePath: filepath.Join(t.TempDir(), "prompts.json")}
+	for _, item := range []string{"first prompt", "second prompt", "third prompt"} {
+		if _, err := store.Append(item); err != nil {
+			t.Fatalf("Append(%q) returned error: %v", item, err)
+		}
+	}
+	items, err := store.Delete(" second prompt ")
+	if err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+	if want := []string{"first prompt", "third prompt"}; !slices.Equal(items, want) {
+		t.Fatalf("Delete items = %#v, want %#v", items, want)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !slices.Equal(items, loaded) {
+		t.Fatalf("persisted items = %#v, want %#v", loaded, items)
 	}
 }
 
