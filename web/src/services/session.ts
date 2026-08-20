@@ -214,7 +214,7 @@ export type CompactNotice = {
   summary?: string;
 };
 
-export type StreamEvent =
+export type StreamEvent = { event_cursor?: string } & (
   | { type: "message_chunk"; data: { content: string } }
   | { type: "thought_chunk"; data: { id?: string; content: string } }
   | { type: "tool_call"; data: ToolCall }
@@ -232,7 +232,8 @@ export type StreamEvent =
         };
       };
     }
-  | { type: "error"; data: { message: string } };
+  | { type: "error"; data: { message: string } }
+);
 
 export type SyncSessionResult = {
   session: Session | null;
@@ -293,6 +294,7 @@ class SessionService {
   private handlers = new Map<string, Set<SessionEventHandler>>();
   private pendingStreams = new Map<string, StreamEvent[]>();
   private activeStreams = new Set<string>();
+  private eventCursors = new Map<string, string>();
   private pendingMessages = new Map<string, PendingMessage>();
   private listeners = new Set<(event: SessionServiceEvent) => void>();
   private reconnectTimer: number | null = null;
@@ -672,6 +674,19 @@ class SessionService {
     this.emit({ type, sessionKey, payload: nextPayload });
 
     if (!sessionKey) return;
+    const rootId =
+      typeof nextPayload.root_id === "string" ? nextPayload.root_id : "";
+    const cursorKey = this.eventCursorKey(rootId, sessionKey);
+    if (type === "session.stream") {
+      const event = nextPayload.event as StreamEvent | undefined;
+      if (event?.event_cursor && cursorKey) {
+        this.eventCursors.set(cursorKey, event.event_cursor);
+      }
+    } else if (type === "session.user_message" && cursorKey) {
+      this.eventCursors.delete(cursorKey);
+    } else if (type === "session.done" && cursorKey) {
+      this.eventCursors.delete(cursorKey);
+    }
     this.updateActiveStreamState(type, sessionKey, nextPayload);
 
     const handlers = this.handlers.get(sessionKey);
@@ -769,6 +784,19 @@ class SessionService {
     return this.activeStreams.has(sessionKey);
   }
 
+  private eventCursorKey(rootId: string, sessionKey: string): string {
+    if (!rootId || !sessionKey) return "";
+    return `${rootId}::${sessionKey}`;
+  }
+
+  getEventCursor(rootId: string, sessionKey: string): string {
+    return this.eventCursors.get(this.eventCursorKey(rootId, sessionKey)) || "";
+  }
+
+  clearEventCursor(rootId: string, sessionKey: string) {
+    this.eventCursors.delete(this.eventCursorKey(rootId, sessionKey));
+  }
+
   subscribe(sessionKey: string, handler: SessionEventHandler) {
     let set = this.handlers.get(sessionKey);
     if (!set) {
@@ -822,6 +850,10 @@ class SessionService {
         readyState: this.ws?.readyState ?? null,
       });
       return false;
+    }
+
+    if (sessionKey) {
+      this.eventCursors.delete(this.eventCursorKey(rootId, sessionKey));
     }
 
     const msg = {
@@ -1027,12 +1059,16 @@ class SessionService {
     if (e2eeService.isRequired()) {
       await e2eeService.ensureSession();
     }
+    const eventCursor = this.eventCursors.get(
+      this.eventCursorKey(rootId, sessionKey),
+    );
     return this.sendWSMessage({
       id: `ready-${now}`,
       type: "session.ready",
       payload: {
         root_id: rootId,
         session_key: sessionKey,
+        ...(eventCursor ? { event_cursor: eventCursor } : {}),
       },
     });
   }

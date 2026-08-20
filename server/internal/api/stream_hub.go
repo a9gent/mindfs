@@ -2,6 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,15 +48,17 @@ type QueuedUserMessage struct {
 }
 
 type SessionPendingState struct {
-	RootID       string
-	SessionTitle string
-	Active       bool
-	QueueFrozen  bool
-	User         *PendingUserMessage
-	Queue        []QueuedUserMessage
-	ReplyingList []StreamEvent
-	Summary      string
-	UpdatedAt    time.Time
+	RootID          string
+	SessionTitle    string
+	Active          bool
+	QueueFrozen     bool
+	User            *PendingUserMessage
+	Queue           []QueuedUserMessage
+	ReplyingList    []StreamEvent
+	BaseExchangeSeq int
+	NextEventSeq    uint64
+	Summary         string
+	UpdatedAt       time.Time
 }
 
 type ClientStreamStatus string
@@ -64,8 +69,8 @@ const (
 )
 
 type ClientReplayState struct {
-	Status      ClientStreamStatus
-	ReplayIndex int
+	Status       ClientStreamStatus
+	LastEventSeq uint64
 }
 
 type CompletedSessionState struct {
@@ -115,7 +120,7 @@ func pendingClientKey(clientID, sessionKey string) string {
 }
 
 func cloneEvent(ev StreamEvent) StreamEvent {
-	return StreamEvent{Type: ev.Type, Data: ev.Data}
+	return StreamEvent{Type: ev.Type, Data: ev.Data, EventCursor: ev.EventCursor}
 }
 
 func cloneUserExchange(msg *PendingUserMessage) *session.Exchange {
@@ -350,7 +355,7 @@ func (h *StreamHub) SetPendingUser(rootID, sessionKey, sessionTitle, agent, mode
 	return h.SetPendingUserAt(rootID, sessionKey, sessionTitle, agent, model, mode, effort, fastService, planMode, content, time.Now().UTC())
 }
 
-func (h *StreamHub) SetPendingUserAt(rootID, sessionKey, sessionTitle, agent, model, mode, effort, fastService string, planMode bool, content string, timestamp time.Time) *PendingUserMessage {
+func (h *StreamHub) SetPendingUserAt(rootID, sessionKey, sessionTitle, agent, model, mode, effort, fastService string, planMode bool, content string, timestamp time.Time, baseExchangeSeq ...int) *PendingUserMessage {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if timestamp.IsZero() {
@@ -374,6 +379,11 @@ func (h *StreamHub) SetPendingUserAt(rootID, sessionKey, sessionTitle, agent, mo
 		Timestamp:   timestamp,
 	}
 	state.ReplyingList = nil
+	state.BaseExchangeSeq = 0
+	if len(baseExchangeSeq) > 0 && baseExchangeSeq[0] > 0 {
+		state.BaseExchangeSeq = baseExchangeSeq[0]
+	}
+	state.NextEventSeq = 0
 	state.Summary = ""
 	state.UpdatedAt = state.User.Timestamp
 	h.clearReplayStatesForSessionLocked(sessionKey)
@@ -608,13 +618,15 @@ func (h *StreamHub) PendingSessionSnapshot(sessionKey string) PendingSessionSnap
 	}
 }
 
-func (h *StreamHub) AppendReplyEvent(sessionKey string, event StreamEvent) {
+func (h *StreamHub) AppendReplyEvent(sessionKey string, event StreamEvent) StreamEvent {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	state := h.ensurePendingSessionLocked(sessionKey)
+	state.NextEventSeq++
+	event.EventCursor = formatEventCursor(state.BaseExchangeSeq, state.NextEventSeq)
 	if coalesceUserShellStreamEvent(state, event) {
 		state.UpdatedAt = time.Now().UTC()
-		return
+		return event
 	}
 	state.ReplyingList = append(state.ReplyingList, cloneEvent(event))
 	state.UpdatedAt = time.Now().UTC()
@@ -625,6 +637,27 @@ func (h *StreamHub) AppendReplyEvent(sessionKey string, event StreamEvent) {
 	} else if isAuxiliarySummaryBoundary(event.Type) {
 		state.Summary = ""
 	}
+	return event
+}
+
+func formatEventCursor(baseExchangeSeq int, eventSeq uint64) string {
+	return fmt.Sprintf("%d:%d", baseExchangeSeq, eventSeq)
+}
+
+func parseEventCursor(value string) (int, uint64, bool) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	baseExchangeSeq, err := strconv.Atoi(parts[0])
+	if err != nil || baseExchangeSeq < 0 {
+		return 0, 0, false
+	}
+	eventSeq, err := strconv.ParseUint(parts[1], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	return baseExchangeSeq, eventSeq, true
 }
 
 func isAuxiliarySummaryBoundary(eventType string) bool {
@@ -669,6 +702,7 @@ func coalesceUserShellStreamEvent(state *SessionPendingState, event StreamEvent)
 		for key, value := range next.Meta {
 			merged.Meta[key] = value
 		}
+		merged.Meta["replaySnapshot"] = true
 		text := toolCallText(prev.Content) + toolCallText(next.Content)
 		if len(text) > maxReplayUserShellStreamBytes {
 			text = text[len(text)-maxReplayUserShellStreamBytes:]
@@ -676,7 +710,7 @@ func coalesceUserShellStreamEvent(state *SessionPendingState, event StreamEvent)
 			merged.Meta["replayTruncation"] = "tail"
 		}
 		merged.Content = []agenttypes.ToolCallContentItem{{Type: "text", Text: text}}
-		state.ReplyingList[i] = StreamEvent{Type: event.Type, Data: merged}
+		state.ReplyingList[i] = StreamEvent{Type: event.Type, Data: merged, EventCursor: event.EventCursor}
 		return true
 	}
 	return false
@@ -713,11 +747,18 @@ func (h *StreamHub) ListReplyingSessions() []ReplyingSessionState {
 	return items
 }
 
-func (h *StreamHub) ReplayPending(rootID, clientID, sessionKey string) {
+func (h *StreamHub) ReplayPending(rootID, clientID, sessionKey, eventCursor string) {
 	h.mu.Lock()
+	lastEventSeq := uint64(0)
+	if state := h.pendingSessions[sessionKey]; state != nil {
+		if baseExchangeSeq, parsedEventSeq, ok := parseEventCursor(eventCursor); ok &&
+			baseExchangeSeq == state.BaseExchangeSeq && parsedEventSeq <= state.NextEventSeq {
+			lastEventSeq = parsedEventSeq
+		}
+	}
 	h.replayStates[pendingClientKey(clientID, sessionKey)] = &ClientReplayState{
-		Status:      ClientStreamStatusReplay,
-		ReplayIndex: 0,
+		Status:       ClientStreamStatusReplay,
+		LastEventSeq: lastEventSeq,
 	}
 	h.mu.Unlock()
 
@@ -789,9 +830,9 @@ func (h *StreamHub) BroadcastSessionStream(rootID, sessionKey string, event *Str
 	if event == nil {
 		return
 	}
-	h.AppendReplyEvent(sessionKey, *event)
+	stored := h.AppendReplyEvent(sessionKey, *event)
 	for _, clientID := range h.GetSessionClientIDs(sessionKey, true) {
-		resp := buildSessionStreamResponse(rootID, sessionKey, event)
+		resp := buildSessionStreamResponse(rootID, sessionKey, &stored)
 		h.SendToClient(clientID, resp)
 	}
 }
@@ -842,8 +883,9 @@ func (h *StreamHub) BroadcastSessionUserMessageAt(
 	timestamp time.Time,
 	excludeClientID string,
 	queued bool,
+	baseExchangeSeq ...int,
 ) {
-	pendingUser := h.SetPendingUserAt(rootID, sessionKey, sessionName, agentName, model, mode, effort, fastService, planMode, content, timestamp)
+	pendingUser := h.SetPendingUserAt(rootID, sessionKey, sessionName, agentName, model, mode, effort, fastService, planMode, content, timestamp, baseExchangeSeq...)
 	resp := buildSessionUserMessageResponse(rootID, sessionKey, sessionType, sessionName, agentName, model, mode, effort, fastService, planMode, content, pendingUser.Timestamp, queued)
 	for _, clientID := range h.GetSessionClientIDs(sessionKey, false) {
 		if clientID == excludeClientID {
@@ -934,14 +976,28 @@ func (h *StreamHub) nextReplayStepLocked(clientID, sessionKey string) replayStep
 		replay.Status = ClientStreamStatusLive
 		return replayStep{live: true}
 	}
-	if replay.ReplayIndex >= len(state.ReplyingList) {
+	events := make([]StreamEvent, 0, len(state.ReplyingList))
+	maxEventSeq := replay.LastEventSeq
+	for _, event := range state.ReplyingList {
+		baseExchangeSeq, eventSeq, ok := parseEventCursor(event.EventCursor)
+		if !ok || baseExchangeSeq != state.BaseExchangeSeq || eventSeq <= replay.LastEventSeq {
+			continue
+		}
+		events = append(events, cloneEvent(event))
+		if eventSeq > maxEventSeq {
+			maxEventSeq = eventSeq
+		}
+	}
+	if len(events) == 0 {
 		replay.Status = ClientStreamStatusLive
 		return replayStep{live: true}
 	}
-	start := replay.ReplayIndex
-	end := len(state.ReplyingList)
-	events := append([]StreamEvent(nil), state.ReplyingList[start:end]...)
-	replay.ReplayIndex = end
+	sort.SliceStable(events, func(i, j int) bool {
+		_, left, _ := parseEventCursor(events[i].EventCursor)
+		_, right, _ := parseEventCursor(events[j].EventCursor)
+		return left < right
+	})
+	replay.LastEventSeq = maxEventSeq
 	return replayStep{events: events}
 }
 

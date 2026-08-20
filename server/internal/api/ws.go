@@ -49,8 +49,9 @@ type WSHandler struct {
 }
 
 type StreamEvent struct {
-	Type string `json:"type"`
-	Data any    `json:"data,omitempty"`
+	Type        string `json:"type"`
+	Data        any    `json:"data,omitempty"`
+	EventCursor string `json:"event_cursor,omitempty"`
 }
 
 type sessionMessageJob struct {
@@ -907,7 +908,7 @@ func (h *WSHandler) runSessionMessage(job sessionMessageJob) {
 		ClientCtx:       job.ClientCtx,
 		OnStart: func(start usecase.MessageStart) {
 			h.AppContext.ClearTaskAuxFlagsForSession(rootID, key)
-			streamHub.BroadcastSessionUserMessageAt(rootID, key, job.SessionType, job.SessionName, job.User.Agent, start.Model, start.Mode, start.Effort, start.FastService, job.User.PlanMode, job.User.Content, job.User.Timestamp, job.ExcludeClientID, job.Queued)
+			streamHub.BroadcastSessionUserMessageAt(rootID, key, job.SessionType, job.SessionName, job.User.Agent, start.Model, start.Mode, start.Effort, start.FastService, job.User.PlanMode, job.User.Content, job.User.Timestamp, job.ExcludeClientID, job.Queued, start.BaseExchangeSeq)
 		},
 		OnUpdate: func(update agenttypes.Event) {
 			updateTracker.Begin()
@@ -1007,12 +1008,13 @@ func (h *WSHandler) handleSessionReady(clientID string, req WSRequest) {
 	}
 	rootID := getString(req.Payload, "root_id")
 	key := getString(req.Payload, "session_key")
+	eventCursor := getString(req.Payload, "event_cursor")
 	if rootID == "" || key == "" {
 		return
 	}
 	streamHub := h.AppContext.GetSessionStreamHub()
 	streamHub.BindSessionClient(key, clientID)
-	streamHub.ReplayPending(rootID, clientID, key)
+	streamHub.ReplayPending(rootID, clientID, key, eventCursor)
 }
 
 func (h *WSHandler) sessionMessageContext() (context.Context, context.CancelFunc) {

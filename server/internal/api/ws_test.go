@@ -81,6 +81,72 @@ func TestAppendReplyEventResetsSummaryAfterAuxiliaryEvent(t *testing.T) {
 	}
 }
 
+func TestAppendReplyEventBuildsCompositeCursor(t *testing.T) {
+	hub := NewStreamHub(nil)
+	hub.SetPendingUserAt("root", "sess-1", "title", "codex", "", "", "", "", false, "prompt", time.Now(), 8)
+
+	first := hub.AppendReplyEvent("sess-1", StreamEvent{
+		Type: string(agenttypes.EventTypeMessageChunk),
+		Data: agenttypes.MessageChunk{Content: "first"},
+	})
+	second := hub.AppendReplyEvent("sess-1", StreamEvent{
+		Type: string(agenttypes.EventTypeMessageChunk),
+		Data: agenttypes.MessageChunk{Content: "second"},
+	})
+
+	if first.EventCursor != "8:1" || second.EventCursor != "8:2" {
+		t.Fatalf("event cursors = %q, %q; want 8:1, 8:2", first.EventCursor, second.EventCursor)
+	}
+}
+
+func TestReplayPendingStartsAfterCompositeCursor(t *testing.T) {
+	hub := NewStreamHub(nil)
+	hub.SetPendingUserAt("root", "sess-1", "title", "codex", "", "", "", "", false, "prompt", time.Now(), 8)
+	hub.AppendReplyEvent("sess-1", StreamEvent{Type: string(agenttypes.EventTypeMessageChunk), Data: agenttypes.MessageChunk{Content: "first"}})
+	hub.AppendReplyEvent("sess-1", StreamEvent{Type: string(agenttypes.EventTypeMessageChunk), Data: agenttypes.MessageChunk{Content: "second"}})
+	hub.AppendReplyEvent("sess-1", StreamEvent{Type: string(agenttypes.EventTypeMessageChunk), Data: agenttypes.MessageChunk{Content: "third"}})
+	hub.replayStates[pendingClientKey("client", "sess-1")] = &ClientReplayState{
+		Status:       ClientStreamStatusReplay,
+		LastEventSeq: 2,
+	}
+
+	step := hub.collectReplayStep("client", "sess-1")
+	if len(step.events) != 1 || step.events[0].EventCursor != "8:3" {
+		t.Fatalf("replayed events = %#v; want only cursor 8:3", step.events)
+	}
+}
+
+func TestCoalescedToolStreamAdvancesCursor(t *testing.T) {
+	hub := NewStreamHub(nil)
+	hub.SetPendingUserAt("root", "sess-1", "title", "", "", "", "", "", false, "command", time.Now(), 4)
+	toolUpdate := func(text string) StreamEvent {
+		return StreamEvent{
+			Type: string(agenttypes.EventTypeToolUpdate),
+			Data: agenttypes.ToolCall{
+				CallID:  "call-1",
+				Status:  "running",
+				Meta:    map[string]any{"source": "userShell", "phase": "stream"},
+				Content: []agenttypes.ToolCallContentItem{{Type: "text", Text: text}},
+			},
+		}
+	}
+	hub.AppendReplyEvent("sess-1", toolUpdate("hello "))
+	hub.AppendReplyEvent("sess-1", toolUpdate("world"))
+	hub.replayStates[pendingClientKey("client", "sess-1")] = &ClientReplayState{
+		Status:       ClientStreamStatusReplay,
+		LastEventSeq: 1,
+	}
+
+	step := hub.collectReplayStep("client", "sess-1")
+	if len(step.events) != 1 || step.events[0].EventCursor != "4:2" {
+		t.Fatalf("replayed events = %#v; want coalesced cursor 4:2", step.events)
+	}
+	tool, ok := step.events[0].Data.(agenttypes.ToolCall)
+	if !ok || len(tool.Content) != 1 || tool.Content[0].Text != "hello world" {
+		t.Fatalf("coalesced tool = %#v; want complete output", step.events[0].Data)
+	}
+}
+
 func TestSessionMessageContextHasNoDeadlineWithoutAppContext(t *testing.T) {
 	handler := &WSHandler{}
 

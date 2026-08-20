@@ -3458,6 +3458,11 @@ export function App({ onGoHome }: AppProps) {
         return null;
       }
       const cacheKey = rootSessionKey(resolvedRoot, resolvedKey);
+      const cachedBeforeSync = sessionCacheRef.current[cacheKey];
+      const resumeCursor = sessionService.getEventCursor(
+        resolvedRoot,
+        resolvedKey,
+      );
       const inflight = loadingSessionRef.current[cacheKey];
       const request =
         inflight ||
@@ -3468,9 +3473,35 @@ export function App({ onGoHome }: AppProps) {
         loadingSessionRef.current[cacheKey] = request;
       }
       const syncResult = await request;
-      const fullSession = syncResult?.session;
+      let fullSession = syncResult?.session;
       if (!fullSession) {
         return null;
+      }
+      if (resumeCursor) {
+        const incomingExchanges = Array.isArray((fullSession as any).exchanges)
+          ? ((fullSession as any).exchanges as Exchange[])
+          : [];
+        const hasPendingTurn = incomingExchanges.some(
+          (exchange) => Number((exchange as any)?.seq || 0) === 0,
+        );
+        const localTransient = Array.isArray((cachedBeforeSync as any)?.exchanges)
+          ? (((cachedBeforeSync as any).exchanges as Exchange[]).filter(
+              (exchange) => Number((exchange as any)?.seq || 0) === 0,
+            ))
+          : [];
+        if (hasPendingTurn && localTransient.length > 0) {
+          fullSession = {
+            ...(fullSession as any),
+            exchanges: [
+              ...incomingExchanges.filter(
+                (exchange) => Number((exchange as any)?.seq || 0) > 0,
+              ),
+              ...localTransient,
+            ],
+          } as Session;
+        } else {
+          sessionService.clearEventCursor(resolvedRoot, resolvedKey);
+        }
       }
       const serverPending =
         typeof (fullSession as any)?.pending === "boolean"
@@ -4125,10 +4156,12 @@ export function App({ onGoHome }: AppProps) {
         const isUserShellStream =
           incomingMeta.source === "userShell" && incomingMeta.phase === "stream";
         if (isUserShellStream) {
-          const mergedContent = [
-            ...((existing?.content || []) as any[]),
-            ...((incoming?.content || []) as any[]),
-          ];
+          const mergedContent = incomingMeta.replaySnapshot === true
+            ? [...((incoming?.content || []) as any[])]
+            : [
+                ...((existing?.content || []) as any[]),
+                ...((incoming?.content || []) as any[]),
+              ];
           const totalText = mergedContent.map((item) => item?.text || "").join("");
           if (totalText.length > 256 * 1024) {
             merged.content = [{ type: "text", text: totalText.slice(-256 * 1024) }];

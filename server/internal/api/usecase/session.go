@@ -1115,10 +1115,11 @@ type SendMessageInput struct {
 }
 
 type MessageStart struct {
-	Model       string
-	Mode        string
-	Effort      string
-	FastService string
+	Model           string
+	Mode            string
+	Effort          string
+	FastService     string
+	BaseExchangeSeq int
 }
 
 func applyMessageRuntimeDefaultsFromStatus(
@@ -2090,10 +2091,11 @@ func (s *Service) SendMessage(ctx context.Context, in SendMessageInput) error {
 	resolvedFastService := resolveRuntimeFastService(in.Agent, current, in.FastService)
 	if in.OnStart != nil {
 		in.OnStart(MessageStart{
-			Model:       in.Model,
-			Mode:        resolvedMode,
-			Effort:      in.Effort,
-			FastService: resolvedFastService,
+			Model:           in.Model,
+			Mode:            resolvedMode,
+			Effort:          in.Effort,
+			FastService:     resolvedFastService,
+			BaseExchangeSeq: len(current.Exchanges),
 		})
 	}
 	if current.Type == session.TypeCommand {
