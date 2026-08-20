@@ -198,6 +198,29 @@ func TestClaudeLocalBashTaskLifecycleIsIgnored(t *testing.T) {
 	}
 }
 
+func TestSummarizeExecuteToolCallPrefersNaturalLanguageDescription(t *testing.T) {
+	title, meta := summarizeExecuteToolCall("Bash", json.RawMessage(`{
+		"command":"go test ./...",
+		"description":"Run the test suite"
+	}`), nil)
+	if title != "Run the test suite" {
+		t.Fatalf("title = %q, want tool description", title)
+	}
+	if meta["command"] != "go test ./..." || meta["description"] != "Run the test suite" {
+		t.Fatalf("meta = %#v, want command and description", meta)
+	}
+}
+
+func TestSummarizeExecuteToolCallFallsBackToNaturalLanguageTitle(t *testing.T) {
+	title, meta := summarizeExecuteToolCall("Bash", json.RawMessage(`{"command":"go test ./..."}`), nil)
+	if title != "Run command" {
+		t.Fatalf("title = %q, want natural-language fallback", title)
+	}
+	if meta["command"] != "go test ./..." {
+		t.Fatalf("meta = %#v, want original command in details", meta)
+	}
+}
+
 func TestClaudeLocalAgentTaskProgressEmitsParentTaskUpdate(t *testing.T) {
 	events := make([]types.Event, 0, 2)
 	s := &session{sessionID: "claude-session", onUpdate: func(event types.Event) {

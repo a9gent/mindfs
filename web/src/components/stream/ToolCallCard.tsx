@@ -543,13 +543,13 @@ export const ToolCallCard = memo(function ToolCallCard({
       .filter(Boolean);
     return Array.from(new Set([...diffNames, ...locationNames]));
   }, [detailSections, effectiveLocations, rootPath]);
+  const displayTitle = isFileChange && labelTitle.toLowerCase() === "file_change" ? "Update files" : labelTitle;
+  const displayFileNames = fileNames.filter((name) => name !== displayTitle && name !== basename(displayTitle));
   const label = isUserShell
-    ? String(effectiveMeta?.command || labelTitle || "command")
+    ? String(effectiveMeta?.command || displayTitle || "command")
     : isCollabTool
-    ? labelTitle || collabToolName || "subagent"
-    : isFileChange
-    ? labelKind || "edit"
-    : [labelKind, labelTitle].filter(Boolean).join(" ").trim() || labelKind || labelTitle || "tool";
+    ? displayTitle || collabToolName || "subagent"
+    : displayTitle || "tool";
   const isRunning = normalizedStatus === "running" || normalizedStatus === "in_progress";
   const isComplete = normalizedStatus === "complete" || normalizedStatus === "success";
   const isFailed = normalizedStatus === "failed" || normalizedStatus === "error";
@@ -659,7 +659,7 @@ export const ToolCallCard = memo(function ToolCallCard({
           <span style={{ fontWeight: 500, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%", minWidth: 0 }}>
             {label}
           </span>
-          {isFileChange ? (
+          {isFileChange && displayFileNames.length > 0 ? (
             <span
               style={{
                 minWidth: 0,
@@ -675,7 +675,7 @@ export const ToolCallCard = memo(function ToolCallCard({
                 textOverflow: "ellipsis",
               }}
             >
-              {fileNames.join(" ")}
+              {displayFileNames.join(" ")}
             </span>
           ) : null}
         </span>

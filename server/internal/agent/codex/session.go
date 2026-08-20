@@ -1096,7 +1096,7 @@ func mapToolItem(item codexsdk.ThreadItem, started bool) (types.ToolCall, bool) 
 		}
 		return types.ToolCall{
 			CallID:  v.ID,
-			Title:   firstNonEmpty(v.Command, "command"),
+			Title:   codexCommandTitle(v.CommandActions, v.Command),
 			Status:  status,
 			Kind:    types.ToolKindExecute,
 			Content: content,
@@ -1126,7 +1126,7 @@ func mapToolItem(item codexsdk.ThreadItem, started bool) (types.ToolCall, bool) 
 		}
 		return types.ToolCall{
 			CallID:    v.ID,
-			Title:     "file_change",
+			Title:     "Update files",
 			Status:    status,
 			Kind:      types.ToolKindEdit,
 			Locations: locations,
@@ -1224,6 +1224,57 @@ func mapToolItem(item codexsdk.ThreadItem, started bool) (types.ToolCall, bool) 
 		return mapUnknownToolItem(v, started)
 	default:
 		return types.ToolCall{}, false
+	}
+}
+
+func codexCommandTitle(actions []codexsdk.CommandAction, command string) string {
+	command = firstNonEmpty(strings.TrimSpace(command), "command")
+	if len(actions) != 1 {
+		for _, action := range actions {
+			if action.Type == codexsdk.CommandActionTypeUnknown {
+				return command
+			}
+		}
+		if len(actions) > 1 {
+			return "Explore files · " + command
+		}
+		return command
+	}
+
+	action := actions[0]
+	path := ""
+	if action.Path != nil {
+		path = strings.TrimSpace(*action.Path)
+	}
+	switch action.Type {
+	case codexsdk.CommandActionTypeRead:
+		name := firstNonEmpty(strings.TrimSpace(action.Name), path)
+		if name != "" {
+			return "Read " + name + " · " + command
+		}
+		return "Read file · " + command
+	case codexsdk.CommandActionTypeListFiles:
+		if path != "" {
+			return "List files in " + path + " · " + command
+		}
+		return "List files · " + command
+	case codexsdk.CommandActionTypeSearch:
+		query := ""
+		if action.Query != nil {
+			query = strings.TrimSpace(*action.Query)
+		}
+		switch {
+		case query != "" && path != "":
+			return "Search for " + query + " in " + path + " · " + command
+		case query != "":
+			return "Search for " + query + " · " + command
+		case path != "":
+			return "Search in " + path + " · " + command
+		default:
+			return "Search files · " + command
+		}
+	default:
+		return command
 	}
 }
 

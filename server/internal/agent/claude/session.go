@@ -1220,8 +1220,9 @@ func summarizeExecuteToolCall(name string, input json.RawMessage, fallbackMeta m
 	meta := map[string]any{"command": command}
 	if desc := strings.TrimSpace(payload.Description); desc != "" {
 		meta["description"] = desc
+		return desc, meta
 	}
-	return command, meta
+	return "Run command", meta
 }
 
 func summarizeSearchToolCall(name string, input json.RawMessage, fallbackMeta map[string]any) (string, map[string]any) {

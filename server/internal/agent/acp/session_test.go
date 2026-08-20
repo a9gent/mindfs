@@ -76,6 +76,28 @@ func TestConvertEventMapsACPPlanToTodoUpdate(t *testing.T) {
 	}
 }
 
+func TestConvertEventPreservesACPHumanReadableToolTitle(t *testing.T) {
+	event := convertEvent(SessionUpdate{
+		Type:      UpdateTypeToolCall,
+		SessionID: "session-1",
+		Raw: acpsdk.SessionUpdate{
+			ToolCall: &acpsdk.SessionUpdateToolCall{
+				ToolCallId: "tool-1",
+				Title:      "Run the test suite",
+				Kind:       acpsdk.ToolKindExecute,
+				Status:     acpsdk.ToolCallStatusInProgress,
+			},
+		},
+	})
+	toolCall, ok := event.Data.(types.ToolCall)
+	if !ok {
+		t.Fatalf("event.Data = %T, want ToolCall", event.Data)
+	}
+	if toolCall.Title != "Run the test suite" {
+		t.Fatalf("title = %q, want ACP human-readable title", toolCall.Title)
+	}
+}
+
 func TestConvertEventMapsACPPlanUpdateMarkdownAndFileToPlanUpdate(t *testing.T) {
 	for _, tc := range []struct {
 		name string

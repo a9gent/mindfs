@@ -52,6 +52,61 @@ func TestCodexListModelsParamsIncludesHiddenModels(t *testing.T) {
 	}
 }
 
+func TestMapCommandExecutionUsesNaturalLanguageTitle(t *testing.T) {
+	path := "server"
+	query := "TODO"
+	output := "ok\n"
+	toolCall, ok := mapToolItem(&codexsdk.CommandExecutionItem{
+		ID:      "command-1",
+		Type:    "commandExecution",
+		Command: "go test ./...",
+		CommandActions: []codexsdk.CommandAction{{
+			Type:  codexsdk.CommandActionTypeSearch,
+			Query: &query,
+			Path:  &path,
+		}},
+		AggregatedOutput: &output,
+		Status:           codexsdk.CommandExecutionStatusCompleted,
+	}, false)
+	if !ok {
+		t.Fatal("mapToolItem returned false")
+	}
+	if toolCall.Title != "Search for TODO in server · go test ./..." {
+		t.Fatalf("title = %q, want natural-language title", toolCall.Title)
+	}
+	if toolCall.Meta["command"] != "go test ./..." {
+		t.Fatalf("meta = %#v, want original command in details", toolCall.Meta)
+	}
+}
+
+func TestCodexCommandTitle(t *testing.T) {
+	path := "server"
+	tests := []struct {
+		name    string
+		actions []codexsdk.CommandAction
+		want    string
+	}{
+		{name: "no parsed action", want: "go test ./..."},
+		{name: "read", actions: []codexsdk.CommandAction{{Type: codexsdk.CommandActionTypeRead, Name: "README.md"}}, want: "Read README.md · go test ./..."},
+		{name: "list", actions: []codexsdk.CommandAction{{Type: codexsdk.CommandActionTypeListFiles, Path: &path}}, want: "List files in server · go test ./..."},
+		{name: "multiple structured actions", actions: []codexsdk.CommandAction{
+			{Type: codexsdk.CommandActionTypeRead, Name: "go.mod"},
+			{Type: codexsdk.CommandActionTypeSearch, Path: &path},
+		}, want: "Explore files · go test ./..."},
+		{name: "multiple including unknown", actions: []codexsdk.CommandAction{
+			{Type: codexsdk.CommandActionTypeRead, Name: "go.mod"},
+			{Type: codexsdk.CommandActionTypeUnknown},
+		}, want: "go test ./..."},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := codexCommandTitle(tc.actions, "go test ./..."); got != tc.want {
+				t.Fatalf("codexCommandTitle() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestHandleRawEventPlanDeltaAggregatesPlanUpdates(t *testing.T) {
 	s := &session{}
 	var updates []agenttypes.Event
