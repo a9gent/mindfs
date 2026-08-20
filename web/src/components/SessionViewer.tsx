@@ -15,6 +15,10 @@ import { copyText } from "../services/clipboard";
 import type { AgentStatus } from "../services/agents";
 import { useI18n, type Locale } from "../i18n";
 import { formatSessionDuration } from "../services/sessionDuration";
+import {
+  relatedFileStatKey,
+  useRelatedFileStats,
+} from "../hooks/useRelatedFileStats";
 
 type SessionItem = {
   key?: string;
@@ -1437,6 +1441,15 @@ function SessionViewerInner({
       return { path, name, head, repo_path: repoPath, repo_name: repoName, repo_kind: repoKind, root_id: rootID };
     })
     .filter((f) => f.path);
+  const gitStatsRefreshKey = Object.entries(gitFileStatsByPath)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([path, stats]) => `${path}:${stats.status}:${stats.additions}:${stats.deletions}`)
+    .join("|");
+  const relatedFileStatsByKey = useRelatedFileStats(
+    rootId,
+    relatedFiles,
+    gitStatsRefreshKey,
+  );
   const activeAskUserCallId = (() => {
     if (!isAwaiting) {
       return "";
@@ -2626,7 +2639,11 @@ function SessionViewerInner({
                                   : group.repoName || t("session.currentProject")}
                             </div>
                           ) : null}
-                          {group.files.map((file) => (
+                          {group.files.map((file) => {
+                            const stats =
+                              relatedFileStatsByKey[relatedFileStatKey(file)] ||
+                              gitFileStatsByPath[file.path];
+                            return (
                           <div
                             key={`${file.head || "legacy"}:${file.path}`}
                             style={{
@@ -2689,7 +2706,7 @@ function SessionViewerInner({
                               >
                                 {file.name}
                               </div>
-                              {gitFileStatsByPath[file.path] ? (
+                              {stats ? (
                                 <div
                                   style={{
                                     display: "inline-flex",
@@ -2706,7 +2723,7 @@ function SessionViewerInner({
                                       fontVariantNumeric: "tabular-nums",
                                     }}
                                   >
-                                    +{gitFileStatsByPath[file.path].additions}
+                                    +{stats.additions}
                                   </span>
                                   <span
                                     style={{
@@ -2714,7 +2731,7 @@ function SessionViewerInner({
                                       fontVariantNumeric: "tabular-nums",
                                     }}
                                   >
-                                    -{gitFileStatsByPath[file.path].deletions}
+                                    -{stats.deletions}
                                   </span>
                                 </div>
                               ) : null}
@@ -2746,7 +2763,8 @@ function SessionViewerInner({
                               x
                             </button>
                           </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       );
                     })}
