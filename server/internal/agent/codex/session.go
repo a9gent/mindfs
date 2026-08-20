@@ -1126,7 +1126,6 @@ func mapToolItem(item codexsdk.ThreadItem, started bool) (types.ToolCall, bool) 
 		}
 		return types.ToolCall{
 			CallID:    v.ID,
-			Title:     "Update files",
 			Status:    status,
 			Kind:      types.ToolKindEdit,
 			Locations: locations,

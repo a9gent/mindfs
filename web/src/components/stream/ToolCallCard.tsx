@@ -543,12 +543,14 @@ export const ToolCallCard = memo(function ToolCallCard({
       .filter(Boolean);
     return Array.from(new Set([...diffNames, ...locationNames]));
   }, [detailSections, effectiveLocations, rootPath]);
-  const displayTitle = isFileChange && labelTitle.toLowerCase() === "file_change" ? "Update files" : labelTitle;
+  const displayTitle = isFileChange && labelTitle.toLowerCase() === "file_change" ? "" : labelTitle;
   const displayFileNames = fileNames.filter((name) => name !== displayTitle && name !== basename(displayTitle));
   const label = isUserShell
     ? String(effectiveMeta?.command || displayTitle || "command")
     : isCollabTool
     ? displayTitle || collabToolName || "subagent"
+    : isFileChange
+    ? displayTitle
     : displayTitle || "tool";
   const isRunning = normalizedStatus === "running" || normalizedStatus === "in_progress";
   const isComplete = normalizedStatus === "complete" || normalizedStatus === "success";
@@ -656,9 +658,11 @@ export const ToolCallCard = memo(function ToolCallCard({
       >
         <span style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0, flex: 1 }}>
           <span>{icon}</span>
-          <span style={{ fontWeight: 500, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%", minWidth: 0 }}>
-            {label}
-          </span>
+          {label ? (
+            <span style={{ fontWeight: 500, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%", minWidth: 0 }}>
+              {label}
+            </span>
+          ) : null}
           {isFileChange && displayFileNames.length > 0 ? (
             <span
               style={{
