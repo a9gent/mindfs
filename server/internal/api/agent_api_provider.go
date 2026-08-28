@@ -503,7 +503,11 @@ func applyCodexAPIProvider(provider agentAPIProvider) error {
 }
 
 func mergeCodexAPIProviderConfig(existing string, provider agentAPIProvider) string {
-	providerName := agentAPIProviderConfigName(provider)
+	// Update provider settings while retaining the configured provider key.
+	providerName := codexModelProviderFromConfig(existing)
+	if providerName == "" {
+		providerName = agentAPIProviderConfigName(provider)
+	}
 	providerTable := tomlDottedTable("model_providers", providerName)
 	lines := strings.Split(strings.ReplaceAll(existing, "\r\n", "\n"), "\n")
 	filtered := make([]string, 0, len(lines))
@@ -511,9 +515,10 @@ func mergeCodexAPIProviderConfig(existing string, provider agentAPIProvider) str
 	currentTable := ""
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-			currentTable = trimmed
-			skipTable = trimmed == providerTable
+		header := tomlTableHeader(line)
+		if header != "" {
+			currentTable = header
+			skipTable = header == providerTable
 			if skipTable {
 				continue
 			}
@@ -529,7 +534,8 @@ func mergeCodexAPIProviderConfig(existing string, provider agentAPIProvider) str
 		}
 		filtered = append(filtered, line)
 	}
-	model := firstModelOrDefault(provider.Models, "gpt-5")
+	// Retain the configured model only when the provider advertises it.
+	model := codexModelForProvider(existing, provider.Models)
 	base := insertCodexTopLevelProviderConfig(strings.Join(filtered, "\n"), model, providerName)
 	addition := fmt.Sprintf(`%s
 name = %q
@@ -543,12 +549,193 @@ experimental_bearer_token = %q
 	return base + "\n\n" + addition
 }
 
+// codexModelProviderFromConfig returns the top-level model_provider value.
+func codexModelProviderFromConfig(existing string) string {
+	lines := strings.Split(strings.ReplaceAll(existing, "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(tomlLineWithoutComment(line))
+		if tomlTableHeader(line) != "" {
+			break
+		}
+		if !strings.HasPrefix(trimmed, "model_provider") {
+			continue
+		}
+		key, value, ok := strings.Cut(trimmed, "=")
+		if !ok || strings.TrimSpace(key) != "model_provider" {
+			continue
+		}
+		return tomlStringValue(value)
+	}
+	return ""
+}
+
+func codexModelForProvider(existing string, models []string) string {
+	model := codexTopLevelStringValue(existing, "model")
+	if model == "" {
+		return ""
+	}
+	for _, candidate := range models {
+		if strings.TrimSpace(candidate) == model {
+			return model
+		}
+	}
+	return ""
+}
+
+func codexTopLevelStringValue(existing, wantedKey string) string {
+	lines := strings.Split(strings.ReplaceAll(existing, "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(tomlLineWithoutComment(line))
+		if tomlTableHeader(line) != "" {
+			break
+		}
+		key, value, ok := strings.Cut(trimmed, "=")
+		if !ok || strings.TrimSpace(key) != wantedKey {
+			continue
+		}
+		return tomlStringValue(value)
+	}
+	return ""
+}
+
+// tomlLineWithoutComment removes comments outside quoted strings.
+func tomlLineWithoutComment(line string) string {
+	inBasic, inLiteral, escaped := false, false, false
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		switch {
+		case inBasic:
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inBasic = false
+			}
+		case inLiteral:
+			if ch == '\'' {
+				inLiteral = false
+			}
+		case ch == '"':
+			inBasic = true
+		case ch == '\'':
+			inLiteral = true
+		case ch == '#':
+			return line[:i]
+		}
+	}
+	return line
+}
+
+func tomlTableHeader(line string) string {
+	trimmed := strings.TrimSpace(tomlLineWithoutComment(line))
+	if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		return trimmed
+	}
+	return ""
+}
+
+func tomlStringValue(value string) string {
+	value = strings.TrimSpace(tomlLineWithoutComment(value))
+	if len(value) >= 2 && value[0] == '"' {
+		if parsed, err := strconv.Unquote(value); err == nil {
+			return strings.TrimSpace(parsed)
+		}
+	}
+	if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
+		return strings.TrimSpace(value[1 : len(value)-1])
+	}
+	return strings.TrimSpace(value)
+}
+
+// preserveCodexModelProviderKey aligns the selected provider key and table.
+func preserveCodexModelProviderKey(existing, stableProvider string) string {
+	stableProvider = strings.TrimSpace(stableProvider)
+	if stableProvider == "" {
+		return existing
+	}
+	currentProvider := codexModelProviderFromConfig(existing)
+	if currentProvider == stableProvider {
+		return existing
+	}
+	if currentProvider == "" {
+		// Add the provider selector before the first table.
+		return addCodexModelProviderKey(existing, stableProvider)
+	}
+	currentTable := tomlDottedTable("model_providers", currentProvider)
+	stableTable := tomlDottedTable("model_providers", stableProvider)
+	lines := strings.Split(strings.ReplaceAll(existing, "\r\n", "\n"), "\n")
+	currentTableFound, stableTableFound := false, false
+	for _, line := range lines {
+		header := tomlTableHeader(line)
+		if header == currentTable {
+			currentTableFound = true
+		}
+		if header == stableTable {
+			stableTableFound = true
+		}
+	}
+	// Keep the configuration unchanged when neither provider table exists.
+	if !currentTableFound && !stableTableFound {
+		return existing
+	}
+	out := make([]string, 0, len(lines))
+	inTable := false
+	skipStableTable := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		header := tomlTableHeader(line)
+		if header != "" {
+			inTable = true
+			skipStableTable = currentTableFound && header == stableTable
+			if skipStableTable {
+				continue
+			}
+			if header == currentTable {
+				line = stableTable
+			}
+		}
+		if skipStableTable {
+			continue
+		}
+		if !inTable && strings.HasPrefix(trimmed, "model_provider") {
+			if key, _, ok := strings.Cut(trimmed, "="); ok && strings.TrimSpace(key) == "model_provider" {
+				line = fmt.Sprintf("model_provider = %q", stableProvider)
+			}
+		}
+		out = append(out, line)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
+}
+
+func addCodexModelProviderKey(existing, providerName string) string {
+	lines := strings.Split(strings.TrimRight(strings.ReplaceAll(existing, "\r\n", "\n"), "\n"), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		lines = nil
+	}
+	insertAt := len(lines)
+	for i, line := range lines {
+		if tomlTableHeader(line) != "" {
+			insertAt = i
+			break
+		}
+	}
+	top := append([]string(nil), lines[:insertAt]...)
+	top = append(top, fmt.Sprintf("model_provider = %q", providerName))
+	if insertAt < len(lines) {
+		if len(top) > 0 && strings.TrimSpace(top[len(top)-1]) != "" {
+			top = append(top, "")
+		}
+		top = append(top, lines[insertAt:]...)
+	}
+	return strings.TrimSpace(strings.Join(top, "\n")) + "\n"
+}
+
 func insertCodexTopLevelProviderConfig(existing, model, providerName string) string {
 	lines := strings.Split(strings.TrimRight(existing, "\n"), "\n")
 	insertAt := len(lines)
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		if tomlTableHeader(line) != "" {
 			insertAt = i
 			break
 		}
@@ -561,7 +748,10 @@ func insertCodexTopLevelProviderConfig(existing, model, providerName string) str
 		}
 		top = append(top, line)
 	}
-	top = append(top, fmt.Sprintf("model = %q", model), fmt.Sprintf("model_provider = %q", providerName))
+	if model != "" {
+		top = append(top, fmt.Sprintf("model = %q", model))
+	}
+	top = append(top, fmt.Sprintf("model_provider = %q", providerName))
 	out := append([]string{}, top...)
 	if insertAt < len(lines) {
 		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
