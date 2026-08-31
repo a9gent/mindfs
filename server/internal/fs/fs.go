@@ -221,17 +221,77 @@ func (r RootInfo) EnsureMetaDir() (string, error) {
 	if metaDir == "" {
 		return "", errors.New("root required")
 	}
+	isProjectMeta := r.effectiveMetaLocation() == MetaLocationProject
 	mode := os.FileMode(0o755)
-	if r.effectiveMetaLocation() == MetaLocationHome {
+	if !isProjectMeta {
 		mode = 0o700
 	}
 	if err := os.MkdirAll(metaDir, mode); err != nil {
 		return "", apperr.Wrap("mkdir", metaDir, err)
 	}
+	if isProjectMeta {
+		rootDir, err := r.rootDir()
+		if err != nil {
+			return "", err
+		}
+		if err := ensureProjectMetaExcluded(rootDir); err != nil {
+			return "", err
+		}
+	}
 	if err := r.ensureHomeMetaIdentity(); err != nil {
 		return "", err
 	}
 	return metaDir, nil
+}
+
+func ensureProjectMetaExcluded(rootDir string) error {
+	gitDir := filepath.Join(rootDir, ".git")
+	info, err := os.Stat(gitDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+
+	gitInfoDir := filepath.Join(gitDir, "info")
+	if err := os.MkdirAll(gitInfoDir, 0o755); err != nil {
+		return err
+	}
+	excludePath := filepath.Join(gitInfoDir, "exclude")
+	lock := metaFileLock(excludePath)
+	lock.Lock()
+	defer lock.Unlock()
+
+	data, err := os.ReadFile(excludePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	const entry = "/.mindfs/"
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == entry {
+			return nil
+		}
+	}
+
+	file, err := os.OpenFile(excludePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		if _, err := file.WriteString("\n"); err != nil {
+			_ = file.Close()
+			return err
+		}
+	}
+	if _, err := file.WriteString(entry + "\n"); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func (r RootInfo) resolveMetaPath(path string) (string, error) {
