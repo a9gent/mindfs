@@ -518,7 +518,8 @@ func mergeCodexAPIProviderConfig(existing string, provider agentAPIProvider) str
 		header := tomlTableHeader(line)
 		if header != "" {
 			currentTable = header
-			skipTable = header == providerTable
+			tableProvider, isProviderTable := codexModelProviderTableKey(line)
+			skipTable = isProviderTable && tableProvider == providerName
 			if skipTable {
 				continue
 			}
@@ -635,6 +636,29 @@ func tomlTableHeader(line string) string {
 	return ""
 }
 
+func codexModelProviderTableKey(line string) (string, bool) {
+	header := tomlTableHeader(line)
+	if header == "" || strings.HasPrefix(header, "[[") {
+		return "", false
+	}
+	parent, key, ok := strings.Cut(strings.TrimSpace(header[1:len(header)-1]), ".")
+	if !ok || strings.TrimSpace(parent) != "model_providers" {
+		return "", false
+	}
+	key = strings.TrimSpace(key)
+	if isTOMLBareKey(key) {
+		return key, true
+	}
+	if len(key) >= 2 && key[0] == '"' && key[len(key)-1] == '"' {
+		parsed, err := strconv.Unquote(key)
+		return parsed, err == nil
+	}
+	if len(key) >= 2 && key[0] == '\'' && key[len(key)-1] == '\'' && !strings.Contains(key[1:len(key)-1], "'") {
+		return key[1 : len(key)-1], true
+	}
+	return "", false
+}
+
 func tomlStringValue(value string) string {
 	value = strings.TrimSpace(tomlLineWithoutComment(value))
 	if len(value) >= 2 && value[0] == '"' {
@@ -662,16 +686,15 @@ func preserveCodexModelProviderKey(existing, stableProvider string) string {
 		// Add the provider selector before the first table.
 		return addCodexModelProviderKey(existing, stableProvider)
 	}
-	currentTable := tomlDottedTable("model_providers", currentProvider)
 	stableTable := tomlDottedTable("model_providers", stableProvider)
 	lines := strings.Split(strings.ReplaceAll(existing, "\r\n", "\n"), "\n")
 	currentTableFound, stableTableFound := false, false
 	for _, line := range lines {
-		header := tomlTableHeader(line)
-		if header == currentTable {
+		tableProvider, ok := codexModelProviderTableKey(line)
+		if ok && tableProvider == currentProvider {
 			currentTableFound = true
 		}
-		if header == stableTable {
+		if ok && tableProvider == stableProvider {
 			stableTableFound = true
 		}
 	}
@@ -687,11 +710,12 @@ func preserveCodexModelProviderKey(existing, stableProvider string) string {
 		header := tomlTableHeader(line)
 		if header != "" {
 			inTable = true
-			skipStableTable = currentTableFound && header == stableTable
+			tableProvider, isProviderTable := codexModelProviderTableKey(line)
+			skipStableTable = currentTableFound && isProviderTable && tableProvider == stableProvider
 			if skipStableTable {
 				continue
 			}
-			if header == currentTable {
+			if isProviderTable && tableProvider == currentProvider {
 				line = stableTable
 			}
 		}

@@ -79,13 +79,13 @@ func TestSwitchAgentConfigClearsExistingEnvWhenBackupHasNoEnv(t *testing.T) {
 	}
 }
 
-func TestSwitchAgentConfigPreservesCodexModelProviderKey(t *testing.T) {
+func TestSwitchAgentConfigPreservesProviderForCustomNamedCodexAgent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	configPath := filepath.Join(home, "agents.json")
 	t.Setenv("MINDFS_AGENTS_CONFIG", configPath)
-	writeJSON(t, configPath, agent.Config{Agents: []agent.Definition{{Name: "codex", Command: "codex", Protocol: agent.ProtocolCodexSDK}}})
+	writeJSON(t, configPath, agent.Config{Agents: []agent.Definition{{Name: "codex-custom", Command: "codex", Protocol: agent.ProtocolCodexSDK}}})
 
 	targetPath := filepath.Join(home, ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
@@ -106,7 +106,7 @@ func TestSwitchAgentConfigPreservesCodexModelProviderKey(t *testing.T) {
 		t.Fatalf("write backup: %v", err)
 	}
 	entry := agentConfigManifestEntry{
-		ID: "codex-target", Agent: "codex", Name: "target",
+		ID: "codex-target", Agent: "codex-custom", Name: "target",
 		Sources: []agentConfigSource{{SourcePath: "~/.codex/config.toml", BackupPath: "codex-target/config.toml"}},
 	}
 	if err := writeAgentConfigManifest([]agentConfigManifestEntry{entry}); err != nil {

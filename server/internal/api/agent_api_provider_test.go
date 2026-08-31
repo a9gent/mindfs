@@ -107,6 +107,29 @@ experimental_bearer_token = "old-key"
 	}
 }
 
+func TestMergeCodexAPIProviderConfigReplacesQuotedProviderTable(t *testing.T) {
+	existing := `model_provider = "custom"
+
+[model_providers."custom"]
+name = "old"
+base_url = "https://old.example.com/v1"
+`
+	got := mergeCodexAPIProviderConfig(existing, agentAPIProvider{
+		Name:    "new-profile",
+		BaseURL: "https://new.example.com",
+		APIKey:  "new-key",
+	})
+	if strings.Contains(got, `[model_providers."custom"]`) {
+		t.Fatalf("quoted provider table was not replaced: %s", got)
+	}
+	if count := strings.Count(got, "[model_providers.custom]"); count != 1 {
+		t.Fatalf("provider table count = %d, want 1: %s", count, got)
+	}
+	if strings.Contains(got, `base_url = "https://old.example.com/v1"`) {
+		t.Fatalf("old provider settings were retained: %s", got)
+	}
+}
+
 func TestMergeCodexAPIProviderConfigOmitsModelWhenProviderHasNoCatalog(t *testing.T) {
 	got := mergeCodexAPIProviderConfig(`model_provider = "custom"
 model = "old-model"
@@ -146,7 +169,7 @@ func TestPreserveCodexModelProviderKeyRenamesCopiedProviderTable(t *testing.T) {
 	existing := `model_provider = "target"
 model = "gpt-5"
 
-[model_providers.target]
+[model_providers."target"]
 name = "target"
 base_url = "https://target.example.com/v1"
 `
@@ -154,7 +177,7 @@ base_url = "https://target.example.com/v1"
 	if !strings.Contains(got, `model_provider = "custom"`) {
 		t.Fatalf("top-level provider key not preserved: %s", got)
 	}
-	if !strings.Contains(got, "[model_providers.custom]") || strings.Contains(got, "[model_providers.target]") {
+	if !strings.Contains(got, "[model_providers.custom]") || strings.Contains(got, `[model_providers."target"]`) {
 		t.Fatalf("provider table was not renamed: %s", got)
 	}
 }

@@ -357,7 +357,15 @@ func switchAgentConfig(req agentConfigSwitchRequest, app *AppContext) (agentConf
 	// Preserve the selected Codex provider key while restoring config.toml.
 	var codexStableProvider string
 	var codexConfigPath string
-	isCodex := normalizedAPIProviderAgent(entry.Agent) == "codex"
+	cfg, err := agent.LoadConfig("")
+	if err != nil {
+		return agentConfigManifestEntry{}, false, err
+	}
+	def, ok := cfg.GetAgent(entry.Agent)
+	if !ok {
+		return agentConfigManifestEntry{}, false, fmt.Errorf("agent not configured: %s", entry.Agent)
+	}
+	isCodex := def.Protocol == agent.ProtocolCodexSDK
 	if isCodex {
 		if home, homeErr := os.UserHomeDir(); homeErr == nil {
 			codexConfigPath = filepath.Clean(filepath.Join(home, ".codex", "config.toml"))
