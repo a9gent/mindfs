@@ -1406,6 +1406,7 @@ const SIDEBARS_SWAPPED_STORAGE_KEY = "mindfs-sidebars-swapped";
 const GIT_DIFF_SIDE_BY_SIDE_STORAGE_KEY = "mindfs-git-diff-side-by-side";
 const TASK_CREATE_WORKTREE_PREF_STORAGE_KEY = "mindfs-task-create-worktree-pref";
 const MAIN_CONTENT_VIEW_STORAGE_KEY = "mindfs-main-content-view";
+const DEFAULT_MAIN_CONTENT_VIEW_STORAGE_KEY = "mindfs-default-main-content-view";
 
 type TaskCreateWorktreePreference = {
   createWorktree: boolean;
@@ -1426,6 +1427,16 @@ function loadMainContentViewByRoot(): Record<string, MainContentViewMode> {
     ) as Record<string, MainContentViewMode>;
   } catch {
     return {};
+  }
+}
+
+function loadDefaultMainContentView(): MainContentViewMode {
+  if (typeof window === "undefined") return "task-kanban";
+  try {
+    const saved = window.localStorage.getItem(DEFAULT_MAIN_CONTENT_VIEW_STORAGE_KEY);
+    return isMainContentViewMode(saved) ? saved : "task-kanban";
+  } catch {
+    return "task-kanban";
   }
 }
 
@@ -1681,6 +1692,8 @@ export function App({ onGoHome }: AppProps) {
     () => window.innerWidth >= 768,
   );
   const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [onboardingMainContentViewRoot, setOnboardingMainContentViewRoot] =
+    useState<string | null>(null);
   const onboardingAutoStartRef = useRef(false);
   const [currentRootId, setCurrentRootId] = useState<string | null>(null);
   const currentRootIdRef = useRef<string | null>(null);
@@ -2437,6 +2450,7 @@ export function App({ onGoHome }: AppProps) {
   useEffect(() => {
     if (isMobile && onboardingOpen) {
       setOnboardingOpen(false);
+      setOnboardingMainContentViewRoot(null);
     }
   }, [isMobile, onboardingOpen]);
   const [e2eeSecretInput, setE2eeSecretInput] = useState("");
@@ -2504,6 +2518,9 @@ export function App({ onGoHome }: AppProps) {
   });
   const [mainContentViewByRoot, setMainContentViewByRoot] = useState<Record<string, MainContentViewMode>>(
     () => loadMainContentViewByRoot(),
+  );
+  const [defaultMainContentView, setDefaultMainContentView] = useState<MainContentViewMode>(
+    () => loadDefaultMainContentView(),
   );
   const [status, setStatus] = useState<WSStatus>("disconnected");
   const [file, setFile] = useState<FilePayload | null>(null);
@@ -2832,6 +2849,15 @@ export function App({ onGoHome }: AppProps) {
     );
   }, [mainContentViewByRoot]);
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(
+      DEFAULT_MAIN_CONTENT_VIEW_STORAGE_KEY,
+      defaultMainContentView,
+    );
+  }, [defaultMainContentView]);
+  useEffect(() => {
     const rootID = currentRootId;
     if (!rootID) return;
     setActiveBoundSessionKey(boundSessionByRootRef.current[rootID] || null);
@@ -2903,15 +2929,27 @@ export function App({ onGoHome }: AppProps) {
     ? directorySortOverrides[currentDirectorySortKey]
     : undefined;
   const currentMainContentView: MainContentViewMode =
-    (currentRootId && mainContentViewByRoot[currentRootId]) || "task-kanban";
+    currentRootId && onboardingMainContentViewRoot === currentRootId
+      ? "task-kanban"
+      : (currentRootId && mainContentViewByRoot[currentRootId]) ||
+        defaultMainContentView;
+  const setMainContentViewForRoot = useCallback(
+    (rootID: string, mode: MainContentViewMode) => {
+      if (!rootID) return;
+      setMainContentViewByRoot((prev) => {
+        if (prev[rootID] === mode) return prev;
+        return { ...prev, [rootID]: mode };
+      });
+    },
+    [],
+  );
   const handleMainContentViewChange = useCallback((mode: MainContentViewMode) => {
     const rootID = currentRootIdRef.current;
     if (!rootID) return;
-    setMainContentViewByRoot((prev) => {
-      if (prev[rootID] === mode) return prev;
-      return { ...prev, [rootID]: mode };
-    });
-  }, []);
+    setOnboardingMainContentViewRoot(null);
+    setMainContentViewForRoot(rootID, mode);
+    setDefaultMainContentView(mode);
+  }, [setMainContentViewForRoot]);
   const currentDirectorySortMode = currentDirectorySortOverride || treeSortMode;
 
   const replaceURLState = useCallback((next: URLState) => {
@@ -2932,7 +2970,7 @@ export function App({ onGoHome }: AppProps) {
       setFile(null);
       setGitDiff(null);
       setSelectedDir(currentRootId);
-      handleMainContentViewChange("task-kanban");
+      setOnboardingMainContentViewRoot(currentRootId);
       replaceURLState({ root: currentRootId, file: "", session: "", cursor: 0, pluginQuery: {} });
     }
 
@@ -2943,7 +2981,7 @@ export function App({ onGoHome }: AppProps) {
     }
     setIsLeftOpen(showingSidebar);
     setIsRightOpen(showingSessions);
-  }, [currentRootId, handleMainContentViewChange, isMobile, replaceURLState]);
+  }, [currentRootId, isMobile, replaceURLState]);
 
   const redirectToRelayLogin = useCallback(() => {
     const next = encodeURIComponent(
@@ -14598,6 +14636,7 @@ export function App({ onGoHome }: AppProps) {
         onComplete={() => {
           completeOnboarding();
           setOnboardingOpen(false);
+          setOnboardingMainContentViewRoot(null);
           if (isMobile) {
             setIsLeftOpen(false);
             setIsRightOpen(false);
@@ -14606,6 +14645,7 @@ export function App({ onGoHome }: AppProps) {
         onDismiss={() => {
           dismissOnboarding();
           setOnboardingOpen(false);
+          setOnboardingMainContentViewRoot(null);
           if (isMobile) {
             setIsLeftOpen(false);
             setIsRightOpen(false);
