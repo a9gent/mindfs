@@ -24,3 +24,7 @@ func configurePlatformProcessCommand(cmd *exec.Cmd) {
 		CreationFlags: windowsACPProcessCreationFlags(),
 	}
 }
+
+func platformProcessDiagnostic(_ int) string {
+	return "pgid=unsupported"
+}

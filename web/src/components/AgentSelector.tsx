@@ -302,7 +302,13 @@ export function AgentSelector({
       const viewportHeight = viewport?.height ?? window.innerHeight;
       const margin = 8;
       const maxLeft = viewportLeft + viewportWidth - menu.width - margin;
-      const left = Math.max(viewportLeft + margin, Math.min(anchor.left, maxLeft));
+      // Match the original absolute positioning (`right: 0`): the menu's
+      // right edge stays aligned with the selector's right edge. The portal
+      // changes only the stacking context, not the visible placement.
+      const left = Math.max(
+        viewportLeft + margin,
+        Math.min(anchor.right - menu.width, maxLeft),
+      );
       const below = anchor.bottom + 8;
       const above = anchor.top - menu.height - 8;
       const top = menuPlacement === "bottom" && below + menu.height <= viewportTop + viewportHeight - margin
@@ -468,6 +474,7 @@ export function AgentSelector({
       <button
         type="button"
         onClick={() => {
+          setViewportMenuPosition(null);
           setIsOpen((prev) => {
             const next = !prev;
             if (next) {
@@ -582,7 +589,7 @@ export function AgentSelector({
             border: "1px solid var(--menu-border)",
             borderRadius: "12px",
             boxShadow: "0 8px 32px rgba(0,0,0,0.15)",
-            zIndex: 1000,
+            zIndex: viewportMenu ? 10100 : 1000,
             width: "max-content",
             minWidth: "0",
             maxWidth: "calc(100vw - 16px)",

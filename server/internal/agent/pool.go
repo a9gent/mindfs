@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,16 +17,21 @@ import (
 
 // Pool routes agent session creation to protocol-specific runtimes.
 type Pool struct {
-	cfg        Config
-	processCtx context.Context
-	cancel     context.CancelFunc
-	mu         sync.Mutex
-	sessions   map[string]*sessionEntry
-	runtimeEnv map[string]map[string]string
-	closed     bool
-	acp        *acp.Runtime
-	claude     *claude.Runtime
-	codex      *codex.Runtime
+	cfg             Config
+	processCtx      context.Context
+	cancel          context.CancelFunc
+	mu              sync.Mutex
+	sessions        map[string]*sessionEntry
+	runtimeEnv      map[string]map[string]string
+	closed          bool
+	acp             *acp.Runtime
+	claude          *claude.Runtime
+	codex           *codex.Runtime
+	runtimeLocksMu  sync.Mutex
+	runtimeLocks    map[runtimeGroup]*sync.Mutex
+	memoryMu        sync.RWMutex
+	memoryCollectMu sync.Mutex
+	memorySnapshot  MemorySnapshot
 }
 
 type sessionEntry struct {
@@ -43,14 +49,15 @@ type sessionEntry struct {
 func NewPool(cfg Config) *Pool {
 	processCtx, cancel := context.WithCancel(context.Background())
 	return &Pool{
-		cfg:        cfg,
-		processCtx: processCtx,
-		cancel:     cancel,
-		sessions:   make(map[string]*sessionEntry),
-		runtimeEnv: make(map[string]map[string]string),
-		acp:        acp.NewRuntime(processCtx),
-		claude:     claude.NewRuntime(),
-		codex:      codex.NewRuntime(),
+		cfg:          cfg,
+		processCtx:   processCtx,
+		cancel:       cancel,
+		sessions:     make(map[string]*sessionEntry),
+		runtimeEnv:   make(map[string]map[string]string),
+		acp:          acp.NewRuntime(processCtx),
+		claude:       claude.NewRuntime(),
+		codex:        codex.NewRuntime(),
+		runtimeLocks: make(map[runtimeGroup]*sync.Mutex),
 	}
 }
 
@@ -109,6 +116,23 @@ retryExisting:
 	protocol := def.Protocol
 	if protocol == "" {
 		protocol = DefaultProtocol(in.AgentName)
+	}
+	p.mu.Unlock()
+	unlockRuntime := p.lockRuntimeGroups([]runtimeGroup{{agentName: in.AgentName, protocol: protocol}})
+	defer unlockRuntime()
+
+	// A concurrent opener may have created the session while this goroutine
+	// waited for the shared runtime lock.
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil, errors.New("agent pool closed")
+	}
+	if entry, ok := p.sessions[in.SessionKey]; ok && entry != nil && entry.session != nil {
+		entry.lastUsedAt = time.Now()
+		existing := entry.session
+		p.mu.Unlock()
+		return existing, nil
 	}
 	p.mu.Unlock()
 
@@ -175,15 +199,61 @@ func (p *Pool) BeginSessionUse(sessionKey string) func() {
 
 // ReleaseIdleSessions closes inactive runtime sessions without changing the
 // persisted MindFS session or its closed_at metadata.
+type IdleReleaseResult struct {
+	ReleasedSessions int `json:"released_sessions"`
+	FailedSessions   int `json:"failed_sessions"`
+}
+
 func (p *Pool) ReleaseIdleSessions(idleFor time.Duration, now time.Time) int {
+	return p.ReleaseIdleSessionsDetailed(idleFor, now).ReleasedSessions
+}
+
+func (p *Pool) ReleaseIdleSessionsDetailed(idleFor time.Duration, now time.Time) IdleReleaseResult {
 	if idleFor <= 0 {
-		return 0
+		return IdleReleaseResult{}
 	}
 	cutoff := now.Add(-idleFor)
+	return p.releaseSessionsDetailed(now, "idle_for="+idleFor.String(), func(entry *sessionEntry) bool {
+		return !entry.lastUsedAt.After(cutoff)
+	})
+}
+
+// ReleaseInactiveSessionsDetailed immediately releases every session that is
+// not currently in use. It is intended for an explicit user action; automatic
+// cleanup should continue to use ReleaseIdleSessionsDetailed with a threshold.
+func (p *Pool) ReleaseInactiveSessionsDetailed(now time.Time) IdleReleaseResult {
+	return p.releaseSessionsDetailed(now, "manual", func(_ *sessionEntry) bool { return true })
+}
+
+func (p *Pool) releaseSessionsDetailed(now time.Time, reason string, eligible func(*sessionEntry) bool) IdleReleaseResult {
+	result := IdleReleaseResult{}
+	p.mu.Lock()
+	groups := make(map[runtimeGroup]struct{})
+	for _, entry := range p.sessions {
+		if entry == nil || entry.closing || entry.activeUses > 0 || !eligible(entry) {
+			continue
+		}
+		groups[runtimeGroup{agentName: entry.agentName, protocol: entry.protocol}] = struct{}{}
+	}
+	p.mu.Unlock()
+	if len(groups) == 0 {
+		return result
+	}
+	groupList := make([]runtimeGroup, 0, len(groups))
+	for group := range groups {
+		groupList = append(groupList, group)
+	}
+	unlockRuntimes := p.lockRuntimeGroups(groupList)
+	defer unlockRuntimes()
+
 	p.mu.Lock()
 	entries := make([]*sessionEntry, 0)
 	for _, entry := range p.sessions {
-		if entry == nil || entry.closing || entry.activeUses > 0 || entry.lastUsedAt.After(cutoff) {
+		group := runtimeGroup{}
+		if entry != nil {
+			group = runtimeGroup{agentName: entry.agentName, protocol: entry.protocol}
+		}
+		if _, selected := groups[group]; !selected || entry == nil || entry.closing || entry.activeUses > 0 || !eligible(entry) {
 			continue
 		}
 		entry.closing = true
@@ -192,7 +262,6 @@ func (p *Pool) ReleaseIdleSessions(idleFor time.Duration, now time.Time) int {
 	}
 	p.mu.Unlock()
 
-	released := 0
 	for _, entry := range entries {
 		err := entry.session.Close()
 		p.mu.Lock()
@@ -200,10 +269,11 @@ func (p *Pool) ReleaseIdleSessions(idleFor time.Duration, now time.Time) int {
 		if current == entry {
 			if err == nil {
 				delete(p.sessions, entry.sessionKey)
-				released++
+				result.ReleasedSessions++
 			} else {
 				entry.closing = false
 				entry.lastUsedAt = now
+				result.FailedSessions++
 			}
 		}
 		close(entry.closeDone)
@@ -211,10 +281,55 @@ func (p *Pool) ReleaseIdleSessions(idleFor time.Duration, now time.Time) int {
 		if err != nil {
 			log.Printf("[agent/pool] idle_release.error session=%s agent=%s protocol=%s err=%v", entry.sessionKey, entry.agentName, entry.protocol, err)
 		} else {
-			log.Printf("[agent/pool] idle_release.done session=%s agent=%s protocol=%s idle_for=%s", entry.sessionKey, entry.agentName, entry.protocol, idleFor)
+			log.Printf("[agent/pool] idle_release.done session=%s agent=%s protocol=%s reason=%s", entry.sessionKey, entry.agentName, entry.protocol, reason)
 		}
 	}
-	return released
+	return result
+}
+
+type runtimeGroup struct {
+	agentName string
+	protocol  Protocol
+}
+
+func (p *Pool) lockRuntimeGroups(groups []runtimeGroup) func() {
+	if len(groups) == 0 {
+		return func() {}
+	}
+	unique := make(map[runtimeGroup]struct{}, len(groups))
+	ordered := make([]runtimeGroup, 0, len(groups))
+	for _, group := range groups {
+		if _, ok := unique[group]; ok {
+			continue
+		}
+		unique[group] = struct{}{}
+		ordered = append(ordered, group)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].protocol != ordered[j].protocol {
+			return ordered[i].protocol < ordered[j].protocol
+		}
+		return ordered[i].agentName < ordered[j].agentName
+	})
+	locks := make([]*sync.Mutex, 0, len(ordered))
+	p.runtimeLocksMu.Lock()
+	for _, group := range ordered {
+		lock := p.runtimeLocks[group]
+		if lock == nil {
+			lock = &sync.Mutex{}
+			p.runtimeLocks[group] = lock
+		}
+		locks = append(locks, lock)
+	}
+	p.runtimeLocksMu.Unlock()
+	for _, lock := range locks {
+		lock.Lock()
+	}
+	return func() {
+		for index := len(locks) - 1; index >= 0; index-- {
+			locks[index].Unlock()
+		}
+	}
 }
 
 func (p *Pool) StartIdleReleaseLoop(ctx context.Context, idleFor func() time.Duration) {
@@ -306,6 +421,8 @@ func (p *Pool) KillAgentProcess(agentName string, wait time.Duration) (string, b
 	if protocol == "" {
 		protocol = DefaultProtocol(agentName)
 	}
+	unlockRuntime := p.lockRuntimeGroups([]runtimeGroup{{agentName: agentName, protocol: protocol}})
+	defer unlockRuntime()
 	switch protocol {
 	case ProtocolClaudeSDK:
 		p.closeSessionsForAgent(agentName, ProtocolClaudeSDK)
@@ -318,7 +435,7 @@ func (p *Pool) KillAgentProcess(agentName string, wait time.Duration) (string, b
 		return "", true
 	case ProtocolACP:
 		p.closeSessionsForAgent(agentName, ProtocolACP)
-		p.acp.Close(agentName)
+		_ = p.acp.Close(agentName)
 		if hint, ok := p.acp.RecentCloseHint(agentName); ok {
 			log.Printf("[agent/pool] kill_agent_process.hint agent=%s hint=%q", agentName, hint)
 			return hint, true
@@ -351,6 +468,14 @@ func cloneEnv(env map[string]string) map[string]string {
 
 // Close closes a session (not the underlying runtime pool).
 func (p *Pool) Close(sessionKey string) {
+	p.mu.Lock()
+	groups := make([]runtimeGroup, 0, 1)
+	if entry := p.sessions[sessionKey]; entry != nil {
+		groups = append(groups, runtimeGroup{agentName: entry.agentName, protocol: entry.protocol})
+	}
+	p.mu.Unlock()
+	unlockRuntimes := p.lockRuntimeGroups(groups)
+	defer unlockRuntimes()
 	entries := p.takeSessions(func(entry *sessionEntry) bool {
 		return entry.sessionKey == sessionKey
 	})
@@ -500,17 +625,54 @@ func (p *Pool) Context() context.Context {
 func (p *Pool) CloseAll() {
 	p.mu.Lock()
 	p.closed = true
-	p.sessions = make(map[string]*sessionEntry)
 	cancel := p.cancel
 	p.cancel = nil
+	groups := make([]runtimeGroup, 0, len(p.cfg.Agents))
+	for _, def := range p.cfg.Agents {
+		protocol := def.Protocol
+		if protocol == "" {
+			protocol = DefaultProtocol(def.Name)
+		}
+		groups = append(groups, runtimeGroup{agentName: def.Name, protocol: protocol})
+	}
+	p.mu.Unlock()
+
+	// Cancel the process lifecycle before waiting for runtime locks. An ACP
+	// process may still be initializing while holding one of those locks; its
+	// command and initialize RPC both use this context.
+	if cancel != nil {
+		cancel()
+	}
+
+	unlockRuntimes := p.lockRuntimeGroups(groups)
+	defer unlockRuntimes()
+
+	p.mu.Lock()
+	sessions := p.sessions
+	p.sessions = make(map[string]*sessionEntry)
 	acpRuntime := p.acp
 	claudeRuntime := p.claude
 	codexRuntime := p.codex
 	p.mu.Unlock()
 
-	if cancel != nil {
-		cancel()
+	// Claude SDK sessions own independent CLI processes rather than a shared
+	// runtime, so each resident session must be closed explicitly. Close them
+	// concurrently so shutdown is bounded by one SDK grace period.
+	var claudeCloseWG sync.WaitGroup
+	for _, entry := range sessions {
+		if entry == nil || entry.protocol != ProtocolClaudeSDK || entry.session == nil {
+			continue
+		}
+		claudeCloseWG.Add(1)
+		go func(entry *sessionEntry) {
+			defer claudeCloseWG.Done()
+			if err := entry.session.Close(); err != nil {
+				log.Printf("[agent/pool] close_all.claude_error session=%s agent=%s err=%v", entry.sessionKey, entry.agentName, err)
+			}
+		}(entry)
 	}
+	claudeCloseWG.Wait()
+
 	if acpRuntime != nil {
 		acpRuntime.CloseAll()
 	}

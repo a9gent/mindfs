@@ -173,6 +173,22 @@ func (r *Runtime) getOrCreateClient(opts OpenOptions) *codexsdk.Codex {
 	return client
 }
 
+// ProcessIDs returns the app-server PID keyed by configured agent.
+func (r *Runtime) ProcessIDs() map[string]int {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]int, len(r.clients))
+	for agentName, client := range r.clients {
+		if pid := client.ProcessID(); pid > 0 {
+			out[agentName] = pid
+		}
+	}
+	return out
+}
+
 func newClient(opts OpenOptions) *codexsdk.Codex {
 	codexOptions := codexsdk.CodexOptions{
 		Transport:             codexsdk.TransportAppServer,

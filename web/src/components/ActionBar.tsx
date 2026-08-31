@@ -21,6 +21,7 @@ import { fetchGitBranches, type GitBranchesPayload } from "../services/git";
 import { WorktreeBranchSelector } from "./WorktreeBranchSelector";
 import { NoWorktreeIcon } from "./NoWorktreeIcon";
 import { CodexRateLimitIndicator } from "./CodexRateLimitIndicator";
+import { AgentMemoryIndicator } from "./AgentMemoryIndicator";
 import { deletePrompt, savePrompt } from "../services/prompts";
 
 type SessionInfo = {
@@ -1300,12 +1301,11 @@ export function ActionBar({
   return (
     <div data-onboarding="action-bar" style={{ width: "100%", minWidth: 0, padding: isMobile ? "0 0 var(--mindfs-actionbar-bottom-padding, calc(env(safe-area-inset-bottom, 0px) + 2px))" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
       <div style={{ position: "relative", width: "100%", minWidth: 0, display: "flex", flexDirection: "column", gap: 0 }}>
-        {planModeActive || (!currentSession && currentRootIsGitRepo && mode !== "command") || (mode !== "command" && agent === "codex") ? (
-          <div
+        <div
             style={{
               position: "absolute",
-              left: isMobile ? "36px" : "2px",
-              right: isMobile ? "36px" : "8px",
+              left: "2px",
+              right: isMobile ? "2px" : "8px",
               bottom: "100%",
               zIndex: 7,
               minWidth: 0,
@@ -1333,7 +1333,7 @@ export function ActionBar({
                   </button>
                 </div>
               ) : null}
-              {!currentSession && currentRootIsGitRepo ? (
+              {mode !== "command" && !currentSession && currentRootIsGitRepo ? (
                 <>
                   <button type="button" onClick={() => setCreateWorktree((value) => !value)} disabled={sending} aria-label={createWorktree ? t("task.worktreeTitle") : t("task.noWorktreeTitle")} title={createWorktree ? t("task.worktreeTitle") : t("task.noWorktreeTitle")} style={{ height: "24px", borderRadius: "6px", border: createWorktree ? "1px solid rgba(22, 163, 74, 0.28)" : "1px solid var(--border-color)", background: createWorktree ? "linear-gradient(rgba(22, 163, 74, 0.08), rgba(22, 163, 74, 0.08)), var(--mobile-overlay-bg)" : "linear-gradient(rgba(100, 116, 139, 0.10), rgba(100, 116, 139, 0.10)), var(--mobile-overlay-bg)", color: createWorktree ? "#15803d" : "var(--text-secondary)", padding: createWorktree ? "0 8px" : "0 8px 0 5px", fontSize: "11px", fontWeight: 800, cursor: sending ? "not-allowed" : "pointer", whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "3px" }}>
                     {createWorktree ? "worktree" : <><NoWorktreeIcon size={12} />worktree</>}
@@ -1342,11 +1342,11 @@ export function ActionBar({
                 </>
               ) : null}
             </div>
-            <div style={{ pointerEvents: "auto" }}>
+            <div style={{ pointerEvents: "auto", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+              <AgentMemoryIndicator refreshToken={agentsVersion + codexRateLimitsRefreshToken} />
               <CodexRateLimitIndicator agent={agent} refreshToken={codexRateLimitsRefreshToken} />
             </div>
-          </div>
-        ) : null}
+        </div>
         {queuedMessages.length > 0 ? (
           <div
             style={{
@@ -1899,7 +1899,7 @@ export function ActionBar({
               </div>
 
               <>
-                <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} onboardingId="mode-selector" />
+                <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} onboardingId="mode-selector" viewportMenu />
                 {mode !== "command" ? (
                   <div>
                     <AgentSelector
@@ -1930,6 +1930,7 @@ export function ActionBar({
                     warnUnavailable={isSelectedAgentUnavailable}
                     defaultExpandOptions
                     onboardingId="agent-selector"
+                    viewportMenu
                     />
                   </div>
                 ) : (

@@ -88,6 +88,41 @@
   overflow: visible;
 }
 
+.mindfs-agent-memory-badge {
+  border: 1px solid color-mix(in srgb, var(--accent-color) 34%, var(--border-color));
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--accent-color) 11%, transparent),
+      color-mix(in srgb, var(--accent-color) 7%, transparent)
+    ),
+    var(--mobile-overlay-bg);
+  color: var(--accent-color);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent-color) 12%, transparent);
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.mindfs-agent-memory-badge:hover {
+  border-color: color-mix(in srgb, var(--accent-color) 62%, var(--border-color));
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--accent-color) 17%, transparent),
+      color-mix(in srgb, var(--accent-color) 11%, transparent)
+    ),
+    var(--mobile-overlay-bg);
+  box-shadow: 0 3px 9px color-mix(in srgb, var(--accent-color) 18%, transparent);
+  transform: translateY(-1px);
+}
+
+.mindfs-agent-memory-badge:active {
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent-color) 12%, transparent);
+  transform: translateY(0) scale(0.98);
+}
+
+.mindfs-agent-memory-badge:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-color) 52%, transparent);
+  outline-offset: 2px;
+}
+
 .mindfs-git-branch-wrap {
   width: min(180px, 100%);
 }

@@ -3,10 +3,19 @@
 package acp
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
 )
+
+func platformProcessDiagnostic(pid int) string {
+	pgid, err := syscall.Getpgid(pid)
+	if err != nil {
+		return fmt.Sprintf("pgid_error=%q", err.Error())
+	}
+	return fmt.Sprintf("pgid=%d", pgid)
+}
 
 func killProcessTree(proc *os.Process) error {
 	if proc == nil {

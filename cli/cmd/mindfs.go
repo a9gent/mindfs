@@ -307,6 +307,7 @@ func main() {
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	restoreDefaultSignalsAfterCancellation(ctx, cancel)
 	defer cancel()
 	if err := writePIDFile(pidPath); err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
@@ -364,14 +365,30 @@ func main() {
 		}
 	}
 
+	runErr := waitForForegroundAppExit(ctx, errCh)
+	if runErr != nil && !errors.Is(runErr, http.ErrServerClosed) {
+		fmt.Fprintln(os.Stderr, runErr.Error())
+		os.Exit(1)
+	}
+}
+
+func restoreDefaultSignalsAfterCancellation(ctx context.Context, stop func()) {
+	go func() {
+		<-ctx.Done()
+		// The first signal starts graceful cleanup. Stop intercepting signals at
+		// that point so a second Ctrl-C uses the platform's default behavior.
+		stop()
+	}()
+}
+
+func waitForForegroundAppExit(ctx context.Context, errCh <-chan error) error {
 	select {
 	case <-ctx.Done():
-		return
+		// Ctrl-C starts graceful server shutdown. Wait for app.Start to return so
+		// Agent runtimes are closed before the foreground process exits.
+		return <-errCh
 	case err := <-errCh:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			fmt.Fprintln(os.Stderr, err.Error())
-			os.Exit(1)
-		}
+		return err
 	}
 }
 

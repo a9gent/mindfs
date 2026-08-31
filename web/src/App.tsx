@@ -11421,12 +11421,9 @@ export function App({ onGoHome }: AppProps) {
     );
   };
   const currentRootSlashCommandResult = slashCommandResultForSession(currentRootId, null);
-  const sessionViewerComposerOverlayInset =
-    String((actionBarSession as any)?.agent || "").toLowerCase() === "codex" ||
-    (actionBarSession as any)?.plan_mode ||
-    pendingPlanMode
-      ? 20
-      : 0;
+  // The memory badge is always rendered above the composer, so floating
+  // session controls must always clear that overlay row.
+  const sessionViewerComposerOverlayInset = 20;
   const sessionView = (
     <SessionViewer
       session={selectedSessionSnapshot}

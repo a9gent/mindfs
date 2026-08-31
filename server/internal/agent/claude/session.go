@@ -222,6 +222,13 @@ type session struct {
 	questionWaits map[string]chan askUserAnswerResult
 }
 
+func (s *session) ProcessID() int {
+	if s == nil || s.client == nil {
+		return 0
+	}
+	return s.client.ProcessID()
+}
+
 type askUserAnswerResult struct {
 	answers claudeagent.Answers
 	err     error

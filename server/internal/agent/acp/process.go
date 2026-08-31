@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +21,7 @@ import (
 	types "mindfs/server/internal/agent/types"
 
 	acp "github.com/coder/acp-go-sdk"
+	gopsprocess "github.com/shirou/gopsutil/v4/process"
 )
 
 // Process manages an agent process using ACP.
@@ -680,9 +683,28 @@ func (p *Process) Close() error {
 		log.Printf("[agent/acp] process.close.done agent=%s pid=%d", p.agentLabel(), pid)
 		return nil
 	case <-time.After(10 * time.Second):
-		log.Printf("[agent/acp] process.close.timeout agent=%s pid=%d", p.agentLabel(), pid)
-		return nil
+		log.Printf("[agent/acp] process.close.timeout agent=%s pid=%d %s", p.agentLabel(), pid, processDiagnostic(pid))
+		return errors.New("ACP process did not exit after kill")
 	}
+}
+
+func processDiagnostic(pid int) string {
+	parts := make([]string, 0, 3)
+	proc, err := gopsprocess.NewProcess(int32(pid))
+	if err != nil {
+		parts = append(parts, "state=not_found")
+	} else {
+		if statuses, statusErr := proc.Status(); statusErr == nil && len(statuses) > 0 {
+			parts = append(parts, "state="+strings.Join(statuses, ","))
+		} else if statusErr != nil {
+			parts = append(parts, "state_error="+strconv.Quote(statusErr.Error()))
+		}
+		if ppid, ppidErr := proc.Ppid(); ppidErr == nil {
+			parts = append(parts, fmt.Sprintf("ppid=%d", ppid))
+		}
+	}
+	parts = append(parts, platformProcessDiagnostic(pid))
+	return strings.Join(parts, " ")
 }
 
 func killProcess(proc *os.Process) error {
@@ -698,6 +720,19 @@ func (p *Process) SessionID(sessionKey string) string {
 		return string(sess.ID)
 	}
 	return ""
+}
+
+// ProcessID returns the PID of the shared ACP agent process.
+func (p *Process) ProcessID() int {
+	if p == nil {
+		return 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cmd == nil || p.cmd.Process == nil {
+		return 0
+	}
+	return p.cmd.Process.Pid
 }
 
 // Capability returns agent capabilities reported by initialize response.
@@ -923,9 +958,13 @@ func streamProcessStderr(proc *Process, reader io.Reader) {
 		log.Printf("[agent/acp][stderr] agent=%s %s", proc.agentLabel(), line)
 		proc.captureStderrHint(line)
 	}
-	if err := scanner.Err(); err != nil {
+	if err := scanner.Err(); err != nil && !isExpectedStreamCloseError(err) {
 		log.Printf("[agent/acp][stderr] agent=%s stream_error=%v", proc.agentLabel(), err)
 	}
+}
+
+func isExpectedStreamCloseError(err error) bool {
+	return err == nil || errors.Is(err, os.ErrClosed) || errors.Is(err, io.ErrClosedPipe)
 }
 
 func configureProcessCommand(cmd *exec.Cmd, env map[string]string) {
