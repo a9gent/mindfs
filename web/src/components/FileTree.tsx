@@ -1410,6 +1410,7 @@ export function FileTree({
   const [sessionNamingAgents, setSessionNamingAgents] = React.useState<AgentStatus[]>([]);
   const [sessionNamingAgent, setSessionNamingAgent] = React.useState("");
   const [sessionNamingModel, setSessionNamingModel] = React.useState("");
+  const [sessionNamingDisabled, setSessionNamingDisabled] = React.useState(false);
   const [sessionNamingBusy, setSessionNamingBusy] = React.useState(false);
   const [sessionNamingError, setSessionNamingError] = React.useState("");
   const [idleReleaseOpen, setIdleReleaseOpen] = React.useState(false);
@@ -1954,6 +1955,7 @@ export function FileTree({
         const selectedModel = selected?.models?.find((item) => item.id === preference.model)?.id || "";
         setSessionNamingAgent(selected?.name || "");
         setSessionNamingModel(selectedModel);
+        setSessionNamingDisabled(preference.disabled);
       })
       .catch((error) => {
         setSessionNamingError(error instanceof Error ? error.message : t("sessionNaming.loadFailed"));
@@ -1962,13 +1964,14 @@ export function FileTree({
   }, [t]);
 
   const saveSessionNaming = React.useCallback(async () => {
-    if (!sessionNamingAgent || sessionNamingBusy) return;
+    if ((!sessionNamingAgent && !sessionNamingDisabled) || sessionNamingBusy) return;
     setSessionNamingBusy(true);
     setSessionNamingError("");
     try {
       await updateSessionNamingPreference({
         agent: sessionNamingAgent,
         model: sessionNamingModel,
+        disabled: sessionNamingDisabled,
       });
       setSessionNamingOpen(false);
     } catch (error) {
@@ -1976,7 +1979,7 @@ export function FileTree({
     } finally {
       setSessionNamingBusy(false);
     }
-  }, [sessionNamingAgent, sessionNamingBusy, sessionNamingModel, t]);
+  }, [sessionNamingAgent, sessionNamingBusy, sessionNamingDisabled, sessionNamingModel, t]);
 
   const openIdleSessionResourceRelease = React.useCallback(() => {
     setAgentConfigFlow(null);
@@ -3484,6 +3487,7 @@ export function FileTree({
               {t("sessionNaming.title")}
             </div>
             <div
+              aria-disabled={sessionNamingDisabled || sessionNamingBusy}
               style={{
                 marginTop: "12px",
                 minHeight: "42px",
@@ -3494,6 +3498,9 @@ export function FileTree({
                 alignItems: "center",
                 justifyContent: "flex-start",
                 gap: "8px",
+                opacity: sessionNamingDisabled ? 0.5 : 1,
+                pointerEvents: sessionNamingDisabled || sessionNamingBusy ? "none" : "auto",
+                transition: "opacity 0.15s ease",
               }}
             >
               {sessionNamingAgent ? (
@@ -3517,6 +3524,25 @@ export function FileTree({
                 {sessionNamingBusy ? t("common.loading") : sessionNamingModel || t("agent.defaultModel")}
               </span>
             </div>
+            <label
+              style={{
+                marginTop: "12px",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                color: "var(--text-primary)",
+                fontSize: "13px",
+                cursor: sessionNamingBusy ? "default" : "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={sessionNamingDisabled}
+                disabled={sessionNamingBusy}
+                onChange={(event) => setSessionNamingDisabled(event.target.checked)}
+              />
+              <span>{t("sessionNaming.disableAutoRename")}</span>
+            </label>
             {sessionNamingError ? (
               <div style={{ marginTop: "8px", color: "#dc2626", fontSize: "11px", lineHeight: 1.4 }}>
                 {sessionNamingError}
@@ -3533,9 +3559,9 @@ export function FileTree({
               </button>
               <button
                 type="button"
-                disabled={sessionNamingBusy || !sessionNamingAgent}
+                disabled={sessionNamingBusy || (!sessionNamingAgent && !sessionNamingDisabled)}
                 onClick={() => void saveSessionNaming()}
-                style={agentConfigPrimaryButtonStyle(sessionNamingBusy || !sessionNamingAgent)}
+                style={agentConfigPrimaryButtonStyle(sessionNamingBusy || (!sessionNamingAgent && !sessionNamingDisabled))}
               >
                 {sessionNamingBusy ? t("common.saving") : t("common.save")}
               </button>

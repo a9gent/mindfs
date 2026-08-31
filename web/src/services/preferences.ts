@@ -4,6 +4,7 @@ import { appPath } from "./base";
 export type SessionNamingPreference = {
   agent: string;
   model: string;
+  disabled: boolean;
 };
 
 export type IdleSessionResourceReleasePreference = {
@@ -60,6 +61,7 @@ function normalizeSessionNamingPreference(value: unknown): SessionNamingPreferen
   return {
     agent: typeof input.agent === "string" ? input.agent.trim() : "",
     model: typeof input.model === "string" ? input.model.trim() : "",
+    disabled: input.disabled === true,
   };
 }
 

@@ -85,6 +85,7 @@ export const enUS = {
   "fileTree.relatedFiles": "Related files",
   "sessionNaming.title": "Custom session rename model",
   "sessionNaming.choose": "Choose an Agent and model",
+  "sessionNaming.disableAutoRename": "Disable automatic renaming",
   "sessionNaming.loadFailed": "Failed to load session naming settings",
   "sessionNaming.saveFailed": "Failed to save session naming settings",
   "idleSessionResourceRelease.title": "Idle session resource release",

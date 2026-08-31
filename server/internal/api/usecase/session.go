@@ -1393,6 +1393,9 @@ func (s *Service) SuggestSessionName(ctx context.Context, in SuggestSessionNameI
 	model := strings.TrimSpace(in.Model)
 	if prefs := s.Registry.GetPreferences(); prefs != nil {
 		namingDefaults := prefs.SessionNamingDefaults()
+		if namingDefaults.Disabled {
+			return nil, nil
+		}
 		if strings.TrimSpace(namingDefaults.Agent) != "" {
 			agentName = strings.TrimSpace(namingDefaults.Agent)
 			model = strings.TrimSpace(namingDefaults.Model)

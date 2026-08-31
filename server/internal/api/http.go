@@ -1257,8 +1257,9 @@ func (h *HTTPHandler) handleAgentsList(w http.ResponseWriter, r *http.Request) {
 }
 
 type sessionNamingPreferenceRequest struct {
-	Agent string `json:"agent"`
-	Model string `json:"model"`
+	Agent    string `json:"agent"`
+	Model    string `json:"model"`
+	Disabled bool   `json:"disabled"`
 }
 
 type idleSessionResourceReleasePreferenceRequest struct {
@@ -1332,13 +1333,14 @@ func (h *HTTPHandler) handleSessionNamingPreferenceGet(w http.ResponseWriter, _ 
 	}
 	pref := h.AppContext.GetPreferences().SessionNamingDefaults()
 	respondJSON(w, http.StatusOK, map[string]any{
-		"agent": pref.Agent,
-		"model": pref.Model,
+		"agent":    pref.Agent,
+		"model":    pref.Model,
+		"disabled": pref.Disabled,
 	})
 }
 
 func (h *HTTPHandler) handleSessionNamingPreferencePut(w http.ResponseWriter, r *http.Request) {
-	if h.AppContext == nil || h.AppContext.GetPreferences() == nil || h.AppContext.GetProber() == nil {
+	if h.AppContext == nil || h.AppContext.GetPreferences() == nil {
 		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("preferences not configured"))
 		return
 	}
@@ -1349,42 +1351,49 @@ func (h *HTTPHandler) handleSessionNamingPreferencePut(w http.ResponseWriter, r 
 	}
 	req.Agent = strings.TrimSpace(req.Agent)
 	req.Model = strings.TrimSpace(req.Model)
-	if req.Agent == "" {
+	if req.Agent == "" && !req.Disabled {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("session naming agent is required"))
 		return
 	}
-	validAgent := false
-	validModel := req.Model == ""
-	for _, status := range h.AppContext.GetProber().GetInstalledStatuses() {
-		if strings.TrimSpace(status.Name) != req.Agent {
-			continue
+	if !req.Disabled {
+		if h.AppContext.GetProber() == nil {
+			respondError(w, http.StatusServiceUnavailable, errInvalidRequest("agent status not configured"))
+			return
 		}
-		validAgent = true
-		if req.Model != "" {
-			for _, model := range status.Models {
-				if strings.TrimSpace(model.ID) == req.Model {
-					validModel = true
-					break
+		validAgent := false
+		validModel := req.Model == ""
+		for _, status := range h.AppContext.GetProber().GetInstalledStatuses() {
+			if strings.TrimSpace(status.Name) != req.Agent {
+				continue
+			}
+			validAgent = true
+			if req.Model != "" {
+				for _, model := range status.Models {
+					if strings.TrimSpace(model.ID) == req.Model {
+						validModel = true
+						break
+					}
 				}
 			}
+			break
 		}
-		break
+		if !validAgent {
+			respondError(w, http.StatusBadRequest, errInvalidRequest("session naming agent is not installed"))
+			return
+		}
+		if !validModel {
+			respondError(w, http.StatusBadRequest, errInvalidRequest("session naming model is not supported by the selected agent"))
+			return
+		}
 	}
-	if !validAgent {
-		respondError(w, http.StatusBadRequest, errInvalidRequest("session naming agent is not installed"))
-		return
-	}
-	if !validModel {
-		respondError(w, http.StatusBadRequest, errInvalidRequest("session naming model is not supported by the selected agent"))
-		return
-	}
-	if err := h.AppContext.GetPreferences().UpdateSessionNamingDefaults(req.Agent, req.Model); err != nil {
+	if err := h.AppContext.GetPreferences().UpdateSessionNamingDefaults(req.Agent, req.Model, req.Disabled); err != nil {
 		respondError(w, http.StatusInternalServerError, errInvalidRequest(err.Error()))
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{
-		"agent": req.Agent,
-		"model": req.Model,
+		"agent":    req.Agent,
+		"model":    req.Model,
+		"disabled": req.Disabled,
 	})
 }
 

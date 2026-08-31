@@ -88,8 +88,9 @@ func (s *Store) UpdateIdleSessionResourceReleaseHours(hours int) error {
 }
 
 type SessionNamingDefaults struct {
-	Agent string `json:"agent,omitempty"`
-	Model string `json:"model,omitempty"`
+	Agent    string `json:"agent,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Disabled bool   `json:"disabled,omitempty"`
 }
 
 type AgentDefaults struct {
@@ -217,15 +218,16 @@ func (s *Store) SessionNamingDefaults() SessionNamingDefaults {
 	return s.data.SessionNaming
 }
 
-func (s *Store) UpdateSessionNamingDefaults(agentName, model string) error {
+func (s *Store) UpdateSessionNamingDefaults(agentName, model string, disabled bool) error {
 	if s == nil {
 		return nil
 	}
 	next := SessionNamingDefaults{
-		Agent: strings.TrimSpace(agentName),
-		Model: strings.TrimSpace(model),
+		Agent:    strings.TrimSpace(agentName),
+		Model:    strings.TrimSpace(model),
+		Disabled: disabled,
 	}
-	if next.Agent == "" {
+	if next.Agent == "" && !next.Disabled {
 		return errors.New("session naming agent is required")
 	}
 	s.mu.Lock()

@@ -83,6 +83,7 @@ export const zhCN = {
   "fileTree.relatedFiles": "关联文件",
   "sessionNaming.title": "自定义会话重命名模型",
   "sessionNaming.choose": "选择 agent 和模型",
+  "sessionNaming.disableAutoRename": "关闭自动重命名",
   "sessionNaming.loadFailed": "读取会话命名设置失败",
   "sessionNaming.saveFailed": "保存会话命名设置失败",
   "idleSessionResourceRelease.title": "空闲会话资源释放",
