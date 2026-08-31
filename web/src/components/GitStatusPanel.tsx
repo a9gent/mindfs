@@ -554,6 +554,9 @@ export function GitStatusPanel({
             onChange={(event) => setCommitMessage(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
+                if (event.nativeEvent.isComposing) {
+                  return;
+                }
                 event.preventDefault();
                 void submitCommit();
               } else if (event.key === "Escape") {
