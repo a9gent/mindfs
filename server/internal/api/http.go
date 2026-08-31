@@ -127,10 +127,11 @@ func requestProofPath(r *http.Request) string {
 	if r == nil || r.URL == nil {
 		return ""
 	}
+	path := r.URL.EscapedPath()
 	if r.URL.RawQuery == "" {
-		return r.URL.Path
+		return path
 	}
-	return r.URL.Path + "?" + r.URL.RawQuery
+	return path + "?" + r.URL.RawQuery
 }
 
 func writeProtectedJSON(w http.ResponseWriter, status int, key []byte, value any) error {

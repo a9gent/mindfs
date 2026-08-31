@@ -45,6 +45,20 @@ func TestPathForStaticAssetCleansURLPaths(t *testing.T) {
 	}
 }
 
+func TestRequestProofPathPreservesEscapedPathSegments(t *testing.T) {
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/sessions/session-1/toolcalls/claude-task-list%3A1?root=mindfs",
+		nil,
+	)
+
+	got := requestProofPath(req)
+	want := "/api/sessions/session-1/toolcalls/claude-task-list%3A1?root=mindfs"
+	if got != want {
+		t.Fatalf("requestProofPath() = %q, want %q", got, want)
+	}
+}
+
 func TestServeFrontendIndexRewritesRelayedAssetRefsForReleaseVersion(t *testing.T) {
 	staticDir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(staticDir, "assets"), 0o755); err != nil {
