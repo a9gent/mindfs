@@ -17,6 +17,13 @@ export type QueuedUserMessage = {
   timestamp: string;
 };
 
+export type TokenUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+};
+
 const commandTerminalFontSize = 12;
 const commandTerminalFontFamily =
   '"Cascadia Mono", "Cascadia Code", Consolas, "Microsoft YaHei Mono", "Microsoft YaHei", "Noto Sans Mono CJK SC", monospace';
@@ -132,6 +139,7 @@ export type Session = {
       totalTokens: number;
       modelContextWindow: number;
     };
+    token_usage?: TokenUsage;
     timestamp?: string;
     toolCall?: ToolCall;
     todoUpdate?: TodoUpdate;
@@ -230,6 +238,7 @@ export type StreamEvent = { event_cursor?: string } & (
           totalTokens: number;
           modelContextWindow: number;
         };
+        tokenUsage?: TokenUsage;
       };
     }
   | { type: "error"; data: { message: string } }

@@ -25,6 +25,26 @@ func TestClaudeModelInfoSupportsEffortWithoutModelNameWhitelist(t *testing.T) {
 	}
 }
 
+func TestClaudeTokenUsageIncludesCacheReadAndCreationInLogicalInput(t *testing.T) {
+	got := claudeTokenUsage(claudeagent.ResultMessage{
+		Usage: &claudeagent.NonNullableUsage{
+			InputTokens:              50,
+			OutputTokens:             1_100,
+			CacheReadInputTokens:     10_000,
+			CacheCreationInputTokens: 2_350,
+		},
+	})
+	if got == nil || got.InputTokens != 12_400 || got.OutputTokens != 1_100 {
+		t.Fatalf("usage = %#v", got)
+	}
+	if got.CacheReadTokens == nil || *got.CacheReadTokens != 10_000 {
+		t.Fatalf("cache read = %#v", got.CacheReadTokens)
+	}
+	if got.CacheWriteTokens == nil || *got.CacheWriteTokens != 2_350 {
+		t.Fatalf("cache write = %#v", got.CacheWriteTokens)
+	}
+}
+
 func TestAppendClaudeDeveloperInstructionsUsesCLIAppendSystemPrompt(t *testing.T) {
 	options := claudeagent.DefaultOptions()
 	for _, apply := range appendClaudeDeveloperInstructions(nil, "render markdown") {

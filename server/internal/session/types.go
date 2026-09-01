@@ -36,16 +36,17 @@ type Session struct {
 }
 
 type Exchange struct {
-	Seq              int       `json:"seq"`
-	Role             string    `json:"role"`
-	Agent            string    `json:"agent,omitempty"`
-	Model            string    `json:"model,omitempty"`
-	ModelDisplayName string    `json:"model_display_name,omitempty"`
-	Mode             string    `json:"mode,omitempty"`
-	Effort           string    `json:"effort,omitempty"`
-	FastService      string    `json:"fast_service,omitempty"`
-	Content          string    `json:"content"`
-	Timestamp        time.Time `json:"timestamp"`
+	Seq              int                    `json:"seq"`
+	Role             string                 `json:"role"`
+	Agent            string                 `json:"agent,omitempty"`
+	Model            string                 `json:"model,omitempty"`
+	ModelDisplayName string                 `json:"model_display_name,omitempty"`
+	Mode             string                 `json:"mode,omitempty"`
+	Effort           string                 `json:"effort,omitempty"`
+	FastService      string                 `json:"fast_service,omitempty"`
+	Content          string                 `json:"content"`
+	TokenUsage       *agenttypes.TokenUsage `json:"token_usage,omitempty"`
+	Timestamp        time.Time              `json:"timestamp"`
 }
 
 type ExchangeAux struct {

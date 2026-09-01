@@ -52,6 +52,20 @@ func TestCodexListModelsParamsIncludesHiddenModels(t *testing.T) {
 	}
 }
 
+func TestCodexTokenUsageNormalizesTurnUsage(t *testing.T) {
+	got := codexTokenUsage(codexsdk.Usage{
+		InputTokens:       12_400,
+		CachedInputTokens: 10_168,
+		OutputTokens:      1_100,
+	})
+	if got == nil || got.InputTokens != 12_400 || got.OutputTokens != 1_100 {
+		t.Fatalf("usage = %#v", got)
+	}
+	if got.CacheReadTokens == nil || *got.CacheReadTokens != 10_168 {
+		t.Fatalf("cache read = %#v", got.CacheReadTokens)
+	}
+}
+
 func TestMapCommandExecutionUsesNaturalLanguageTitle(t *testing.T) {
 	path := "server"
 	query := "TODO"

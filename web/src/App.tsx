@@ -23,6 +23,7 @@ import {
   type RelatedFile,
   type RelatedWorktree,
   type Session,
+  type TokenUsage,
   type QueuedUserMessage,
 } from "./services/session";
 import { buildClientContext } from "./services/context";
@@ -369,6 +370,7 @@ export type SessionItem = {
       totalTokens: number;
       modelContextWindow: number;
     };
+    token_usage?: TokenUsage;
   }>;
   pending?: boolean;
 };
@@ -565,6 +567,7 @@ type Exchange = {
     totalTokens: number;
     modelContextWindow: number;
   };
+  token_usage?: TokenUsage;
   timestamp?: string;
   toolCall?: any;
   todoUpdate?: any;
@@ -4437,10 +4440,24 @@ export function App({ onGoHome }: AppProps) {
       rootID: string,
       sessionKey: string,
       contextWindow?: { totalTokens?: number; modelContextWindow?: number },
+      tokenUsage?: TokenUsage,
     ) => {
       const totalTokens = Math.max(0, Number(contextWindow?.totalTokens || 0));
       const modelContextWindow = Math.max(0, Number(contextWindow?.modelContextWindow || 0));
-      if (!totalTokens || !modelContextWindow) {
+      const hasContextWindow = totalTokens > 0 && modelContextWindow > 0;
+      const normalizedTokenUsage = tokenUsage
+        ? {
+            inputTokens: Math.max(0, Number(tokenUsage.inputTokens || 0)),
+            outputTokens: Math.max(0, Number(tokenUsage.outputTokens || 0)),
+            ...(Number.isFinite(tokenUsage.cacheReadTokens)
+              ? { cacheReadTokens: Math.max(0, Number(tokenUsage.cacheReadTokens)) }
+              : {}),
+            ...(Number.isFinite(tokenUsage.cacheWriteTokens)
+              ? { cacheWriteTokens: Math.max(0, Number(tokenUsage.cacheWriteTokens)) }
+              : {}),
+          }
+        : undefined;
+      if (!hasContextWindow && !normalizedTokenUsage) {
         return;
       }
       const cacheKey = rootSessionKey(rootID, sessionKey);
@@ -4454,10 +4471,12 @@ export function App({ onGoHome }: AppProps) {
           ) {
             list[i] = {
               ...item,
-              context_window: {
-                totalTokens,
-                modelContextWindow,
-              },
+              ...(hasContextWindow
+                ? { context_window: { totalTokens, modelContextWindow } }
+                : {}),
+              ...(normalizedTokenUsage
+                ? { token_usage: normalizedTokenUsage }
+                : {}),
             };
             break;
           }
@@ -4470,10 +4489,9 @@ export function App({ onGoHome }: AppProps) {
         sessionCacheRef.current[cacheKey] = {
           ...(cached as any),
           exchanges,
-          context_window: {
-            totalTokens,
-            modelContextWindow,
-          },
+          ...(hasContextWindow
+            ? { context_window: { totalTokens, modelContextWindow } }
+            : {}),
           updated_at: new Date().toISOString(),
         } as Session;
       }
@@ -4486,10 +4504,9 @@ export function App({ onGoHome }: AppProps) {
         return {
           ...(prev as any),
           exchanges: stampList((((prev as any).exchanges || []) as Exchange[])),
-          context_window: {
-            totalTokens,
-            modelContextWindow,
-          },
+          ...(hasContextWindow
+            ? { context_window: { totalTokens, modelContextWindow } }
+            : {}),
         } as SessionItem;
       });
       const drawer = drawerSessionByRootRef.current[rootID];
@@ -4497,10 +4514,9 @@ export function App({ onGoHome }: AppProps) {
         setDrawerSessionForRoot(rootID, {
           ...(drawer as any),
           exchanges: stampList((((drawer as any).exchanges || []) as Exchange[])),
-          context_window: {
-            totalTokens,
-            modelContextWindow,
-          },
+          ...(hasContextWindow
+            ? { context_window: { totalTokens, modelContextWindow } }
+            : {}),
         } as Session);
       }
       bumpCacheVersion();
@@ -9395,6 +9411,7 @@ export function App({ onGoHome }: AppProps) {
             activeRoot,
             streamKey,
             event.data?.contextWindow,
+            event.data?.tokenUsage,
           );
           tokenStationRefreshRef.current?.();
           setCodexRateLimitsRefreshToken((value) => value + 1);

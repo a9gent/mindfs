@@ -54,8 +54,8 @@ github.com/yandc/acp-go-sdk v0.0.0-20260709074204-a1ec7b200d08 h1:LRTQubOsvE3qqf
 github.com/yandc/acp-go-sdk v0.0.0-20260709074204-a1ec7b200d08/go.mod h1:yKzM/3R9uELp4+nBAwwtkS0aN1FOFjo11CNPy37yFko=
 github.com/yandc/claude-agent-sdk-go v0.0.0-20260831075240-a5d51881486c h1:2qCaVJM5GEBswJxPVB5ucBPpkkg4OwteIFZj8ooyBS0=
 github.com/yandc/claude-agent-sdk-go v0.0.0-20260831075240-a5d51881486c/go.mod h1:F0UH/dW/gpCuTfWRWa2qwT18HeiYwUTSd+Q6KSFHIjo=
-github.com/yandc/codex-go-sdk v0.0.0-20260831075257-b420765795d1 h1:3Q8zqfONBtljuK0M4PitJvQka4w1oH9jnzS7rX6x6rI=
-github.com/yandc/codex-go-sdk v0.0.0-20260831075257-b420765795d1/go.mod h1:YTvQqlQmaABafBpZf5dftTiLj03hBgoR8a9UTZR/TNQ=
+github.com/yandc/codex-go-sdk v0.0.0-20260901035144-3e51ee3c924c h1:LOzbc9YhYTEe3xwTI2D3u77yytSGEfNxEWHmbZd10a8=
+github.com/yandc/codex-go-sdk v0.0.0-20260901035144-3e51ee3c924c/go.mod h1:YTvQqlQmaABafBpZf5dftTiLj03hBgoR8a9UTZR/TNQ=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
 github.com/yusufpapurcu/wmi v1.2.4 h1:zFUKzehAFReQwLys1b/iSMl+JQGSCSjtVqQn9bBrPo0=
 github.com/yusufpapurcu/wmi v1.2.4/go.mod h1:SBZ9tNy3G9/m5Oi98Zks0QjeHVDvuK0qfxQmPyzfmi0=

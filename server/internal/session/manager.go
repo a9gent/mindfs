@@ -450,6 +450,7 @@ func (m *Manager) Search(_ context.Context, opts SearchOptions) ([]SearchHit, er
 }
 
 type exchangeModelDisplayNameContextKey struct{}
+type exchangeTokenUsageContextKey struct{}
 
 func WithExchangeModelDisplayName(ctx context.Context, displayName string) context.Context {
 	displayName = strings.TrimSpace(displayName)
@@ -467,15 +468,35 @@ func exchangeModelDisplayNameFromContext(ctx context.Context) string {
 	return strings.TrimSpace(value)
 }
 
+func WithExchangeTokenUsage(ctx context.Context, usage *agenttypes.TokenUsage) context.Context {
+	if ctx == nil || usage == nil {
+		return ctx
+	}
+	copy := *usage
+	return context.WithValue(ctx, exchangeTokenUsageContextKey{}, &copy)
+}
+
+func exchangeTokenUsageFromContext(ctx context.Context) *agenttypes.TokenUsage {
+	if ctx == nil {
+		return nil
+	}
+	usage, _ := ctx.Value(exchangeTokenUsageContextKey{}).(*agenttypes.TokenUsage)
+	if usage == nil {
+		return nil
+	}
+	copy := *usage
+	return &copy
+}
+
 func (m *Manager) AddExchangeForAgent(ctx context.Context, session *Session, role, content, agent, mode, effort, fastService string) error {
-	return m.addExchangeForAgentAt(session, role, content, agent, exchangeModelDisplayNameFromContext(ctx), mode, effort, fastService, time.Time{})
+	return m.addExchangeForAgentAt(session, role, content, agent, exchangeModelDisplayNameFromContext(ctx), exchangeTokenUsageFromContext(ctx), mode, effort, fastService, time.Time{})
 }
 
 func (m *Manager) AddExchangeForAgentAt(ctx context.Context, session *Session, role, content, agent, mode, effort, fastService string, timestamp time.Time) error {
-	return m.addExchangeForAgentAt(session, role, content, agent, exchangeModelDisplayNameFromContext(ctx), mode, effort, fastService, timestamp)
+	return m.addExchangeForAgentAt(session, role, content, agent, exchangeModelDisplayNameFromContext(ctx), exchangeTokenUsageFromContext(ctx), mode, effort, fastService, timestamp)
 }
 
-func (m *Manager) addExchangeForAgentAt(session *Session, role, content, agent, modelDisplayName, mode, effort, fastService string, timestamp time.Time) error {
+func (m *Manager) addExchangeForAgentAt(session *Session, role, content, agent, modelDisplayName string, tokenUsage *agenttypes.TokenUsage, mode, effort, fastService string, timestamp time.Time) error {
 	if session == nil || strings.TrimSpace(session.Key) == "" {
 		return errors.New("session required")
 	}
@@ -509,6 +530,7 @@ func (m *Manager) addExchangeForAgentAt(session *Session, role, content, agent, 
 		Effort:           strings.TrimSpace(effort),
 		FastService:      fastService,
 		Content:          content,
+		TokenUsage:       tokenUsage,
 		Timestamp:        ts,
 	}
 	if err := m.appendExchange(session.Key, record); err != nil {

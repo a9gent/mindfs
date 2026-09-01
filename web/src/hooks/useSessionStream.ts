@@ -6,6 +6,7 @@ import {
   type PlanUpdate,
   type TodoUpdate,
   type ToolCall,
+  type TokenUsage,
 } from "../services/session";
 import { translateNow } from "../i18n";
 
@@ -23,6 +24,7 @@ type ExchangeLike = {
     totalTokens: number;
     modelContextWindow: number;
   };
+  token_usage?: TokenUsage;
   timestamp?: string;
   toolCall?: ToolCall;
   todoUpdate?: TodoUpdate;
@@ -50,6 +52,7 @@ export type TimelineItem =
         totalTokens: number;
         modelContextWindow: number;
       };
+      tokenUsage?: TokenUsage;
     }
   | { id: string; type: "thought"; content: string }
   | { id: string; type: "tool"; toolCall: ToolCall }
@@ -163,6 +166,7 @@ function assistantSegmentItem(
     fastService: ex.fast_service,
     seq: ex.seq,
     contextWindow: includeContextWindow ? ex.context_window : undefined,
+    tokenUsage: includeContextWindow ? ex.token_usage : undefined,
   };
 }
 
@@ -308,6 +312,7 @@ function buildAssistantTimeline(
         out[i] = {
           ...item,
           contextWindow: ex.context_window,
+          tokenUsage: ex.token_usage,
         };
         break;
       }

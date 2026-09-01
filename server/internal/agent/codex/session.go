@@ -379,10 +379,11 @@ func (s *session) handleStreamedEvents(events <-chan codexsdk.ThreadEvent) error
 			s.updateThreadIDFromThread()
 			log.Printf("[agent/codex] output.done session=%s", s.sessionKey)
 			contextWindow, _ := s.ContextWindow(context.Background())
+			tokenUsage := codexTokenUsage(e.Usage)
 			s.emit(types.Event{
 				Type:      types.EventTypeMessageDone,
 				SessionID: s.SessionID(),
-				Data:      types.MessageDone{ContextWindow: contextWindow},
+				Data:      types.MessageDone{ContextWindow: contextWindow, TokenUsage: tokenUsage},
 			})
 		case *codexsdk.TurnFailedEvent:
 			log.Printf("[agent/codex] send.error session=%s err=%s", s.sessionKey, e.Error.Message)
@@ -1077,6 +1078,21 @@ func parseContextWindow(raw json.RawMessage) (types.ContextWindow, bool) {
 		TotalTokens:        totalTokens,
 		ModelContextWindow: payload.TokenUsage.ModelContextWindow,
 	}, true
+}
+
+func codexTokenUsage(usage codexsdk.Usage) *types.TokenUsage {
+	inputTokens := max(0, usage.InputTokens)
+	outputTokens := max(0, usage.OutputTokens)
+	cacheReadTokens := max(0, usage.CachedInputTokens)
+	if inputTokens == 0 && outputTokens == 0 && cacheReadTokens == 0 {
+		return nil
+	}
+	inputTokens = max(inputTokens, cacheReadTokens)
+	return &types.TokenUsage{
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		CacheReadTokens: &cacheReadTokens,
+	}
 }
 
 func messageDelta(prev, next string) string {

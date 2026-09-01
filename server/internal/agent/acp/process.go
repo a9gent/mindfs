@@ -78,8 +78,16 @@ type sessionState struct {
 	configOptions []acp.SessionConfigOption
 	commands      []acp.AvailableCommand
 	contextWindow types.ContextWindow
+	lastUsage     cumulativeTokenUsage
 	onUpdate      func(SessionUpdate)
 	mu            sync.RWMutex
+}
+
+type cumulativeTokenUsage struct {
+	inputTokens      int
+	outputTokens     int
+	cacheReadTokens  int
+	cacheWriteTokens int
 }
 
 type qwenSlashCommandNotification struct {
@@ -170,11 +178,61 @@ func (s *sessionState) getContextWindow() types.ContextWindow {
 	return s.contextWindow
 }
 
+func (s *sessionState) tokenUsageDelta(usage *acp.Usage) *types.TokenUsage {
+	if usage == nil {
+		return nil
+	}
+	current := cumulativeTokenUsage{
+		inputTokens:  max(0, usage.InputTokens),
+		outputTokens: max(0, usage.OutputTokens),
+	}
+	if usage.CachedReadTokens != nil {
+		current.cacheReadTokens = max(0, *usage.CachedReadTokens)
+	}
+	if usage.CachedWriteTokens != nil {
+		current.cacheWriteTokens = max(0, *usage.CachedWriteTokens)
+	}
+
+	s.mu.Lock()
+	previous := s.lastUsage
+	s.lastUsage = current
+	s.mu.Unlock()
+
+	inputTokens := cumulativeCounterDelta(current.inputTokens, previous.inputTokens)
+	outputTokens := cumulativeCounterDelta(current.outputTokens, previous.outputTokens)
+	result := &types.TokenUsage{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+	}
+	if usage.CachedReadTokens != nil {
+		value := cumulativeCounterDelta(current.cacheReadTokens, previous.cacheReadTokens)
+		result.CacheReadTokens = &value
+		result.InputTokens = max(result.InputTokens, value)
+	}
+	if usage.CachedWriteTokens != nil {
+		value := cumulativeCounterDelta(current.cacheWriteTokens, previous.cacheWriteTokens)
+		result.CacheWriteTokens = &value
+		result.InputTokens = max(result.InputTokens, value)
+	}
+	if result.InputTokens == 0 && result.OutputTokens == 0 && result.CacheReadTokens == nil && result.CacheWriteTokens == nil {
+		return nil
+	}
+	return result
+}
+
+func cumulativeCounterDelta(current, previous int) int {
+	if current < previous {
+		return current
+	}
+	return current - previous
+}
+
 // SessionUpdate is the internal session update type.
 type SessionUpdate struct {
-	Type      UpdateType
-	SessionID string
-	Raw       acp.SessionUpdate
+	Type       UpdateType
+	SessionID  string
+	Raw        acp.SessionUpdate
+	TokenUsage *types.TokenUsage
 }
 
 // UpdateType defines the type of session update.
@@ -595,17 +653,20 @@ func (p *Process) SendMessage(ctx context.Context, sessionKey, content string) e
 	if err != nil {
 		return p.wrapPromptError(sessionKey, string(sess.ID), err)
 	}
+	var tokenUsage *types.TokenUsage
 	if resp.Usage != nil {
 		current := sess.getContextWindow()
 		current.TotalTokens = resp.Usage.TotalTokens
 		sess.setContextWindow(current)
+		tokenUsage = sess.tokenUsageDelta(resp.Usage)
 	}
 
 	// Signal completion
 	if onUpdate := sess.getOnUpdate(); onUpdate != nil {
 		onUpdate(SessionUpdate{
-			Type:      UpdateTypeMessageDone,
-			SessionID: string(sess.ID),
+			Type:       UpdateTypeMessageDone,
+			SessionID:  string(sess.ID),
+			TokenUsage: tokenUsage,
 		})
 	}
 	log.Printf("[agent/acp] send.done agent=%s session_key=%s duration_ms=%d", p.agentLabel(), sessionKey, time.Since(start).Milliseconds())

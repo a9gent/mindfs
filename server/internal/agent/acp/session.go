@@ -388,7 +388,7 @@ func (s *session) OnUpdate(onUpdate func(types.Event)) {
 				onUpdate(types.Event{
 					Type:      types.EventTypeMessageDone,
 					SessionID: update.SessionID,
-					Data:      types.MessageDone{ContextWindow: contextWindow},
+					Data:      types.MessageDone{ContextWindow: contextWindow, TokenUsage: update.TokenUsage},
 				})
 				return
 			}

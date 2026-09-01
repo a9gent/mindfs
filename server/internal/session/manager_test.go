@@ -338,6 +338,37 @@ func TestManagerPersistsExchangeModelDisplayName(t *testing.T) {
 	}
 }
 
+func TestManagerPersistsExchangeTokenUsage(t *testing.T) {
+	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
+	manager := NewManager(root)
+	created, err := manager.Create(context.Background(), CreateInput{
+		Type: TypeChat, Agent: "codex", Model: "gpt-test", Name: "Chat",
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	cacheRead := 8_000
+	usage := &agenttypes.TokenUsage{
+		InputTokens: 10_000, OutputTokens: 1_200, CacheReadTokens: &cacheRead,
+	}
+	ctx := WithExchangeTokenUsage(context.Background(), usage)
+	if err := manager.AddExchangeForAgent(ctx, created, "agent", "reply", "codex", "", "", ""); err != nil {
+		t.Fatalf("add exchange: %v", err)
+	}
+
+	loaded, err := manager.Get(context.Background(), created.Key, 0)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	got := loaded.Exchanges[0].TokenUsage
+	if got == nil || got.InputTokens != 10_000 || got.OutputTokens != 1_200 {
+		t.Fatalf("token usage = %#v", got)
+	}
+	if got.CacheReadTokens == nil || *got.CacheReadTokens != 8_000 {
+		t.Fatalf("cache read = %#v", got.CacheReadTokens)
+	}
+}
+
 func TestManagerPersistsLastContextWindow(t *testing.T) {
 	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
 	manager := NewManager(root)

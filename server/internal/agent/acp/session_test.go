@@ -23,6 +23,37 @@ func TestIsExpectedStreamCloseError(t *testing.T) {
 	}
 }
 
+func TestACPTokenUsageConvertsCumulativeCountersToTurnDelta(t *testing.T) {
+	state := &sessionState{}
+	firstRead, firstWrite := 4_000, 1_000
+	first := state.tokenUsageDelta(&acpsdk.Usage{
+		InputTokens:       5_500,
+		OutputTokens:      500,
+		CachedReadTokens:  &firstRead,
+		CachedWriteTokens: &firstWrite,
+	})
+	if first == nil || first.InputTokens != 5_500 || first.OutputTokens != 500 {
+		t.Fatalf("first usage = %#v", first)
+	}
+
+	secondRead, secondWrite := 12_000, 1_500
+	second := state.tokenUsageDelta(&acpsdk.Usage{
+		InputTokens:       14_000,
+		OutputTokens:      1_600,
+		CachedReadTokens:  &secondRead,
+		CachedWriteTokens: &secondWrite,
+	})
+	if second == nil || second.InputTokens != 8_500 || second.OutputTokens != 1_100 {
+		t.Fatalf("second usage = %#v", second)
+	}
+	if second.CacheReadTokens == nil || *second.CacheReadTokens != 8_000 {
+		t.Fatalf("second cache read = %#v", second.CacheReadTokens)
+	}
+	if second.CacheWriteTokens == nil || *second.CacheWriteTokens != 500 {
+		t.Fatalf("second cache write = %#v", second.CacheWriteTokens)
+	}
+}
+
 func TestCloseProcessesConcurrentlyDoesNotSerializeWaits(t *testing.T) {
 	procs := []*Process{{agentName: "first"}, {agentName: "second"}}
 	started := make(chan string, len(procs))
