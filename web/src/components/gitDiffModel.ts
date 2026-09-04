@@ -31,25 +31,33 @@ export type DiffCodeRow = {
 
 export function buildDiffLines(content: string): DiffLine[] {
   const source = String(content || "").split("\n");
-  const filtered = source.filter((line) => !/^(diff --git|index |--- |\+\+\+ )/.test(line));
   const lines: DiffLine[] = [];
   let oldLine = 0;
   let newLine = 0;
+  let inHunk = false;
 
-  filtered.forEach((line) => {
+  source.forEach((line) => {
+    if (line.startsWith("diff --git")) {
+      inHunk = false;
+      return;
+    }
+    if (!inHunk && /^(index |--- |\+\+\+ )/.test(line)) {
+      return;
+    }
     const hunkMatch = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunkMatch) {
+      inHunk = true;
       oldLine = Number.parseInt(hunkMatch[1], 10) || 0;
       newLine = Number.parseInt(hunkMatch[2], 10) || 0;
       lines.push({ kind: "hunk", text: line });
       return;
     }
-    if (/^\+[^+]/.test(line)) {
+    if (line.startsWith("+")) {
       lines.push({ kind: "add", text: line.slice(1), newLine });
       newLine += 1;
       return;
     }
-    if (/^-[^-]/.test(line)) {
+    if (line.startsWith("-")) {
       lines.push({ kind: "del", text: line.slice(1), oldLine });
       oldLine += 1;
       return;
@@ -149,9 +157,7 @@ export function buildUnifiedRows(lines: DiffLine[]): UnifiedDiffRow[] {
 }
 
 export function buildDiffCodeRows(content: string): DiffCodeRow[] {
-  const metaRows = String(content || "")
-    .split("\n")
-    .filter((line) => /^(diff --git|index |--- |\+\+\+ )/.test(line))
+  const metaRows = getDiffMetaLines(content)
     .map((line): DiffCodeRow => ({ kind: "meta", text: line }));
 
   const diffRows = buildUnifiedRows(buildDiffLines(content)).map((row): DiffCodeRow => {
@@ -167,6 +173,28 @@ export function buildDiffCodeRows(content: string): DiffCodeRow[] {
   });
 
   return [...metaRows, ...diffRows];
+}
+
+function getDiffMetaLines(content: string): string[] {
+  const metaLines: string[] = [];
+  let inHunk = false;
+
+  String(content || "").split("\n").forEach((line) => {
+    if (line.startsWith("diff --git")) {
+      inHunk = false;
+      metaLines.push(line);
+      return;
+    }
+    if (line.startsWith("@@ ")) {
+      inHunk = true;
+      return;
+    }
+    if (!inHunk && /^(index |--- |\+\+\+ )/.test(line)) {
+      metaLines.push(line);
+    }
+  });
+
+  return metaLines;
 }
 
 function alignChangeBlock(deleted: DiffLine[], added: DiffLine[]): SideBySideDiffRow[] {

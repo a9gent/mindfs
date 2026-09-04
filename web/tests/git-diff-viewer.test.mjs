@@ -64,6 +64,64 @@ assert.deepEqual(
   ["UserTimestamp:"],
 );
 
+const markdownMarkerDiff = [
+  "diff --git a/README.md b/README.md",
+  "--- a/README.md",
+  "+++ b/README.md",
+  "@@ -1,4 +1,4 @@",
+  "-- old list item",
+  "+- new list item",
+  "-+ old positive item",
+  "++ new positive item",
+  "--- old separator",
+  "+-- new separator",
+  "-++ old operator",
+  "+++ new operator",
+].join("\n");
+
+const markdownMarkerLines = buildDiffLines(markdownMarkerDiff);
+
+assert.deepEqual(
+  markdownMarkerLines.filter((line) => line.kind !== "hunk").map(({ kind, text }) => ({ kind, text })),
+  [
+    { kind: "del", text: "- old list item" },
+    { kind: "add", text: "- new list item" },
+    { kind: "del", text: "+ old positive item" },
+    { kind: "add", text: "+ new positive item" },
+    { kind: "del", text: "-- old separator" },
+    { kind: "add", text: "-- new separator" },
+    { kind: "del", text: "++ old operator" },
+    { kind: "add", text: "++ new operator" },
+  ],
+);
+
+assert.deepEqual(
+  buildDiffCodeRows(markdownMarkerDiff)
+    .filter((row) => row.kind === "add" || row.kind === "del")
+    .map(({ kind, text }) => ({ kind, text })),
+  [
+    { kind: "del", text: "- old list item" },
+    { kind: "add", text: "- new list item" },
+    { kind: "del", text: "+ old positive item" },
+    { kind: "add", text: "+ new positive item" },
+    { kind: "del", text: "-- old separator" },
+    { kind: "add", text: "-- new separator" },
+    { kind: "del", text: "++ old operator" },
+    { kind: "add", text: "++ new operator" },
+  ],
+);
+
+assert.deepEqual(
+  buildDiffCodeRows(markdownMarkerDiff)
+    .filter((row) => row.kind === "meta")
+    .map((row) => row.text),
+  [
+    "diff --git a/README.md b/README.md",
+    "--- a/README.md",
+    "+++ b/README.md",
+  ],
+);
+
 const insertedArgument = getInlineDiffSegments(
   "streamHub.BroadcastSessionUserMessage(rootID, key, job.User.Content, job.ExcludeClientID)",
   "streamHub.BroadcastSessionUserMessageAt(rootID, key, job.User.Content, job.User.Timestamp, job.ExcludeClientID)",
