@@ -895,19 +895,22 @@ func (s *Service) runAgentStage(ctx context.Context, store *TaskStore, task Task
 	}); err != nil {
 		log.Printf("[kanban] agent_stage.session_error root=%s task=%s run=%s err=%v", task.RootID, task.ID, run.ID, err)
 		message := strings.TrimSpace(err.Error())
+		now = time.Now().UTC()
+		task.Status = StatusWaitingUser
 		task.AuxFlags.SessionError = message
-		task.UpdatedAt = time.Now().UTC()
-		if updateErr := store.UpdateTask(ctx, task); updateErr != nil {
-			return updateErr
-		}
-		_ = store.AddEvent(ctx, TaskEvent{
+		task.UpdatedAt = now
+		run.Status = StageStatusFail
+		run.FinishedAt = now.Format(time.RFC3339Nano)
+		if updateErr := store.UpdateTaskAndStageRun(ctx, task, run, TaskEvent{
 			ID:         newID("event"),
 			TaskID:     task.ID,
 			StageRunID: run.ID,
 			Type:       "agent_session_error",
 			Payload:    eventPayload(map[string]any{"message": message}),
-			CreatedAt:  time.Now().UTC(),
-		})
+			CreatedAt:  now,
+		}); updateErr != nil {
+			return updateErr
+		}
 		if detail, detailErr := store.GetDetail(ctx, task.ID); detailErr == nil {
 			s.Runner.TaskUpdated(task.RootID, detail)
 		}
