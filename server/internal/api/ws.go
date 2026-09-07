@@ -25,10 +25,11 @@ import (
 )
 
 const (
-	wsPingInterval = 30 * time.Second
-	wsPongWait     = 2 * time.Minute
-	wsProofQuery   = "e2ee_proof"
-	wsTSQuery      = "e2ee_ts"
+	wsPingInterval          = 30 * time.Second
+	wsPongWait              = 2 * time.Minute
+	wsProofQuery            = "e2ee_proof"
+	wsTSQuery               = "e2ee_ts"
+	wsCloseClientSuperseded = 4000
 
 	sessionDoneSettleWindow = 50 * time.Millisecond
 	sessionDoneMaxWait      = 2 * time.Second
@@ -177,7 +178,16 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[ws] connected client=%s remote=%s path=%s", clientID, r.RemoteAddr, r.URL.Path)
 	if h.AppContext != nil {
-		h.AppContext.GetSessionStreamHub().RegisterClient(clientID, conn)
+		previous := h.AppContext.GetSessionStreamHub().RegisterClient(clientID, conn)
+		if previous != nil {
+			log.Printf("[ws] superseded client=%s remote=%s path=%s", clientID, r.RemoteAddr, r.URL.Path)
+			_ = previous.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(wsCloseClientSuperseded, "client_superseded"),
+				time.Now().Add(5*time.Second),
+			)
+			_ = previous.Close()
+		}
 		h.pushInitialAppUpdate(clientID)
 		h.pushInitialGitHubImports(clientID)
 	}

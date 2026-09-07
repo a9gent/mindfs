@@ -486,13 +486,37 @@ export function ActionBar({
   const applyingInputHistoryRef = useRef(false);
   const { isMobile } = useResponsive();
   const isConnected = status === "connected";
-  const connectionMeta = wsStatusMeta(status, t);
+  const [displayStatus, setDisplayStatus] = useState<WSStatus>(status);
+  const reconnectDisplayTimerRef = useRef<number | null>(null);
+  const connectionMeta = wsStatusMeta(displayStatus, t);
   const DRAG_THRESHOLD = -40;
   const boundRingColor = detachedBoundSession ? "#f59e0b" : "#2563eb";
   const boundRingShadow = detachedBoundSession
     ? "0 0 0 1px rgba(245,158,11,0.18)"
     : "0 0 0 1px rgba(37,99,235,0.08)";
   const boundArrowColor = detachedBoundSession ? "#f59e0b" : "#2563eb";
+
+  useEffect(() => {
+    if (reconnectDisplayTimerRef.current) {
+      window.clearTimeout(reconnectDisplayTimerRef.current);
+      reconnectDisplayTimerRef.current = null;
+    }
+    if (status !== "reconnecting") {
+      setDisplayStatus(status);
+      return;
+    }
+    setDisplayStatus("connecting");
+    reconnectDisplayTimerRef.current = window.setTimeout(() => {
+      reconnectDisplayTimerRef.current = null;
+      setDisplayStatus("reconnecting");
+    }, 800);
+    return () => {
+      if (reconnectDisplayTimerRef.current) {
+        window.clearTimeout(reconnectDisplayTimerRef.current);
+        reconnectDisplayTimerRef.current = null;
+      }
+    };
+  }, [status]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");

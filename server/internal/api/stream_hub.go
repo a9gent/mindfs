@@ -261,16 +261,21 @@ func (h *StreamHub) clearReplayStatesForSessionLocked(sessionKey string) {
 	}
 }
 
-func (h *StreamHub) RegisterClient(clientID string, conn *websocket.Conn) {
+func (h *StreamHub) RegisterClient(clientID string, conn *websocket.Conn) *websocket.Conn {
 	if blank(clientID) || conn == nil {
-		return
+		return nil
 	}
 	h.mu.Lock()
+	previous := h.clients[clientID]
 	h.clients[clientID] = conn
 	if _, ok := h.connLocks[conn]; !ok {
 		h.connLocks[conn] = &sync.Mutex{}
 	}
 	h.mu.Unlock()
+	if previous == conn {
+		return nil
+	}
+	return previous
 }
 
 func (h *StreamHub) UnregisterClient(clientID string, conn *websocket.Conn) {
@@ -280,11 +285,11 @@ func (h *StreamHub) UnregisterClient(clientID string, conn *websocket.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	existing := h.clients[clientID]
+	delete(h.connLocks, conn)
 	if existing != conn {
 		return
 	}
 	delete(h.clients, clientID)
-	delete(h.connLocks, conn)
 	for sessionKey, clientSet := range h.sessionClients {
 		delete(clientSet, clientID)
 		if len(clientSet) == 0 {

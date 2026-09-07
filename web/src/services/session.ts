@@ -309,7 +309,9 @@ class SessionService {
   private reconnectTimer: number | null = null;
   private connectTimeoutTimer: number | null = null;
   private probeTimeoutTimer: number | null = null;
+  private lifecycleCheckTimer: number | null = null;
   private activeProbeId: string | null = null;
+  private consecutiveProbeFailures = 0;
   private connectingStartedAt = 0;
   private openingSocket = false;
   private reconnectDelayMs = 1000;
@@ -320,23 +322,25 @@ class SessionService {
   private readonly maxReconnectDelayMs = 30000;
   private readonly fastReconnectDelayMs = 1000;
   private readonly fastReconnectWindowMs = 10000;
-  private readonly connectTimeoutMs = 5000;
-  private readonly probeTimeoutMs = 2000;
+  private readonly connectTimeoutMs = 15000;
+  private readonly probeTimeoutMs = 8000;
+  private readonly lifecycleCheckDelayMs = 750;
+  private readonly maxConsecutiveProbeFailures = 2;
   private readonly reconnectWatchdogMs = 3000;
   private contextCache = new Map<string, { selectionKey: string }>();
 
   constructor() {
     e2eeService.setClientId(this.clientId);
     if (typeof window !== "undefined") {
-      window.addEventListener("online", () => this.ensureConnection());
-      window.addEventListener("pageshow", () => this.ensureConnection());
-      window.addEventListener("focus", () => this.ensureConnection());
+      window.addEventListener("online", () => this.scheduleLifecycleCheck());
+      window.addEventListener("pageshow", () => this.scheduleLifecycleCheck());
+      window.addEventListener("focus", () => this.scheduleLifecycleCheck());
       window.setInterval(() => this.ensureReconnectLoop(), this.reconnectWatchdogMs);
     }
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") {
-          this.ensureConnection();
+          this.scheduleLifecycleCheck();
         }
       });
     }
@@ -425,6 +429,7 @@ class SessionService {
       this.clearConnectTimeout();
       this.clearProbe();
       this.reconnectDelayMs = 1000;
+      this.consecutiveProbeFailures = 0;
       if (this.hasConnected) {
         this.emit({ type: "ws.reconnected" });
       } else {
@@ -441,6 +446,7 @@ class SessionService {
 
     ws.onmessage = (event) => {
       if (this.ws !== ws) return;
+      this.consecutiveProbeFailures = 0;
       this.clearProbe();
       void (async () => {
         try {
@@ -478,9 +484,12 @@ class SessionService {
   }
 
   disconnect() {
+    this.rootId = null;
     this.clearReconnectTimer();
     this.clearConnectTimeout();
     this.clearProbe();
+    this.clearLifecycleCheck();
+    this.consecutiveProbeFailures = 0;
     this.closeSocket();
     this.contextCache.clear();
   }
@@ -506,6 +515,22 @@ class SessionService {
       this.probeTimeoutTimer = null;
     }
     this.activeProbeId = null;
+  }
+
+  private clearLifecycleCheck() {
+    if (this.lifecycleCheckTimer) {
+      clearTimeout(this.lifecycleCheckTimer);
+      this.lifecycleCheckTimer = null;
+    }
+  }
+
+  private scheduleLifecycleCheck() {
+    if (!this.rootId) return;
+    this.clearLifecycleCheck();
+    this.lifecycleCheckTimer = window.setTimeout(() => {
+      this.lifecycleCheckTimer = null;
+      this.ensureConnection();
+    }, this.lifecycleCheckDelayMs);
   }
 
   private closeSocket() {
@@ -584,9 +609,20 @@ class SessionService {
     });
     this.probeTimeoutTimer = window.setTimeout(() => {
       if (this.activeProbeId !== probeId) return;
-      console.warn("[Session] WebSocket probe timed out, reconnecting");
+      this.consecutiveProbeFailures += 1;
+      const shouldReconnect =
+        this.consecutiveProbeFailures >= this.maxConsecutiveProbeFailures;
+      console.warn("[Session] WebSocket probe timed out", {
+        consecutiveFailures: this.consecutiveProbeFailures,
+        reconnecting: shouldReconnect,
+      });
       this.clearProbe();
-      this.reconnectNow();
+      if (shouldReconnect) {
+        this.consecutiveProbeFailures = 0;
+        this.reconnectNow();
+        return;
+      }
+      this.probeConnection();
     }, this.probeTimeoutMs);
   }
 

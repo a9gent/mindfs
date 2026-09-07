@@ -13,6 +13,8 @@ import (
 	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/e2ee"
 	"mindfs/server/internal/session"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestParseClientContext(t *testing.T) {
@@ -39,6 +41,36 @@ func TestParseClientContext(t *testing.T) {
 	got = parseClientContext(map[string]any{}, "fallback-root")
 	if got.CurrentRoot != "fallback-root" {
 		t.Fatalf("expected fallback root, got %q", got.CurrentRoot)
+	}
+}
+
+func TestRegisterClientSupersedesPreviousConnection(t *testing.T) {
+	hub := NewStreamHub(nil)
+	first := &websocket.Conn{}
+	second := &websocket.Conn{}
+
+	if previous := hub.RegisterClient("client-1", first); previous != nil {
+		t.Fatalf("first registration returned previous connection %p", previous)
+	}
+	hub.BindSessionClient("session-1", "client-1")
+	if previous := hub.RegisterClient("client-1", second); previous != first {
+		t.Fatalf("replacement returned %p, want %p", previous, first)
+	}
+
+	hub.UnregisterClient("client-1", first)
+	if got := hub.clients["client-1"]; got != second {
+		t.Fatalf("old connection unregistered replacement: got %p, want %p", got, second)
+	}
+	if _, ok := hub.connLocks[first]; ok {
+		t.Fatal("old connection lock was not released")
+	}
+	if got := hub.GetSessionClientIDs("session-1", false); len(got) != 1 || got[0] != "client-1" {
+		t.Fatalf("old connection removed replacement session binding: %#v", got)
+	}
+
+	hub.UnregisterClient("client-1", second)
+	if got := hub.clients["client-1"]; got != nil {
+		t.Fatalf("replacement connection still registered: %p", got)
 	}
 }
 
