@@ -475,7 +475,7 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onS
           ) : file.encoding === "binary" ? (
             <div style={{ padding: "24px 16px" }}><BinaryViewer /></div>
           ) : usesMarkdownViewer ? (
-            <div ref={contentRootRef} style={{ padding: "24px 16px" }}>
+            <div ref={contentRootRef} className="markdown-document-shell" style={{ padding: "24px 16px" }}>
               <MarkdownViewer
                 content={file.content}
                 currentPath={file.path}
@@ -483,6 +483,10 @@ export function FileViewer({ file, onSessionClick, onPathClick, onFileClick, onS
                 onFileClick={onFileClick}
                 targetLine={file.targetLine}
                 contentRef={contentRootRef}
+                scrollContainerRef={scrollRef}
+                isVisible={isVisible}
+                compactOutline={isMobile}
+                showOutline
               />
             </div>
           ) : (

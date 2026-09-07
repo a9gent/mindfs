@@ -968,6 +968,209 @@ body[data-plugin-theme="1"] [data-slot="drawer-content"] {
   font-size: 1.04em;
 }
 
+.markdown-document-shell {
+  container-type: inline-size;
+}
+
+.markdown-document-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 216px;
+  grid-template-areas: "content outline";
+  gap: 28px;
+  width: 100%;
+  transition: grid-template-columns 160ms ease, gap 160ms ease;
+}
+
+.markdown-document-layout.is-outline-collapsed {
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 12px;
+}
+
+.markdown-document-layout > .markdown-viewer {
+  grid-area: content;
+  min-width: 0;
+}
+
+.markdown-viewer [data-markdown-heading] {
+  scroll-margin-top: 24px;
+}
+
+.markdown-outline {
+  grid-area: outline;
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: calc(100vh - 116px);
+  overflow: auto;
+  overflow-anchor: none;
+  padding: 34px 0 10px 12px;
+  border-left: 1px solid var(--border-color);
+}
+
+.markdown-outline.is-collapsed {
+  overflow: visible;
+  padding-left: 0;
+}
+
+.markdown-outline-toggle {
+  position: absolute;
+  top: 0;
+  left: 7px;
+  display: inline-flex;
+  width: auto;
+  min-width: 52px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0 7px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--mindfs-topbar-bg, var(--input-bg));
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+}
+
+.markdown-outline-toggle span {
+  display: block;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.markdown-outline-toggle svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.markdown-outline.is-collapsed .markdown-outline-toggle {
+  right: 0;
+  left: auto;
+}
+
+.markdown-outline-toggle:hover {
+  border-color: color-mix(in srgb, var(--accent-color) 45%, var(--border-color));
+  color: var(--accent-color);
+}
+
+.markdown-outline.is-collapsed nav {
+  display: none;
+}
+
+.markdown-outline nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.markdown-outline-item {
+  position: relative;
+  flex: 0 0 auto;
+  width: 100%;
+  overflow: hidden;
+  padding: 5px 8px 5px calc(8px + (var(--outline-level) - 1) * 10px);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-outline-item:hover {
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+  color: var(--text-primary);
+}
+
+.markdown-outline-item.is-active {
+  background: color-mix(in srgb, var(--accent-color) 11%, transparent);
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.markdown-outline-item.is-active::before {
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent-color);
+  content: "";
+}
+
+.markdown-outline-backdrop {
+  display: none;
+}
+
+.markdown-document-layout.is-mobile-outline,
+.markdown-document-layout.is-mobile-outline.is-outline-collapsed {
+  position: relative;
+  display: block;
+}
+
+.markdown-document-layout.is-mobile-outline .markdown-outline {
+  position: sticky;
+  top: 0;
+  z-index: 22;
+  width: 0;
+  height: 0;
+  min-height: 0;
+  margin-left: auto;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  border-left: 0;
+}
+
+.markdown-document-layout.is-mobile-outline .markdown-outline-toggle {
+  right: 0;
+  left: auto;
+  z-index: 23;
+}
+
+.markdown-document-layout.is-mobile-outline .markdown-outline:not(.is-collapsed) nav {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  z-index: 22;
+  display: flex;
+  width: 60vw;
+  max-height: calc(var(--mindfs-viewport-height, 100dvh) - 150px);
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--mobile-overlay-bg, #fff);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.22);
+}
+
+.markdown-document-layout.is-mobile-outline .markdown-outline-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;

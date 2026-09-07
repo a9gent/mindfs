@@ -11,6 +11,7 @@ import { fetchProofProtectedBlob } from "../services/file";
 import { openExternalURL } from "../services/platformNavigation";
 import { useI18n } from "../i18n";
 import { buildDiffCodeRows, type DiffCodeRow } from "./gitDiffModel";
+import { extractMarkdownOutline } from "./markdownOutline";
 import "prismjs/themes/prism.css";
 import "katex/dist/katex.min.css";
 // Reuse the language imports from global Prism context (since they are imported in CodeViewer, they might be available if loaded, 
@@ -588,6 +589,10 @@ function MarkdownViewerInner({
   onFileClick,
   targetLine,
   contentRef,
+  scrollContainerRef,
+  isVisible = true,
+  compactOutline = false,
+  showOutline = false,
 }: {
   content: string;
   currentPath?: string;
@@ -595,7 +600,12 @@ function MarkdownViewerInner({
   onFileClick?: (path: string) => void;
   targetLine?: number;
   contentRef?: React.RefObject<HTMLDivElement | null>;
+  scrollContainerRef?: React.RefObject<HTMLDivElement | null>;
+  isVisible?: boolean;
+  compactOutline?: boolean;
+  showOutline?: boolean;
 }) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const onFileClickRef = useRef(onFileClick);
   const sourceLineSelector = useMemo(() => {
@@ -603,10 +613,34 @@ function MarkdownViewerInner({
     return "[data-source-line]";
   }, [targetLine]);
   const normalizedContent = useMemo(() => normalizeMarkdownMathDelimiters(content), [content]);
+  const outline = useMemo(
+    () => (showOutline ? extractMarkdownOutline(normalizedContent) : []),
+    [normalizedContent, showOutline],
+  );
+  const headingsByLine = useMemo(
+    () => new Map(outline.map((item) => [item.sourceLine, item])),
+    [outline],
+  );
+  const [activeHeadingId, setActiveHeadingId] = useState("");
+  const [isOutlineCollapsed, setIsOutlineCollapsed] = useState(compactOutline);
+  const forcedActiveHeadingRef = useRef<string | null>(null);
 
   useEffect(() => {
     onFileClickRef.current = onFileClick;
   }, [onFileClick]);
+
+  useEffect(() => {
+    if (compactOutline) setIsOutlineCollapsed(true);
+  }, [compactOutline]);
+
+  useEffect(() => {
+    if (!compactOutline || isOutlineCollapsed) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsOutlineCollapsed(true);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [compactOutline, isOutlineCollapsed]);
 
   useEffect(() => {
     if (contentRef) {
@@ -633,37 +667,106 @@ function MarkdownViewerInner({
     (target || elements[0]).scrollIntoView({ block: "center", behavior: "auto" });
   }, [content, sourceLineSelector, targetLine]);
 
+  useEffect(() => {
+    if (!isVisible || !showOutline || outline.length === 0 || !containerRef.current) {
+      setActiveHeadingId("");
+      return;
+    }
+    const container = containerRef.current;
+    if (!container.querySelector("[data-markdown-heading]")) return;
+
+    let scrollParent: HTMLElement | Window = scrollContainerRef?.current || window;
+    if (!scrollContainerRef?.current) {
+      let parent = container.parentElement;
+      while (parent) {
+        const overflowY = window.getComputedStyle(parent).overflowY;
+        if (overflowY === "auto" || overflowY === "scroll") {
+          scrollParent = parent;
+          break;
+        }
+        parent = parent.parentElement;
+      }
+    }
+
+    let frame = 0;
+    const updateActiveHeading = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        // ReactMarkdown may replace heading nodes after this effect is installed,
+        // so always read the live DOM instead of retaining a stale NodeList.
+        const headingElements = Array.from(container.querySelectorAll<HTMLElement>("[data-markdown-heading]"));
+        if (headingElements.length === 0) return;
+        const forcedActive = forcedActiveHeadingRef.current;
+        if (forcedActive) {
+          setActiveHeadingId(forcedActive);
+          return;
+        }
+        const top = (scrollParent instanceof Window ? 24 : scrollParent.getBoundingClientRect().top + 24) + 2;
+        let active = headingElements[0];
+        for (const heading of headingElements) {
+          if (heading.getBoundingClientRect().top <= top) active = heading;
+          else break;
+        }
+        setActiveHeadingId(active.id);
+      });
+    };
+    updateActiveHeading();
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(updateActiveHeading);
+    resizeObserver?.observe(container);
+    const resumeScrollTracking = () => {
+      forcedActiveHeadingRef.current = null;
+    };
+    scrollParent.addEventListener("wheel", resumeScrollTracking, { passive: true });
+    scrollParent.addEventListener("touchstart", resumeScrollTracking, { passive: true });
+    scrollParent.addEventListener("pointerdown", resumeScrollTracking, { passive: true });
+    scrollParent.addEventListener("scroll", updateActiveHeading, { passive: true });
+    window.addEventListener("resize", updateActiveHeading);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      resizeObserver?.disconnect();
+      scrollParent.removeEventListener("wheel", resumeScrollTracking);
+      scrollParent.removeEventListener("touchstart", resumeScrollTracking);
+      scrollParent.removeEventListener("pointerdown", resumeScrollTracking);
+      scrollParent.removeEventListener("scroll", updateActiveHeading);
+      window.removeEventListener("resize", updateActiveHeading);
+    };
+  }, [isVisible, outline, scrollContainerRef, showOutline]);
+
   const getSourceLineProps = (node: any): Record<string, string> => {
     const line = node?.position?.start?.line;
     if (!Number.isFinite(line)) return {};
     return { "data-source-line": String(line) };
   };
 
-  return (
-    <div
-      ref={containerRef}
-      className="markdown-viewer"
-      style={{
-        padding: "0", // 移除内层 padding，由 FileViewer 统一控制
-        color: "var(--text-primary)",
-        lineHeight: 1.75,
-        fontSize: "15px",
-      }}
-    >
-      <ReactMarkdown
+  const getHeadingProps = (node: any): Record<string, string> => {
+    const sourceProps = getSourceLineProps(node);
+    const sourceLine = Number.parseInt(sourceProps["data-source-line"] || "", 10);
+    const item = headingsByLine.get(sourceLine);
+    return item
+      ? { ...sourceProps, id: item.id, "data-markdown-heading": "true" }
+      : sourceProps;
+  };
+
+  const renderedMarkdown = useMemo(() => (
+    <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         remarkRehypeOptions={{ allowDangerousHtml: true }}
         rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema], rehypeKatex]}
         components={{
           h1: ({ node, ...props }: any) => (
-            <h1 style={{ fontSize: "24px", marginTop: 0 }} {...getSourceLineProps(node)} {...props} />
+            <h1 style={{ fontSize: "24px", marginTop: 0 }} {...getHeadingProps(node)} {...props} />
           ),
           h2: ({ node, ...props }: any) => (
-            <h2 style={{ fontSize: "20px" }} {...getSourceLineProps(node)} {...props} />
+            <h2 style={{ fontSize: "20px" }} {...getHeadingProps(node)} {...props} />
           ),
           h3: ({ node, ...props }: any) => (
-            <h3 style={{ fontSize: "17px", marginTop: "1.25em" }} {...getSourceLineProps(node)} {...props} />
+            <h3 style={{ fontSize: "17px", marginTop: "1.25em" }} {...getHeadingProps(node)} {...props} />
           ),
+          h4: ({ node, ...props }: any) => <h4 {...getHeadingProps(node)} {...props} />,
+          h5: ({ node, ...props }: any) => <h5 {...getHeadingProps(node)} {...props} />,
+          h6: ({ node, ...props }: any) => <h6 {...getHeadingProps(node)} {...props} />,
           p: ({ node, ...props }: any) => (
             <p style={{ margin: "0 0 1em", whiteSpace: "pre-wrap" }} {...getSourceLineProps(node)} {...props} />
           ),
@@ -844,7 +947,84 @@ function MarkdownViewerInner({
         }}
       >
         {normalizedContent}
-      </ReactMarkdown>
+    </ReactMarkdown>
+  ), [currentPath, headingsByLine, normalizedContent, onFileClick, root]);
+
+  const viewer = (
+    <div
+      ref={containerRef}
+      className="markdown-viewer"
+      style={{
+        padding: "0", // 移除内层 padding，由 FileViewer 统一控制
+        color: "var(--text-primary)",
+        lineHeight: 1.75,
+        fontSize: "15px",
+      }}
+    >
+      {renderedMarkdown}
+    </div>
+  );
+
+  if (!showOutline || outline.length === 0) return viewer;
+
+  return (
+    <div className={`markdown-document-layout${isOutlineCollapsed ? " is-outline-collapsed" : ""}${compactOutline ? " is-mobile-outline" : ""}`}>
+      {compactOutline && !isOutlineCollapsed && (
+        <button
+          type="button"
+          className="markdown-outline-backdrop"
+          aria-label={t("markdown.collapseOutline")}
+          onClick={() => setIsOutlineCollapsed(true)}
+        />
+      )}
+      <aside className={`markdown-outline${isOutlineCollapsed ? " is-collapsed" : ""}`} aria-label={t("markdown.outline")}>
+        <button
+          type="button"
+          className="markdown-outline-toggle"
+          aria-label={t(isOutlineCollapsed ? "markdown.expandOutline" : "markdown.collapseOutline")}
+          title={t(isOutlineCollapsed ? "markdown.expandOutline" : "markdown.collapseOutline")}
+          aria-expanded={!isOutlineCollapsed}
+          onClick={() => setIsOutlineCollapsed((collapsed) => !collapsed)}
+        >
+          {isOutlineCollapsed && (
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m10 3-5 5 5 5" /></svg>
+          )}
+          <span>{t("markdown.outline")}</span>
+          {!isOutlineCollapsed && (
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5" /></svg>
+          )}
+        </button>
+        <nav>
+          {outline.map((item) => (
+            <button
+              type="button"
+              key={item.id}
+              className={`markdown-outline-item${activeHeadingId === item.id ? " is-active" : ""}`}
+              style={{ "--outline-level": item.level } as React.CSSProperties}
+              title={item.title}
+              onClick={() => {
+                const heading = document.getElementById(item.id);
+                const scrollContainer = scrollContainerRef?.current;
+                forcedActiveHeadingRef.current = item.id;
+                if (heading && scrollContainer) {
+                  const nextScrollTop = scrollContainer.scrollTop
+                    + heading.getBoundingClientRect().top
+                    - scrollContainer.getBoundingClientRect().top
+                    - 24;
+                  scrollContainer.scrollTop = Math.max(0, nextScrollTop);
+                } else {
+                  heading?.scrollIntoView({ behavior: "auto", block: "start" });
+                }
+                setActiveHeadingId(item.id);
+                if (compactOutline) setIsOutlineCollapsed(true);
+              }}
+            >
+              {item.title}
+            </button>
+          ))}
+        </nav>
+      </aside>
+      {viewer}
     </div>
   );
 }
@@ -853,5 +1033,8 @@ export const MarkdownViewer = memo(MarkdownViewerInner, (prev, next) => (
   prev.content === next.content &&
   prev.currentPath === next.currentPath &&
   prev.root === next.root &&
-  prev.targetLine === next.targetLine
+  prev.targetLine === next.targetLine &&
+  prev.isVisible === next.isVisible &&
+  prev.compactOutline === next.compactOutline &&
+  prev.showOutline === next.showOutline
 ));
