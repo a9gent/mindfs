@@ -47,6 +47,11 @@ import {
 } from "./services/api";
 import { reportError } from "./services/error";
 import {
+  loadSendShortcut,
+  persistSendShortcut,
+  type SendShortcut,
+} from "./services/sendShortcut";
+import {
   fetchFile,
   clearFileCacheForRoot,
   getCachedFile,
@@ -1688,6 +1693,7 @@ export function App({ onGoHome }: AppProps) {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const { isMobile, isTablet } = useResponsive();
   const [mobileEnterKeySends, setMobileEnterKeySends] = useState(loadMobileEnterKeySends);
+  const [sendShortcut, setSendShortcut] = useState<SendShortcut | null>(loadSendShortcut);
   const [sidebarsSwapped, setSidebarsSwapped] = useState(loadSidebarsSwapped);
   const [gitDiffSideBySide, setGitDiffSideBySide] = useState(loadGitDiffSideBySide);
   const [isLeftOpen, setIsLeftOpen] = useState(() => window.innerWidth >= 768);
@@ -2342,6 +2348,10 @@ export function App({ onGoHome }: AppProps) {
       // Ignore storage failures; the setting can still apply for this session.
     }
   }, [mobileEnterKeySends]);
+
+  useEffect(() => {
+    persistSendShortcut(sendShortcut);
+  }, [sendShortcut]);
 
   useEffect(() => {
     return () => {
@@ -14437,6 +14447,9 @@ export function App({ onGoHome }: AppProps) {
             showEnterKeySendOption={isMobile}
             enterKeySends={mobileEnterKeySends}
             onEnterKeySendsChange={setMobileEnterKeySends}
+            showSendShortcutOption={!isMobile}
+            sendShortcut={sendShortcut}
+            onSendShortcutChange={setSendShortcut}
             sidebarsSwapped={sidebarsSwapped}
             onSidebarsSwappedChange={setSidebarsSwapped}
             gitDiffSideBySide={gitDiffSideBySide}
@@ -14540,6 +14553,7 @@ export function App({ onGoHome }: AppProps) {
               onUpdateQueuedMessage={handleUpdateQueuedMessage}
               onSendQueuedMessageNow={handleSendQueuedMessageNow}
               mobileEnterKeySends={mobileEnterKeySends}
+              sendShortcut={sendShortcut}
               onNewSession={handleNewSession}
               onRequestFileContext={handleRequestFileContext}
               onClearFileContext={handleClearFileContext}
