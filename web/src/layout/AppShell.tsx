@@ -14,6 +14,9 @@ type AppShellProps = {
   onOpenLeft?: () => void;
   onOpenRight?: () => void;
   sidebarsSwapped?: boolean;
+  fileSidebarFontScale?: number;
+  mainFontScale?: number;
+  sessionSidebarFontScale?: number;
 };
 
 const MOBILE_BREAKPOINT = 768;
@@ -97,6 +100,9 @@ export function AppShell({
   onOpenLeft,
   onOpenRight,
   sidebarsSwapped = false,
+  fileSidebarFontScale = 1,
+  mainFontScale = 1,
+  sessionSidebarFontScale = 1,
 }: AppShellProps) {
   const { t } = useI18n();
   const { isMobile, isTablet } = useResponsive();
@@ -116,6 +122,11 @@ export function AppShell({
   const physicalRightOpenHandler = sidebarsSwapped ? onOpenLeft : onOpenRight;
   const physicalLeftLabel = sidebarsSwapped ? t("sidebar.session") : t("sidebar.file");
   const physicalRightLabel = sidebarsSwapped ? t("sidebar.file") : t("sidebar.session");
+  const physicalLeftFontScale = sidebarsSwapped ? sessionSidebarFontScale : fileSidebarFontScale;
+  const physicalRightFontScale = sidebarsSwapped ? fileSidebarFontScale : sessionSidebarFontScale;
+  const fontScaleStyle = (scale: number): React.CSSProperties => ({
+    "--mindfs-font-scale": scale,
+  } as React.CSSProperties);
 
   const shellStyle: React.CSSProperties & {
     "--mindfs-actionbar-bottom-padding"?: string;
@@ -141,7 +152,7 @@ export function AppShell({
     boxSizing: "border-box",
     transition: "grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
     "--mindfs-actionbar-bottom-padding": "calc(var(--mindfs-safe-area-bottom) + 12px)",
-    "--mindfs-file-menu-width": isMobile ? "52.5vw" : (isTablet ? "140px" : "182px"),
+    "--mindfs-file-menu-width": isMobile ? "min(240px, calc(100vw - 16px))" : "220px",
   };
 
   const mobileSidebarStyle = (side: 'left' | 'right'): React.CSSProperties => ({
@@ -190,11 +201,14 @@ export function AppShell({
 
       {(!isMobile || physicalLeftOpen) && physicalLeftContent ? (
         <aside
+          className="mindfs-font-scale-region"
+          data-mindfs-font-scale-region="sidebar"
           style={
             isMobile
-              ? mobileSidebarStyle('left')
+              ? { ...mobileSidebarStyle('left'), ...fontScaleStyle(physicalLeftFontScale) }
               : {
                   ...sidebarStyle,
+                  ...fontScaleStyle(physicalLeftFontScale),
                   overflow: physicalLeftOpen ? "auto" : "hidden",
                   pointerEvents: physicalLeftOpen ? "auto" : "none",
                 }
@@ -205,15 +219,18 @@ export function AppShell({
       ) : null}
 
       <main
+        className="mindfs-font-scale-region"
+        data-mindfs-font-scale-region="main"
         style={
           isMobile
             ? {
                 ...mainStyle,
+                ...fontScaleStyle(mainFontScale),
                 flex: 1,
                 minHeight: 0,
                 minWidth: 0,
               }
-            : mainStyle
+            : { ...mainStyle, ...fontScaleStyle(mainFontScale) }
         }
       >
         {main}
@@ -223,11 +240,14 @@ export function AppShell({
 
       {(!isMobile || physicalRightOpen) && physicalRightContent ? (
         <aside
+          className="mindfs-font-scale-region"
+          data-mindfs-font-scale-region="sidebar"
           style={
             isMobile
-              ? mobileSidebarStyle('right')
+              ? { ...mobileSidebarStyle('right'), ...fontScaleStyle(physicalRightFontScale) }
               : {
                   ...rightStyle,
+                  ...fontScaleStyle(physicalRightFontScale),
                   overflow: physicalRightOpen ? "auto" : "hidden",
                   pointerEvents: physicalRightOpen ? "auto" : "none",
                 }
@@ -267,10 +287,12 @@ export function AppShell({
       ) : null}
 
       <footer
+        className="mindfs-font-scale-region"
+        data-mindfs-font-scale-region="main"
         style={
           isMobile
-            ? mobileFooterStyle
-            : footerStyle
+            ? { ...mobileFooterStyle, ...fontScaleStyle(mainFontScale) }
+            : { ...footerStyle, ...fontScaleStyle(mainFontScale) }
         }
       >
         {footer}

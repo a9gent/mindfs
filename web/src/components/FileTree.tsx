@@ -60,6 +60,13 @@ import {
   shortcutFromKeyboardEvent,
   type SendShortcut,
 } from "../services/sendShortcut";
+import {
+  changeFontSize,
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
+  type FontSizePreferences,
+  type FontSizeRegion,
+} from "../services/fontSize";
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -188,6 +195,8 @@ type FileTreeProps = {
   onGitDiffSideBySideChange?: (enabled: boolean) => void;
   multiProjectSessionsEnabled?: boolean;
   onMultiProjectSessionsChange?: (enabled: boolean) => void;
+  fontSizePreferences?: FontSizePreferences;
+  onFontSizePreferencesChange?: (preferences: FontSizePreferences) => void;
   onRunAgentLifecycleCommand?: (agentName: string, action: AgentLifecycleCommandAction, commands: string[]) => void | Promise<void>;
   onRestartAgent?: (agentName: string) => void | Promise<void>;
   onGoHome?: () => void;
@@ -224,6 +233,21 @@ const fileTreeMenuButtonStyle: React.CSSProperties = {
   textAlign: "left",
   cursor: "pointer",
   fontSize: "12px",
+};
+
+const fontSizeAdjustButtonStyle: React.CSSProperties = {
+  width: "26px",
+  height: "26px",
+  padding: 0,
+  border: "none",
+  background: "transparent",
+  color: "var(--text-primary)",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  cursor: "pointer",
+  fontSize: "16px",
+  lineHeight: 1,
 };
 
 function NotificationIcon() {
@@ -1381,6 +1405,8 @@ export function FileTree({
   onGitDiffSideBySideChange,
   multiProjectSessionsEnabled = false,
   onMultiProjectSessionsChange,
+  fontSizePreferences = { fileSidebar: 1, main: 1, sessionSidebar: 1 },
+  onFontSizePreferencesChange,
   onRunAgentLifecycleCommand,
   onRestartAgent,
   onGoHome,
@@ -1415,6 +1441,7 @@ export function FileTree({
     handleClick: handleRefreshClick,
   } = useRefreshSpin(handleTabRefresh);
   const [isAppearanceMenuOpen, setIsAppearanceMenuOpen] = React.useState(false);
+  const [isFontSizeMenuOpen, setIsFontSizeMenuOpen] = React.useState(false);
   const [isLocaleMenuOpen, setIsLocaleMenuOpen] = React.useState(false);
   const [isSortMenuOpen, setIsSortMenuOpen] = React.useState(false);
   const [sessionNamingOpen, setSessionNamingOpen] = React.useState(false);
@@ -2432,6 +2459,12 @@ export function FileTree({
     return hiddenFiltered.filter((entry) => !!rootId && entry.path === rootId);
   }, [projectTreeTab, rootId, showHiddenFiles]);
 
+  const fontSizeRows: Array<{ region: FontSizeRegion; labelKey: MessageKey }> = [
+    { region: "fileSidebar", labelKey: "fileTree.fontSizeFileSidebar" },
+    { region: "main", labelKey: "fileTree.fontSizeMain" },
+    { region: "sessionSidebar", labelKey: "fileTree.fontSizeSessionSidebar" },
+  ];
+
   const renderEntries = (items: FileEntry[], depth: number, branchRoot: string) => (
     <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
       {depth === 0 && creatingRootName !== null ? (
@@ -2812,6 +2845,7 @@ export function FileTree({
                 const nextOpen = !open;
                 if (nextOpen) {
                   setIsAppearanceMenuOpen(false);
+                  setIsFontSizeMenuOpen(false);
                   setIsLocaleMenuOpen(false);
                   setIsSortMenuOpen(false);
                   setSendShortcutOpen(false);
@@ -2978,6 +3012,7 @@ export function FileTree({
                   type="button"
                   onClick={() => {
                     setIsAppearanceMenuOpen((open) => !open);
+                    setIsFontSizeMenuOpen(false);
                     setIsLocaleMenuOpen(false);
                     setIsSortMenuOpen(false);
                   }}
@@ -3040,8 +3075,94 @@ export function FileTree({
                 <button
                   type="button"
                   onClick={() => {
+                    setIsFontSizeMenuOpen((open) => !open);
+                    setIsAppearanceMenuOpen(false);
+                    setIsLocaleMenuOpen(false);
+                    setIsSortMenuOpen(false);
+                  }}
+                  style={fileTreeMenuButtonStyle}
+                  aria-expanded={isFontSizeMenuOpen}
+                >
+                  <span style={{ flex: 1 }}>{t("fileTree.fontSize")}</span>
+                  <span style={{ color: "var(--text-secondary)", fontSize: "11px" }}>
+                    {t("fileTree.fontSizeByRegion")}
+                  </span>
+                  <ChevronRight isOpen={isFontSizeMenuOpen} />
+                </button>
+                {isFontSizeMenuOpen ? (
+                  <div style={{ padding: "2px 6px 6px", display: "flex", flexDirection: "column", gap: "3px" }}>
+                    {fontSizeRows.map(({ region, labelKey }) => {
+                      const label = t(labelKey);
+                      const scale = fontSizePreferences[region];
+                      return (
+                        <div
+                          key={region}
+                          style={{
+                            minHeight: "30px",
+                            padding: "0 4px",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            color: "var(--text-primary)",
+                            fontSize: "12px",
+                          }}
+                        >
+                          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }} title={label}>
+                            {label}
+                          </span>
+                          <div
+                            style={{
+                              flexShrink: 0,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "7px",
+                              overflow: "hidden",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              className="mindfs-font-size-adjust"
+                              disabled={scale <= FONT_SIZE_MIN}
+                              aria-label={t("fileTree.fontSizeDecrease", { region: label })}
+                              onClick={() => onFontSizePreferencesChange?.(changeFontSize(fontSizePreferences, region, -1))}
+                              style={fontSizeAdjustButtonStyle}
+                            >
+                              −
+                            </button>
+                            <span
+                              style={{
+                                width: "42px",
+                                textAlign: "center",
+                                color: "var(--text-secondary)",
+                                fontSize: "11px",
+                                fontVariantNumeric: "tabular-nums",
+                              }}
+                            >
+                              {Math.round(scale * 100)}%
+                            </span>
+                            <button
+                              type="button"
+                              className="mindfs-font-size-adjust"
+                              disabled={scale >= FONT_SIZE_MAX}
+                              aria-label={t("fileTree.fontSizeIncrease", { region: label })}
+                              onClick={() => onFontSizePreferencesChange?.(changeFontSize(fontSizePreferences, region, 1))}
+                              style={fontSizeAdjustButtonStyle}
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
                     setIsLocaleMenuOpen((open) => !open);
                     setIsAppearanceMenuOpen(false);
+                    setIsFontSizeMenuOpen(false);
                     setIsSortMenuOpen(false);
                   }}
                   style={{
@@ -3105,6 +3226,7 @@ export function FileTree({
                   onClick={() => {
                     setIsSortMenuOpen((open) => !open);
                     setIsAppearanceMenuOpen(false);
+                    setIsFontSizeMenuOpen(false);
                     setIsLocaleMenuOpen(false);
                   }}
                   style={{

@@ -53,6 +53,40 @@
   --root-badge-text: #4f46e5;
 }
 
+/* Region font preferences preserve the existing type hierarchy while scaling text only. */
+.mindfs-font-scale-region {
+  font-size: calc(16px * var(--mindfs-font-scale, 1));
+}
+
+.mindfs-font-scale-region [style*="font-size: 7px"] { font-size: calc(7px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 8px"] { font-size: calc(8px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 9px"] { font-size: calc(9px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 10px"] { font-size: calc(10px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 11px"] { font-size: calc(11px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 12px"] { font-size: calc(12px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 13px"] { font-size: calc(13px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 14px"] { font-size: calc(14px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 15px"] { font-size: calc(15px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 16px"] { font-size: calc(16px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 17px"] { font-size: calc(17px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 18px"] { font-size: calc(18px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 20px"] { font-size: calc(20px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 22px"] { font-size: calc(22px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 24px"] { font-size: calc(24px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 28px"] { font-size: calc(28px * var(--mindfs-font-scale, 1)) !important; }
+.mindfs-font-scale-region [style*="font-size: 32px"] { font-size: calc(32px * var(--mindfs-font-scale, 1)) !important; }
+
+.mindfs-font-scale-region .markdown-outline-toggle,
+.mindfs-font-scale-region .markdown-outline-item,
+.mindfs-font-scale-region .mindfs-git-branch-wrap[data-branch-tooltip]::after {
+  font-size: calc(12px * var(--mindfs-font-scale, 1));
+}
+
+.mindfs-font-size-adjust:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 @keyframes mindfs-task-ask-user-pulse {
   0%, 100% {
     opacity: 1;
