@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -69,6 +70,29 @@ type agentAPIProviderSwitchRequest struct {
 	ProviderID string `json:"provider_id"`
 }
 
+type agentAPIProviderSyncAllResult struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Success    bool   `json:"success"`
+	Error      string `json:"error,omitempty"`
+	ModelCount int    `json:"modelCount,omitempty"`
+}
+
+type agentAPIProviderTestRequest struct {
+	ProviderID string `json:"provider_id"`
+	Model      string `json:"model"`
+	Prompt     string `json:"prompt,omitempty"`
+}
+
+type agentAPIProviderTestResult struct {
+	Success   bool   `json:"success"`
+	LatencyMS int64  `json:"latency_ms"`
+	Model     string `json:"model"`
+	Protocol  string `json:"protocol,omitempty"`
+	Response  string `json:"response,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
 type agentAPIProviderProbeResult struct {
 	Protocols     []string
 	Models        []string
@@ -126,6 +150,33 @@ func (h *HTTPHandler) handleAgentAPIProvidersSync(w http.ResponseWriter, r *http
 		out = append(out, publicAgentAPIProvider(provider))
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"providers": out})
+}
+
+func (h *HTTPHandler) handleAgentAPIProvidersSyncAll(w http.ResponseWriter, r *http.Request) {
+	providers, results, err := syncAllAgentAPIProviders(r.Context())
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	out := make([]agentAPIProviderPublic, 0, len(providers))
+	for _, provider := range providers {
+		out = append(out, publicAgentAPIProvider(provider))
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"providers": out, "results": results})
+}
+
+func (h *HTTPHandler) handleAgentAPIProviderTest(w http.ResponseWriter, r *http.Request) {
+	var req agentAPIProviderTestRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
+		return
+	}
+	result, err := testAgentAPIProviderModel(r.Context(), req)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
 }
 
 func (h *HTTPHandler) handleAgentAPIProviderDelete(w http.ResponseWriter, r *http.Request) {
@@ -304,6 +355,329 @@ func providerIDExists(providers []agentAPIProvider, id string) bool {
 		}
 	}
 	return false
+}
+
+// syncAllAgentAPIProviders 一键同步：使用已保存的 API Key 逐个重新拉取模型目录。
+// 单个供应商同步失败时保留旧模型列表并记录错误，不影响其他供应商。
+func syncAllAgentAPIProviders(ctx context.Context) ([]agentAPIProvider, []agentAPIProviderSyncAllResult, error) {
+	providers, err := readAgentAPIProviders()
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(providers) == 0 {
+		return providers, nil, nil
+	}
+	results := make([]agentAPIProviderSyncAllResult, 0, len(providers))
+	changed := false
+	now := time.Now().Format(time.RFC3339)
+	for index := range providers {
+		provider := providers[index]
+		probe, err := probeAgentAPIProvider(ctx, provider.BaseURL, provider.APIKey)
+		if err != nil {
+			results = append(results, agentAPIProviderSyncAllResult{
+				ID:         provider.ID,
+				Name:       provider.Name,
+				Success:    false,
+				Error:      sanitizeAPIProviderError(err.Error()),
+				ModelCount: len(provider.Models),
+			})
+			continue
+		}
+		provider.Protocols = probe.Protocols
+		provider.ModelFamilies = probe.ModelFamilies
+		provider.Models = probe.Models
+		provider.UpdatedAt = now
+		providers[index] = provider
+		changed = true
+		results = append(results, agentAPIProviderSyncAllResult{
+			ID:         provider.ID,
+			Name:       provider.Name,
+			Success:    true,
+			ModelCount: len(provider.Models),
+		})
+	}
+	if changed {
+		if err := writeAgentAPIProviders(providers); err != nil {
+			return nil, nil, err
+		}
+	}
+	return providers, results, nil
+}
+
+// testAgentAPIProviderModel 对单个模型发送最小测试请求，返回延迟、错误与简短响应。
+func testAgentAPIProviderModel(ctx context.Context, req agentAPIProviderTestRequest) (agentAPIProviderTestResult, error) {
+	providerID := strings.TrimSpace(req.ProviderID)
+	if providerID == "" {
+		return agentAPIProviderTestResult{}, errors.New("provider id required")
+	}
+	providers, err := readAgentAPIProviders()
+	if err != nil {
+		return agentAPIProviderTestResult{}, err
+	}
+	var target *agentAPIProvider
+	for index := range providers {
+		if providers[index].ID == providerID {
+			target = &providers[index]
+			break
+		}
+	}
+	if target == nil {
+		return agentAPIProviderTestResult{}, errors.New("provider not found")
+	}
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = firstModelOrDefault(target.Models, "")
+	}
+	if model == "" {
+		return agentAPIProviderTestResult{}, errors.New("provider has no models to test")
+	}
+	chosen := apiProviderProtocolForTest(target)
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt == "" {
+		prompt = "Reply with the single word: OK"
+	}
+	start := time.Now()
+	response, err := runAPIProviderModelTest(ctx, chosen, target.BaseURL, target.APIKey, model, prompt)
+	latency := time.Since(start).Milliseconds()
+	result := agentAPIProviderTestResult{
+		Success:   err == nil,
+		LatencyMS: latency,
+		Model:     model,
+		Protocol:  chosen,
+	}
+	if err != nil {
+		result.Error = sanitizeAPIProviderError(err.Error())
+		return result, nil
+	}
+	result.Response = truncateAPIProviderResponse(response)
+	return result, nil
+}
+
+func apiProviderProtocolForTest(provider *agentAPIProvider) string {
+	if protocol := agentAPIProviderActiveProtocol(*provider); protocol != "" {
+		return protocol
+	}
+	if len(provider.Protocols) > 0 {
+		return provider.Protocols[0]
+	}
+	return apiProviderProtocolOpenAICompatible
+}
+
+func runAPIProviderModelTest(ctx context.Context, protocol, baseURL, apiKey, model, prompt string) (string, error) {
+	switch protocol {
+	case apiProviderProtocolAnthropicCompatible:
+		return testAnthropicCompatibleModel(ctx, baseURL, apiKey, model, prompt)
+	case apiProviderProtocolGeminiCompatible:
+		return testGeminiCompatibleModel(ctx, baseURL, apiKey, model, prompt)
+	default:
+		return testOpenAICompatibleModel(ctx, baseURL, apiKey, model, prompt)
+	}
+}
+
+const apiProviderTestTimeout = 30 * time.Second
+const apiProviderTestMaxTokens = 32
+
+func sanitizeAPIProviderError(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return "unknown error"
+	}
+	if len(message) > 400 {
+		message = message[:400] + "..."
+	}
+	return message
+}
+
+func truncateAPIProviderResponse(response string) string {
+	response = strings.TrimSpace(response)
+	if len(response) > 200 {
+		response = response[:200] + "..."
+	}
+	return response
+}
+
+func testOpenAICompatibleModel(ctx context.Context, baseURL, apiKey, model, prompt string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, apiProviderTestTimeout)
+	defer cancel()
+	body := map[string]any{
+		"model":      model,
+		"max_tokens": apiProviderTestMaxTokens,
+		"messages":   []map[string]string{{"role": "user", "content": prompt}},
+	}
+	data, err := postAPIProviderJSON(ctx, openAIChatURL(baseURL), body, map[string]string{
+		"Authorization": "Bearer " + apiKey,
+	})
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", fmt.Errorf("invalid response: %w", err)
+	}
+	if payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
+		return "", errors.New(strings.TrimSpace(payload.Error.Message))
+	}
+	if len(payload.Choices) == 0 {
+		return "", errors.New("empty response")
+	}
+	return payload.Choices[0].Message.Content, nil
+}
+
+func testAnthropicCompatibleModel(ctx context.Context, baseURL, apiKey, model, prompt string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, apiProviderTestTimeout)
+	defer cancel()
+	body := map[string]any{
+		"model":      model,
+		"max_tokens": apiProviderTestMaxTokens,
+		"messages":   []map[string]string{{"role": "user", "content": prompt}},
+	}
+	headers := map[string]string{
+		"x-api-key":         apiKey,
+		"anthropic-version": "2023-06-01",
+	}
+	data, err := postAPIProviderJSON(ctx, anthropicMessagesURL(baseURL), body, headers)
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", fmt.Errorf("invalid response: %w", err)
+	}
+	if payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
+		return "", errors.New(strings.TrimSpace(payload.Error.Message))
+	}
+	parts := make([]string, 0, len(payload.Content))
+	for _, block := range payload.Content {
+		if text := strings.TrimSpace(block.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	if len(parts) == 0 {
+		return "", errors.New("empty response")
+	}
+	return strings.Join(parts, "\n"), nil
+}
+
+func testGeminiCompatibleModel(ctx context.Context, baseURL, apiKey, model, prompt string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, apiProviderTestTimeout)
+	defer cancel()
+	body := map[string]any{
+		"contents": []map[string]any{{
+			"role":  "user",
+			"parts": []map[string]string{{"text": prompt}},
+		}},
+		"generationConfig": map[string]any{
+			"maxOutputTokens": apiProviderTestMaxTokens,
+		},
+	}
+	endpoint, err := url.Parse(geminiGenerateURL(baseURL, model))
+	if err != nil {
+		return "", err
+	}
+	q := endpoint.Query()
+	q.Set("key", apiKey)
+	endpoint.RawQuery = q.Encode()
+	data, err := postAPIProviderJSON(ctx, endpoint.String(), body)
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", fmt.Errorf("invalid response: %w", err)
+	}
+	if payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
+		return "", errors.New(strings.TrimSpace(payload.Error.Message))
+	}
+	parts := make([]string, 0)
+	for _, candidate := range payload.Candidates {
+		for _, part := range candidate.Content.Parts {
+			if text := strings.TrimSpace(part.Text); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return "", errors.New("empty response")
+	}
+	return strings.Join(parts, "\n"), nil
+}
+
+func openAIChatURL(baseURL string) string {
+	return strings.TrimRight(baseURL, "/") + "/chat/completions"
+}
+
+func anthropicMessagesURL(baseURL string) string {
+	base := strings.TrimRight(baseURL, "/")
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/messages"
+	}
+	return base + "/v1/messages"
+}
+
+func geminiGenerateURL(baseURL, model string) string {
+	base := strings.TrimRight(baseURL, "/")
+	if strings.HasSuffix(base, "/v1beta") || strings.HasSuffix(base, "/v1") {
+		return base + "/models/" + model + ":generateContent"
+	}
+	return base + "/v1beta/models/" + model + ":generateContent"
+}
+
+func postAPIProviderJSON(ctx context.Context, endpoint string, body map[string]any, extraHeaders ...map[string]string) ([]byte, error) {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for _, headers := range extraHeaders {
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+	}
+	client := &http.Client{Timeout: apiProviderTestTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status %d %s", resp.StatusCode, sanitizeAPIProviderError(string(data)))
+	}
+	return data, nil
 }
 
 func deleteAgentAPIProvider(id string) ([]agentAPIProvider, error) {

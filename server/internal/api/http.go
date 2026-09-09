@@ -387,6 +387,8 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/agent-api-providers", h.protectedEndpoint(h.handleAgentAPIProvidersList))
 	r.Post("/api/agent-api-providers", h.protectedEndpoint(h.handleAgentAPIProviderCreate))
 	r.Post("/api/agent-api-providers/sync", h.protectedEndpoint(h.handleAgentAPIProvidersSync))
+	r.Post("/api/agent-api-providers/sync-all", h.protectedEndpoint(h.handleAgentAPIProvidersSyncAll))
+	r.Post("/api/agent-api-providers/test", h.protectedEndpoint(h.handleAgentAPIProviderTest))
 	r.Delete("/api/agent-api-providers", h.protectedEndpoint(h.handleAgentAPIProviderDelete))
 	r.Post("/api/agent-api-providers/switch", h.protectedEndpoint(h.handleAgentAPIProviderSwitch))
 	r.NotFound(h.handleNotFound)
