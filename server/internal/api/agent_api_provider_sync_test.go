@@ -7,7 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+
+	"mindfs/server/internal/preferences"
 )
 
 func writeAPIProvidersFile(t *testing.T, providers []agentAPIProvider) {
@@ -95,7 +98,7 @@ func TestSyncAllAgentAPIProvidersKeepsModelsOnFailure(t *testing.T) {
 		{ID: "api-bad", Name: "bad", BaseURL: upstream.URL + "/down", APIKey: "k2", Models: []string{"keep-me"}, ModelFamilies: []string{"fam"}},
 	})
 
-	providers, results, err := syncAllAgentAPIProviders(context.Background())
+	providers, results, err := syncAllAgentAPIProviders(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("syncAllAgentAPIProviders: %v", err)
 	}
@@ -144,6 +147,86 @@ func TestAPIProviderTestURLHelpers(t *testing.T) {
 	if got := geminiGenerateURL("https://api.example.com/v1beta", "m1"); got != "https://api.example.com/v1beta/models/m1:generateContent" {
 		t.Fatalf("geminiGenerateURL: %s", got)
 	}
+}
+
+func TestSyncAllAgentAPIProvidersReappliesToAgents(t *testing.T) {
+	var mu sync.Mutex
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path != "/v1/models" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{"id": "fresh-model-a"}, {"id": "fresh-model-b"}},
+		})
+	}))
+	defer upstream.Close()
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+	writeAPIProvidersFile(t, []agentAPIProvider{
+		{ID: "api-pi", Name: "9779", BaseURL: upstream.URL + "/v1", APIKey: "secret", Protocols: []string{apiProviderProtocolOpenAICompatible}, Models: []string{"stale"}},
+	})
+
+	// 预置偏好：pi 上次手动应用了供应商 api-pi，codex 关联的是其它供应商。
+	store, err := preferences.NewStore()
+	if err != nil {
+		t.Fatalf("preferences.NewStore: %v", err)
+	}
+	if err := store.UpdateAgentLastConfigSelection("pi", preferences.LastConfigSelection{Type: "api_provider", ID: "api-pi", Name: "9779"}); err != nil {
+		t.Fatalf("UpdateAgentLastConfigSelection(pi): %v", err)
+	}
+	if err := store.UpdateAgentLastConfigSelection("codex", preferences.LastConfigSelection{Type: "api_provider", ID: "api-other", Name: "other"}); err != nil {
+		t.Fatalf("UpdateAgentLastConfigSelection(codex): %v", err)
+	}
+
+	providers, results, err := syncAllAgentAPIProviders(context.Background(), store)
+	if err != nil {
+		t.Fatalf("syncAllAgentAPIProviders: %v", err)
+	}
+	if len(results) != 1 || !results[0].Success {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if len(results[0].Applied) != 1 {
+		t.Fatalf("expected only pi to be re-applied, got %+v", results[0].Applied)
+	}
+	applied := results[0].Applied[0]
+	if applied.Agent != "pi" || !applied.Success {
+		t.Fatalf("unexpected apply result: %+v", applied)
+	}
+
+	// pi 的 models.json 应写入最新模型列表。
+	payload, err := os.ReadFile(filepath.Join(tmpHome, ".pi", "agent", "models.json"))
+	if err != nil {
+		t.Fatalf("read pi models.json: %v", err)
+	}
+	var piCfg struct {
+		Providers map[string]struct {
+			Models []struct {
+				ID string `json:"id"`
+			} `json:"models"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(payload, &piCfg); err != nil {
+		t.Fatalf("unmarshal pi models.json: %v", err)
+	}
+	piProvider, ok := piCfg.Providers["9779"]
+	if !ok {
+		t.Fatalf("provider 9779 missing in pi models.json: %s", payload)
+	}
+	if len(piProvider.Models) != 2 || piProvider.Models[0].ID != "fresh-model-a" {
+		t.Fatalf("pi models not updated, got %+v", piProvider.Models)
+	}
+
+	// codex 关联其它供应商，不应被写入（其配置文件不应被创建）。
+	if _, err := os.Stat(filepath.Join(tmpHome, ".codex", "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("codex config should not be touched, err=%v", err)
+	}
+	_ = providers
 }
 
 func TestTruncateAndSanitizeAPIProviderStrings(t *testing.T) {

@@ -70,12 +70,19 @@ type agentAPIProviderSwitchRequest struct {
 	ProviderID string `json:"provider_id"`
 }
 
+type agentAPIProviderSyncAgentResult struct {
+	Agent   string `json:"agent"`
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
 type agentAPIProviderSyncAllResult struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Success    bool   `json:"success"`
-	Error      string `json:"error,omitempty"`
-	ModelCount int    `json:"modelCount,omitempty"`
+	ID         string                            `json:"id"`
+	Name       string                            `json:"name"`
+	Success    bool                              `json:"success"`
+	Error      string                            `json:"error,omitempty"`
+	ModelCount int                               `json:"modelCount,omitempty"`
+	Applied    []agentAPIProviderSyncAgentResult `json:"applied,omitempty"`
 }
 
 type agentAPIProviderTestRequest struct {
@@ -153,7 +160,7 @@ func (h *HTTPHandler) handleAgentAPIProvidersSync(w http.ResponseWriter, r *http
 }
 
 func (h *HTTPHandler) handleAgentAPIProvidersSyncAll(w http.ResponseWriter, r *http.Request) {
-	providers, results, err := syncAllAgentAPIProviders(r.Context())
+	providers, results, err := syncAllAgentAPIProviders(r.Context(), h.AppContext.GetPreferences())
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err)
 		return
@@ -359,7 +366,7 @@ func providerIDExists(providers []agentAPIProvider, id string) bool {
 
 // syncAllAgentAPIProviders 一键同步：使用已保存的 API Key 逐个重新拉取模型目录。
 // 单个供应商同步失败时保留旧模型列表并记录错误，不影响其他供应商。
-func syncAllAgentAPIProviders(ctx context.Context) ([]agentAPIProvider, []agentAPIProviderSyncAllResult, error) {
+func syncAllAgentAPIProviders(ctx context.Context, prefs *preferences.Store) ([]agentAPIProvider, []agentAPIProviderSyncAllResult, error) {
 	providers, err := readAgentAPIProviders()
 	if err != nil {
 		return nil, nil, err
@@ -394,6 +401,7 @@ func syncAllAgentAPIProviders(ctx context.Context) ([]agentAPIProvider, []agentA
 			Name:       provider.Name,
 			Success:    true,
 			ModelCount: len(provider.Models),
+			Applied:    reapplySyncedProvider(prefs, provider),
 		})
 	}
 	if changed {
@@ -402,6 +410,41 @@ func syncAllAgentAPIProviders(ctx context.Context) ([]agentAPIProvider, []agentA
 		}
 	}
 	return providers, results, nil
+}
+
+// reapplySyncedProvider 在一键同步成功后，把最新模型列表静默写入所有上次
+// 手动应用过该供应商的 Agent 配置；不重启任何 Agent 进程，改动在 Agent
+// 下次启动时生效。失败只记录在结果里，不影响其它 Agent。
+func reapplySyncedProvider(prefs *preferences.Store, provider agentAPIProvider) []agentAPIProviderSyncAgentResult {
+	if prefs == nil {
+		return nil
+	}
+	selections := prefs.AgentLastConfigSelections()
+	if len(selections) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(selections))
+	for name := range selections {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	results := make([]agentAPIProviderSyncAgentResult, 0)
+	for _, name := range names {
+		selection := selections[name]
+		if selection.Type != "api_provider" || selection.ID != provider.ID {
+			continue
+		}
+		err := applyAgentAPIProvider(name, provider, nil)
+		result := agentAPIProviderSyncAgentResult{Agent: name, Success: err == nil}
+		if err != nil {
+			result.Error = sanitizeAPIProviderError(err.Error())
+		}
+		results = append(results, result)
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	return results
 }
 
 // testAgentAPIProviderModel 对单个模型发送最小测试请求，返回延迟、错误与简短响应。

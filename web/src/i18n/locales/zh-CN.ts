@@ -164,6 +164,8 @@ export const zhCN = {
   "agentConfig.syncingProviders": "同步中...",
   "agentConfig.syncAllProvidersHint": "使用已保存的密钥重新拉取全部供应商的模型列表",
   "agentConfig.syncProvidersResult": "同步完成：成功 {success} 个，失败 {failed} 个",
+  "agentConfig.syncApplySuccess": "已重新应用模型到 {agent}，Agent 下次启动时生效",
+  "agentConfig.syncApplyFailed": "应用到 {agent} 失败：{error}",
   "agentConfig.syncProvidersEmpty": "暂无已保存的供应商",
   "agentConfig.syncProvidersFailed": "同步模型失败，已保留原有模型列表",
   "agentConfig.testModel": "测试模型 {name}",

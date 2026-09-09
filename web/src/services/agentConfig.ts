@@ -125,12 +125,19 @@ export async function syncAgentAPIProviders(input: Array<{
   });
 }
 
+export type AgentAPIProviderSyncApplyResult = {
+  agent: string;
+  success: boolean;
+  error?: string;
+};
+
 export type AgentAPIProviderSyncAllResult = {
   id: string;
   name: string;
   success: boolean;
   error?: string;
   modelCount?: number;
+  applied?: AgentAPIProviderSyncApplyResult[];
 };
 
 export async function syncAllAgentAPIProviders(): Promise<{

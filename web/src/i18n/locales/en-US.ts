@@ -166,6 +166,8 @@ export const enUS = {
   "agentConfig.syncingProviders": "Syncing...",
   "agentConfig.syncAllProvidersHint": "Refresh model catalogs for all saved providers using stored keys",
   "agentConfig.syncProvidersResult": "Sync finished: {success} succeeded, {failed} failed",
+  "agentConfig.syncApplySuccess": "Re-applied models to {agent}; takes effect on next agent start",
+  "agentConfig.syncApplyFailed": "Failed to apply to {agent}: {error}",
   "agentConfig.syncProvidersEmpty": "No saved providers yet",
   "agentConfig.syncProvidersFailed": "Failed to sync models; existing model lists were kept",
   "agentConfig.testModel": "Test model {name}",

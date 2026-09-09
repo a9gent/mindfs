@@ -2545,14 +2545,30 @@ export function FileTree({
         success: succeeded.length,
         failed: failed.length,
       });
+      const sections = [summary];
       if (failed.length > 0) {
         const detail = failed
           .map((item) => `${item.name}: ${item.error || ""}`.trim())
           .join("\n");
-        setAgentConfigNotice(`${summary}\n${detail}`);
-      } else {
-        setAgentConfigNotice(summary);
+        sections.push(detail);
       }
+      const appliedLines: string[] = [];
+      for (const item of results) {
+        for (const applied of item.applied || []) {
+          appliedLines.push(
+            applied.success
+              ? t("agentConfig.syncApplySuccess", { agent: applied.agent })
+              : t("agentConfig.syncApplyFailed", {
+                  agent: applied.agent,
+                  error: applied.error || "",
+                }),
+          );
+        }
+      }
+      if (appliedLines.length > 0) {
+        sections.push(appliedLines.join("\n"));
+      }
+      setAgentConfigNotice(sections.join("\n"));
     } catch (error) {
       // 同步失败时后端保留旧模型列表，这里提示错误即可。
       setAgentConfigError(error instanceof Error ? error.message : t("agentConfig.syncProvidersFailed"));
