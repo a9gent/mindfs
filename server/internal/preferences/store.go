@@ -209,6 +209,24 @@ func (s *Store) UpdateAgentLastConfigSelection(agentName string, selection LastC
 	return s.saveLocked()
 }
 
+// AgentLastConfigSelections returns a snapshot of every agent's last manual
+// config selection keyed by agent name. Callers must treat the result as
+// read-only.
+func (s *Store) AgentLastConfigSelections() map[string]LastConfigSelection {
+	out := map[string]LastConfigSelection{}
+	if s == nil {
+		return out
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for name, defaults := range s.data.Agents {
+		if defaults.LastConfigSelection != nil {
+			out[strings.TrimSpace(name)] = *defaults.LastConfigSelection
+		}
+	}
+	return out
+}
+
 func (s *Store) SessionNamingDefaults() SessionNamingDefaults {
 	if s == nil {
 		return SessionNamingDefaults{}

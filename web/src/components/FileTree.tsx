@@ -17,7 +17,7 @@ import {
   setAppearanceMode,
   type AppearanceMode,
 } from "../services/appearance";
-import { useI18n, type Locale, type MessageKey } from "../i18n";
+import { useI18n, type I18nContextValue, type Locale, type MessageKey } from "../i18n";
 import { useRefreshSpin } from "../hooks";
 import { AgentMenuList } from "./AgentMenuList";
 import { AgentIcon } from "./AgentIcon";
@@ -33,9 +33,13 @@ import {
   fetchAgentAPIProviders,
   fetchAgentConfigBackups,
   fetchAgentConfigDefaults,
+  invalidateAgentAPIProvidersCache,
   switchAgentAPIProvider,
   switchAgentConfig,
+  syncAllAgentAPIProviders,
+  testAgentAPIProviderModel,
   type AgentAPIProvider,
+  type AgentAPIProviderTestResult,
   type AgentConfigBackup,
 } from "../services/agentConfig";
 import {
@@ -209,6 +213,19 @@ type AgentConfigAddTab = "backup" | "api";
 type AgentConfigSwitchTab = "backup" | "api_provider";
 type AgentConfigSwitchSelection = { type: "backup" | "api_provider"; id: string };
 type AgentLifecycleCommandAction = "install" | "update";
+
+/** 把单模型测试结果格式化成一行简短文案（成功/延迟/错误/简短响应）。 */
+function formatProviderTestResult(
+  result: AgentAPIProviderTestResult,
+  t: I18nContextValue["t"],
+): string {
+  const latency = t("agentConfig.testModelLatency", { ms: result.latency_ms });
+  if (result.success) {
+    const response = result.response ? ` ${result.response}` : "";
+    return `✓ ${latency}${response}`;
+  }
+  return `✗ ${latency} ${result.error || t("agentConfig.testModelFailed")}`;
+}
 
 function isAgentConfigBackupConflict(error: unknown): boolean {
   const maybeError = error as { status?: unknown; message?: unknown; payload?: { error?: unknown; message?: unknown } } | null;
@@ -659,6 +676,14 @@ function AgentConfigPopover({
   busy,
   restartingAgent,
   error,
+  notice,
+  providerSyncBusy,
+  providerTestBusyID,
+  providerTestResults,
+  onSyncAllProviders,
+  onTestProviderModel,
+  onProviderTestModelChange,
+  providerTestModels,
   onChooseAgent,
   onAddTabChange,
   onSwitchTabChange,
@@ -698,6 +723,14 @@ function AgentConfigPopover({
   busy: boolean;
   restartingAgent: string;
   error: string;
+  notice: string;
+  providerSyncBusy: boolean;
+  providerTestBusyID: string;
+  providerTestResults: Record<string, string>;
+  onSyncAllProviders: () => void;
+  onTestProviderModel: (providerID: string, model: string) => void;
+  onProviderTestModelChange: (providerID: string, model: string) => void;
+  providerTestModels: Record<string, string>;
   onChooseAgent: (name: string) => void;
   onAddTabChange: (tab: AgentConfigAddTab) => void;
   onSwitchTabChange: (tab: AgentConfigSwitchTab) => void;
@@ -968,6 +1001,30 @@ function AgentConfigPopover({
               })}
             </div>
           ) : null}
+          {effectiveSwitchTab === "api_provider" ? (
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <button
+                type="button"
+                disabled={busy || providerSyncBusy || apiProviders.length === 0}
+                onClick={onSyncAllProviders}
+                style={{
+                  border: "1px solid var(--border-color)",
+                  background: "transparent",
+                  color: providerSyncBusy || apiProviders.length === 0 ? "var(--text-secondary)" : "var(--accent-color)",
+                  borderRadius: "8px",
+                  padding: "5px 10px",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  cursor: providerSyncBusy || apiProviders.length === 0 ? "default" : "pointer",
+                }}
+              >
+                {providerSyncBusy ? t("agentConfig.syncingProviders") : t("agentConfig.syncAllProviders")}
+              </button>
+              <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: 0, flex: 1 }}>
+                {t("agentConfig.syncAllProvidersHint")}
+              </span>
+            </div>
+          ) : null}
           <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "260px", overflow: "auto" }}>
             {busy ? (
               <div style={agentConfigHintStyle}>{t("agentConfig.loading")}</div>
@@ -1017,6 +1074,9 @@ function AgentConfigPopover({
               ) : apiProviders.map((item) => {
                 const selected = item.id === selectedAPIProviderID;
                 const summary = (item.modelFamilies || []).join(", ");
+                const testBusy = providerTestBusyID === item.id;
+                const testResult = providerTestResults[item.id] || "";
+                const models = item.models || [];
                 return (
                   <div
                     key={item.id}
@@ -1038,6 +1098,19 @@ function AgentConfigPopover({
                       </div>
                       <button
                         type="button"
+                        aria-label={t("agentConfig.testModel", { name: item.name })}
+                        title={t("agentConfig.testModel", { name: item.name })}
+                        disabled={busy || testBusy || models.length === 0}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onTestProviderModel(item.id, providerTestModels[item.id] || models[0] || "");
+                        }}
+                        style={agentConfigIconButtonStyle(busy || testBusy)}
+                      >
+                        {testBusy ? "…" : t("agentConfig.testModelShort")}
+                      </button>
+                      <button
+                        type="button"
                         aria-label={t("agentConfig.deleteAPIProvider", { name: item.name })}
                         title={t("common.delete")}
                         disabled={busy}
@@ -1050,6 +1123,35 @@ function AgentConfigPopover({
                         <TrashIcon />
                       </button>
                     </div>
+                    {models.length > 0 ? (
+                      <select
+                        value={providerTestModels[item.id] || models[0] || ""}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={(event) => {
+                          event.stopPropagation();
+                          onProviderTestModelChange(item.id, event.target.value);
+                        }}
+                        style={{
+                          marginTop: "6px",
+                          width: "100%",
+                          fontSize: "11px",
+                          padding: "3px 6px",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "6px",
+                          background: "var(--menu-bg)",
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        {models.map((model) => (
+                          <option key={model} value={model}>{model}</option>
+                        ))}
+                      </select>
+                    ) : null}
+                    {testResult ? (
+                      <div style={{ marginTop: "6px", fontSize: "11px", color: "var(--text-secondary)", whiteSpace: "normal", overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                        {testResult}
+                      </div>
+                    ) : null}
                   </div>
                 );
               })
@@ -1070,6 +1172,7 @@ function AgentConfigPopover({
           </div>
         </>
       )}
+      {notice ? <div style={{ ...agentConfigHintStyle, whiteSpace: "pre-line" }}>{notice}</div> : null}
       {error ? <div style={{ ...agentConfigHintStyle, color: "#dc2626" }}>{error}</div> : null}
     </div>
   );
@@ -1492,6 +1595,11 @@ export function FileTree({
   const [agentConfigBusy, setAgentConfigBusy] = React.useState(false);
   const [agentConfigRestartingAgent, setAgentConfigRestartingAgent] = React.useState("");
   const [agentConfigError, setAgentConfigError] = React.useState("");
+  const [agentConfigNotice, setAgentConfigNotice] = React.useState("");
+  const [providerSyncBusy, setProviderSyncBusy] = React.useState(false);
+  const [providerTestBusyID, setProviderTestBusyID] = React.useState("");
+  const [providerTestResults, setProviderTestResults] = React.useState<Record<string, string>>({});
+  const [providerTestModels, setProviderTestModels] = React.useState<Record<string, string>>({});
   const [agentLifecycleOpen, setAgentLifecycleOpen] = React.useState(false);
   const [relayServicesOpen, setRelayServicesOpen] = React.useState(false);
   const [relayServicesEditing, setRelayServicesEditing] = React.useState(false);
@@ -2417,6 +2525,84 @@ export function FileTree({
     }
   }, [agentAPIProviders, selectedAgentAPIProviderID, t]);
 
+  const syncAllAgentAPIProviderModels = React.useCallback(async () => {
+    setProviderSyncBusy(true);
+    setAgentConfigError("");
+    setAgentConfigNotice("");
+    try {
+      const result = await syncAllAgentAPIProviders();
+      const providers = result.providers || [];
+      setAgentAPIProviders(providers);
+      invalidateAgentAPIProvidersCache();
+      const results = result.results || [];
+      const failed = results.filter((item) => !item.success);
+      const succeeded = results.filter((item) => item.success);
+      if (results.length === 0) {
+        setAgentConfigNotice(t("agentConfig.syncProvidersEmpty"));
+        return;
+      }
+      const summary = t("agentConfig.syncProvidersResult", {
+        success: succeeded.length,
+        failed: failed.length,
+      });
+      const sections = [summary];
+      if (failed.length > 0) {
+        const detail = failed
+          .map((item) => `${item.name}: ${item.error || ""}`.trim())
+          .join("\n");
+        sections.push(detail);
+      }
+      const appliedLines: string[] = [];
+      for (const item of results) {
+        for (const applied of item.applied || []) {
+          appliedLines.push(
+            applied.success
+              ? t("agentConfig.syncApplySuccess", { agent: applied.agent })
+              : t("agentConfig.syncApplyFailed", {
+                  agent: applied.agent,
+                  error: applied.error || "",
+                }),
+          );
+        }
+      }
+      if (appliedLines.length > 0) {
+        sections.push(appliedLines.join("\n"));
+      }
+      setAgentConfigNotice(sections.join("\n"));
+    } catch (error) {
+      // 同步失败时后端保留旧模型列表，这里提示错误即可。
+      setAgentConfigError(error instanceof Error ? error.message : t("agentConfig.syncProvidersFailed"));
+    } finally {
+      setProviderSyncBusy(false);
+    }
+  }, [t]);
+
+  const testAgentAPIProviderModelNow = React.useCallback(async (providerID: string, model: string) => {
+    const trimmedProviderID = String(providerID || "").trim();
+    if (!trimmedProviderID || providerTestBusyID) {
+      return;
+    }
+    setProviderTestBusyID(trimmedProviderID);
+    setAgentConfigError("");
+    try {
+      const result = await testAgentAPIProviderModel({
+        providerID: trimmedProviderID,
+        model: String(model || "").trim(),
+      });
+      setProviderTestResults((previous) => ({
+        ...previous,
+        [trimmedProviderID]: formatProviderTestResult(result, t),
+      }));
+    } catch (error) {
+      setProviderTestResults((previous) => ({
+        ...previous,
+        [trimmedProviderID]: error instanceof Error ? `✗ ${error.message}` : t("agentConfig.testModelFailed"),
+      }));
+    } finally {
+      setProviderTestBusyID("");
+    }
+  }, [providerTestBusyID, t]);
+
   const selectAgentConfigBackup = React.useCallback((id: string) => {
     setSelectedAgentConfigID(id);
     setSelectedAgentAPIProviderID("");
@@ -2427,6 +2613,14 @@ export function FileTree({
     setSelectedAgentAPIProviderID(id);
     setSelectedAgentConfigID("");
     setAgentConfigSwitchSelection(id ? { type: "api_provider", id } : null);
+  }, []);
+
+  const changeProviderTestModel = React.useCallback((providerID: string, model: string) => {
+    const trimmedID = String(providerID || "").trim();
+    if (!trimmedID) {
+      return;
+    }
+    setProviderTestModels((previous) => ({ ...previous, [trimmedID]: model }));
   }, []);
 
   React.useEffect(() => {
@@ -3522,6 +3716,18 @@ export function FileTree({
               busy={agentConfigBusy}
               restartingAgent={agentConfigRestartingAgent}
               error={agentConfigError}
+              notice={agentConfigNotice}
+              providerSyncBusy={providerSyncBusy}
+              providerTestBusyID={providerTestBusyID}
+              providerTestResults={providerTestResults}
+              onSyncAllProviders={() => {
+                void syncAllAgentAPIProviderModels();
+              }}
+              onTestProviderModel={(providerID, model) => {
+                void testAgentAPIProviderModelNow(providerID, model);
+              }}
+              onProviderTestModelChange={changeProviderTestModel}
+              providerTestModels={providerTestModels}
               onChooseAgent={(name) => {
                 void chooseAgentForConfig(name);
               }}

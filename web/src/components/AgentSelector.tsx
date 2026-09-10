@@ -9,6 +9,12 @@ import React, {
 import { createPortal } from "react-dom";
 import { AgentIcon } from "./AgentIcon";
 import type { AgentStatus } from "../services/agents";
+import { fetchAgentAPIProvidersCached, type AgentAPIProvider } from "../services/agentConfig";
+import {
+  buildModelProviderIndex,
+  filterAgentModels,
+  resolveModelGroups,
+} from "./modelFiltering";
 import { useI18n } from "../i18n";
 
 type AgentSelectorProps = {
@@ -53,6 +59,8 @@ function AgentMenuPortal({
   }
   return <>{children}</>;
 }
+
+const AGENT_MODEL_SEARCH_THRESHOLD = 8;
 
 function hasAgentOptions(agent?: AgentStatus): boolean {
   return !!(
@@ -170,6 +178,8 @@ export function AgentSelector({
     useState(false);
   const [restartingAgent, setRestartingAgent] = useState<string | null>(null);
   const [menuBodyHeight, setMenuBodyHeight] = useState<number | null>(null);
+  const [modelSearch, setModelSearch] = useState("");
+  const [providerCatalog, setProviderCatalog] = useState<AgentAPIProvider[] | null>(null);
   const [menuHorizontalOffset, setMenuHorizontalOffset] = useState(0);
   const [viewportMenuPosition, setViewportMenuPosition] = useState<{
     top: number;
@@ -190,6 +200,43 @@ export function AgentSelector({
     () => submenuAgentStatus?.models ?? [],
     [submenuAgentStatus],
   );
+  const enableModelSearch = submenuModels.length > AGENT_MODEL_SEARCH_THRESHOLD;
+  const providerIndex = useMemo(
+    () => buildModelProviderIndex(providerCatalog),
+    [providerCatalog],
+  );
+  const filteredSubmenuModels = useMemo(
+    () => filterAgentModels(submenuModels, modelSearch),
+    [submenuModels, modelSearch],
+  );
+  const submenuModelGroups = useMemo(
+    () =>
+      resolveModelGroups(filteredSubmenuModels, providerIndex),
+    [filteredSubmenuModels, providerIndex],
+  );
+  useEffect(() => {
+    if (!isOpen || !submenuAgent) {
+      setModelSearch("");
+    }
+  }, [isOpen, submenuAgent]);
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    let cancelled = false;
+    fetchAgentAPIProvidersCached()
+      .then((providers) => {
+        if (!cancelled && Array.isArray(providers) && providers.length > 0) {
+          setProviderCatalog(providers);
+        }
+      })
+      .catch(() => {
+        // 供应商目录不可用时退回平铺列表。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, submenuAgent]);
   const submenuSelectedModel = useMemo(() => {
     if (!submenuAgentStatus) return null;
     const fallbackModel =
@@ -934,7 +981,40 @@ export function AgentSelector({
                 />
                 {modelSectionExpanded ? (
                   <>
-                    {allowDefaultModel ? (
+                    {enableModelSearch ? (
+                      <div
+                        style={{
+                          padding: "4px 10px 6px",
+                          position: "sticky",
+                          top: 0,
+                          zIndex: 1,
+                          background: "var(--menu-bg)",
+                        }}
+                      >
+                        <input
+                          type="text"
+                          value={modelSearch}
+                          onChange={(event) =>
+                            setModelSearch(event.target.value)
+                          }
+                          placeholder={t("agent.modelSearchPlaceholder")}
+                          style={{
+                            width: "100%",
+                            boxSizing: "border-box",
+                            height: "28px",
+                            padding: "0 10px",
+                            border: "1px solid var(--menu-divider)",
+                            borderRadius: "8px",
+                            background: "transparent",
+                            color: "var(--text-primary)",
+                            fontSize: "12px",
+                            outline: "none",
+                          }}
+                        />
+                      </div>
+                    ) : null}
+                    {allowDefaultModel &&
+                    filteredSubmenuModels.length > 0 ? (
                       <button
                         type="button"
                         onClick={() => handleAgentSelect(submenuAgentStatus.name, "")}
@@ -951,53 +1031,66 @@ export function AgentSelector({
                         </span>
                       </button>
                     ) : null}
-                    {submenuModels.map((item, index) => {
-                      const isSelected =
-                        submenuAgentStatus.name === agent &&
-                        !!model &&
-                        item.id === (submenuSelectedModel?.id || "");
-                      return (
-                        <button
+                    {filteredSubmenuModels.length === 0 ? (
+                      <div
+                        style={{
+                          padding: "10px 12px",
+                          fontSize: "12px",
+                          color: "var(--text-secondary)",
+                        }}
+                      >
+                        {t("agent.modelNoMatch")}
+                      </div>
+                    ) : submenuModelGroups ? (
+                      submenuModelGroups.map((group) => (
+                        <div key={group.provider || "__other__"}>
+                          <div
+                            style={{
+                              padding: "6px 12px 4px",
+                              fontSize: "11px",
+                              fontWeight: 600,
+                              color: "var(--text-secondary)",
+                              letterSpacing: "0.02em",
+                            }}
+                          >
+                            {group.provider || t("agent.modelOtherGroup")}
+                          </div>
+                          {group.models.map((item) => (
+                            <ModelMenuItem
+                              key={item.id}
+                              item={item}
+                              selected={
+                                submenuAgentStatus.name === agent &&
+                                !!model &&
+                                item.id === (submenuSelectedModel?.id || "")
+                              }
+                              topBorder
+                              onSelect={handleAgentSelect}
+                              agentName={submenuAgentStatus.name}
+                            />
+                          ))}
+                        </div>
+                      ))
+                    ) : (
+                      filteredSubmenuModels.map((item, index) => (
+                        <ModelMenuItem
                           key={item.id}
-                          type="button"
-                          onClick={() =>
-                            handleAgentSelect(submenuAgentStatus.name, item.id)
+                          item={item}
+                          selected={
+                            submenuAgentStatus.name === agent &&
+                            !!model &&
+                            item.id === (submenuSelectedModel?.id || "")
                           }
-                          style={sectionItemStyle(
-                            isSelected,
-                            allowDefaultModel || index > 0,
-                            item.hidden ? 0.66 : 1,
-                          )}
-                          title={item.description || item.id}
-                        >
-                          <span style={{ fontSize: "13px", fontWeight: 500 }}>
-                            {item.name || item.id}
-                          </span>
-                          {item.description ? (
-                            <span
-                              style={{
-                                fontSize: "11px",
-                                color: "var(--text-secondary)",
-                                whiteSpace: "normal",
-                                overflowWrap: "anywhere",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              {item.description}
-                            </span>
-                          ) : item.hidden ? (
-                            <span
-                              style={{
-                                fontSize: "11px",
-                                color: "var(--text-secondary)",
-                              }}
-                            >
-                              hidden
-                            </span>
-                          ) : null}
-                        </button>
-                      );
-                    })}
+                          topBorder={
+                            (allowDefaultModel &&
+                              filteredSubmenuModels.length > 0) ||
+                            index > 0
+                          }
+                          onSelect={handleAgentSelect}
+                          agentName={submenuAgentStatus.name}
+                        />
+                      ))
+                    )}
                   </>
                 ) : null}
                 {submenuModes.length > 0 ? (
@@ -1269,4 +1362,53 @@ function sectionItemStyle(
     cursor: "pointer",
     opacity,
   };
+}
+
+function ModelMenuItem({
+  item,
+  selected,
+  topBorder,
+  onSelect,
+  agentName,
+}: {
+  item: NonNullable<AgentStatus["models"]>[number];
+  selected: boolean;
+  topBorder: boolean;
+  onSelect: (agent: string, model?: string) => void;
+  agentName: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(agentName, item.id)}
+      style={sectionItemStyle(selected, topBorder, item.hidden ? 0.66 : 1)}
+      title={item.description || item.id}
+    >
+      <span style={{ fontSize: "13px", fontWeight: 500 }}>
+        {item.name || item.id}
+      </span>
+      {item.description ? (
+        <span
+          style={{
+            fontSize: "11px",
+            color: "var(--text-secondary)",
+            whiteSpace: "normal",
+            overflowWrap: "anywhere",
+            wordBreak: "break-word",
+          }}
+        >
+          {item.description}
+        </span>
+      ) : item.hidden ? (
+        <span
+          style={{
+            fontSize: "11px",
+            color: "var(--text-secondary)",
+          }}
+        >
+          hidden
+        </span>
+      ) : null}
+    </button>
+  );
 }
