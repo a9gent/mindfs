@@ -72,22 +72,15 @@ type activePromptState struct {
 var stderrMessagePattern = regexp.MustCompile(`"message"\s*:\s*"([^"]+)"`)
 
 type sessionState struct {
-	ID            acp.SessionId
-	models        *acp.SessionModelState
-	modes         *acp.SessionModeState
-	configOptions []acp.SessionConfigOption
-	commands      []acp.AvailableCommand
-	contextWindow types.ContextWindow
-	lastUsage     cumulativeTokenUsage
-	onUpdate      func(SessionUpdate)
-	mu            sync.RWMutex
-}
-
-type cumulativeTokenUsage struct {
-	inputTokens      int
-	outputTokens     int
-	cacheReadTokens  int
-	cacheWriteTokens int
+	ID                     acp.SessionId
+	models                 *acp.SessionModelState
+	modes                  *acp.SessionModeState
+	configOptions          []acp.SessionConfigOption
+	commands               []acp.AvailableCommand
+	contextWindow          types.ContextWindow
+	contextUsageUpdateSeen bool
+	onUpdate               func(SessionUpdate)
+	mu                     sync.RWMutex
 }
 
 type qwenSlashCommandNotification struct {
@@ -178,39 +171,40 @@ func (s *sessionState) getContextWindow() types.ContextWindow {
 	return s.contextWindow
 }
 
-func (s *sessionState) tokenUsageDelta(usage *acp.Usage) *types.TokenUsage {
+func (s *sessionState) setUsageUpdate(used, size int) {
+	s.mu.Lock()
+	if size > 0 {
+		s.contextWindow.ModelContextWindow = size
+	}
+	s.contextWindow.TotalTokens = max(0, used)
+	s.contextUsageUpdateSeen = true
+	s.mu.Unlock()
+}
+
+func (s *sessionState) hasContextUsageUpdate() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.contextUsageUpdateSeen
+}
+
+// tokenUsageForPrompt normalizes the usage returned by one ACP prompt.
+// PromptResponse.Usage is scoped to the completed prompt; it is not a
+// session-wide counter and must not be differenced against an earlier prompt.
+func (s *sessionState) tokenUsageForPrompt(usage *acp.Usage) *types.TokenUsage {
 	if usage == nil {
 		return nil
 	}
-	current := cumulativeTokenUsage{
-		inputTokens:  max(0, usage.InputTokens),
-		outputTokens: max(0, usage.OutputTokens),
-	}
-	if usage.CachedReadTokens != nil {
-		current.cacheReadTokens = max(0, *usage.CachedReadTokens)
-	}
-	if usage.CachedWriteTokens != nil {
-		current.cacheWriteTokens = max(0, *usage.CachedWriteTokens)
-	}
-
-	s.mu.Lock()
-	previous := s.lastUsage
-	s.lastUsage = current
-	s.mu.Unlock()
-
-	inputTokens := cumulativeCounterDelta(current.inputTokens, previous.inputTokens)
-	outputTokens := cumulativeCounterDelta(current.outputTokens, previous.outputTokens)
 	result := &types.TokenUsage{
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
+		InputTokens:  max(0, usage.InputTokens),
+		OutputTokens: max(0, usage.OutputTokens),
 	}
 	if usage.CachedReadTokens != nil {
-		value := cumulativeCounterDelta(current.cacheReadTokens, previous.cacheReadTokens)
+		value := max(0, *usage.CachedReadTokens)
 		result.CacheReadTokens = &value
 		result.InputTokens = max(result.InputTokens, value)
 	}
 	if usage.CachedWriteTokens != nil {
-		value := cumulativeCounterDelta(current.cacheWriteTokens, previous.cacheWriteTokens)
+		value := max(0, *usage.CachedWriteTokens)
 		result.CacheWriteTokens = &value
 		result.InputTokens = max(result.InputTokens, value)
 	}
@@ -218,13 +212,6 @@ func (s *sessionState) tokenUsageDelta(usage *acp.Usage) *types.TokenUsage {
 		return nil
 	}
 	return result
-}
-
-func cumulativeCounterDelta(current, previous int) int {
-	if current < previous {
-		return current
-	}
-	return current - previous
 }
 
 // SessionUpdate is the internal session update type.
@@ -302,12 +289,10 @@ func (c *mindfsClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 		c.proc.mu.Unlock()
 	}
 	if params.Update.UsageUpdate != nil {
-		current := session.getContextWindow()
-		current.ModelContextWindow = params.Update.UsageUpdate.Size
-		if current.TotalTokens == 0 {
-			current.TotalTokens = params.Update.UsageUpdate.Used
-		}
-		session.setContextWindow(current)
+		session.setUsageUpdate(
+			params.Update.UsageUpdate.Used,
+			params.Update.UsageUpdate.Size,
+		)
 	}
 
 	if internalUpdate.Type != "" {
@@ -655,10 +640,15 @@ func (p *Process) SendMessage(ctx context.Context, sessionKey, content string) e
 	}
 	var tokenUsage *types.TokenUsage
 	if resp.Usage != nil {
-		current := sess.getContextWindow()
-		current.TotalTokens = resp.Usage.TotalTokens
-		sess.setContextWindow(current)
-		tokenUsage = sess.tokenUsageDelta(resp.Usage)
+		// Some older ACP agents expose no usage_update notification. Keep a
+		// compatibility fallback for those agents, but never let prompt-level
+		// accounting overwrite an authoritative session context update.
+		if !sess.hasContextUsageUpdate() {
+			current := sess.getContextWindow()
+			current.TotalTokens = max(0, resp.Usage.TotalTokens)
+			sess.setContextWindow(current)
+		}
+		tokenUsage = sess.tokenUsageForPrompt(resp.Usage)
 	}
 
 	// Signal completion

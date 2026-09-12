@@ -23,10 +23,10 @@ func TestIsExpectedStreamCloseError(t *testing.T) {
 	}
 }
 
-func TestACPTokenUsageConvertsCumulativeCountersToTurnDelta(t *testing.T) {
+func TestACPTokenUsagePreservesPromptUsage(t *testing.T) {
 	state := &sessionState{}
 	firstRead, firstWrite := 4_000, 1_000
-	first := state.tokenUsageDelta(&acpsdk.Usage{
+	first := state.tokenUsageForPrompt(&acpsdk.Usage{
 		InputTokens:       5_500,
 		OutputTokens:      500,
 		CachedReadTokens:  &firstRead,
@@ -37,20 +37,42 @@ func TestACPTokenUsageConvertsCumulativeCountersToTurnDelta(t *testing.T) {
 	}
 
 	secondRead, secondWrite := 12_000, 1_500
-	second := state.tokenUsageDelta(&acpsdk.Usage{
+	second := state.tokenUsageForPrompt(&acpsdk.Usage{
 		InputTokens:       14_000,
 		OutputTokens:      1_600,
 		CachedReadTokens:  &secondRead,
 		CachedWriteTokens: &secondWrite,
 	})
-	if second == nil || second.InputTokens != 8_500 || second.OutputTokens != 1_100 {
+	if second == nil || second.InputTokens != 14_000 || second.OutputTokens != 1_600 {
 		t.Fatalf("second usage = %#v", second)
 	}
-	if second.CacheReadTokens == nil || *second.CacheReadTokens != 8_000 {
+	if second.CacheReadTokens == nil || *second.CacheReadTokens != 12_000 {
 		t.Fatalf("second cache read = %#v", second.CacheReadTokens)
 	}
-	if second.CacheWriteTokens == nil || *second.CacheWriteTokens != 500 {
+	if second.CacheWriteTokens == nil || *second.CacheWriteTokens != 1_500 {
 		t.Fatalf("second cache write = %#v", second.CacheWriteTokens)
+	}
+}
+
+func TestACPUsageUpdateReplacesCurrentContextUsage(t *testing.T) {
+	state := &sessionState{contextWindow: types.ContextWindow{
+		TotalTokens:        1_911_735,
+		ModelContextWindow: 512_000,
+	}}
+
+	state.setUsageUpdate(217_991, 512_000)
+	got := state.getContextWindow()
+	if got.TotalTokens != 217_991 || got.ModelContextWindow != 512_000 {
+		t.Fatalf("context window after first update = %#v", got)
+	}
+	if !state.hasContextUsageUpdate() {
+		t.Fatal("usage update was not marked authoritative")
+	}
+
+	state.setUsageUpdate(220_104, 512_000)
+	got = state.getContextWindow()
+	if got.TotalTokens != 220_104 || got.ModelContextWindow != 512_000 {
+		t.Fatalf("context window after second update = %#v", got)
 	}
 }
 
