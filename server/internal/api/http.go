@@ -283,6 +283,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/health", h.handleHealth)
 	r.Get("/api/tree", h.protectedEndpoint(h.handleTree))
 	r.Get("/api/file", h.handleFile)
+	r.Put("/api/file", h.protectedEndpoint(h.handleFileSave))
 	r.Get("/api/git/status", h.protectedEndpoint(h.handleGitStatus))
 	r.Get("/api/git/diff", h.protectedEndpoint(h.handleGitDiff))
 	r.Get("/api/git/history", h.protectedEndpoint(h.handleGitHistory))
@@ -1714,6 +1715,10 @@ func (h *HTTPHandler) handleTree(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("edit") == "1" {
+		h.protectedEndpoint(h.handleEditableFile)(w, r)
+		return
+	}
 	rootID := r.URL.Query().Get("root")
 	uc := h.service()
 	path := r.URL.Query().Get("path")

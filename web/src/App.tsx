@@ -4,7 +4,9 @@ import React, {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
+import { FileEditStore, fileEditKey } from "./services/fileEditing";
 import { normalizePathForRoot, shouldRedirectToRelayNodes } from "./services/fileNavigation";
 import { getViewModeSystemPrompt } from "./renderer/viewCatalog";
 import { Renderer } from "./renderer/Renderer";
@@ -59,6 +61,8 @@ import {
 } from "./services/fontSize";
 import {
   fetchFile,
+  fetchEditableFile,
+  saveTextFile,
   clearFileCacheForRoot,
   getCachedFile,
   invalidateFileCache,
@@ -1506,6 +1510,7 @@ function saveTaskCreateWorktreePreference(rootId: string, pref: TaskCreateWorktr
 }
 
 export function App({ onGoHome }: AppProps) {
+  const [fileEditStore] = useState(() => new FileEditStore({ load: fetchEditableFile, save: saveTextFile }));
   const { t } = useI18n();
   const pluginManagerRef = useRef<PluginManager>(new PluginManager());
   const completionAudioContextRef = useRef<AudioContext | null>(null);
@@ -2536,6 +2541,7 @@ export function App({ onGoHome }: AppProps) {
   );
   const [status, setStatus] = useState<WSStatus>("disconnected");
   const [file, setFile] = useState<FilePayload | null>(null);
+  const currentFileEditing = useSyncExternalStore(fileEditStore.subscribe, () => !!file?.root && fileEditStore.has(file.root, file.path));
   const [viewerSelection, setViewerSelection] =
     useState<ViewerSelection | null>(null);
   const [attachedFileContext, setAttachedFileContext] =
@@ -4584,6 +4590,7 @@ export function App({ onGoHome }: AppProps) {
 
   const refreshCurrentFileContent = useCallback(
     async (rootID: string, changedPath: string) => {
+      if (fileEditStore.has(rootID, changedPath)) return;
       const currentFile = fileRef.current;
       if (!currentFile) return;
       const currentRoot = currentFile.root || currentRootIdRef.current || "";
@@ -4615,7 +4622,8 @@ export function App({ onGoHome }: AppProps) {
           !next ||
           !latestFile ||
           latestRoot !== rootID ||
-          latestFile.path !== changedPath
+          latestFile.path !== changedPath ||
+          fileEditStore.has(rootID, changedPath)
         ) {
           return;
         }
@@ -7194,14 +7202,17 @@ export function App({ onGoHome }: AppProps) {
           const fetchFileWithMode = async (
             mode: "full" | "incremental",
             timeoutMs?: number,
-          ) =>
-            fetchFile({
+          ) => {
+            const editing = fileEditStore.get(fileEditKey(String(root), String(path)));
+            if (editing?.file) return editing.file;
+            return fetchFile({
               rootId: String(root),
               path: String(path),
               readMode: mode,
               cursor,
               timeoutMs,
             });
+          };
 
           let readMode: "incremental" | "full" =
             params.readMode === "full" ? "full" : "incremental";
@@ -10917,7 +10928,7 @@ export function App({ onGoHome }: AppProps) {
   }, [currentRootId, file, pluginVersion, pluginQuery]);
 
   useEffect(() => {
-    if (!file || pluginBypass || !matchedPlugin) return;
+    if (!file || currentFileEditing || pluginBypass || !matchedPlugin) return;
     if (inferReadModeFromPlugin(matchedPlugin) !== "full") return;
     if (!file.truncated) return;
     const root = file.root || currentRootId;
@@ -10934,6 +10945,7 @@ export function App({ onGoHome }: AppProps) {
     });
   }, [
     file,
+    currentFileEditing,
     pluginBypass,
     matchedPlugin,
     currentRootId,
@@ -13457,7 +13469,7 @@ export function App({ onGoHome }: AppProps) {
       />
     );
   } else if (file) {
-    if (pluginRender && pluginRender.output) {
+    if (pluginRender && pluginRender.output && !currentFileEditing) {
       workspaceView = (
         <div
           style={{
@@ -13537,7 +13549,7 @@ export function App({ onGoHome }: AppProps) {
             minHeight: 0,
           }}
         >
-          {pluginBypass && matchedPlugin ? (
+          {pluginBypass && matchedPlugin && !currentFileEditing ? (
             <div
               style={{
                 borderBottom: "1px solid var(--border-color)",
@@ -13603,6 +13615,20 @@ export function App({ onGoHome }: AppProps) {
           ) : null}
           <FileViewer
             file={file}
+            editStore={fileEditStore}
+            onFileUpdated={(next) => {
+              const current = fileRef.current;
+              if (current?.root === next.root && current?.path === next.path) {
+                setFile({ ...current, ...next, file_meta: current.file_meta });
+              }
+            }}
+            onFileSaved={(next) => {
+              const current = fileRef.current;
+              if (current?.root === next.root && current?.path === next.path) {
+                setFile({ ...current, ...next, file_meta: current.file_meta });
+              }
+              if (next.root) void refreshGitStatus(next.root);
+            }}
             isVisible={!selectedSession}
             onSelectionChange={handleViewerSelectionChange}
             initialScrollTop={

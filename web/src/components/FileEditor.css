@@ -1,0 +1,28 @@
+.file-editor { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; color: var(--text-primary); }
+.file-editor-button { border: 1px solid var(--border-color); border-radius: 6px; padding: 5px 10px; background: transparent; color: var(--text-primary); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.file-editor-button.primary { background: var(--accent-color); border-color: var(--accent-color); color: var(--accent-foreground, #fff); }
+.file-editor-button:disabled { opacity: .5; cursor: default; }
+.file-editor-button:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+.file-editor-input { flex: 1; width: 100%; min-height: 0; box-sizing: border-box; resize: none; border: 0; outline: none; padding: 16px; background: var(--panel-bg, transparent); color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; line-height: 1.6; tab-size: 4; }
+.file-editor-input:focus-visible { box-shadow: inset 2px 0 var(--accent-color); }
+.file-editor-error { padding: 10px 16px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); background: rgba(220, 80, 50, .10); font-size: 13px; overflow-wrap: anywhere; }
+.file-editor-dialog { width: min(440px, calc(100vw - 32px)); box-sizing: border-box; padding: 24px; color: var(--text-primary); background: var(--menu-bg, var(--panel-bg)); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: 0 24px 60px rgba(0,0,0,.24); }
+.file-editor-dialog::backdrop { background: rgba(0,0,0,.4); }
+.file-editor-dialog h2 { font-size: 17px; margin: 0 0 12px; }
+.file-editor-dialog p { font-size: 14px; line-height: 1.6; color: var(--text-secondary); margin: 0 0 24px; }
+.file-editor-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+@media (max-width: 768px) {
+  .file-editor-input { font-size: 16px; }
+  .file-editor-dialog-actions .file-editor-button { min-height: 36px; }
+}
+
+.file-editor-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.file-editor-actions:empty { display: none; }
+.file-editor-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 28px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--text-secondary); cursor: pointer; flex-shrink: 0; }
+.file-editor-icon-button > svg { width: 18px; height: 18px; flex-shrink: 0; }
+.file-editor-icon-button:hover:not(:disabled) { background: var(--border-color); color: var(--text-primary); }
+.file-editor-icon-button.is-dirty { color: var(--accent-color); }
+.file-editor-icon-button:disabled { opacity: .45; cursor: default; }
+.file-editor-icon-button:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
+.file-editor-save-success { position: fixed; z-index: 10000; transform: translateX(-50%); width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 6px; color: #fff; background: #16803d; box-shadow: 0 2px 8px rgba(0,0,0,.16); pointer-events: none; }
+.file-editor-loading { padding: 16px; font-size: 13px; color: var(--text-secondary); }

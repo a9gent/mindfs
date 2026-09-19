@@ -469,6 +469,7 @@ func (r RootInfo) ListEntries(dirRelPath string) ([]Entry, error) {
 }
 
 type ReadResult struct {
+	Revision   string          `json:"revision,omitempty"`
 	Path       string          `json:"path"`
 	Name       string          `json:"name"`
 	Content    string          `json:"content"`
