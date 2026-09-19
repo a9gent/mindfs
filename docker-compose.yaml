@@ -1,0 +1,26 @@
+services:
+  mindfs:
+    container_name: mindfs
+    security_opt:
+      - apparmor:unconfined
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${MINDFS_PORT:-7331}:7331"
+    volumes:
+      - ./workspaces:/home/mindfs/workspaces
+      - ./data/config:/home/mindfs/.config
+      - ./data/cache:/home/mindfs/.cache
+      - ./data/local:/home/mindfs/.local
+      - ./data/codex:/home/mindfs/.codex
+      - ./data/gitconfig:/home/mindfs/.gitconfig
+      - ./data/ssh:/home/mindfs/.ssh
+    command:
+      - --foreground
+      - -tls
+      - -e2ee
+      - -addr
+      - ${MINDFS_ADDR:-0.0.0.0:7331}
+      - /home/mindfs/workspaces
+    restart: ${MINDFS_RESTART:-unless-stopped}
