@@ -6,6 +6,7 @@ import React, {
   useState,
   useSyncExternalStore,
 } from "react";
+import { resolveInputSession } from "./services/inputSession";
 import { FileEditStore, fileEditKey } from "./services/fileEditing";
 import { normalizePathForRoot, shouldRedirectToRelayNodes } from "./services/fileNavigation";
 import { getViewModeSystemPrompt } from "./renderer/viewCatalog";
@@ -3805,10 +3806,20 @@ export function App({ onGoHome }: AppProps) {
     }
   }, [sessions, syncSessionHeaderFromListItem]);
 
+  const getInputSession = useCallback(() => {
+    const root = currentRootIdRef.current;
+    return resolveInputSession(
+      root,
+      !!drawerOpenByRootRef.current[root || ""],
+      selectedSessionRef.current,
+      drawerSessionByRootRef.current[root || ""] || null,
+    );
+  }, []);
+
   const handleSetPlanMode = useCallback(
     async (enabled: boolean, targetSessionKey?: string, targetRootId?: string) => {
       const activeRoot = targetRootId || currentRootIdRef.current;
-      const session = currentSessionRef.current || drawerSessionByRootRef.current[activeRoot || ""];
+      const session = getInputSession();
       const sessionKey = targetSessionKey || session?.key || (session as any)?.session_key;
       if (!activeRoot) {
         reportError("session.sync_failed", t("session.planModeSelectFirst"));
@@ -3848,7 +3859,7 @@ export function App({ onGoHome }: AppProps) {
         reportError("network.disconnected", t("session.planModeSwitchFailedNotReady"));
       }
     },
-    [rootSessionKey, setDrawerSessionForRoot, bumpCacheVersion, t],
+    [getInputSession, rootSessionKey, setDrawerSessionForRoot, bumpCacheVersion, t],
   );
 
   const promotePendingSessionForRoot = useCallback(
@@ -6234,46 +6245,14 @@ export function App({ onGoHome }: AppProps) {
     ) => {
       const activeRoot = currentRootIdRef.current;
       if (!activeRoot) return;
-      const selected = selectedSessionRef.current;
-      const selectedKey = selected?.key || selected?.session_key;
-      const selectedRoot =
-        (selected?.root_id as string | undefined) || activeRoot;
-      const currentBoundSessionKey =
-        boundSessionByRootRef.current[activeRoot] || null;
-      const isMainSessionView =
-        interactionModeRef.current !== "drawer" &&
-        !!selectedKey &&
-        selectedRoot === activeRoot;
-      let sendSessionKey: string | null | undefined =
-        isMainSessionView && selectedKey && !selectedKey.startsWith("pending-")
-          ? selectedKey
-          : currentBoundSessionKey;
-      let session: Session | null = null;
-      if (sendSessionKey) {
-        session =
-          sessionCacheRef.current[rootSessionKey(activeRoot, sendSessionKey)];
-        if (!session) {
-          const current = currentSessionRef.current;
-          if (current?.key === sendSessionKey) {
-            session = current as Session;
-          }
-        }
-        if (!session && selectedKey === sendSessionKey) {
-          session = { ...(selected as any), key: sendSessionKey } as Session;
-        }
-      } else {
-        if (
-          selectedRoot === activeRoot &&
-          selectedKey &&
-          !selectedKey.startsWith("pending-")
-        ) {
-          sendSessionKey = selectedKey;
-          session =
-            sessionCacheRef.current[
-              rootSessionKey(activeRoot, sendSessionKey)
-            ] || ({ ...selected, key: selectedKey } as Session);
-        }
-      }
+      const target = getInputSession();
+      let sendSessionKey: string | null | undefined = target?.key || target?.session_key;
+      // The server must assign a real key before this draft can receive more input.
+      if (sendSessionKey?.startsWith("pending-")) return;
+      let session: Session | null = sendSessionKey
+        ? sessionCacheRef.current[rootSessionKey(activeRoot, sendSessionKey)]
+          || ({ ...target, key: sendSessionKey } as Session)
+        : null;
       let effectiveMode = mode,
         effectiveAgent = agent,
         effectiveModel = model || "",
@@ -6301,32 +6280,28 @@ export function App({ onGoHome }: AppProps) {
       if (sendSessionKey && session) {
         const targetSessionKey = sendSessionKey;
         const previousAgent = session.agent || "";
-        const useTargetSessionDefaults =
-          !!currentBoundSessionKey && currentBoundSessionKey !== targetSessionKey;
         effectiveMode = normalizeMode(session.type as any);
         effectiveAgent =
-          (useTargetSessionDefaults ? previousAgent : agent) ||
+          agent ||
           previousAgent ||
           "";
         effectiveModel =
-          (useTargetSessionDefaults ? session.model || "" : model) ||
+          model ||
           (effectiveAgent === previousAgent ? session.model || "" : "");
         effectiveAgentMode =
-          (useTargetSessionDefaults ? (session as any).mode || "" : agentMode) ||
+          agentMode ||
           (effectiveAgent === previousAgent ? (session as any).mode || "" : "");
         effectiveEffort =
-          (useTargetSessionDefaults ? (session as any).effort || "" : effort) ||
+          effort ||
           (effectiveAgent === previousAgent ? (session as any).effort || "" : "");
         effectiveFastService =
-          (useTargetSessionDefaults
-            ? (((session as any).fast_service || "") as "" | "on" | "off")
-            : ((fastService || "") as "" | "on" | "off")) ||
+          ((fastService || "") as "" | "on" | "off") ||
           (effectiveAgent === previousAgent
             ? (((session as any).fast_service || "") as "" | "on" | "off")
             : "");
         effectiveShell =
           effectiveMode === "command"
-            ? ((useTargetSessionDefaults ? (session as any).shell || "" : shell) ||
+            ? (shell ||
                 (session as any).shell ||
                 "")
             : "";
@@ -6747,6 +6722,7 @@ export function App({ onGoHome }: AppProps) {
     },
     [
       attachedFileContext,
+      getInputSession,
       rootSessionKey,
       mergeSessionItems,
       setSelectedPendingByKey,
@@ -6869,57 +6845,30 @@ export function App({ onGoHome }: AppProps) {
   const handleRemoveQueuedMessage = useCallback(
     async (queueId: string) => {
       const activeRoot = currentRootIdRef.current;
-      const selected = selectedSessionRef.current;
-      const selectedRoot =
-        (selected?.root_id as string | undefined) || activeRoot || "";
-      const selectedKey = selected?.key || selected?.session_key || "";
-      const sessionKey =
-        interactionModeRef.current !== "drawer" &&
-        selectedRoot === activeRoot &&
-        selectedKey &&
-        !selectedKey.startsWith("pending-")
-          ? selectedKey
-          : boundSessionByRootRef.current[activeRoot || ""] || "";
+      const target = getInputSession();
+      const sessionKey = target?.key || target?.session_key || "";
       if (!activeRoot || !sessionKey || !queueId) return;
       await sessionService.removeQueuedMessage(activeRoot, sessionKey, queueId);
     },
-    [],
+    [getInputSession],
   );
 
   const handleUpdateQueuedMessage = useCallback(
     async (queueId: string, content: string) => {
       const activeRoot = currentRootIdRef.current;
-      const selected = selectedSessionRef.current;
-      const selectedRoot =
-        (selected?.root_id as string | undefined) || activeRoot || "";
-      const selectedKey = selected?.key || selected?.session_key || "";
-      const sessionKey =
-        interactionModeRef.current !== "drawer" &&
-        selectedRoot === activeRoot &&
-        selectedKey &&
-        !selectedKey.startsWith("pending-")
-          ? selectedKey
-          : boundSessionByRootRef.current[activeRoot || ""] || "";
+      const target = getInputSession();
+      const sessionKey = target?.key || target?.session_key || "";
       if (!activeRoot || !sessionKey || !queueId || !content.trim()) return;
       await sessionService.updateQueuedMessage(activeRoot, sessionKey, queueId, content);
     },
-    [],
+    [getInputSession],
   );
 
   const handleSendQueuedMessageNow = useCallback(
     async (queueId: string) => {
       const activeRoot = currentRootIdRef.current;
-      const selected = selectedSessionRef.current;
-      const selectedRoot =
-        (selected?.root_id as string | undefined) || activeRoot || "";
-      const selectedKey = selected?.key || selected?.session_key || "";
-      const sessionKey =
-        interactionModeRef.current !== "drawer" &&
-        selectedRoot === activeRoot &&
-        selectedKey &&
-        !selectedKey.startsWith("pending-")
-          ? selectedKey
-          : boundSessionByRootRef.current[activeRoot || ""] || "";
+      const target = getInputSession();
+      const sessionKey = target?.key || target?.session_key || "";
       if (!activeRoot || !sessionKey || !queueId) return;
       const cacheKey = rootSessionKey(activeRoot, sessionKey);
       const previousQueue = queuedMessagesBySessionRef.current[cacheKey] || [];
@@ -6938,33 +6887,8 @@ export function App({ onGoHome }: AppProps) {
         setQueueVersion((v) => v + 1);
       }
     },
-    [markSessionPending, rootSessionKey],
+    [getInputSession, markSessionPending, rootSessionKey],
   );
-
-  const handleNewSession = useCallback(() => {
-    const rootID = currentRootIdRef.current;
-    const previousBoundKey = rootID ? boundSessionByRootRef.current[rootID] : "";
-    if (rootID && previousBoundKey && !previousBoundKey.startsWith("pending-")) {
-      suppressedAutoBindSessionByRootRef.current[rootID] = previousBoundKey;
-    }
-    setMainViewPreferenceForRoot(rootID, "session");
-    selectedSessionRef.current = null;
-    currentSessionRef.current = null;
-    interactionModeRef.current = "main";
-    setSelectedSession(null);
-    if (rootID) {
-      selectedSessionByRootRef.current[rootID] = null;
-    }
-    setBoundSessionForRoot(rootID, null);
-    setDrawerSessionForRoot(rootID, null);
-    setInteractionMode("main");
-    setDrawerOpenForRoot(rootID, false);
-  }, [
-    setBoundSessionForRoot,
-    setDrawerOpenForRoot,
-    setDrawerSessionForRoot,
-    setMainViewPreferenceForRoot,
-  ]);
 
   const currentSelectionSource = useMemo(() => {
     if (file?.path) {
@@ -10865,35 +10789,12 @@ export function App({ onGoHome }: AppProps) {
     return () => window.removeEventListener("popstate", handlePopState);
   }, [actionHandlers, loadSessionsForRoot, refreshTreeDir, tryShowBoundSessionForRoot]);
 
-  const selectedRoot =
-    (selectedSession?.root_id as string | undefined) || currentRootId || "";
-  const selectedInCurrentRoot =
-    !!selectedSession && !!currentRootId && selectedRoot === currentRootId;
-  const selectedKey =
-    selectedSession?.key || selectedSession?.session_key || "";
-  const boundFromSelected =
-    selectedInCurrentRoot && selectedKey === activeBoundSessionKey
-      ? (selectedSession as any)
-      : null;
-  const boundFromCache =
-    activeBoundSessionKey && currentRootId
-      ? (sessionCacheRef.current[
-          rootSessionKey(currentRootId, activeBoundSessionKey)
-        ] as any)
-      : null;
-  const isDetachedMainSessionTarget =
-    !!activeBoundSessionKey &&
-    selectedInCurrentRoot &&
-    !!selectedKey &&
-    selectedKey !== activeBoundSessionKey &&
-    interactionMode !== "drawer";
-  const actionBarSession = activeBoundSessionKey
-    ? isDetachedMainSessionTarget
-      ? (selectedSession as any)
-      : (currentSession as any) || boundFromCache || boundFromSelected
-    : selectedInCurrentRoot
-      ? (selectedSession as any)
-      : null;
+  const actionBarSession = resolveInputSession(
+    currentRootId,
+    isDrawerOpen,
+    selectedSession,
+    currentSession,
+  );
   const actionBarSessionKey =
     (actionBarSession as any)?.key ||
     (actionBarSession as any)?.session_key ||
@@ -10904,13 +10805,6 @@ export function App({ onGoHome }: AppProps) {
       actionBarSession as any,
     ) || (actionBarSession as any),
   );
-  const isBoundSessionInMain =
-    !!activeBoundSessionKey &&
-    selectedKey === activeBoundSessionKey &&
-    interactionMode !== "drawer";
-  const canOpenSessionDrawer = !!activeBoundSessionKey && !isBoundSessionInMain;
-  const detachedBoundSession =
-    isDetachedMainSessionTarget && !isDrawerOpen;
   const actionBarQueuedMessages = useMemo(() => {
     void queueVersion;
     if (!currentRootId || !actionBarSessionKey) return [];
@@ -14566,12 +14460,9 @@ export function App({ onGoHome }: AppProps) {
               codexRateLimitsRefreshToken={codexRateLimitsRefreshToken}
               currentRootId={currentRootId}
               currentRootIsGitRepo={managedRootByIdRef.current[currentRootId || ""]?.is_git_repo === true}
-              currentSession={actionBarSession}
+              currentSession={actionBarSession ? { ...actionBarSession, name: actionBarSession.name || "", type: normalizeMode(actionBarSession.type), agent: actionBarSession.agent || "" } : null}
               pendingPlanMode={pendingPlanMode}
               attachedFileContext={attachedFileContext}
-              canOpenSessionDrawer={canOpenSessionDrawer}
-              sessionDrawerOpen={isDrawerOpen}
-              detachedBoundSession={detachedBoundSession}
               editDraftRequest={editDraftRequest}
               queuedMessages={actionBarQueuedMessages}
               inputHistory={actionBarInputHistory}
@@ -14583,32 +14474,11 @@ export function App({ onGoHome }: AppProps) {
               onSendQueuedMessageNow={handleSendQueuedMessageNow}
               mobileEnterKeySends={mobileEnterKeySends}
               sendShortcut={sendShortcut}
-              onNewSession={handleNewSession}
               onRequestFileContext={handleRequestFileContext}
               onClearFileContext={handleClearFileContext}
               onToggleLeftSidebar={() => setIsLeftOpen((v) => !v)}
               onToggleRightSidebar={() => setIsRightOpen((v) => !v)}
               sidebarsSwapped={sidebarsSwapped}
-              onSessionClick={() => {
-              const rootID = currentRootIdRef.current;
-              if (!activeBoundSessionKey) return;
-              const selectedKey =
-                selectedSession?.key || selectedSession?.session_key;
-              const isBoundSessionInMain =
-                selectedKey === activeBoundSessionKey &&
-                interactionMode !== "drawer";
-              if (isBoundSessionInMain) return;
-              const isDrawerCurrentlyOpen =
-                !!drawerOpenByRootRef.current[rootID || ""];
-              if (isDrawerCurrentlyOpen) {
-                interactionModeRef.current = "main";
-                setInteractionMode("main");
-                setDrawerOpenForRoot(rootID, false);
-                return;
-              }
-              setInteractionMode("drawer");
-              setDrawerOpenForRoot(rootID, true);
-              }}
             />
           </div>
         }

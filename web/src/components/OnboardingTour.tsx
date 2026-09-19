@@ -23,7 +23,6 @@ const TOUR_STEPS: TourStep[] = [
   { id: "tasks", target: "[data-onboarding='task-create']", titleKey: "onboarding.tasks.title", bodyKey: "onboarding.tasks.body" },
   { id: "session-actions", target: "[data-onboarding='session-actions']", titleKey: "onboarding.sessionActions.title", bodyKey: "onboarding.sessionActions.body", padding: 1, pinToTop: true },
   { id: "shortcuts", target: "[data-onboarding='message-input']", titleKey: "onboarding.shortcuts.title", bodyKey: "onboarding.shortcuts.body" },
-  { id: "session-ring", target: "[data-onboarding='session-ring']", titleKey: "onboarding.sessionRing.title", bodyKey: "onboarding.sessionRing.body" },
   { id: "mode-selector", target: "[data-onboarding='mode-selector']", titleKey: "onboarding.modeSelector.title", bodyKey: "onboarding.modeSelector.body", interactive: true },
   { id: "agent-selector", target: "[data-onboarding='agent-selector']", fallbackTarget: "[data-onboarding='input-controls']", titleKey: "onboarding.agentSelector.title", bodyKey: "onboarding.agentSelector.body", interactive: true },
   { id: "attachment-action", target: "[data-onboarding='attachment-action']", titleKey: "onboarding.attachmentAction.title", bodyKey: "onboarding.attachmentAction.body" },
