@@ -197,6 +197,7 @@ export const zhCN = {
   "fileEditor.content": "文件内容",
   "fileEditor.save": "保存",
   "fileEditor.exit": "退出编辑",
+  "fileEditor.highlightFailed": "语法高亮加载失败，仍可编辑和保存。",
   "fileEditor.loading": "正在读取完整文件…",
   "fileEditor.reloading": "正在刷新预览…",
   "fileEditor.saving": "保存中…",

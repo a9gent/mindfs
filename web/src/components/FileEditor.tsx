@@ -1,8 +1,9 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n";
 import { fetchFile, type FilePayload } from "../services/file";
 import { type FileEditSession, type FileEditStore } from "../services/fileEditing";
+import { CodeTextEditor } from "./editor/CodeTextEditor";
 import "./FileEditor.css";
 
 type Props = {
@@ -18,7 +19,6 @@ type Props = {
 
 export function FileEditor({ actionsTarget, store, editKey, session, isVisible, onFileUpdated, onFileSaved, onExitError }: Props) {
   const { t } = useI18n();
-  const textarea = useRef<HTMLTextAreaElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const saveButton = useRef<HTMLButtonElement>(null);
   const successTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -42,29 +42,11 @@ export function FileEditor({ actionsTarget, store, editKey, session, isVisible, 
   const busy = session.loading || session.saving || leaving;
   const loaded = !!session.revision;
 
-  useLayoutEffect(() => {
-    const node = textarea.current;
-    if (!node || !isVisible || !loaded) return;
-    // Focusing can synchronously emit selection events; capture before they update view.
-    const view = { ...session.view };
-    node.focus({ preventScroll: true });
-    node.setSelectionRange(view.start, view.end, view.direction);
-    node.scrollTop = view.top;
-    node.scrollLeft = view.left;
-  }, [editKey, isVisible, loaded]);
-
   useEffect(() => {
     const node = dialog.current;
     if (confirmExit && isVisible && node && !node.open) node.showModal();
     else if (node?.open) node.close();
   }, [confirmExit, isVisible]);
-
-  function rememberView() {
-    const node = textarea.current;
-    if (!node) return;
-    // The view object survives immutable content updates without rerendering on scroll.
-    Object.assign(session.view, { start: node.selectionStart, end: node.selectionEnd, direction: node.selectionDirection, top: node.scrollTop, left: node.scrollLeft });
-  }
 
   async function exit() {
     store.patch(editKey, { leaving: true });
@@ -130,21 +112,7 @@ export function FileEditor({ actionsTarget, store, editKey, session, isVisible, 
       </span>, document.body)}
       {session.loading && <div className="file-editor-loading" role="status">{t("fileEditor.loading")}</div>}
       {errorText && <div className="file-editor-error" role="alert">{errorText}</div>}
-      {loaded && <textarea
-        ref={textarea}
-        className="file-editor-input"
-        aria-label={t("fileEditor.content")}
-        value={session.text}
-        readOnly={leaving}
-        spellCheck={false}
-        autoCapitalize="off"
-        autoCorrect="off"
-        wrap="off"
-        onChange={(event) => { rememberView(); store.patch(editKey, { text: event.target.value }); }}
-        onSelect={rememberView}
-        onScroll={rememberView}
-        onBlur={rememberView}
-      />}
+      {loaded && <CodeTextEditor store={store} editKey={editKey} session={session} isVisible={isVisible} />}
       <dialog ref={dialog} className="file-editor-dialog" aria-labelledby="file-editor-exit-title" aria-describedby="file-editor-exit-description" onCancel={(event) => { event.preventDefault(); if (!busy) setConfirmExit(false); }}>
         <h2 id="file-editor-exit-title">{t("fileEditor.confirmTitle")}</h2>
         <p id="file-editor-exit-description">{t("fileEditor.confirmDescription")}</p>

@@ -199,6 +199,7 @@ export const enUS = {
   "fileEditor.content": "File content",
   "fileEditor.save": "Save",
   "fileEditor.exit": "Exit editing",
+  "fileEditor.highlightFailed": "Syntax highlighting could not load. You can still edit and save.",
   "fileEditor.loading": "Loading complete file…",
   "fileEditor.reloading": "Refreshing preview…",
   "fileEditor.saving": "Saving…",

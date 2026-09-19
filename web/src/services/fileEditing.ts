@@ -1,8 +1,19 @@
 import type { FilePayload } from "./file";
+import type { EditorState } from "@codemirror/state";
+import type { EditorView as CodeMirrorView } from "@codemirror/view";
 
 export const MAX_EDITABLE_FILE_BYTES = 1024 * 1024;
 export type EditableFile = FilePayload & { revision: string };
-export type EditorView = { start: number; end: number; direction: "forward" | "backward" | "none"; top: number; left: number };
+export type EditorView = {
+  start: number;
+  end: number;
+  direction: "forward" | "backward" | "none";
+  top: number;
+  left: number;
+  // Immutable document/selection/history only; never retain an editor DOM instance.
+  editorState?: EditorState;
+  scrollSnapshot?: ReturnType<CodeMirrorView["scrollSnapshot"]>;
+};
 export type FileEditSession = {
   rootId: string;
   path: string;

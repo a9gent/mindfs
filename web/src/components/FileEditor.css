@@ -3,8 +3,6 @@
 .file-editor-button.primary { background: var(--accent-color); border-color: var(--accent-color); color: var(--accent-foreground, #fff); }
 .file-editor-button:disabled { opacity: .5; cursor: default; }
 .file-editor-button:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
-.file-editor-input { flex: 1; width: 100%; min-height: 0; box-sizing: border-box; resize: none; border: 0; outline: none; padding: 16px; background: var(--panel-bg, transparent); color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; line-height: 1.6; tab-size: 4; }
-.file-editor-input:focus-visible { box-shadow: inset 2px 0 var(--accent-color); }
 .file-editor-error { padding: 10px 16px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); background: rgba(220, 80, 50, .10); font-size: 13px; overflow-wrap: anywhere; }
 .file-editor-dialog { width: min(440px, calc(100vw - 32px)); box-sizing: border-box; padding: 24px; color: var(--text-primary); background: var(--menu-bg, var(--panel-bg)); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: 0 24px 60px rgba(0,0,0,.24); }
 .file-editor-dialog::backdrop { background: rgba(0,0,0,.4); }
@@ -12,7 +10,6 @@
 .file-editor-dialog p { font-size: 14px; line-height: 1.6; color: var(--text-secondary); margin: 0 0 24px; }
 .file-editor-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 @media (max-width: 768px) {
-  .file-editor-input { font-size: 16px; }
   .file-editor-dialog-actions .file-editor-button { min-height: 36px; }
 }
 
@@ -26,3 +23,58 @@
 .file-editor-icon-button:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
 .file-editor-save-success { position: fixed; z-index: 10000; transform: translateX(-50%); width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 6px; color: #fff; background: #16803d; box-shadow: 0 2px 8px rgba(0,0,0,.16); pointer-events: none; }
 .file-editor-loading { padding: 16px; font-size: 13px; color: var(--text-secondary); }
+
+/* CodeMirror owns the editing surface; keep its metrics identical in every theme. */
+.file-code-editor {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  --file-code-comment: #64748b;
+  --file-code-keyword: #7c3aed;
+  --file-code-string: #16703a;
+  --file-code-number: #b45309;
+  --file-code-type: #0e7490;
+  --file-code-function: #1d4ed8;
+  --file-code-property: #9d174d;
+  --file-code-invalid: #dc2626;
+}
+.file-code-editor .cm-editor { height: 100%; color: var(--text-primary); background: var(--panel-bg, transparent); }
+.file-code-editor .cm-editor.cm-focused { outline: none; }
+.file-code-editor .cm-scroller { overflow: auto; font-family: Menlo, Monaco, "Courier New", monospace; font-size: 13px; line-height: 20px; }
+.mindfs-font-scale-region .file-code-editor .cm-scroller { font-size: calc(13px * var(--mindfs-font-scale, 1)); }
+.file-code-editor .cm-content { padding: 16px 0; caret-color: var(--text-primary); }
+.file-code-editor .cm-line { padding: 0 16px 0 12px; }
+.file-code-editor .cm-gutters { background: var(--panel-bg); color: var(--text-secondary); border-right: 1px solid var(--border-color); }
+.file-code-editor .cm-lineNumbers .cm-gutterElement { padding: 0 10px 0 12px; min-width: 32px; }
+.file-code-editor .cm-activeLineGutter { background: var(--selection-bg); color: var(--accent-color); }
+.file-code-editor .cm-cursor, .file-code-editor .cm-dropCursor { border-left-color: var(--text-primary); }
+.file-code-editor .cm-selectionBackground, .file-code-editor .cm-focused .cm-selectionBackground { background: var(--selection-bg); }
+.file-code-editor .cm-selectionMatch { background: var(--selection-bg); }
+.file-code-editor .cm-matchingBracket { background: var(--selection-bg); outline: 1px solid var(--accent-color); }
+.file-editor-language-notice { padding: 8px 16px; color: var(--text-secondary); font-size: 12px; }
+:root[data-theme="dark"] .file-code-editor {
+  --file-code-comment: #94a3b8;
+  --file-code-keyword: #c4b5fd;
+  --file-code-string: #86efac;
+  --file-code-number: #fcd34d;
+  --file-code-type: #67e8f9;
+  --file-code-function: #93c5fd;
+  --file-code-property: #f9a8d4;
+  --file-code-invalid: #fca5a5;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .file-code-editor {
+    --file-code-comment: #94a3b8;
+    --file-code-keyword: #c4b5fd;
+    --file-code-string: #86efac;
+    --file-code-number: #fcd34d;
+    --file-code-type: #67e8f9;
+    --file-code-function: #93c5fd;
+    --file-code-property: #f9a8d4;
+    --file-code-invalid: #fca5a5;
+  }
+}
+@media (max-width: 768px) {
+  .file-code-editor .cm-lineNumbers .cm-gutterElement { padding-left: 8px; padding-right: 8px; }
+}

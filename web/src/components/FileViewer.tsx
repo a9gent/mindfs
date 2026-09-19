@@ -332,7 +332,7 @@ export function FileViewer({ editStore, onFileUpdated, onFileSaved, file, onSess
   const visibleRelatedSessions = relatedSessions.slice(0, isMobile ? 2 : 3);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, background: "transparent" }}>
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0, background: "transparent" }}>
       {/* 下载结果 toast */}
       {downloadToast && (
         <div style={{
