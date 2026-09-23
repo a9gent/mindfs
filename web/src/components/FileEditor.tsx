@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { ExitIcon } from "./ExitIcon";
 import { useI18n } from "../i18n";
 import { fetchFile, type FilePayload } from "../services/file";
 import { type FileEditSession, type FileEditStore } from "../services/fileEditing";
@@ -101,10 +102,7 @@ export function FileEditor({ actionsTarget, store, editKey, session, isVisible, 
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12l4 4v12a2 2 0 0 1-2 2Z" /><path d="M7 3v6h10V3M7 21v-8h10v8" /></svg>
         </button>
         <button type="button" className="file-editor-icon-button" title={leaving ? t("fileEditor.reloading") : t("fileEditor.exit")} aria-label={t("fileEditor.exit")} disabled={busy} onClick={() => { if (dirty) setConfirmExit(true); else void exit(); }}>
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M0 0h24v24H0z" fill="none" />
-            <path fill="currentColor" d="M6.5 3A3.5 3.5 0 0 0 3 6.5v11A3.5 3.5 0 0 0 6.5 21H15a1 1 0 1 0 0-2H6.5A1.5 1.5 0 0 1 5 17.5v-11A1.5 1.5 0 0 1 6.5 5H15a1 1 0 1 0 0-2zm11.207 4.293a1 1 0 1 0-1.414 1.414L18.586 11H9a1 1 0 1 0 0 2h9.586l-2.293 2.293a1 1 0 0 0 1.414 1.414l4-4a1 1 0 0 0 0-1.414z" />
-          </svg>
+          <ExitIcon />
         </button>
       </>, actionsTarget)}
       {saveSuccess && isVisible && createPortal(<span className="file-editor-save-success" role="status" aria-label={t("fileEditor.saved")} style={saveSuccess}>

@@ -12,6 +12,7 @@ import { openExternalURL } from "../services/platformNavigation";
 import { useI18n } from "../i18n";
 import { buildDiffCodeRows, type DiffCodeRow } from "./gitDiffModel";
 import { extractMarkdownOutline } from "./markdownOutline";
+import { DiagramPreview } from "./DiagramPreview";
 import "prismjs/themes/prism.css";
 import "katex/dist/katex.min.css";
 // Reuse the language imports from global Prism context (since they are imported in CodeViewer, they might be available if loaded, 
@@ -75,6 +76,10 @@ function makeMermaidSafe(source: string): string {
 }
 
 function MermaidBlock({ chart }: { chart: string }) {
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
+  const blockRef = useRef<HTMLDivElement>(null);
+  const [previewHeight, setPreviewHeight] = useState(0);
   const [svg, setSvg] = useState("");
   const [error, setError] = useState("");
 
@@ -140,8 +145,11 @@ function MermaidBlock({ chart }: { chart: string }) {
 
   return (
     <div
+      ref={blockRef}
       style={{
+        position: "relative",
         width: "100%",
+        minHeight: expanded ? previewHeight : undefined,
         boxSizing: "border-box",
         background: "rgba(0,0,0,0.02)",
         padding: "16px",
@@ -152,10 +160,23 @@ function MermaidBlock({ chart }: { chart: string }) {
       }}
     >
       {svg ? (
-        <div
-          dangerouslySetInnerHTML={{ __html: svg }}
-          style={{ minWidth: "fit-content" }}
-        />
+        <>
+          <button type="button" className="diagram-expand" aria-label={t("diagram.expand")} title={t("diagram.expand")} onClick={() => {
+            setPreviewHeight(blockRef.current?.getBoundingClientRect().height || 0);
+            setExpanded(true);
+          }}>
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5" />
+              <path d="m3 3 6 6m12-6-6 6m6 12-6-6M3 21l6-6" />
+            </svg>
+          </button>
+          {expanded ? <DiagramPreview svg={svg} onClose={() => setExpanded(false)} /> : (
+            <div
+              dangerouslySetInnerHTML={{ __html: svg }}
+              style={{ minWidth: "fit-content" }}
+            />
+          )}
+        </>
       ) : (
         <div style={{ color: "var(--text-secondary)", fontSize: "14px" }}>Rendering Mermaid diagram...</div>
       )}
