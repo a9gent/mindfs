@@ -299,6 +299,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/tree", h.protectedEndpoint(h.handleTree))
 	r.Get("/api/file", h.handleFile)
 	r.Put("/api/file", h.protectedEndpoint(h.handleFileSave))
+	r.Post("/api/file", h.protectedEndpoint(h.handleFileCreate))
 	r.Get("/api/git/status", h.protectedEndpoint(h.handleGitStatus))
 	r.Get("/api/git/diff", h.protectedEndpoint(h.handleGitDiff))
 	r.Get("/api/git/history", h.protectedEndpoint(h.handleGitHistory))

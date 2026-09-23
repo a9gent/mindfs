@@ -5353,6 +5353,32 @@ export function App({ onGoHome }: AppProps) {
     [runGitAction],
   );
 
+  const handleCreateBlankFile = useCallback(async () => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID) return;
+    const targetDir = (selectedDirRef.current === rootID ? "." : selectedDirRef.current) || ".";
+    const input = window.prompt(t("directory.fileNamePrompt"), "");
+    if (input === null) return;
+    const name = input.trim();
+    if (!name || name === "." || name === ".." || /[/\\\x00]/.test(name)) {
+      window.alert(t("directory.invalidFileName"));
+      return;
+    }
+    try {
+      await apiProtectedJSON(appPath(`/api/file?${new URLSearchParams({ root: rootID })}`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dir: targetDir, name }),
+      });
+      const currentDir = (selectedDirRef.current === rootID ? "." : selectedDirRef.current) || ".";
+      await refreshTreeDir(rootID, targetDir, rootID === currentRootIdRef.current && currentDir === targetDir);
+    } catch (err) {
+      reportError("file.write_failed", err instanceof ProtectedAPIError && err.status === 409
+        ? t("directory.fileExists")
+        : String((err as Error)?.message || t("directory.createFileFailed")));
+    }
+  }, [refreshTreeDir, t]);
+
   const handleTreeUpload = useCallback(
     async (files: File[]) => {
       const rootID = currentRootIdRef.current;
@@ -12445,7 +12471,6 @@ export function App({ onGoHome }: AppProps) {
                         style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--text-secondary)" }}
                       >
                         <AgentIcon agentName={agentStage.agent} style={{ width: 14, height: 14, display: "block", flexShrink: 0 }} />
-                        {agentStage.model}
                       </span>
                     ) : null;
                     const taskSessionKeys = detail?.stage_runs.some(run => run.session_key)
@@ -13630,6 +13655,7 @@ export function App({ onGoHome }: AppProps) {
           });
         }}
         onUploadFiles={handleTreeUpload}
+        onCreateBlankFile={handleCreateBlankFile}
         onRenameRoot={handleRenameCurrentRoot}
         onRemoveRoot={handleRemoveCurrentRoot}
         isGitRepo={managedRootByIdRef.current[currentRootId || ""]?.is_git_repo === true}

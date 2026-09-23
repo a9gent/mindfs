@@ -88,7 +88,7 @@ func TestFileEditingHTTPAndEncryption(t *testing.T) {
 				return response.Code, result
 			}
 			if encrypted {
-				for _, method := range []string{"GET", "PUT"} {
+				for _, method := range []string{"GET", "PUT", "POST"} {
 					path := target
 					var body any
 					if method == "GET" {
@@ -100,6 +100,36 @@ func TestFileEditingHTTPAndEncryption(t *testing.T) {
 						t.Fatalf("unprotected %s accepted: %d", method, status)
 					}
 				}
+			}
+			if err := os.Mkdir(filepath.Join(dir, "nested"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			for _, folder := range []string{".", "nested"} {
+				body := map[string]any{"dir": folder, "name": "空白.txt"}
+				if status, _ := request("POST", target, body, true); status != http.StatusCreated {
+					t.Fatalf("create in %s: %d", folder, status)
+				}
+				createdPath := filepath.Join(dir, folder, "空白.txt")
+				if info, err := os.Stat(createdPath); err != nil || info.Size() != 0 {
+					t.Fatalf("expected empty file: %v %v", info, err)
+				}
+				if err := os.WriteFile(createdPath, []byte("keep"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if status, _ := request("POST", target, body, true); status != http.StatusConflict {
+					t.Fatalf("duplicate create: %d", status)
+				}
+				if data, err := os.ReadFile(createdPath); err != nil || string(data) != "keep" {
+					t.Fatalf("existing content changed: %q %v", data, err)
+				}
+			}
+			for _, name := range []string{"", " ", ".", "..", "../escape.txt", "a/b", `a\b`} {
+				if status, _ := request("POST", target, map[string]any{"dir": ".", "name": name}, true); status != http.StatusBadRequest {
+					t.Fatalf("invalid name %q accepted: %d", name, status)
+				}
+			}
+			if status, _ := request("POST", target, map[string]any{"dir": "..", "name": "escape.txt"}, true); status != http.StatusBadRequest {
+				t.Fatalf("outside root accepted: %d", status)
 			}
 			status, payload := request("GET", target+"&edit=1", nil, true)
 			if status != 200 {
