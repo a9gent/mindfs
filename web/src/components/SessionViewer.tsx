@@ -288,7 +288,7 @@ function TurnTokenUsage({ usage }: { usage?: TokenUsage }) {
   const cacheLabel = hitPercent === null ? "—" : `${hitPercent}%`;
   return (
     <span
-      title={`${inputTokens}(♻ ${cacheLabel})→${outputTokens}`}
+      title={`${inputTokens}(♻${cacheLabel})→${outputTokens}`}
       style={{
         display: "inline-flex",
         alignItems: "baseline",
@@ -298,7 +298,7 @@ function TurnTokenUsage({ usage }: { usage?: TokenUsage }) {
       }}
     >
       <span>{formatTurnTokenCount(inputTokens)}</span>
-      <span>{`(♻ ${cacheLabel})`}</span>
+      <span>{`(♻${cacheLabel})`}</span>
       <span>→</span>
       <span>{formatTurnTokenCount(outputTokens)}</span>
     </span>
@@ -338,7 +338,7 @@ function formatAssistantExchangeMeta(
   if (`${item.fastService || ""}`.trim().toLowerCase() === "on") {
     parts.push("fast");
   }
-  return parts.join(" · ");
+  return parts.join("·").replace(/\s+/g, "");
 }
 
 function ContextWindowBadge({
@@ -2253,7 +2253,7 @@ function SessionViewerInner({
                       overflowWrap: "anywhere",
                     }}
                   >
-                    {time}{assistantDurationLabel ? ` ${assistantDurationLabel}` : ""}
+                    {time.replace(/\s+/g, "")}{assistantDurationLabel}
                   </span>
                   <span
                     style={{
@@ -3097,7 +3097,7 @@ function SessionViewerInner({
                       fontVariantNumeric: "tabular-nums",
                     }}
                   >
-                    {userMessageSummaries.length > 99 ? "99+" : userMessageSummaries.length}
+                    {userMessageSummaries.length}
                   </span>
                 </button>
               </div>

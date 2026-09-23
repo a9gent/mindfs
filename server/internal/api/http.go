@@ -235,6 +235,21 @@ func isLocalCLIPath(r *http.Request) bool {
 	if r == nil || r.URL == nil {
 		return false
 	}
+	if strings.HasSuffix(r.URL.Path, "/approve-plan") {
+		return false
+	}
+	if r.URL.Path == "/api/task-groups" || strings.HasPrefix(r.URL.Path, "/api/task-groups/") {
+		return r.Method == http.MethodGet || r.Method == http.MethodPost
+	}
+	if r.Method == http.MethodGet && (r.URL.Path == "/api/agents" || r.URL.Path == "/api/task-templates" || r.URL.Path == "/api/tasks") {
+		return true
+	}
+	if r.Method == http.MethodPost && r.URL.Path == "/api/tasks" {
+		return true
+	}
+	if (r.Method == http.MethodPatch || r.Method == http.MethodDelete) && isLocalCLITaskPath(r.URL.Path) {
+		return true
+	}
 	switch r.Method {
 	case http.MethodPost:
 		return r.URL.Path == "/api/dirs" || r.URL.Path == "/api/relay/bind/start" || isLocalCLITaskPath(r.URL.Path)
@@ -341,8 +356,18 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/task-templates", h.protectedEndpoint(h.handleTaskTemplateSave))
 	r.Put("/api/task-templates/{id}", h.protectedEndpoint(h.handleTaskTemplateSave))
 	r.Delete("/api/task-templates/{id}", h.protectedEndpoint(h.handleTaskTemplateDelete))
+	r.Get("/api/task-groups", h.protectedEndpoint(h.handleTaskGroups))
+	r.Post("/api/task-groups", h.protectedEndpoint(h.handleTaskGroups))
+	r.Get("/api/task-groups/{id}", h.protectedEndpoint(h.handleTaskGroup))
+	r.Patch("/api/task-groups/{id}/context", h.protectedEndpoint(h.handleTaskGroupContext))
+	r.Post("/api/task-groups/{id}/{operation}", h.protectedEndpoint(h.handleTaskGroupAction))
 	r.Get("/api/tasks", h.protectedEndpoint(h.handleKanbanTasksList))
 	r.Post("/api/tasks", h.protectedEndpoint(h.handleKanbanTaskCreate))
+	r.Get("/api/tasks/{id}", h.protectedEndpoint(h.handleTaskDetail))
+	r.Patch("/api/tasks/{id}", h.protectedEndpoint(h.handleTaskPatch))
+	r.Delete("/api/tasks/{id}", h.protectedEndpoint(h.handleTaskDelete))
+	r.Get("/api/tasks/{id}/read/{resource}", h.protectedEndpoint(h.handleTaskRead))
+	r.Post("/api/tasks/{id}/orchestration/{operation}", h.protectedEndpoint(h.handleTaskOrchestration))
 	r.Post("/api/tasks/{id}/input", h.protectedEndpoint(h.handleKanbanTaskInputUpdate))
 	r.Post("/api/tasks/{id}/next", h.protectedEndpoint(h.handleKanbanTaskNext))
 	r.Post("/api/tasks/{id}/run-now", h.protectedEndpoint(h.handleKanbanTaskRunNow))

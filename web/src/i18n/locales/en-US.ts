@@ -1,6 +1,19 @@
 import type { Messages } from "../types";
 
 export const enUS = {
+
+
+  "taskGroup.title": "Task groups",
+  "taskGroup.dag": "Tasks",
+  "taskGroup.context": "Shared context",
+  "taskGroup.messages": "Message history",
+  "taskGroup.noMessages": "No messages yet",
+  "taskGroup.parentConversation": "Parent conversation",
+  "taskGroup.start": "Start",
+  "taskGroup.pause": "Pause",
+  "taskGroup.resume": "Resume",
+  "task.newBranchName": "New branch name (blank for automatic)",
+
   "app.name": "MindFS",
   "app.initFailed": "Initialization failed",
   "common.cancel": "Cancel",

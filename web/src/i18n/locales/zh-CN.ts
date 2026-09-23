@@ -1,4 +1,17 @@
 export const zhCN = {
+
+
+  "taskGroup.title": "任务组",
+  "taskGroup.dag": "任务",
+  "taskGroup.context": "共享上下文",
+  "taskGroup.messages": "消息历史",
+  "taskGroup.noMessages": "暂无消息",
+  "taskGroup.parentConversation": "父会话",
+  "taskGroup.start": "开始",
+  "taskGroup.pause": "暂停",
+  "taskGroup.resume": "继续",
+  "task.newBranchName": "新分支名称（留空自动生成）",
+
   "app.name": "MindFS",
   "app.initFailed": "初始化失败",
   "common.cancel": "取消",

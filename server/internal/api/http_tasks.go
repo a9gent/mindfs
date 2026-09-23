@@ -151,9 +151,56 @@ func (h *HTTPHandler) handleKanbanTasksList(w http.ResponseWriter, r *http.Reque
 		opts.Stage = stage
 		opts.HasStage = true
 	}
+	summary := r.URL.Query().Get("summary") == "1"
+	if summary {
+		opts.CreatedDesc = true
+		opts.Limit = 21 // One extra row determines whether another page exists.
+		if raw := r.URL.Query().Get("cursor"); raw != "" {
+			cursor, err := strconv.Atoi(raw)
+			if err != nil || cursor <= 0 {
+				respondError(w, http.StatusBadRequest, errInvalidRequest("cursor must be a positive task number"))
+				return
+			}
+			opts.CursorTaskNumber = cursor
+		}
+	}
 	items, err := svc.ListTaskDetails(r.Context(), rootID, opts)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	if summary {
+		nextCursor := ""
+		if len(items) > 20 {
+			items = items[:20]
+			last := items[len(items)-1].Task
+			nextCursor = strconv.Itoa(last.TaskNumber)
+		}
+		summaries := []map[string]any{}
+		for _, d := range items {
+			input := ""
+			for _, run := range d.StageRuns {
+				if run.StageIndex == 0 {
+					input = run.Input
+					break
+				}
+			}
+			runes := []rune(input)
+			if len(runes) > 240 {
+				input = string(runes[:240]) + "…"
+			}
+			agentName, model := "", ""
+			tmpl, _ := svc.TaskExecutionTemplate(d.Task)
+			for _, stage := range tmpl.Stages {
+				if stage.Snapshot.Role == kanban.RoleAgent {
+					agentName = stage.Snapshot.Agent
+					model = stage.Snapshot.Model
+					break
+				}
+			}
+			summaries = append(summaries, map[string]any{"id": d.Task.ID, "task_number": d.Task.TaskNumber, "group_id": d.Task.GroupID, "status": d.Task.Status, "published": d.Task.Published, "input_summary": input, "block_reason": d.Task.BlockReason, "depends_on": d.Task.DependsOn, "agent": agentName, "model": model})
+		}
+		respondJSON(w, http.StatusOK, map[string]any{"items": summaries, "next_cursor": nextCursor})
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"items": items})
@@ -164,26 +211,14 @@ func (h *HTTPHandler) handleKanbanTaskCreate(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	var req struct {
-		RootID             string `json:"root_id"`
-		TaskTemplateID     string `json:"task_template_id"`
-		Input              string `json:"input"`
-		CreateWorktree     bool   `json:"create_worktree"`
-		WorktreeBranchMode string `json:"worktree_branch_mode"`
-		WorktreeBranch     string `json:"worktree_branch"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&req); err != nil {
+	var req kanban.CreateTaskInput
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 4<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json body"))
 		return
 	}
-	detail, err := svc.CreateTask(r.Context(), kanban.CreateTaskInput{
-		RootID:             req.RootID,
-		TaskTemplateID:     req.TaskTemplateID,
-		Input:              req.Input,
-		CreateWorktree:     req.CreateWorktree,
-		WorktreeBranchMode: req.WorktreeBranchMode,
-		WorktreeBranch:     req.WorktreeBranch,
-	})
+	detail, err := svc.CreateTask(r.Context(), req)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err)
 		return

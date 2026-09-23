@@ -142,6 +142,7 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	}
 	services.Kanban = kanban.NewService(taskTemplates, services)
 	services.Kanban.SetRunner(services)
+	services.Kanban.Start(ctx)
 	githubImportSvc, err := githubimport.NewService(services)
 	if err != nil {
 		return err

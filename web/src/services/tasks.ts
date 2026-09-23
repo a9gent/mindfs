@@ -25,7 +25,6 @@ export type StageTemplate = {
   plan_mode?: boolean;
   session_reuse_policy?: "task_main" | "same_stage" | "always_new";
   prompt_template?: string;
-  agent_can_control_stage?: boolean;
   created_at?: string;
   updated_at?: string;
 };
@@ -48,6 +47,12 @@ export type TaskTemplate = {
 };
 
 export type KanbanTask = {
+  group_id?: string;
+  agent?: string;
+  model?: string | null;
+  published?: boolean;
+  block_reason?: string;
+  depends_on?: string[];
   id: string;
   task_number?: number;
   root_id: string;
@@ -78,6 +83,8 @@ export type KanbanTask = {
 };
 
 export type StageRun = {
+  result?: string;
+  trigger?: string;
   id: string;
   task_id: string;
   stage_index: number;
@@ -94,6 +101,8 @@ export type StageRun = {
 };
 
 export type TaskEvent = {
+  receiver_task_id?: string;
+  handled_at?: string;
   id: string;
   task_id: string;
   stage_run_id?: string;
@@ -312,6 +321,7 @@ export async function createTask(
   createWorktree = false,
   worktreeBranchMode: "new" | "existing" = "new",
   worktreeBranch = "",
+  execution?: { agent?: string; model?: string },
 ): Promise<TaskDetail> {
   return protectedJSON<TaskDetail>(appURL("/api/tasks"), {
     method: "POST",
@@ -319,6 +329,7 @@ export async function createTask(
     body: JSON.stringify({
       root_id: rootId,
       task_template_id: taskTemplateId,
+      ...execution,
       input,
       create_worktree: createWorktree,
       worktree_branch_mode: worktreeBranchMode,
@@ -353,5 +364,42 @@ export async function moveTask(rootId: string, taskId: string, action: "next" | 
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ root_id: rootId, reason }),
+  });
+}
+
+export async function patchTask(root: string, id: string, patch: Record<string,unknown>): Promise<TaskDetail> {
+ return protectedJSON<TaskDetail>(appURL(`/api/tasks/${encodeURIComponent(id)}`), {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({root_id:root,...patch})});
+}
+
+export async function fetchTaskDetail(root: string,id: string): Promise<TaskDetail> {
+ return protectedJSON<TaskDetail>(appURL(`/api/tasks/${encodeURIComponent(id)}`,new URLSearchParams({root})));
+}
+
+export async function deleteCachedTask(root:string,id:string):Promise<void> {
+ await withTaskStore("readwrite",async({tasks})=>{await taskRequest(tasks.delete(taskCacheKey(root,id)))});
+}
+
+export type TaskGroup = {
+  id: string; root_id: string; session_key: string; title: string;
+  project_context: string; published: boolean;
+  plan_version: number; status: string; block_reason: string; updated_at: string;
+};
+export type GroupMessage = { from: string; to: string; message: string; timestamp: string };
+export type GroupGraph = { group: TaskGroup; tasks: TaskDetail[]; edges: Record<string,string[]>; messages: TaskEvent[]; message_history?: GroupMessage[] };
+export async function fetchTaskGroups(root: string): Promise<TaskGroup[]> {
+  const data = await protectedJSON<{items:TaskGroup[]}>(appURL(`/api/task-groups?root=${encodeURIComponent(root)}`));
+  return data.items || [];
+}
+export function fetchGroupGraph(root:string,id:string):Promise<GroupGraph> {
+  return protectedJSON(appURL(`/api/task-groups/${encodeURIComponent(id)}?root=${encodeURIComponent(root)}`));
+}
+export function groupOperation(root:string,id:string,operation:string,input:Record<string,unknown>={}):Promise<TaskGroup> {
+  return protectedJSON(appURL(`/api/task-groups/${encodeURIComponent(id)}/${operation}`),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...input,root_id:root})});
+}
+
+export function updateGroupContext(root: string, id: string, projectContext: string, planVersion: number): Promise<TaskGroup> {
+  return protectedJSON(appURL(`/api/task-groups/${encodeURIComponent(id)}/context`), {
+    method: "PATCH", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({root_id: root, project_context: projectContext, plan_version: planVersion}),
   });
 }

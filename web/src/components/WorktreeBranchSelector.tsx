@@ -31,7 +31,7 @@ export function WorktreeBranchSelector({
   const selectedBranch = branches.find((item) => item.name === branch);
   const label =
     branchMode === "new"
-      ? t("worktree.createBranch")
+      ? (branch || t("worktree.createBranch"))
       : selectedBranch?.name || branch;
 
   useEffect(() => {

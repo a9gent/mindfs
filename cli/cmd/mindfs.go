@@ -66,8 +66,15 @@ func main() {
 		fmt.Fprintf(out, "  mindfs -remove /path/to/project\n")
 		fmt.Fprintf(out, "  mindfs <rootid> -task 12\n")
 		fmt.Fprintf(out, "  mindfs <rootid> -task 12 -next\n")
+		fmt.Fprintf(out, "  mindfs <rootid> -tasks\n  mindfs -agents\n  mindfs -task-templates\n")
+		fmt.Fprintf(out, "  mindfs <rootid> -task-create < task.json\n")
+		fmt.Fprintf(out, "  mindfs <rootid> -task-groups\n")
+		fmt.Fprintf(out, "  mindfs <rootid> -task-group-create < group.json\n")
+		fmt.Fprintf(out, "  mindfs <rootid> -task-group <group-id> -graph\n")
+		fmt.Fprintln(out, "  mindfs -orchestration  # detailed orchestration guide (Markdown)")
 	}
 
+	orchestrationHelp := flag.Bool("orchestration", false, "print task and conversation orchestration guide as Markdown; no service required")
 	addr := flag.String("addr", "127.0.0.1:7331", "listen address")
 	noRelayer := flag.Bool("no-relayer", false, "disable relay integration")
 	e2eeFlag := flag.Bool("e2ee", false, "enable end-to-end encryption for sensitive data")
@@ -77,22 +84,35 @@ func main() {
 	internalAutoStartFlag := flag.Bool("internal-autostart", false, "internal flag used by the automatic startup entry")
 	stop := flag.Bool("stop", false, "stop the background mindfs service")
 	restart := flag.Bool("restart", false, "restart the background mindfs service")
-	statusFlag := flag.Bool("status", false, "show background service status")
+	statusFlag := flag.Bool("status", false, "show service status, or task/group status with -task/-task-group")
 	versionFlag := flag.Bool("version", false, "show version")
-	updateFlag := flag.Bool("update", false, "check for and install the latest MindFS release")
+	updateFlag := flag.Bool("update", false, "update MindFS, or edit a task with -task (JSON from stdin)")
 	uninstallFlag := flag.Bool("uninstall", false, "print the MindFS uninstall command")
 	bindRelay := flag.Bool("bind-relay", false, "start relay binding and print the relayer bind URL")
 	configFlag := flag.String("config", "", "mindfs startup config file; command-line flags override file values")
 	agentConfigFlag := flag.String("agent-config", "", "extra agents.json file for customizable agent(ACP-protocol) and shell")
 	notifyScriptFlag := flag.String("notify-script", "", "executable script for notification events; receives JSON payload on stdin")
 	remove := flag.Bool("remove", false, "remove the managed directory")
-	taskNumber := flag.String("task", "", "task number for task stage control; defaults to status when set")
-	taskNext := flag.Bool("next", false, "advance task to next stage")
-	taskPrev := flag.Bool("prev", false, "move task to previous stage")
+	groupCreate := flag.Bool("task-group-create", false, "create an orchestration group linked to a parent session")
+	groupList := flag.Bool("task-groups", false, "list task groups and their parent conversations")
+	groupID := flag.String("task-group", "", "task group ID (defaults to -graph)")
+	toTask := flag.String("to-task", "", "reply to a task; read JSON message from stdin")
+	fromTask := flag.String("from-task", "", "report from a task to its parent conversation; read JSON message from stdin")
+	taskCreate := flag.Bool("task-create", false, "create a task from JSON")
+	taskList := flag.Bool("tasks", false, "list tasks, newest created first, 20 per page")
+	taskCursor := flag.String("cursor", "", "task number returned as next_cursor by the previous -tasks response")
+	taskAgents := flag.Bool("agents", false, "list global agents and model capabilities (no root ID required)")
+	taskTemplates := flag.Bool("task-templates", false, "list global task templates (no root ID required)")
+	taskNumber := flag.String("task", "", "task ID or project task number (defaults to -status)")
+	taskOperations := registerTaskOperationFlags(flag.CommandLine, statusFlag, updateFlag)
 	tlsFlag := flag.Bool("tls", false, "enable HTTPS (auto-generates self-signed cert if -cert/-key not provided)")
 	certFlag := flag.String("cert", "", "TLS certificate file (PEM); auto-generated if empty with -tls")
 	keyFlag := flag.String("key", "", "TLS private key file (PEM); auto-generated if empty with -tls")
 	_ = flag.CommandLine.Parse(normalizeTaskRootFirstArgs(os.Args[1:]))
+	if *orchestrationHelp {
+		fmt.Print(taskCLIHelp)
+		return
+	}
 	explicitFlags := visitedFlags(flag.CommandLine)
 	startupCfg, err := loadStartupConfig(*configFlag)
 	if err != nil {
@@ -109,14 +129,63 @@ func main() {
 		printVersion()
 		return
 	}
-	if strings.TrimSpace(*taskNumber) != "" {
-		rootID := ""
-		if flag.NArg() > 0 {
-			rootID = flag.Arg(0)
+	action, count := selectedTaskOperation(taskOperations, *taskNumber != "" || *groupID != "" || *toTask != "" || *fromTask != "" || *groupCreate || *groupList || *taskCreate || *taskList || *taskAgents || *taskTemplates)
+	if *taskCursor != "" && !*taskList {
+		fmt.Fprintln(os.Stderr, "-cursor requires -tasks")
+		os.Exit(1)
+	}
+	if *toTask != "" || *fromTask != "" || *groupCreate || *groupList || *groupID != "" || *taskNumber != "" || count > 0 || *taskCreate || *taskList || *taskAgents || *taskTemplates {
+		for _, operation := range []struct {
+			enabled bool
+			name    string
+		}{
+			{*taskCreate, "create"}, {*taskList, "list"}, {*taskAgents, "agents"},
+			{*taskTemplates, "templates"}, {*groupCreate, "group:create"}, {*groupList, "group:list"},
+		} {
+			if operation.enabled {
+				action = operation.name
+				count++
+			}
 		}
-		action := taskCLIAction(*statusFlag, *taskNext, *taskPrev)
-		if err := handleTaskCommand(*addr, *tlsFlag, rootID, strings.TrimSpace(*taskNumber), action); err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
+		messageTaskID := ""
+		for _, target := range []struct{ id, action string }{{*toTask, "to-task"}, {*fromTask, "from-task"}} {
+			if target.id != "" {
+				count++
+				action = target.action
+				messageTaskID = target.id
+			}
+		}
+		if messageTaskID != "" && (*taskNumber != "" || *groupID != "") {
+			fmt.Fprintln(os.Stderr, "choose one of -task, -task-group, -to-task, or -from-task")
+			os.Exit(1)
+		}
+		id := *taskNumber
+		if messageTaskID != "" {
+			id = messageTaskID
+		}
+		if *groupID != "" {
+			if id != "" || *groupCreate || *groupList || *taskCreate || *taskList || *taskAgents || *taskTemplates {
+				fmt.Fprintln(os.Stderr, "choose either -task-group or -task")
+				os.Exit(1)
+			}
+			id = *groupID
+			if count == 0 {
+				action, count = "graph", 1
+			}
+			action = "group:" + action
+		} else if id != "" && count == 0 {
+			action, count = "status", 1
+		}
+		if count != 1 {
+			fmt.Fprintln(os.Stderr, "exactly one task operation required")
+			os.Exit(1)
+		}
+		root := ""
+		if flag.NArg() > 0 {
+			root = flag.Arg(0)
+		}
+		if err := handleTaskOperation(*addr, *tlsFlag, root, id, action, *taskCursor); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		return
@@ -872,31 +941,17 @@ func normalizeTaskRootFirstArgs(args []string) []string {
 
 func containsTaskFlag(args []string) bool {
 	for _, arg := range args {
-		if arg == "-task" || arg == "--task" || strings.HasPrefix(arg, "-task=") || strings.HasPrefix(arg, "--task=") {
+		name := strings.SplitN(strings.TrimLeft(arg, "-"), "=", 2)[0]
+		if !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		switch name {
+		case "to-task", "from-task", "task-group", "task-groups", "task-group-create", "tasks", "task-create", "agents", "task-templates", "task":
 			return true
 		}
 	}
-	return false
-}
 
-func taskCLIAction(status, next, prev bool) string {
-	actions := []string{}
-	if status {
-		actions = append(actions, "status")
-	}
-	if next {
-		actions = append(actions, "next")
-	}
-	if prev {
-		actions = append(actions, "prev")
-	}
-	if len(actions) == 0 {
-		return "status"
-	}
-	if len(actions) > 1 {
-		return ""
-	}
-	return actions[0]
+	return false
 }
 
 type taskCLIListResponse struct {
@@ -908,61 +963,6 @@ type taskCLIDetailHeader struct {
 		ID         string `json:"id"`
 		TaskNumber int    `json:"task_number"`
 	} `json:"task"`
-}
-
-func handleTaskCommand(addr string, useTLS bool, rootID, taskNumberRaw, action string) error {
-	rootID = strings.TrimSpace(rootID)
-	taskNumberRaw = strings.TrimSpace(strings.TrimPrefix(taskNumberRaw, "#"))
-	if rootID == "" {
-		return errors.New("root id argument required: mindfs <rootid> -task <task_number>")
-	}
-	taskNumber, err := strconv.Atoi(taskNumberRaw)
-	if err != nil || taskNumber <= 0 {
-		return errors.New("task number must be a positive integer")
-	}
-	if action == "" {
-		return errors.New("at most one task action allowed: -status, -next, or -prev")
-	}
-	token, err := app.ReadLocalCLIToken(addr)
-	if err != nil {
-		return err
-	}
-	taskID, detail, err := fetchTaskDetailByNumber(addr, useTLS, token, rootID, taskNumber)
-	if err != nil {
-		return err
-	}
-	if action == "status" {
-		_, err = os.Stdout.Write(detail)
-		if err == nil {
-			fmt.Fprintln(os.Stdout)
-		}
-		return err
-	}
-	payload, err := json.Marshal(map[string]any{"root_id": rootID})
-	if err != nil {
-		return err
-	}
-	path := "/api/tasks/" + url.PathEscape(taskID) + "/" + action
-	req, err := http.NewRequest(http.MethodPost, addrToURL(addr, path, useTLS), bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-MindFS-Local-CLI-Token", token)
-	req.Header.Set("Content-Type", "application/json")
-	client := newHTTPClient(useTLS, 10*time.Second)
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("task command failed: %s", httpErrorMessage(resp))
-	}
-	_, err = io.Copy(os.Stdout, resp.Body)
-	if err == nil {
-		fmt.Fprintln(os.Stdout)
-	}
-	return err
 }
 
 func fetchTaskDetailByNumber(addr string, useTLS bool, token, rootID string, taskNumber int) (string, json.RawMessage, error) {

@@ -17,7 +17,7 @@ import (
 )
 
 const taskDBMetaPath = "tasks/task-kanban.db"
-const taskSelectColumns = "id, task_number, root_id, task_template_id, task_template_name, template_snapshot_json, create_worktree, worktree_branch_mode, worktree_branch, current_stage_index, status, scheduler_admitted, main_session_key, worktree_root_id, worktree_path, aux_ask_user_waiting, aux_has_plan, aux_has_todos, aux_has_task, aux_session_error, labels_json, created_at, updated_at, completed_at"
+const taskSelectColumns = "id, task_number, root_id, task_template_id, task_template_name, create_worktree, worktree_branch_mode, worktree_branch, current_stage_index, status, scheduler_admitted, main_session_key, worktree_root_id, worktree_path, aux_ask_user_waiting, aux_has_plan, aux_has_todos, aux_has_task, aux_session_error, labels_json, created_at, updated_at, completed_at, published, block_reason, group_id, agent_override, model_override"
 
 type TaskStore struct {
 	root fs.RootInfo
@@ -69,7 +69,6 @@ CREATE TABLE IF NOT EXISTS tasks (
 	root_id TEXT NOT NULL,
 	task_template_id TEXT NOT NULL,
 	task_template_name TEXT NOT NULL,
-	template_snapshot_json TEXT NOT NULL,
 	create_worktree INTEGER NOT NULL DEFAULT 0,
 	worktree_branch_mode TEXT NOT NULL DEFAULT '',
 	worktree_branch TEXT NOT NULL DEFAULT '',
@@ -146,10 +145,55 @@ CREATE INDEX IF NOT EXISTS idx_task_events_task_created ON task_events(task_id, 
 	if _, err := s.db.Exec(`ALTER TABLE tasks ADD COLUMN aux_session_error TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 		return err
 	}
+	if err := s.dropLegacyTaskColumns(); err != nil {
+		return err
+	}
+	if err := s.migrateOrchestration(); err != nil {
+		return err
+	}
 	if err := s.backfillTaskNumbers(); err != nil {
 		return err
 	}
 	return err
+}
+
+func (s *TaskStore) dropLegacyTaskColumns() error {
+	legacyColumns := []string{"template_snapshot_json", "is_parent_task", "parent_task_id", "plan_version", "project_context"}
+	rows, err := s.db.Query(`PRAGMA table_info(tasks)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dfltValue any
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// Release the sole SQLite connection before executing schema changes.
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec("DROP INDEX IF EXISTS idx_tasks_parent"); err != nil {
+		return err
+	}
+	for _, column := range legacyColumns {
+		if !existing[column] {
+			continue
+		}
+		if _, err := s.db.Exec(`ALTER TABLE tasks DROP COLUMN ` + column); err != nil && !strings.Contains(strings.ToLower(err.Error()), "no such column") {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *TaskStore) backfillTaskNumbers() error {
@@ -191,17 +235,23 @@ func (s *TaskStore) backfillTaskNumbers() error {
 }
 
 type ListTasksOptions struct {
-	TemplateID string
-	Status     string
-	TaskNumber int
-	Stage      int
-	HasStage   bool
-	After      string
-	Before     string
-	Limit      int
+	TemplateID       string
+	Status           string
+	TaskNumber       int
+	Stage            int
+	HasStage         bool
+	After            string
+	Before           string
+	Limit            int
+	CreatedDesc      bool
+	CursorTaskNumber int
 }
 
 func (s *TaskStore) CreateTask(ctx context.Context, task Task, firstRun StageRun, event TaskEvent) (Task, error) {
+	return s.CreateTaskWithDependencies(ctx, task, firstRun, event, nil)
+}
+
+func (s *TaskStore) CreateTaskWithDependencies(ctx context.Context, task Task, firstRun StageRun, event TaskEvent, deps []string) (Task, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Task{}, err
@@ -221,6 +271,12 @@ func (s *TaskStore) CreateTask(ctx context.Context, task Task, firstRun StageRun
 		return Task{}, err
 	}
 	if err := insertTaskEvent(ctx, tx, event); err != nil {
+		return Task{}, err
+	}
+	if err := replaceDependencies(ctx, tx, task.ID, deps); err != nil {
+		return Task{}, err
+	}
+	if err := appendToGroup(ctx, tx, task.GroupID); err != nil {
 		return Task{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -257,11 +313,29 @@ func (s *TaskStore) ListTasks(ctx context.Context, opts ListTasksOptions) ([]Tas
 		args = append(args, strings.TrimSpace(opts.Before))
 	}
 	limitClause := ""
+	order := "updated_at DESC, created_at DESC"
+	if opts.CreatedDesc {
+		// Stored timestamps are UTC RFC3339Nano. Strip Z so whole seconds
+		// sort before fractional seconds, including variable precision.
+		order = "rtrim(created_at, 'Z') DESC, id DESC"
+		if opts.CursorTaskNumber > 0 {
+			var createdAt, id string
+			err := s.db.QueryRowContext(ctx, "SELECT created_at, id FROM tasks WHERE task_number = ?", opts.CursorTaskNumber).Scan(&createdAt, &id)
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, errors.New("cursor task not found; restart pagination without -cursor")
+			}
+			if err != nil {
+				return nil, err
+			}
+			where = append(where, "(rtrim(created_at, 'Z') < rtrim(?, 'Z') OR (created_at = ? AND id < ?))")
+			args = append(args, createdAt, createdAt, id)
+		}
+	}
 	if opts.Limit > 0 {
 		limitClause = " LIMIT ?"
 		args = append(args, opts.Limit)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+taskSelectColumns+` FROM tasks WHERE `+strings.Join(where, " AND ")+` ORDER BY updated_at DESC, created_at DESC`+limitClause, args...)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+taskSelectColumns+` FROM tasks WHERE `+strings.Join(where, " AND ")+` ORDER BY `+order+limitClause, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -368,11 +442,15 @@ func (s *TaskStore) GetDetail(ctx context.Context, id string) (TaskDetail, error
 	if err != nil {
 		return TaskDetail{}, err
 	}
+	task.DependsOn, err = s.Dependencies(ctx, task.ID)
+	if err != nil {
+		return TaskDetail{}, err
+	}
 	return TaskDetail{Task: task, StageRuns: runs, Events: events}, nil
 }
 
 func (s *TaskStore) ListStageRuns(ctx context.Context, taskID string) ([]StageRun, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, task_id, stage_index, stage_name, role, status, session_key, input, rendered_prompt, started_at, finished_at, created_at, updated_at FROM stage_runs WHERE task_id = ? ORDER BY created_at ASC`, strings.TrimSpace(taskID))
+	rows, err := s.db.QueryContext(ctx, `SELECT id, task_id, stage_index, stage_name, role, status, session_key, input, rendered_prompt, started_at, finished_at, created_at, updated_at, trigger, result FROM stage_runs WHERE task_id = ? ORDER BY created_at ASC`, strings.TrimSpace(taskID))
 	if err != nil {
 		return nil, err
 	}
@@ -389,7 +467,7 @@ func (s *TaskStore) ListStageRuns(ctx context.Context, taskID string) ([]StageRu
 }
 
 func (s *TaskStore) ListEvents(ctx context.Context, taskID string) ([]TaskEvent, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, task_id, stage_run_id, type, payload_json, created_at FROM task_events WHERE task_id = ? ORDER BY created_at ASC`, strings.TrimSpace(taskID))
+	rows, err := s.db.QueryContext(ctx, `SELECT id, task_id, stage_run_id, type, payload_json, created_at, receiver_task_id, handled_at FROM task_events WHERE task_id = ? ORDER BY created_at ASC`, strings.TrimSpace(taskID))
 	if err != nil {
 		return nil, err
 	}
@@ -406,7 +484,7 @@ func (s *TaskStore) ListEvents(ctx context.Context, taskID string) ([]TaskEvent,
 }
 
 func (s *TaskStore) LatestStageRun(ctx context.Context, taskID string, stageIndex int) (StageRun, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, task_id, stage_index, stage_name, role, status, session_key, input, rendered_prompt, started_at, finished_at, created_at, updated_at FROM stage_runs WHERE task_id = ? AND stage_index = ? ORDER BY created_at DESC LIMIT 1`, strings.TrimSpace(taskID), stageIndex)
+	row := s.db.QueryRowContext(ctx, `SELECT id, task_id, stage_index, stage_name, role, status, session_key, input, rendered_prompt, started_at, finished_at, created_at, updated_at, trigger, result FROM stage_runs WHERE task_id = ? AND stage_index = ? ORDER BY created_at DESC LIMIT 1`, strings.TrimSpace(taskID), stageIndex)
 	return scanStageRun(row)
 }
 
@@ -554,7 +632,7 @@ func (s *TaskStore) UpdateTaskAndStageRun(ctx context.Context, task Task, run St
 }
 
 func (s *TaskStore) AddEvent(ctx context.Context, event TaskEvent) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO task_events (id, task_id, stage_run_id, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`, event.ID, event.TaskID, event.StageRunID, event.Type, event.Payload, event.CreatedAt.UTC().Format(time.RFC3339Nano))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO task_events (id, task_id, stage_run_id, type, payload_json, created_at, receiver_task_id, handled_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, event.ID, event.TaskID, event.StageRunID, event.Type, event.Payload, event.CreatedAt.UTC().Format(time.RFC3339Nano), event.ReceiverTaskID, event.HandledAt)
 	return err
 }
 
@@ -569,8 +647,11 @@ func (s *TaskStore) decorateCurrentStage(ctx context.Context, task *Task) {
 
 func insertTask(ctx context.Context, tx *sql.Tx, task Task) error {
 	labels, _ := json.Marshal(task.Labels)
-	_, err := tx.ExecContext(ctx, `INSERT INTO tasks (id, task_number, root_id, task_template_id, task_template_name, template_snapshot_json, create_worktree, worktree_branch_mode, worktree_branch, current_stage_index, status, scheduler_admitted, main_session_key, worktree_root_id, worktree_path, aux_ask_user_waiting, aux_has_plan, aux_has_todos, aux_has_task, aux_session_error, labels_json, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		task.ID, task.TaskNumber, task.RootID, task.TaskTemplateID, task.TaskTemplateName, "", boolInt(task.CreateWorktree), task.WorktreeBranchMode, task.WorktreeBranch, task.CurrentStageIndex, task.Status, boolInt(task.SchedulerAdmitted), task.MainSessionKey, task.WorktreeRootID, task.WorktreePath, boolInt(task.AuxFlags.AskUserWaiting), boolInt(task.AuxFlags.HasPlan), boolInt(task.AuxFlags.HasTodos), boolInt(task.AuxFlags.HasTask), strings.TrimSpace(task.AuxFlags.SessionError), string(labels), task.CreatedAt.UTC().Format(time.RFC3339Nano), task.UpdatedAt.UTC().Format(time.RFC3339Nano), task.CompletedAt)
+	_, err := tx.ExecContext(ctx, `INSERT INTO tasks (id, task_number, root_id, task_template_id, task_template_name, create_worktree, worktree_branch_mode, worktree_branch, current_stage_index, status, scheduler_admitted, main_session_key, worktree_root_id, worktree_path, aux_ask_user_waiting, aux_has_plan, aux_has_todos, aux_has_task, aux_session_error, labels_json, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		task.ID, task.TaskNumber, task.RootID, task.TaskTemplateID, task.TaskTemplateName, boolInt(task.CreateWorktree), task.WorktreeBranchMode, task.WorktreeBranch, task.CurrentStageIndex, task.Status, boolInt(task.SchedulerAdmitted), task.MainSessionKey, task.WorktreeRootID, task.WorktreePath, boolInt(task.AuxFlags.AskUserWaiting), boolInt(task.AuxFlags.HasPlan), boolInt(task.AuxFlags.HasTodos), boolInt(task.AuxFlags.HasTask), strings.TrimSpace(task.AuxFlags.SessionError), string(labels), task.CreatedAt.UTC().Format(time.RFC3339Nano), task.UpdatedAt.UTC().Format(time.RFC3339Nano), task.CompletedAt)
+	if err == nil {
+		err = updateTaskOrchestration(ctx, tx, task)
+	}
 	return err
 }
 
@@ -578,17 +659,20 @@ func updateTaskCore(ctx context.Context, tx *sql.Tx, task Task) error {
 	labels, _ := json.Marshal(task.Labels)
 	_, err := tx.ExecContext(ctx, `UPDATE tasks SET create_worktree = ?, worktree_branch_mode = ?, worktree_branch = ?, current_stage_index = ?, status = ?, scheduler_admitted = ?, main_session_key = ?, worktree_root_id = ?, worktree_path = ?, aux_ask_user_waiting = ?, aux_has_plan = ?, aux_has_todos = ?, aux_has_task = ?, aux_session_error = ?, labels_json = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
 		boolInt(task.CreateWorktree), task.WorktreeBranchMode, task.WorktreeBranch, task.CurrentStageIndex, task.Status, boolInt(task.SchedulerAdmitted), task.MainSessionKey, task.WorktreeRootID, task.WorktreePath, boolInt(task.AuxFlags.AskUserWaiting), boolInt(task.AuxFlags.HasPlan), boolInt(task.AuxFlags.HasTodos), boolInt(task.AuxFlags.HasTask), strings.TrimSpace(task.AuxFlags.SessionError), string(labels), task.UpdatedAt.UTC().Format(time.RFC3339Nano), task.CompletedAt, task.ID)
+	if err == nil {
+		err = updateTaskOrchestration(ctx, tx, task)
+	}
 	return err
 }
 
 func insertStageRun(ctx context.Context, tx *sql.Tx, run StageRun) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO stage_runs (id, task_id, stage_index, stage_name, role, status, session_key, input, rendered_prompt, started_at, finished_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.TaskID, run.StageIndex, run.StageName, run.Role, run.Status, run.SessionKey, run.Input, run.RenderedPrompt, run.StartedAt, run.FinishedAt, run.CreatedAt.UTC().Format(time.RFC3339Nano), run.UpdatedAt.UTC().Format(time.RFC3339Nano))
+	_, err := tx.ExecContext(ctx, `INSERT INTO stage_runs (id, task_id, stage_index, stage_name, role, status, session_key, input, rendered_prompt, started_at, finished_at, created_at, updated_at, trigger, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.TaskID, run.StageIndex, run.StageName, run.Role, run.Status, run.SessionKey, run.Input, run.RenderedPrompt, run.StartedAt, run.FinishedAt, run.CreatedAt.UTC().Format(time.RFC3339Nano), run.UpdatedAt.UTC().Format(time.RFC3339Nano), run.Trigger, run.Result)
 	return err
 }
 
 func insertTaskEvent(ctx context.Context, tx *sql.Tx, event TaskEvent) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO task_events (id, task_id, stage_run_id, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`, event.ID, event.TaskID, event.StageRunID, event.Type, event.Payload, event.CreatedAt.UTC().Format(time.RFC3339Nano))
+	_, err := tx.ExecContext(ctx, `INSERT INTO task_events (id, task_id, stage_run_id, type, payload_json, created_at, receiver_task_id, handled_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, event.ID, event.TaskID, event.StageRunID, event.Type, event.Payload, event.CreatedAt.UTC().Format(time.RFC3339Nano), event.ReceiverTaskID, event.HandledAt)
 	return err
 }
 
@@ -599,9 +683,8 @@ func scanTask(row scanner) (Task, error) {
 	var createWorktree, admitted, askUserWaiting, hasPlan, hasTodos, hasTask int
 	var sessionError string
 	var labels string
-	var templateSnapshot string
 	var created, updated string
-	if err := row.Scan(&task.ID, &task.TaskNumber, &task.RootID, &task.TaskTemplateID, &task.TaskTemplateName, &templateSnapshot, &createWorktree, &task.WorktreeBranchMode, &task.WorktreeBranch, &task.CurrentStageIndex, &task.Status, &admitted, &task.MainSessionKey, &task.WorktreeRootID, &task.WorktreePath, &askUserWaiting, &hasPlan, &hasTodos, &hasTask, &sessionError, &labels, &created, &updated, &task.CompletedAt); err != nil {
+	if err := row.Scan(&task.ID, &task.TaskNumber, &task.RootID, &task.TaskTemplateID, &task.TaskTemplateName, &createWorktree, &task.WorktreeBranchMode, &task.WorktreeBranch, &task.CurrentStageIndex, &task.Status, &admitted, &task.MainSessionKey, &task.WorktreeRootID, &task.WorktreePath, &askUserWaiting, &hasPlan, &hasTodos, &hasTask, &sessionError, &labels, &created, &updated, &task.CompletedAt, &task.Published, &task.BlockReason, &task.GroupID, &task.Agent, &task.Model); err != nil {
 		return Task{}, err
 	}
 	task.CreateWorktree = createWorktree != 0
@@ -622,7 +705,7 @@ func scanTask(row scanner) (Task, error) {
 func scanStageRun(row scanner) (StageRun, error) {
 	var run StageRun
 	var created, updated string
-	if err := row.Scan(&run.ID, &run.TaskID, &run.StageIndex, &run.StageName, &run.Role, &run.Status, &run.SessionKey, &run.Input, &run.RenderedPrompt, &run.StartedAt, &run.FinishedAt, &created, &updated); err != nil {
+	if err := row.Scan(&run.ID, &run.TaskID, &run.StageIndex, &run.StageName, &run.Role, &run.Status, &run.SessionKey, &run.Input, &run.RenderedPrompt, &run.StartedAt, &run.FinishedAt, &created, &updated, &run.Trigger, &run.Result); err != nil {
 		return StageRun{}, err
 	}
 	run.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
@@ -633,7 +716,7 @@ func scanStageRun(row scanner) (StageRun, error) {
 func scanTaskEvent(row scanner) (TaskEvent, error) {
 	var event TaskEvent
 	var created string
-	if err := row.Scan(&event.ID, &event.TaskID, &event.StageRunID, &event.Type, &event.Payload, &created); err != nil {
+	if err := row.Scan(&event.ID, &event.TaskID, &event.StageRunID, &event.Type, &event.Payload, &created, &event.ReceiverTaskID, &event.HandledAt); err != nil {
 		return TaskEvent{}, err
 	}
 	event.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)

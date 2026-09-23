@@ -73,6 +73,7 @@ function getSelectionPreview(text?: string): string {
 }
 
 type ActionBarProps = {
+  taskGroupBadge?: React.ReactNode;
   status?: WSStatus;
   agentsVersion?: number;
   codexRateLimitsRefreshToken?: number;
@@ -385,6 +386,7 @@ function stripPlanCommandPrefix(input: string): string {
 }
 
 export function ActionBar({
+  taskGroupBadge,
   status = "disconnected",
   agentsVersion = 0,
   codexRateLimitsRefreshToken = 0,
@@ -1288,12 +1290,13 @@ export function ActionBar({
             <div
               style={{
                 display: "flex",
-                alignItems: "center",
+                alignItems: "flex-end",
                 gap: "6px",
                 minWidth: 0,
                 pointerEvents: "auto",
               }}
             >
+              {taskGroupBadge}
               {planModeActive ? (
                 <div style={{ display: "inline-flex", alignItems: "center", gap: "5px", height: "20px", padding: "0 5px 0 8px", borderRadius: "999px", border: "1px solid rgba(37, 99, 235, 0.22)", background: "linear-gradient(rgba(37, 99, 235, 0.10), rgba(37, 99, 235, 0.10)), var(--mobile-overlay-bg)", color: "#2563eb", fontSize: "11px", fontWeight: 700, lineHeight: 1, flexShrink: 0 }}>
                   <span>Plan</span>
@@ -1311,7 +1314,7 @@ export function ActionBar({
                 </>
               ) : null}
             </div>
-            <div style={{ pointerEvents: "auto", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+            <div style={{ pointerEvents: "auto", display: "inline-flex", alignItems: "flex-end", gap: "6px" }}>
               <AgentMemoryIndicator refreshToken={agentsVersion + codexRateLimitsRefreshToken} />
               <CodexRateLimitIndicator agent={agent} refreshToken={codexRateLimitsRefreshToken} />
             </div>

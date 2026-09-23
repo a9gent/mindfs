@@ -39,6 +39,8 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 - **Built-in Token Stagion**: Real-time balance display and one-click activation.
 
 ### Task Board
+
+- **Task Orchestration**: Automatically break down complex goals into subtasks with dependencies, coordinate parallel execution across multiple agents, and complete the workflow with an overall acceptance review in the parent conversation.
 - **Concurrent Execution**: Run multiple tasks in parallel, with each task isolated via its own worktree.
 - **Task Templates**: Customize task stages within templates. Each stage supports configuration of the agent, model, planning mode toggle, preset prompts, and more.
 - **Deep Linking**: Dynamic, interactive associations between tasks, worktrees, sessions, and files.

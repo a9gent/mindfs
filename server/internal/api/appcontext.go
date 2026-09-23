@@ -261,23 +261,30 @@ func (s *AppContext) EnsureAgentSession(ctx context.Context, exec kanban.AgentSt
 	if strings.TrimSpace(exec.RootID) == "" {
 		return "", errors.New("root_id required")
 	}
-	if strings.TrimSpace(exec.Run.SessionKey) != "" && exec.Stage.SessionReusePolicy != kanban.SessionReuseAlwaysNew {
+	uc := &usecase.Service{Registry: s}
+	reusable := func(key string) bool {
+		if strings.TrimSpace(key) == "" {
+			return false
+		}
+		existing, err := uc.GetSession(ctx, usecase.GetSessionInput{RootID: exec.RootID, Key: key})
+		return err == nil && existing != nil
+	}
+	if reusable(exec.Run.SessionKey) && exec.Stage.SessionReusePolicy != kanban.SessionReuseAlwaysNew {
 		return strings.TrimSpace(exec.Run.SessionKey), nil
 	}
-	uc := &usecase.Service{Registry: s}
 	switch strings.TrimSpace(exec.Stage.SessionReusePolicy) {
 	case kanban.SessionReuseTaskMain, "":
-		if strings.TrimSpace(exec.Task.MainSessionKey) != "" {
+		if reusable(exec.Task.MainSessionKey) {
 			return strings.TrimSpace(exec.Task.MainSessionKey), nil
 		}
 	case kanban.SessionReuseSameStage:
-		if strings.TrimSpace(exec.Run.SessionKey) != "" {
+		if reusable(exec.Run.SessionKey) {
 			return strings.TrimSpace(exec.Run.SessionKey), nil
 		}
 	}
 	name := strings.TrimSpace(exec.Task.TaskTemplateName)
+	number := "#" + strconv.Itoa(exec.Task.TaskNumber)
 	if exec.Task.TaskNumber > 0 {
-		number := "#" + strconv.Itoa(exec.Task.TaskNumber)
 		if name == "" {
 			name = number
 		} else {
@@ -893,6 +900,9 @@ func (s *AppContext) BroadcastSessionDone(rootID, sessionKey, requestID string) 
 	s.notifySessionDone(rootID, sessionKey, requestID, pending)
 	hub.ClearSessionPending(sessionKey)
 	hub.BroadcastSessionDone(rootID, sessionKey, requestID)
+	if service, err := s.GetKanbanService(); err == nil {
+		service.Schedule(rootID)
+	}
 }
 
 func (s *AppContext) BroadcastScheduledTaskDone(rootID, taskID, taskName, sessionKey, summary string) {
@@ -1173,4 +1183,30 @@ func (s *AppContext) GetCandidateRegistry() *usecase.CandidateRegistry {
 		s.candidateRegistry = registry
 	}
 	return s.candidateRegistry
+}
+
+// StopTaskExecution requests cancellation without releasing the scheduler slot.
+// The kanban runner releases it only after SendMessage returns.
+func (s *AppContext) StopTaskExecution(ctx context.Context, task kanban.Task) error {
+	if task.MainSessionKey == "" {
+		return nil
+	}
+	uc := &usecase.Service{Registry: s}
+	return uc.CancelSessionTurn(ctx, usecase.CancelSessionTurnInput{RootID: task.RootID, Key: task.MainSessionKey})
+}
+
+func (s *AppContext) ValidateTaskAgent(stage kanban.StageTemplate) error {
+	if s.GetProber() == nil {
+		return nil
+	}
+	for _, status := range s.GetProber().GetConfiguredStatuses() {
+		if status.Name == stage.Agent {
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown agent %q; query available agents first", stage.Agent)
+}
+
+func (s *AppContext) TaskDeleted(root, id string) {
+	s.GetSessionStreamHub().BroadcastAll(WSResponse{Type: "task.deleted", Payload: map[string]any{"root_id": root, "task_id": id}})
 }

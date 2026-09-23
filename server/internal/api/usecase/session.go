@@ -936,7 +936,46 @@ func (s *Service) DeleteSession(ctx context.Context, in DeleteSessionInput) erro
 	for _, key := range keys {
 		cancelActiveSessionTurn(in.RootID, key)
 	}
+	if cleaner, ok := s.Registry.(interface {
+		DeleteSessionTaskGroups(context.Context, string, []string) ([]string, error)
+	}); ok {
+		executionKeys, err := cleaner.DeleteSessionTaskGroups(ctx, in.RootID, keys)
+		if err != nil {
+			return err
+		}
+		metas, err := manager.ListMetas(ctx)
+		if err != nil {
+			return err
+		}
+		existing := map[string]bool{}
+		for _, meta := range metas {
+			if meta != nil {
+				existing[meta.Key] = true
+			}
+		}
+		seen := map[string]bool{}
+		for _, key := range keys {
+			seen[key] = true
+		}
+		for _, key := range executionKeys {
+			if !existing[key] || seen[key] {
+				continue
+			}
+			children, err := deleteSessionCascadeKeys(ctx, manager, key)
+			if err != nil {
+				return err
+			}
+			for _, child := range children {
+				if !seen[child] {
+					keys = append(keys, child)
+					seen[child] = true
+				}
+			}
+		}
+	}
 	for _, key := range keys {
+		cancelActiveSessionTurn(in.RootID, key)
+
 		if err := manager.Delete(ctx, key); err != nil {
 			return err
 		}
@@ -1066,6 +1105,13 @@ func (s *Service) BuildPrompt(in BuildPromptInput) string {
 		prompt = buildPluginPrompt(clientCtx.PluginCatalog, in.Message, in.IsInitial, pluginDir)
 	} else if in.IsInitial && in.IncludeReplyTipsInUserMessage {
 		prompt = appendReplyTips(prompt)
+	}
+	if in.IsInitial && in.Manager != nil && in.Session != nil {
+		prompt += fmt.Sprintf("\n\nMindFS context: root_id=%s session_key=%s", in.Manager.Root().ID, in.Session.Key)
+		if in.Session.TaskID != "" {
+			prompt += " task_id=" + in.Session.TaskID
+		}
+		prompt += ". If asked to orchestrate tasks, read mindfs -orchestration; create a task group with this parent session_key, then create ordinary template tasks in that group.\n"
 	}
 	return prependSwitchHint(in, prompt)
 }
@@ -3897,4 +3943,10 @@ func (s *Service) CancelSessionTurn(ctx context.Context, in CancelSessionTurnInp
 	}
 	active.cancel()
 	return nil
+}
+
+// SessionTurnActive lets background orchestration defer while the user is chatting.
+// SendMessage's existing per-session lock remains the final serialization guard.
+func SessionTurnActive(rootID, sessionKey string) bool {
+	return getActiveTurn(rootID, sessionKey) != nil
 }

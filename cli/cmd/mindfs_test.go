@@ -16,12 +16,19 @@ func TestNormalizeTaskRootFirstArgs(t *testing.T) {
 	}
 }
 
-func TestTaskCLIActionDefaultsToStatus(t *testing.T) {
-	if got := taskCLIAction(false, false, false); got != "status" {
-		t.Fatalf("action = %q, want status", got)
+func TestNormalizeTaskGroupRootFirstArgs(t *testing.T) {
+	for _, flag := range []string{"-to-task", "--to-task", "-to-task=id", "-from-task", "--from-task=id", "-task-group", "--task-group", "-task-group=id", "--task-group=id", "-task-groups", "--task-groups", "-task-group-create", "--task-group-create"} {
+		args := []string{"root-id", flag}
+		want := []string{flag, "root-id"}
+		if got := normalizeTaskRootFirstArgs(args); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: got %v, want %v", flag, got, want)
+		}
 	}
-	if got := taskCLIAction(false, true, true); got != "" {
-		t.Fatalf("conflicting action = %q, want empty", got)
+	for _, flag := range []string{"-task-templates", "-agents", "-orchestration"} {
+		args := []string{flag}
+		if got := normalizeTaskRootFirstArgs(args); !reflect.DeepEqual(got, args) {
+			t.Fatalf("global flag changed: %v", got)
+		}
 	}
 }
 

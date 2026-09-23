@@ -33,21 +33,20 @@ const (
 )
 
 type StageTemplate struct {
-	ID                   string    `json:"id"`
-	Name                 string    `json:"name"`
-	Role                 string    `json:"role"`
-	AutoAdvance          bool      `json:"auto_advance"`
-	Agent                string    `json:"agent,omitempty"`
-	Model                string    `json:"model,omitempty"`
-	Mode                 string    `json:"mode,omitempty"`
-	Effort               string    `json:"effort,omitempty"`
-	FastService          string    `json:"fast_service,omitempty"`
-	PlanMode             bool      `json:"plan_mode,omitempty"`
-	SessionReusePolicy   string    `json:"session_reuse_policy,omitempty"`
-	PromptTemplate       string    `json:"prompt_template,omitempty"`
-	AgentCanControlStage bool      `json:"agent_can_control_stage,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Role               string    `json:"role"`
+	AutoAdvance        bool      `json:"auto_advance"`
+	Agent              string    `json:"agent,omitempty"`
+	Model              string    `json:"model,omitempty"`
+	Mode               string    `json:"mode,omitempty"`
+	Effort             string    `json:"effort,omitempty"`
+	FastService        string    `json:"fast_service,omitempty"`
+	PlanMode           bool      `json:"plan_mode,omitempty"`
+	SessionReusePolicy string    `json:"session_reuse_policy,omitempty"`
+	PromptTemplate     string    `json:"prompt_template,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type TaskTemplateStage struct {
@@ -68,6 +67,14 @@ type TaskTemplate struct {
 }
 
 type Task struct {
+	GroupID     string  `json:"group_id,omitempty"`
+	Agent       string  `json:"agent,omitempty"`
+	Model       *string `json:"model,omitempty"`
+	Published   bool    `json:"published"`
+	BlockReason string  `json:"block_reason,omitempty"`
+
+	DependsOn []string `json:"depends_on,omitempty"`
+
 	ID                 string       `json:"id"`
 	TaskNumber         int          `json:"task_number"`
 	RootID             string       `json:"root_id"`
@@ -108,6 +115,9 @@ type TaskAuxFlagsPatch struct {
 }
 
 type StageRun struct {
+	Trigger string `json:"trigger,omitempty"`
+	Result  string `json:"result,omitempty"`
+
 	ID             string    `json:"id"`
 	TaskID         string    `json:"task_id"`
 	StageIndex     int       `json:"stage_index"`
@@ -124,6 +134,9 @@ type StageRun struct {
 }
 
 type TaskEvent struct {
+	ReceiverTaskID string `json:"receiver_task_id,omitempty"`
+	HandledAt      string `json:"handled_at,omitempty"`
+
 	ID         string    `json:"id"`
 	TaskID     string    `json:"task_id"`
 	StageRunID string    `json:"stage_run_id,omitempty"`

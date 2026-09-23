@@ -42,7 +42,6 @@ const blankAgentStage = (): StageTemplate => ({
   plan_mode: false,
   session_reuse_policy: "task_main",
   prompt_template: "{previous_input}",
-  agent_can_control_stage: false,
 });
 
 const newTaskTemplate = (t?: I18nContextValue["t"]): TaskTemplate => ({
@@ -91,7 +90,6 @@ function stageChangedFromTemplate(stage: StageTemplate, templates: StageTemplate
     plan_mode: value.plan_mode === true,
     session_reuse_policy: value.session_reuse_policy || "",
     prompt_template: value.prompt_template || "",
-    agent_can_control_stage: value.agent_can_control_stage === true,
   });
   return comparable(stage) !== comparable(original);
 }

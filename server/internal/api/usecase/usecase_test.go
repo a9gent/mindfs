@@ -2353,3 +2353,87 @@ func (*renameManagedDirTestRegistry) GetFileWatcher(string, *session.Manager) (*
 }
 
 func (*renameManagedDirTestRegistry) ReleaseFileWatcher(string, string) {}
+
+type sessionCleanupRegistry struct {
+	*commandTestRegistry
+	cleanup func(context.Context, string, []string) ([]string, error)
+}
+
+func (r *sessionCleanupRegistry) DeleteSessionTaskGroups(ctx context.Context, root string, keys []string) ([]string, error) {
+	return r.cleanup(ctx, root, keys)
+}
+
+func TestDeleteSessionCleansTaskGroupsBeforeDeletingSessions(t *testing.T) {
+	for _, fails := range []bool{false, true} {
+		name := "success"
+		if fails {
+			name = "cleanup failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			root := rootfs.NewRootInfo("root", "root", t.TempDir())
+			manager := session.NewManager(root)
+			parent, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, Name: "parent"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			execution, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, Name: "execution"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			child, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, ParentSessionKey: execution.Key, Name: "nested"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			called := false
+			registry := &sessionCleanupRegistry{commandTestRegistry: &commandTestRegistry{root: root, manager: manager}}
+			registry.cleanup = func(_ context.Context, id string, keys []string) ([]string, error) {
+				called = true
+				if id != root.ID || len(keys) != 1 || keys[0] != parent.Key {
+					t.Fatalf("wrong cleanup target: %s %v", id, keys)
+				}
+				if _, err := manager.Get(ctx, parent.Key, 0); err != nil {
+					t.Fatal("parent deleted before cleanup", err)
+				}
+				if fails {
+					return nil, errors.New("could not stop execution")
+				}
+				return []string{execution.Key}, nil
+			}
+			svc := Service{Registry: registry}
+			err = svc.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: parent.Key})
+			if !called || (err != nil) != fails {
+				t.Fatalf("called=%v err=%v", called, err)
+			}
+			for _, key := range []string{parent.Key, execution.Key, child.Key} {
+				_, err := manager.Get(ctx, key, 0)
+				if (err == nil) != fails {
+					t.Fatalf("incorrect session retention %s: %v", key, err)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildPromptAddsMindFSContextOnlyToInitialMessage(t *testing.T) {
+	root := rootfs.NewRootInfo("root", "root", t.TempDir())
+	manager := session.NewManager(root)
+	service := &Service{}
+	for _, taskID := range []string{"", "task-test"} {
+		for _, initial := range []bool{true, false} {
+			prompt := service.BuildPrompt(BuildPromptInput{Message: "Task instructions", IsInitial: initial, Manager: manager, Session: &session.Session{Key: "session-test", TaskID: taskID}})
+			if strings.Count(prompt, "MindFS context:") != map[bool]int{true: 1, false: 0}[initial] {
+				t.Fatalf("wrong context count for task=%q initial=%v: %s", taskID, initial, prompt)
+			}
+			if initial && !strings.Contains(prompt, "root_id=root session_key=session-test") {
+				t.Fatalf("missing session identity: %s", prompt)
+			}
+			if strings.Contains(prompt, "task_id=") != (initial && taskID != "") {
+				t.Fatalf("wrong task identity for task=%q initial=%v: %s", taskID, initial, prompt)
+			}
+			if initial && taskID != "" && !strings.Contains(prompt, "task_id="+taskID) {
+				t.Fatalf("missing task identity: %s", prompt)
+			}
+		}
+	}
+}

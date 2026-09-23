@@ -244,7 +244,7 @@ func (s *Service) CreateGitWorktree(ctx context.Context, in CreateGitWorktreeInp
 		return CreateGitWorktreeOutput{}, errors.New("invalid branch_mode")
 	}
 	branch := strings.TrimSpace(in.Branch)
-	if branchMode == "new" {
+	if branchMode == "new" && branch == "" {
 		branch = name
 	} else if branch == "" {
 		return CreateGitWorktreeOutput{}, errors.New("branch required")

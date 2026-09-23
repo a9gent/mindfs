@@ -23,20 +23,28 @@ type RootProvider interface {
 }
 
 type Service struct {
+	runCtx    context.Context
+	cancel    context.CancelFunc
+	workers   sync.WaitGroup
+	closed    bool
 	Templates *TemplateStore
 	Roots     RootProvider
 	Runner    Runner
 
-	mu           sync.Mutex
-	stores       map[string]*TaskStore
-	scheduleRun  map[string]bool
-	schedulePend map[string]bool
+	opMu             sync.Mutex
+	running          map[string]bool
+	executionCancels map[string]context.CancelFunc
+	mu               sync.Mutex
+	stores           map[string]*TaskStore
+	scheduleRun      map[string]bool
+	schedulePend     map[string]bool
 }
 
 var errStopTaskExecution = errors.New("stop task execution")
 
 func NewService(templates *TemplateStore, roots RootProvider) *Service {
-	return &Service{Templates: templates, Roots: roots, stores: map[string]*TaskStore{}, scheduleRun: map[string]bool{}, schedulePend: map[string]bool{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Service{runCtx: ctx, cancel: cancel, Templates: templates, Roots: roots, stores: map[string]*TaskStore{}, scheduleRun: map[string]bool{}, schedulePend: map[string]bool{}}
 }
 
 func (s *Service) SetRunner(runner Runner) {
@@ -49,12 +57,17 @@ func (s *Service) SetRunner(runner Runner) {
 }
 
 type CreateTaskInput struct {
-	RootID             string
-	TaskTemplateID     string
-	Input              string
-	CreateWorktree     bool
-	WorktreeBranchMode string
-	WorktreeBranch     string
+	GroupID   string   `json:"group_id"`
+	DependsOn []string `json:"depends_on"`
+	Agent     string   `json:"agent"`
+	Model     string   `json:"model"`
+
+	RootID             string `json:"root_id"`
+	TaskTemplateID     string `json:"task_template_id"`
+	Input              string `json:"input"`
+	CreateWorktree     bool   `json:"create_worktree"`
+	WorktreeBranchMode string `json:"worktree_branch_mode"`
+	WorktreeBranch     string `json:"worktree_branch"`
 }
 
 type MoveInput struct {
@@ -191,7 +204,7 @@ func (s *Service) countUnfinishedTasksByTemplate(ctx context.Context, templateID
 	return total, nil
 }
 
-func (s *Service) CreateTask(ctx context.Context, in CreateTaskInput) (TaskDetail, error) {
+func (s *Service) createTask(ctx context.Context, in CreateTaskInput) (TaskDetail, error) {
 	rootID := strings.TrimSpace(in.RootID)
 	if rootID == "" {
 		return TaskDetail{}, errors.New("root_id required")
@@ -200,7 +213,7 @@ func (s *Service) CreateTask(ctx context.Context, in CreateTaskInput) (TaskDetai
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	tmpl, err := s.Templates.GetTaskTemplate(in.TaskTemplateID)
+	tmpl, err := s.creationTemplate(ctx, store, in)
 	if err != nil {
 		return TaskDetail{}, err
 	}
@@ -212,14 +225,18 @@ func (s *Service) CreateTask(ctx context.Context, in CreateTaskInput) (TaskDetai
 	taskID := newID("task")
 	first := tmpl.Stages[0].Snapshot
 	status := StatusWaitingUser
-	if first.AutoAdvance {
+	if in.GroupID != "" {
+		status = StatusPending
+	}
+	if first.AutoAdvance && in.GroupID == "" {
 		status = StatusQueued
 	}
 	task := Task{
-		ID:                 taskID,
-		RootID:             rootID,
-		TaskTemplateID:     tmpl.ID,
-		TaskTemplateName:   tmpl.Name,
+		ID:               taskID,
+		RootID:           rootID,
+		TaskTemplateID:   tmpl.ID,
+		TaskTemplateName: tmpl.Name,
+		GroupID:          in.GroupID, Agent: in.Agent, Model: createModelOverride(in),
 		CreateWorktree:     in.CreateWorktree,
 		WorktreeBranchMode: branchMode,
 		WorktreeBranch:     branch,
@@ -240,7 +257,7 @@ func (s *Service) CreateTask(ctx context.Context, in CreateTaskInput) (TaskDetai
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
-	if first.AutoAdvance {
+	if first.AutoAdvance && in.GroupID == "" {
 		run.Status = StageStatusApproved
 		run.FinishedAt = now.Format(time.RFC3339Nano)
 	}
@@ -252,7 +269,7 @@ func (s *Service) CreateTask(ctx context.Context, in CreateTaskInput) (TaskDetai
 		Payload:    eventPayload(map[string]any{"input": run.Input, "auto_advance": first.AutoAdvance}),
 		CreatedAt:  now,
 	}
-	if _, err := store.CreateTask(ctx, task, run, event); err != nil {
+	if _, err := store.CreateTaskWithDependencies(ctx, task, run, event, in.DependsOn); err != nil {
 		return TaskDetail{}, err
 	}
 	detail, err := store.GetDetail(ctx, taskID)
@@ -287,6 +304,10 @@ func (s *Service) GetTask(ctx context.Context, rootID, taskID string) (TaskDetai
 }
 
 func (s *Service) UpdateCurrentInput(ctx context.Context, in UpdateTaskInput) (TaskDetail, error) {
+	if d, e := s.GetTask(ctx, in.RootID, in.TaskID); e == nil && d.Task.GroupID != "" && d.Task.CurrentStageIndex == 0 {
+		return s.PatchTask(ctx, in.RootID, in.TaskID, TaskPatch{Input: &in.Input, CreateWorktree: in.CreateWorktree, WorktreeBranchMode: optionalString(in.WorktreeBranchMode), WorktreeBranch: optionalString(in.WorktreeBranch)})
+	}
+
 	store, err := s.taskStore(in.RootID)
 	if err != nil {
 		return TaskDetail{}, err
@@ -363,6 +384,9 @@ func (s *Service) UpdateFirstInput(ctx context.Context, in UpdateTaskInput) (Tas
 }
 
 func (s *Service) Next(ctx context.Context, in MoveInput) (TaskDetail, error) {
+	if d, e := s.GetTask(ctx, in.RootID, in.TaskID); e == nil && d.Task.GroupID != "" {
+		return s.nextManaged(ctx, in)
+	}
 	detail, err := s.moveRelative(ctx, in, 1, "user_approved", StageStatusApproved)
 	if err == nil {
 		s.Schedule(in.RootID)
@@ -372,6 +396,8 @@ func (s *Service) Next(ctx context.Context, in MoveInput) (TaskDetail, error) {
 }
 
 func (s *Service) RunNow(ctx context.Context, in MoveInput) (TaskDetail, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 	store, err := s.taskStore(in.RootID)
 	if err != nil {
 		return TaskDetail{}, err
@@ -386,6 +412,11 @@ func (s *Service) RunNow(ctx context.Context, in MoveInput) (TaskDetail, error) 
 	if task.Status != StatusQueued {
 		return TaskDetail{}, errors.New("task is not queued")
 	}
+	if task.GroupID != "" {
+		if !s.managedReady(ctx, store, task) {
+			return TaskDetail{}, errors.New("task cannot start: publication, group state or dependencies are not ready")
+		}
+	}
 	if task.SchedulerAdmitted {
 		detail, err := store.GetDetail(ctx, task.ID)
 		if err == nil {
@@ -393,7 +424,7 @@ func (s *Service) RunNow(ctx context.Context, in MoveInput) (TaskDetail, error) 
 		}
 		return detail, err
 	}
-	tmpl, err := s.Templates.GetTaskTemplate(task.TaskTemplateID)
+	tmpl, err := s.TaskExecutionTemplate(task)
 	if err != nil {
 		_ = s.recordTaskError(ctx, store, task, "", err.Error())
 		return TaskDetail{}, err
@@ -416,6 +447,9 @@ func (s *Service) RunNow(ctx context.Context, in MoveInput) (TaskDetail, error) 
 }
 
 func (s *Service) Prev(ctx context.Context, in MoveInput) (TaskDetail, error) {
+	if t, e := s.GetTask(ctx, in.RootID, in.TaskID); e == nil && t.Task.GroupID != "" {
+		return s.ManagedAction(ctx, in.RootID, in.TaskID, "invalid", ManagedInput{Message: in.Reason})
+	}
 	detail, err := s.moveRelative(ctx, in, -1, "user_rejected", StageStatusRejected)
 	if err == nil {
 		s.RunTask(detail.Task.RootID, detail.Task.ID)
@@ -424,6 +458,9 @@ func (s *Service) Prev(ctx context.Context, in MoveInput) (TaskDetail, error) {
 }
 
 func (s *Service) Jump(ctx context.Context, in MoveInput) (TaskDetail, error) {
+	if t, e := s.GetTask(ctx, in.RootID, in.TaskID); e == nil && t.Task.GroupID != "" {
+		return s.ManagedAction(ctx, in.RootID, in.TaskID, "invalid", ManagedInput{Message: in.Reason})
+	}
 	store, task, tmpl, err := s.loadForMove(ctx, in.RootID, in.TaskID)
 	if err != nil {
 		return TaskDetail{}, err
@@ -439,10 +476,16 @@ func (s *Service) Jump(ctx context.Context, in MoveInput) (TaskDetail, error) {
 }
 
 func (s *Service) Pause(ctx context.Context, in MoveInput) (TaskDetail, error) {
+	if t, e := s.GetTask(ctx, in.RootID, in.TaskID); e == nil && t.Task.GroupID != "" {
+		return TaskDetail{}, errors.New("individual orchestrated tasks do not support pause")
+	}
 	return s.setTaskStatus(ctx, in.RootID, in.TaskID, StatusPaused, "paused", in.Reason, false)
 }
 
 func (s *Service) Resume(ctx context.Context, in MoveInput) (TaskDetail, error) {
+	if t, e := s.GetTask(ctx, in.RootID, in.TaskID); e == nil && t.Task.GroupID != "" {
+		return TaskDetail{}, errors.New("individual orchestrated tasks do not support resume")
+	}
 	store, err := s.taskStore(in.RootID)
 	if err != nil {
 		return TaskDetail{}, err
@@ -464,14 +507,27 @@ func (s *Service) Resume(ctx context.Context, in MoveInput) (TaskDetail, error) 
 }
 
 func (s *Service) Fail(ctx context.Context, in MoveInput) (TaskDetail, error) {
+	if t, e := s.GetTask(ctx, in.RootID, in.TaskID); e == nil && t.Task.GroupID != "" {
+		return TaskDetail{}, errors.New("report task problems with -from-task")
+	}
 	return s.setTaskStatus(ctx, in.RootID, in.TaskID, StatusFail, "stage_failed", in.Reason, true)
 }
 
 func (s *Service) Cancel(ctx context.Context, in MoveInput) (TaskDetail, error) {
+	if t, e := s.GetTask(ctx, in.RootID, in.TaskID); e == nil && t.Task.GroupID != "" {
+		reason := in.Reason
+		if reason == "" {
+			reason = "Cancelled by user"
+		}
+		return s.ManagedAction(ctx, in.RootID, in.TaskID, "cancel", ManagedInput{Message: reason})
+	}
 	return s.setTaskStatus(ctx, in.RootID, in.TaskID, StatusCancelled, "cancelled", in.Reason, true)
 }
 
 func (s *Service) Complete(ctx context.Context, in MoveInput) (TaskDetail, error) {
+	if d, e := s.GetTask(ctx, in.RootID, in.TaskID); e == nil && d.Task.GroupID != "" {
+		return TaskDetail{}, errors.New("orchestrated tasks deliver results through -from-task with completed: true")
+	}
 	store, task, tmpl, err := s.loadForMove(ctx, in.RootID, in.TaskID)
 	if err != nil {
 		return TaskDetail{}, err
@@ -516,6 +572,10 @@ func (s *Service) Schedule(rootID string) {
 		return
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	if s.scheduleRun == nil {
 		s.scheduleRun = map[string]bool{}
 	}
@@ -528,10 +588,12 @@ func (s *Service) Schedule(rootID string) {
 		return
 	}
 	s.scheduleRun[rootID] = true
+	s.workers.Add(1)
 	s.mu.Unlock()
 	go func() {
+		defer s.workers.Done()
 		for {
-			if err := s.schedule(context.Background(), rootID); err != nil {
+			if err := s.schedule(s.runCtx, rootID); err != nil {
 				log.Printf("[kanban] schedule.error root=%s err=%v", rootID, err)
 			}
 			s.mu.Lock()
@@ -549,6 +611,10 @@ func (s *Service) Schedule(rootID string) {
 }
 
 func (s *Service) RunTask(rootID, taskID string) {
+	s.runTask(rootID, taskID, false)
+}
+
+func (s *Service) runTask(rootID, taskID string, messageTurn bool) {
 	if s == nil || s.Runner == nil {
 		return
 	}
@@ -557,11 +623,51 @@ func (s *Service) RunTask(rootID, taskID string) {
 	if rootID == "" || taskID == "" {
 		return
 	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	if s.running == nil {
+		s.running = map[string]bool{}
+	}
+	key := rootID + "/" + taskID
+	if s.running[key] {
+		s.mu.Unlock()
+		return
+	}
+	s.running[key] = true
+	runCtx, runCancel := context.WithCancel(s.runCtx)
+	if s.executionCancels == nil {
+		s.executionCancels = map[string]context.CancelFunc{}
+	}
+	s.executionCancels[key] = runCancel
+	s.workers.Add(1)
+	s.mu.Unlock()
 	go func() {
-		if err := s.executeTask(context.Background(), rootID, taskID); err != nil {
-			log.Printf("[kanban] task.execute.error root=%s task=%s err=%v", rootID, taskID, err)
+		defer s.workers.Done()
+		defer func() {
+			runCancel()
+			s.mu.Lock()
+			delete(s.running, key)
+			delete(s.executionCancels, key)
+			s.mu.Unlock()
+			s.Schedule(rootID)
+		}()
+		execute := s.executeTask
+		if messageTurn {
+			execute = s.executeTaskMessages
 		}
-		s.Schedule(rootID)
+		if err := execute(runCtx, rootID, taskID); err != nil {
+			log.Printf("[kanban] task.execute.error root=%s task=%s err=%v", rootID, taskID, err)
+			s.opMu.Lock()
+			if store, e := s.taskStore(rootID); e == nil {
+				if task, e := store.GetTask(context.Background(), taskID); e == nil && task.GroupID != "" && (task.SchedulerAdmitted || task.Status == StatusRunning) {
+					_ = s.recordManagedFailure(context.Background(), store, task, err.Error())
+				}
+			}
+			s.opMu.Unlock()
+		}
 	}()
 }
 
@@ -622,6 +728,8 @@ func patchPayload(patch TaskAuxFlagsPatch) map[string]any {
 }
 
 func (s *Service) schedule(ctx context.Context, rootID string) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 	store, err := s.taskStore(rootID)
 	if err != nil {
 		return err
@@ -631,16 +739,38 @@ func (s *Service) schedule(ctx context.Context, rootID string) error {
 		if err != nil {
 			return err
 		}
+		if err := s.refreshGroups(ctx, store); err != nil {
+			return err
+		}
+		if err := s.refreshManaged(ctx, store, all); err != nil {
+			return err
+		}
+		all, err = store.ListTasks(ctx, ListTasksOptions{})
+		if err != nil {
+			return err
+		}
+		if err := s.deliverTaskMessages(ctx, store, all); err != nil {
+			return err
+		}
 		queued, err := store.ListQueuedTasks(ctx)
 		if err != nil {
 			return err
 		}
 		started := false
 		for _, task := range queued {
+			s.mu.Lock()
+			stillExecuting := s.running[rootID+"/"+task.ID]
+			s.mu.Unlock()
+			if stillExecuting {
+				continue
+			}
 			if task.SchedulerAdmitted || isTerminalStatus(task.Status) || task.Status != StatusQueued || strings.TrimSpace(task.AuxFlags.SessionError) != "" {
 				continue
 			}
-			tmpl, err := s.Templates.GetTaskTemplate(task.TaskTemplateID)
+			if task.GroupID != "" && !s.managedReady(ctx, store, task) {
+				continue
+			}
+			tmpl, err := s.TaskExecutionTemplate(task)
 			if err != nil {
 				_ = s.recordTaskError(ctx, store, task, "", err.Error())
 				continue
@@ -681,7 +811,7 @@ func (s *Service) hasSlot(candidate Task, tmpl TaskTemplate, tasks []Task) bool 
 			}
 			continue
 		}
-		if task.CreateWorktree && task.TaskTemplateID == candidate.TaskTemplateID {
+		if task.CreateWorktree && ((candidate.GroupID != "" && task.GroupID == candidate.GroupID) || (candidate.GroupID == "" && task.GroupID == "" && task.TaskTemplateID == candidate.TaskTemplateID)) {
 			used++
 		}
 	}
@@ -696,6 +826,12 @@ func (s *Service) admitTask(ctx context.Context, store *TaskStore, task Task, tm
 	if task.CreateWorktree && strings.TrimSpace(task.WorktreePath) == "" {
 		updated, err := s.ensureTaskWorktree(ctx, store, task)
 		if err != nil {
+			if task.GroupID != "" {
+				if e := s.recordManagedFailure(ctx, store, task, err.Error()); e != nil {
+					return e
+				}
+				return err
+			}
 			return s.failTask(ctx, store, task, "", err)
 		}
 		task = updated
@@ -762,7 +898,7 @@ func normalizeTaskWorktreeBranch(mode, branch string) (string, string) {
 	mode = strings.TrimSpace(mode)
 	branch = strings.TrimSpace(branch)
 	if mode != "existing" {
-		return "new", ""
+		return "new", branch
 	}
 	if branch == "" {
 		return "new", ""
@@ -774,6 +910,9 @@ func (s *Service) executeTask(ctx context.Context, rootID, taskID string) error 
 	store, task, tmpl, err := s.loadForMove(ctx, rootID, taskID)
 	if err != nil {
 		return err
+	}
+	if task.GroupID != "" {
+		return s.executeManaged(ctx, store, task, tmpl)
 	}
 	for {
 		if task.Status == StatusPaused || task.Status == StatusQueued || isTerminalStatus(task.Status) {
@@ -843,13 +982,7 @@ func (s *Service) runAgentStage(ctx context.Context, store *TaskStore, task Task
 	}
 	now := time.Now().UTC()
 	values := s.promptValues(ctx, store, task, tmpl, stage, run)
-	prompt := BuildAgentPrompt(stage.PromptTemplate, values, TaskControlPromptContext{
-		RootID:            task.RootID,
-		TaskNumber:        task.TaskNumber,
-		CurrentStageIndex: strconv.Itoa(task.CurrentStageIndex),
-		CurrentStageName:  stage.Name,
-		Enabled:           stage.AgentCanControlStage,
-	})
+	prompt := BuildAgentPrompt(stage.PromptTemplate, values)
 	runtimeRootPath := strings.TrimSpace(task.WorktreePath)
 	sessionKey, err := s.Runner.EnsureAgentSession(ctx, AgentStageExecution{
 		RootID:          task.RootID,
@@ -885,14 +1018,15 @@ func (s *Service) runAgentStage(ctx context.Context, store *TaskStore, task Task
 	if detail, err := store.GetDetail(ctx, task.ID); err == nil {
 		s.Runner.TaskUpdated(task.RootID, detail)
 	}
-	if err := s.Runner.RunAgentStage(ctx, AgentStageExecution{
+	runErr := s.Runner.RunAgentStage(ctx, AgentStageExecution{
 		RootID:          task.RootID,
 		RuntimeRootPath: runtimeRootPath,
 		Task:            task,
 		Stage:           stage,
 		Run:             run,
 		Prompt:          prompt,
-	}); err != nil {
+	})
+	if err := runErr; err != nil {
 		log.Printf("[kanban] agent_stage.session_error root=%s task=%s run=%s err=%v", task.RootID, task.ID, run.ID, err)
 		message := strings.TrimSpace(err.Error())
 		now = time.Now().UTC()
@@ -1175,7 +1309,7 @@ func (s *Service) loadForMove(ctx context.Context, rootID, taskID string) (*Task
 	if err != nil {
 		return nil, Task{}, TaskTemplate{}, err
 	}
-	tmpl, err := s.Templates.GetTaskTemplate(task.TaskTemplateID)
+	tmpl, err := s.TaskExecutionTemplate(task)
 	if err != nil {
 		return nil, Task{}, TaskTemplate{}, err
 	}
@@ -1189,6 +1323,9 @@ func (s *Service) taskStore(rootID string) (*TaskStore, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return nil, errors.New("task service is closed")
+	}
 	if s.stores == nil {
 		s.stores = map[string]*TaskStore{}
 	}
@@ -1206,11 +1343,15 @@ func (s *Service) taskStore(rootID string) (*TaskStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := store.recoverManaged(); err != nil {
+		store.Close()
+		return nil, err
+	}
 	s.stores[rootID] = store
 	return store, nil
 }
 
-func eventPayload(value map[string]any) string {
+func eventPayload(value any) string {
 	payload, err := json.Marshal(value)
 	if err != nil {
 		return "{}"
@@ -1228,24 +1369,30 @@ func eventReason(payload string) string {
 	return strings.TrimSpace(value.Reason)
 }
 
-type TaskControlPromptContext struct {
-	RootID            string
-	TaskNumber        int
-	CurrentStageIndex string
-	CurrentStageName  string
-	Enabled           bool
-}
-
-func BuildAgentPrompt(template string, values map[string]string, control TaskControlPromptContext) string {
+func BuildAgentPrompt(template string, values map[string]string) string {
 	out := template
 	for key, value := range values {
 		out = strings.ReplaceAll(out, "{"+key+"}", value)
 	}
-	if control.Enabled {
-		taskNumber := strconv.Itoa(control.TaskNumber)
-		out += fmt.Sprintf("\n\nTask control context:\n- root_id: %s\n- task_number: %s\n- current_stage_index: %s\n- current_stage_name: %s\n\nBefore changing the task stage, inspect the current task state.\n\nmindfs %s -task %s\nmindfs %s -task %s -next\nmindfs %s -task %s -prev",
-			control.RootID, taskNumber, control.CurrentStageIndex, control.CurrentStageName,
-			control.RootID, taskNumber, control.RootID, taskNumber, control.RootID, taskNumber)
-	}
 	return out
+}
+
+// Close cancels in-flight work and waits before closing SQLite connections.
+func (s *Service) Close() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.mu.Unlock()
+	s.workers.Wait()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, store := range s.stores {
+		_ = store.Close()
+	}
 }

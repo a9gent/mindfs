@@ -476,6 +476,12 @@ func AddWorktree(ctx context.Context, rootPath, targetPath, branchMode, branch s
 	if _, err := loadRepoContext(ctx, rootPath); err != nil {
 		return err
 	}
+	if branchMode != "new" && branchMode != "existing" {
+		return errors.New("invalid branch mode")
+	}
+	if _, err := runGit(ctx, rootPath, "check-ref-format", "--branch", branch); err != nil {
+		return fmt.Errorf("invalid branch name: %w", err)
+	}
 	args := []string{"worktree", "add"}
 	if branchMode == "new" {
 		if strings.TrimSpace(branch) == "" {
