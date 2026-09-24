@@ -1906,7 +1906,6 @@ function SessionViewerInner({
               style={{
                 fontSize: "10px",
                 color: "var(--text-secondary)",
-                opacity: 0.5,
                 alignSelf: "flex-end",
                 display: "inline-flex",
                 alignItems: "center",
@@ -1927,7 +1926,7 @@ function SessionViewerInner({
                   }}
                 />
               ) : null}
-              <span>{time}</span>
+              <span style={{ opacity: 0.5 }}>{time}</span>
               <button
                 type="button"
                 onClick={() => {
@@ -2099,8 +2098,7 @@ function SessionViewerInner({
                   minWidth: 0,
                   fontSize: "10px",
                   color: "var(--text-secondary)",
-                  opacity: 0.5,
-                  marginTop: "-10px",
+                  marginTop: "0",
                   marginBottom: "4px",
                 }}
               >
@@ -2202,7 +2200,7 @@ function SessionViewerInner({
                   ) : null}
                   <AgentIcon
                     agentName={item.agent || ""}
-                    style={{ width: "12px", height: "12px", flexShrink: 0 }}
+                    style={{ width: "12px", height: "12px", flexShrink: 0, opacity: 0.5 }}
                   />
                 </span>
                 <span
@@ -2214,6 +2212,7 @@ function SessionViewerInner({
                     gap: "0 8px",
                     minWidth: 0,
                     lineHeight: "16px",
+                    opacity: 0.5,
                   }}
                 >
                   {assistantExchangeMeta ? (
@@ -2253,7 +2252,7 @@ function SessionViewerInner({
                       overflowWrap: "anywhere",
                     }}
                   >
-                    {time.replace(/\s+/g, "")}{assistantDurationLabel}
+                    {time}{assistantDurationLabel}
                   </span>
                   <span
                     style={{
