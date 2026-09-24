@@ -271,7 +271,7 @@ function formatTurnTokenCount(value: number) {
   return String(Math.round(tokens));
 }
 
-function TurnTokenUsage({ usage }: { usage?: TokenUsage }) {
+function TurnTokenUsage({ usage, totalUsage }: { usage?: TokenUsage; totalUsage: TokenUsage }) {
   if (!usage) {
     return null;
   }
@@ -288,7 +288,7 @@ function TurnTokenUsage({ usage }: { usage?: TokenUsage }) {
   const cacheLabel = hitPercent === null ? "—" : `${hitPercent}%`;
   return (
     <span
-      title={`${inputTokens}(♻${cacheLabel})→${outputTokens}`}
+      title={`${inputTokens}(♻${cacheLabel}·Σ${totalUsage.inputTokens})→${outputTokens}(Σ${totalUsage.outputTokens})`}
       style={{
         display: "inline-flex",
         alignItems: "baseline",
@@ -298,9 +298,12 @@ function TurnTokenUsage({ usage }: { usage?: TokenUsage }) {
       }}
     >
       <span>{formatTurnTokenCount(inputTokens)}</span>
-      <span>{`(♻${cacheLabel})`}</span>
+      <span>
+        {`(♻${cacheLabel}·Σ${formatTurnTokenCount(totalUsage.inputTokens)})`}
+      </span>
       <span>→</span>
       <span>{formatTurnTokenCount(outputTokens)}</span>
+      <span>{`(Σ${formatTurnTokenCount(totalUsage.outputTokens)})`}</span>
     </span>
   );
 }
@@ -1166,6 +1169,18 @@ function SessionViewerInner({
     );
     copyResetTimersRef.current = {};
   }, [sessionKey]);
+
+  const cumulativeTokenUsage = useMemo(() => {
+    let inputTokens = 0;
+    let outputTokens = 0;
+    return timeline.map((item) => {
+      if (item.type === "assistant_text" && item.tokenUsage) {
+        inputTokens += Math.max(0, Number(item.tokenUsage.inputTokens || 0));
+        outputTokens += Math.max(0, Number(item.tokenUsage.outputTokens || 0));
+      }
+      return { inputTokens, outputTokens };
+    });
+  }, [timeline]);
 
   const userMessageSummaries = useMemo(
     () =>
@@ -2239,7 +2254,7 @@ function SessionViewerInner({
                       overflowWrap: "anywhere",
                     }}
                   >
-                    <TurnTokenUsage usage={item.tokenUsage} />
+                    <TurnTokenUsage usage={item.tokenUsage} totalUsage={cumulativeTokenUsage[idx]} />
                   </span>
                   <span
                     style={{
