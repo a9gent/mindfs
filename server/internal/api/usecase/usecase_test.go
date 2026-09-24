@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1757,6 +1758,45 @@ func TestSessionNameRunnerSkipsWithoutAgentOrPool(t *testing.T) {
 			got, err := sessionNameRunner(context.Background(), nil, "/tmp/root", tc.input)
 			if err != nil || got != "" {
 				t.Fatalf("sessionNameRunner = (%q, %v), want empty nil", got, err)
+			}
+		})
+	}
+}
+
+func TestAssistantAuxLineBeforeFollowingText(t *testing.T) {
+	for _, tc := range []struct {
+		before string
+		line   int
+	}{
+		{"", 0},
+		{"\n\n", 0},
+		{"说明", 1},
+		{"说明\n", 1},
+		{"说明\n\n", 1},
+		{"第一行\n第二行\n", 2},
+		{"第一行\n\n第二行\n\n", 3},
+	} {
+		before := tc.before
+		t.Run(fmt.Sprintf("prefix_%q", before), func(t *testing.T) {
+			line := currentAssistantLine(before)
+			if line != tc.line {
+				t.Fatalf("aux line = %d, want %d", line, tc.line)
+			}
+			content := appendResponseChunk(before, string(agenttypes.EventTypeToolCall), "工具后的回复\n后续内容")
+			if before == "" || strings.HasSuffix(before, "\n") {
+				if content != before+"工具后的回复\n后续内容" {
+					t.Fatalf("response whitespace changed: %q", content)
+				}
+			}
+			// Match the history viewer's line-based split around an auxiliary event.
+			lines := strings.Split(content, "\n")
+			preceding := strings.Join(lines[:line], "\n")
+			following := strings.Join(lines[line:], "\n")
+			if strings.TrimRight(preceding, "\n") != strings.TrimRight(before, "\n") {
+				t.Fatalf("text before tool = %q, want %q", preceding, before)
+			}
+			if strings.TrimLeft(following, "\n") != "工具后的回复\n后续内容" {
+				t.Fatalf("text after tool = %q", following)
 			}
 		})
 	}

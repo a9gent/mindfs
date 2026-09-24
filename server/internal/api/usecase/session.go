@@ -3521,6 +3521,9 @@ func (s *Service) AnswerQuestion(ctx context.Context, in AnswerQuestionInput) er
 }
 
 func currentAssistantLine(responseText string) int {
+	// Anchor auxiliary events after the last text line, before trailing empty
+	// lines that may be filled by subsequent chunks. Leave the response intact.
+	responseText = strings.TrimRight(responseText, "\n")
 	if responseText == "" {
 		return 0
 	}
