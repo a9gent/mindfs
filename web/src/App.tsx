@@ -14533,6 +14533,23 @@ export function App({ onGoHome }: AppProps) {
               </div>
             ) : null}
             <ActionBar
+              onNewSession={() => {
+                const root = currentRootIdRef.current;
+                if (!root) return;
+                setPendingPlanMode(false);
+                selectedSessionRef.current = null;
+                currentSessionRef.current = null;
+                selectedSessionByRootRef.current[root] = null;
+                setSelectedSession(null);
+                setDrawerSessionForRoot(root, null);
+                interactionModeRef.current = "main";
+                setInteractionMode("main");
+                setDrawerOpenForRoot(root, false);
+              }}
+              onSelectProject={(root) => {
+                void actionHandlers.open_dir({ path: root, root, isRoot: true, suppressTreeExpand: true });
+              }}
+              onSelectSession={(session) => { void handleSelectSession(session); }}
               taskGroupBadge={actionBarSessionKey ? <TaskGroupPanel key={`${actionBarSession?.root_id || currentRootId}:${actionBarSessionKey}`} rootId={actionBarSession?.root_id || currentRootId || ""} sessionKey={actionBarSessionKey} renderTask={(detail, close) => renderKanbanTaskCard(detail.task, isTerminalKanbanTask(detail.task) ? t("task.column.done") : t("task.column.running"), detail, true, close)} /> : null}
               status={status}
               agentsVersion={agentsVersion}

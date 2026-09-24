@@ -24,6 +24,7 @@ import { CodexRateLimitIndicator } from "./CodexRateLimitIndicator";
 import { AgentMemoryIndicator } from "./AgentMemoryIndicator";
 import { deletePrompt, savePrompt } from "../services/prompts";
 import { matchesSendShortcut, type SendShortcut } from "../services/sendShortcut";
+import { SessionQuickActions, type SessionQuickActionsProps } from "./SessionQuickActions";
 
 type SessionInfo = {
   key: string;
@@ -73,6 +74,9 @@ function getSelectionPreview(text?: string): string {
 }
 
 type ActionBarProps = {
+  onNewSession: SessionQuickActionsProps["onNewSession"];
+  onSelectProject: SessionQuickActionsProps["onSelectProject"];
+  onSelectSession: SessionQuickActionsProps["onSelectSession"];
   taskGroupBadge?: React.ReactNode;
   status?: WSStatus;
   agentsVersion?: number;
@@ -386,6 +390,9 @@ function stripPlanCommandPrefix(input: string): string {
 }
 
 export function ActionBar({
+  onNewSession,
+  onSelectProject,
+  onSelectSession,
   taskGroupBadge,
   status = "disconnected",
   agentsVersion = 0,
@@ -432,7 +439,7 @@ export function ActionBar({
   const [editingQueueText, setEditingQueueText] = useState("");
   const [isMultiLine, setIsMultiLine] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
-  const [showShortcutTip, setShowShortcutTip] = useState(() => Math.random() < 0.5);
+  const [placeholderVariant, setPlaceholderVariant] = useState(0);
   const [isDark, setIsDark] = useState(() => getEffectiveAppearanceMode() === "dark");
   const [candidates, setCandidates] = useState<CandidateItem[]>([]);
   const [activeCandidateIndex, setActiveCandidateIndex] = useState(0);
@@ -511,21 +518,24 @@ export function ActionBar({
     };
   }, []);
 
+  const resetForNewSession = useCallback(() => {
+    const nextAgent = agents.find((item) => item.name === agent)
+      || agents.find((item) => item.available) || agents[0];
+    if (nextAgent) {
+      const defaults = getAgentDefaults(nextAgent);
+      setAgent(nextAgent.name);
+      setModel(defaults.model);
+      setAgentMode("");
+      setEffort(defaults.effort);
+      setFastService(defaults.fastService);
+    }
+    syncedSessionSignatureRef.current = "";
+  }, [agent, agents]);
+
   useEffect(() => {
     const sessionKey = currentSession?.key || currentSession?.session_key || null;
     if (!currentSession) {
-      if (syncedSessionSignatureRef.current) {
-        const nextAgent = agents.find((item) => item.name === agent)
-          || agents.find((item) => item.available) || agents[0];
-        if (nextAgent) {
-          const defaults = getAgentDefaults(nextAgent);
-          setAgent(nextAgent.name);
-          setModel(defaults.model);
-          setAgentMode("");
-          setEffort(defaults.effort);
-          setFastService(defaults.fastService);
-        }
-      }
+      if (syncedSessionSignatureRef.current) resetForNewSession();
       syncedSessionSignatureRef.current = "";
       return;
     }
@@ -548,7 +558,7 @@ export function ActionBar({
     setAgentMode(nextAgentMode);
     setEffort(nextEffort);
     setFastService(nextFastService);
-  }, [currentSession]);
+  }, [currentSession, resetForNewSession]);
 
   useEffect(() => {
     if (!currentSession?.pending) {
@@ -1233,11 +1243,11 @@ export function ActionBar({
   }, [handleCancel, isCompositionActive, isMobile, showCancel]);
 
   const inputPlaceholder = mode === "chat"
-    ? !isFocused && showShortcutTip
-      ? t("action.placeholder.tip")
+    ? !isFocused && placeholderVariant !== 0
+      ? t(placeholderVariant === 1 ? "action.placeholder.tip" : "action.placeholder.quickSwitch")
       : t(currentSession ? "action.placeholder.continueSession" : "action.placeholder.newSession")
     : t(mode === "command" ? "action.placeholder.command" : "action.placeholder.plugin");
-  const editorRightInset = isMultiLine ? 14 : mode === "command" ? (isMobile ? 60 : 82) : isMobile ? 92 : 114;
+  const editorRightInset = isMultiLine ? 14 : mode === "command" ? (isMobile ? 84 : 108) : isMobile ? 116 : 140;
   const editorBottomInset = isMultiLine ? 44 : 12;
   const editorMinHeight = 44;
   const mobileFileSidebarButton = isMobile ? (
@@ -1525,7 +1535,7 @@ export function ActionBar({
               onFocusChange={(focused) => {
                 setIsFocused(focused);
                 if (!focused && mode === "chat") {
-                  setShowShortcutTip(Math.random() < 0.5);
+                  setPlaceholderVariant((previous) => (previous + 1) % 3);
                 }
                 if (focused) {
                   if (mode === "command" && serializedInput.trim()) {
@@ -1790,6 +1800,7 @@ export function ActionBar({
             />
 
             <div data-onboarding="input-controls" style={{ position: "absolute", right: isMobile ? "4px" : "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: isMobile ? "0px" : "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
+              <SessionQuickActions currentRootId={currentRootId} currentSessionKey={currentSession?.key || currentSession?.session_key} onNewSession={() => { resetForNewSession(); onNewSession(); }} onSelectProject={onSelectProject} onSelectSession={onSelectSession} />
               <>
                 <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} onboardingId="mode-selector" viewportMenu />
                 {mode !== "command" ? (
@@ -1842,6 +1853,7 @@ export function ActionBar({
                 onClick={() => attachmentInputRef.current?.click()}
                 disabled={!currentRootId || sending}
                 style={{
+                  marginLeft: "-4px",
                   width: "28px",
                   height: "28px",
                   borderRadius: "8px",
