@@ -9,12 +9,7 @@ import React, {
 import { createPortal } from "react-dom";
 import { AgentIcon } from "./AgentIcon";
 import type { AgentStatus } from "../services/agents";
-import { fetchAgentAPIProvidersCached, type AgentAPIProvider } from "../services/agentConfig";
-import {
-  buildModelProviderIndex,
-  filterAgentModels,
-  resolveModelGroups,
-} from "./modelFiltering";
+import { filterAgentModels } from "./modelFiltering";
 import { useI18n } from "../i18n";
 
 type AgentSelectorProps = {
@@ -179,7 +174,6 @@ export function AgentSelector({
   const [restartingAgent, setRestartingAgent] = useState<string | null>(null);
   const [menuBodyHeight, setMenuBodyHeight] = useState<number | null>(null);
   const [modelSearch, setModelSearch] = useState("");
-  const [providerCatalog, setProviderCatalog] = useState<AgentAPIProvider[] | null>(null);
   const [menuHorizontalOffset, setMenuHorizontalOffset] = useState(0);
   const [viewportMenuPosition, setViewportMenuPosition] = useState<{
     top: number;
@@ -201,41 +195,14 @@ export function AgentSelector({
     [submenuAgentStatus],
   );
   const enableModelSearch = submenuModels.length > AGENT_MODEL_SEARCH_THRESHOLD;
-  const providerIndex = useMemo(
-    () => buildModelProviderIndex(providerCatalog),
-    [providerCatalog],
-  );
   const filteredSubmenuModels = useMemo(
     () => filterAgentModels(submenuModels, modelSearch),
     [submenuModels, modelSearch],
-  );
-  const submenuModelGroups = useMemo(
-    () =>
-      resolveModelGroups(filteredSubmenuModels, providerIndex),
-    [filteredSubmenuModels, providerIndex],
   );
   useEffect(() => {
     if (!isOpen || !submenuAgent) {
       setModelSearch("");
     }
-  }, [isOpen, submenuAgent]);
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-    let cancelled = false;
-    fetchAgentAPIProvidersCached()
-      .then((providers) => {
-        if (!cancelled && Array.isArray(providers) && providers.length > 0) {
-          setProviderCatalog(providers);
-        }
-      })
-      .catch(() => {
-        // 供应商目录不可用时退回平铺列表。
-      });
-    return () => {
-      cancelled = true;
-    };
   }, [isOpen, submenuAgent]);
   const submenuSelectedModel = useMemo(() => {
     if (!submenuAgentStatus) return null;
@@ -984,7 +951,7 @@ export function AgentSelector({
                     {enableModelSearch ? (
                       <div
                         style={{
-                          padding: "4px 10px 6px",
+                          padding: "2px 10px",
                           position: "sticky",
                           top: 0,
                           zIndex: 1,
@@ -999,9 +966,10 @@ export function AgentSelector({
                           }
                           placeholder={t("agent.modelSearchPlaceholder")}
                           style={{
+                            display: "block",
                             width: "100%",
                             boxSizing: "border-box",
-                            height: "28px",
+                            height: "26px",
                             padding: "0 10px",
                             border: "1px solid var(--menu-divider)",
                             borderRadius: "8px",
@@ -1041,36 +1009,6 @@ export function AgentSelector({
                       >
                         {t("agent.modelNoMatch")}
                       </div>
-                    ) : submenuModelGroups ? (
-                      submenuModelGroups.map((group) => (
-                        <div key={group.provider || "__other__"}>
-                          <div
-                            style={{
-                              padding: "6px 12px 4px",
-                              fontSize: "11px",
-                              fontWeight: 600,
-                              color: "var(--text-secondary)",
-                              letterSpacing: "0.02em",
-                            }}
-                          >
-                            {group.provider || t("agent.modelOtherGroup")}
-                          </div>
-                          {group.models.map((item) => (
-                            <ModelMenuItem
-                              key={item.id}
-                              item={item}
-                              selected={
-                                submenuAgentStatus.name === agent &&
-                                !!model &&
-                                item.id === (submenuSelectedModel?.id || "")
-                              }
-                              topBorder
-                              onSelect={handleAgentSelect}
-                              agentName={submenuAgentStatus.name}
-                            />
-                          ))}
-                        </div>
-                      ))
                     ) : (
                       filteredSubmenuModels.map((item, index) => (
                         <ModelMenuItem

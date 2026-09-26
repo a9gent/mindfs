@@ -138,7 +138,6 @@ export const enUS = {
   "agent.defaultModelDescription": "Follow this Agent's current default model",
   "agent.modelSearchPlaceholder": "Search models...",
   "agent.modelNoMatch": "No matching models",
-  "agent.modelOtherGroup": "Other",
   "agentConfig.chooseBackupAgent": "Choose an agent to back up config",
   "agentConfig.chooseSwitchAgent": "Choose an agent to switch config",
   "agentConfig.continueBackup": "Continue backup",

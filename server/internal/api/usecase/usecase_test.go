@@ -20,6 +20,7 @@ import (
 	rootfs "mindfs/server/internal/fs"
 	"mindfs/server/internal/preferences"
 	"mindfs/server/internal/session"
+	"mindfs/server/internal/testutil"
 )
 
 func TestSaveUploadedFilesDefaultsToAttachmentDirAndRenamesConflicts(t *testing.T) {
@@ -1217,7 +1218,7 @@ func TestRenameManagedDirRollsBackDirectoryWhenRegistryFails(t *testing.T) {
 
 func TestSkillCandidateProviderSearch(t *testing.T) {
 	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	testutil.IsolateUserDirs(t, homeDir)
 	rootDir := t.TempDir()
 	mustWriteFile(t, filepath.Join(homeDir, ".codex", "skills", "status", "SKILL.md"), "---\nname: status\ndescription: Home status skill\n---\n")
 	mustWriteFile(t, filepath.Join(homeDir, ".agents", "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Shared review skill\n---\n")
@@ -1253,7 +1254,7 @@ func TestSkillCandidateProviderSearch(t *testing.T) {
 
 func TestSkillCandidateProviderSearchIncludesCodexPluginCacheSkills(t *testing.T) {
 	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	testutil.IsolateUserDirs(t, homeDir)
 	rootDir := t.TempDir()
 	mustWriteFile(t, filepath.Join(homeDir, ".codex", "plugins", "cache", "openai-primary-runtime", "documents", "26.1.0", "skills", "documents", "SKILL.md"), "---\nname: documents\ndescription: Old documents skill\n---\n")
 	mustWriteFile(t, filepath.Join(homeDir, ".codex", "plugins", "cache", "openai-primary-runtime", "documents", "26.10.0", "skills", "documents", "SKILL.md"), "---\nname: documents\ndescription: Current documents skill\n---\n")
@@ -1279,7 +1280,7 @@ func TestSkillCandidateProviderSearchIncludesCodexPluginCacheSkills(t *testing.T
 
 func TestSkillCandidateProviderSearchFollowsSymlinkedSkillDir(t *testing.T) {
 	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	testutil.IsolateUserDirs(t, homeDir)
 	rootDir := t.TempDir()
 	ssotDir := t.TempDir()
 	targetDir := filepath.Join(ssotDir, "linked")
@@ -1311,7 +1312,7 @@ func TestSkillCandidateProviderSearchFollowsSymlinkedSkillDir(t *testing.T) {
 
 func TestSkillCandidateProviderSearchExpandsNamespacedSkillBundle(t *testing.T) {
 	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	testutil.IsolateUserDirs(t, homeDir)
 	rootDir := t.TempDir()
 	ssotDir := t.TempDir()
 	targetDir := filepath.Join(ssotDir, "aegis-skills")
@@ -1351,7 +1352,7 @@ func TestSkillCandidateProviderSearchExpandsNamespacedSkillBundle(t *testing.T) 
 
 func TestSkillCandidateProviderSearchMatchesNamespacedChildName(t *testing.T) {
 	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	testutil.IsolateUserDirs(t, homeDir)
 	rootDir := t.TempDir()
 	mustWriteFile(t, filepath.Join(homeDir, ".agents", "skills", "aegis", "brainstorming", "SKILL.md"), "---\nname: brainstorming\ndescription: Aegis brainstorm\n---\n")
 	root := rootfs.NewRootInfo("mindfs", "mindfs", rootDir)
@@ -1371,7 +1372,7 @@ func TestSkillCandidateProviderSearchMatchesNamespacedChildName(t *testing.T) {
 
 func TestSkillCandidateProviderSearchSkipsNonDirectoryScanPath(t *testing.T) {
 	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	testutil.IsolateUserDirs(t, homeDir)
 	rootDir := t.TempDir()
 	mustWriteFile(t, filepath.Join(homeDir, ".codex"), "not a directory")
 	mustWriteFile(t, filepath.Join(homeDir, ".agents", "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Shared review skill\n---\n")
@@ -1392,8 +1393,7 @@ func TestSkillCandidateProviderSearchSkipsNonDirectoryScanPath(t *testing.T) {
 
 func TestListLocalDirsDefaultsEmptyPathToHome(t *testing.T) {
 	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
-	t.Setenv("USERPROFILE", homeDir)
+	testutil.IsolateUserDirs(t, homeDir)
 	mustWriteFile(t, filepath.Join(homeDir, "project-a", "README.md"), "a")
 	if err := os.MkdirAll(filepath.Join(homeDir, "project-b"), 0o755); err != nil {
 		t.Fatalf("mkdir project-b: %v", err)

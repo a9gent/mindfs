@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+
+	"mindfs/server/internal/testutil"
 )
 
 func TestLocalCLITokenStoreKeepsTokensByAddress(t *testing.T) {
@@ -70,7 +72,5 @@ func TestLocalCLITokenStoreWritesSinglePrivateFile(t *testing.T) {
 
 func setTestConfigHome(t *testing.T, dir string) {
 	t.Helper()
-	t.Setenv("XDG_CONFIG_HOME", dir)
-	t.Setenv("HOME", dir)
-	t.Setenv("AppData", dir)
+	testutil.IsolateUserDirs(t, dir)
 }

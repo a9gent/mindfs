@@ -8,14 +8,17 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"mindfs/server/internal/preferences"
+	"mindfs/server/internal/testutil"
 )
 
-func writeAPIProvidersFile(t *testing.T, providers []agentAPIProvider) {
+func writeAPIProvidersFile(t *testing.T, providers []agentAPIProvider) string {
 	t.Helper()
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), ".config"))
+	root := t.TempDir()
+	testutil.IsolateUserDirs(t, root)
 	path, err := agentAPIProvidersPath()
 	if err != nil {
 		t.Fatalf("agentAPIProvidersPath: %v", err)
@@ -24,11 +27,40 @@ func writeAPIProvidersFile(t *testing.T, providers []agentAPIProvider) {
 	if err != nil {
 		t.Fatalf("marshal providers: %v", err)
 	}
+	testutil.RequireWithin(t, root, path)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("write providers: %v", err)
+	}
+	return root
+}
+
+func TestProviderFixturesDoNotOverwriteExistingConfig(t *testing.T) {
+	// Simulate a real user's configuration without touching the actual user.
+	testutil.IsolateUserDirs(t, t.TempDir())
+	path, err := agentAPIProvidersPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const original = `[{"id":"user-provider","models":["user-model"]}]`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("fixture", func(t *testing.T) {
+		writeAPIProvidersFile(t, []agentAPIProvider{{ID: "test-provider"}})
+		providers, err := readAgentAPIProviders()
+		if err != nil || len(providers) != 1 || providers[0].ID != "test-provider" {
+			t.Fatalf("fixture was not isolated: %v", err)
+		}
+	})
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != original {
+		t.Fatalf("fixture overwrote existing configuration: %v", err)
 	}
 }
 
@@ -79,9 +111,9 @@ func TestTestAgentAPIProviderModelOpenAI(t *testing.T) {
 }
 
 func TestSyncAllAgentAPIProvidersKeepsModelsOnFailure(t *testing.T) {
-	var probeHits int
+	var probeHits atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		probeHits++
+		probeHits.Add(1)
 		if r.URL.Path == "/down/v1/models" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -102,7 +134,7 @@ func TestSyncAllAgentAPIProvidersKeepsModelsOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("syncAllAgentAPIProviders: %v", err)
 	}
-	if probeHits == 0 {
+	if probeHits.Load() == 0 {
 		t.Fatal("expected probes to run")
 	}
 	if len(results) != 2 {
@@ -165,10 +197,7 @@ func TestSyncAllAgentAPIProvidersReappliesToAgents(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	t.Setenv("USERPROFILE", tmpHome)
-	writeAPIProvidersFile(t, []agentAPIProvider{
+	tmpHome := writeAPIProvidersFile(t, []agentAPIProvider{
 		{ID: "api-pi", Name: "9779", BaseURL: upstream.URL + "/v1", APIKey: "secret", Protocols: []string{apiProviderProtocolOpenAICompatible}, Models: []string{"stale"}},
 	})
 

@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"mindfs/server/internal/testutil"
 )
 
 func TestBuildSessionPayloadMatchesNativeReplyShape(t *testing.T) {
@@ -223,8 +225,7 @@ func TestSendTestToEndpointRequiresRegisteredSubscription(t *testing.T) {
 
 func TestEnsureConfigAutoGeneratesVAPIDKeys(t *testing.T) {
 	configRoot := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", configRoot)
-	t.Setenv("HOME", configRoot)
+	testutil.IsolateUserDirs(t, configRoot)
 
 	first, err := EnsureConfig(true)
 	if err != nil {

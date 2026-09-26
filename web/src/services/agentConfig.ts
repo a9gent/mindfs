@@ -179,27 +179,6 @@ export async function testAgentAPIProviderModel(input: {
   });
 }
 
-let cachedAPIProviders: AgentAPIProvider[] | null = null;
-let cachedAPIProvidersAt = 0;
-const API_PROVIDERS_CACHE_TTL = 15_000;
-
-/** 模型选择器使用的供应商目录缓存，避免每次展开菜单都请求。 */
-export async function fetchAgentAPIProvidersCached(agent?: string): Promise<AgentAPIProvider[]> {
-  const now = Date.now();
-  if (cachedAPIProviders && now - cachedAPIProvidersAt < API_PROVIDERS_CACHE_TTL) {
-    return cachedAPIProviders;
-  }
-  const providers = await fetchAgentAPIProviders(agent);
-  cachedAPIProviders = providers;
-  cachedAPIProvidersAt = now;
-  return providers;
-}
-
-export function invalidateAgentAPIProvidersCache(): void {
-  cachedAPIProviders = null;
-  cachedAPIProvidersAt = 0;
-}
-
 export async function deleteAgentAPIProvider(id: string): Promise<{ deleted: boolean; id: string; providers?: AgentAPIProvider[] }> {
   const params = new URLSearchParams({ id });
   return protectedJSON<{ deleted: boolean; id: string; providers?: AgentAPIProvider[] }>(appPath(`/api/agent-api-providers?${params.toString()}`), {

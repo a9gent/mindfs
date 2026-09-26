@@ -34,7 +34,6 @@ import {
   fetchAgentAPIProviders,
   fetchAgentConfigBackups,
   fetchAgentConfigDefaults,
-  invalidateAgentAPIProvidersCache,
   switchAgentAPIProvider,
   switchAgentConfig,
   syncAllAgentAPIProviders,
@@ -2530,7 +2529,6 @@ export function FileTree({
     setAgentConfigNotice("");
     try {
       const result = await syncAllAgentAPIProviders();
-      invalidateAgentAPIProvidersCache();
       if (flowVersion !== agentConfigFlowVersion.current) return;
       const providers = result.providers || [];
       setAgentAPIProviders(providers);

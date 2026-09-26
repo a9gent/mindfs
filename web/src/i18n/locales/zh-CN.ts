@@ -136,7 +136,6 @@ export const zhCN = {
   "agent.defaultModelDescription": "跟随该 agent 当前的默认模型",
   "agent.modelSearchPlaceholder": "搜索模型...",
   "agent.modelNoMatch": "未找到匹配的模型",
-  "agent.modelOtherGroup": "其他",
   "agentConfig.chooseBackupAgent": "选择要备份配置的 agent",
   "agentConfig.chooseSwitchAgent": "选择要切换配置的 agent",
   "agentConfig.continueBackup": "继续备份",
