@@ -37,6 +37,7 @@ Access your personal AI agents and workstation data anywhere, anytime through Mi
 - **Scheduled tasks**: Trigger agents to run tasks at specified times.
 - **Codex Remote Login**: Login to Codex remotely via the /login command.
 - **Built-in Token Stagion**: Real-time balance display and one-click activation.
+- **Token Usage data**: Record and display token usage and context-window usage.
 
 ### Task Board
 
