@@ -13,7 +13,32 @@ import { useI18n } from "../i18n";
 import type { FilePayload } from "../services/file";
 import { FileEditStore, fileEditKey, MAX_EDITABLE_FILE_BYTES } from "../services/fileEditing";
 import { FileEditor } from "./FileEditor";
-import { renderToolIcon } from "./stream/ToolCallCard";
+import { FileOperationItems, FileMenuIcon, fileMenuItemStyle, MoreMenuButton, moreMenuPopoverStyle, menuOverlayStyle, MoveFilePopover } from "./FileOperations";
+
+function FileViewerMenu({ root, rootPath, path, downloading, onDownload, onEdit, onComplete }: {
+  root: string; rootPath?: string; path: string; downloading: boolean; onDownload: () => void;
+  onEdit?: () => void; onComplete?: () => void | Promise<void>;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open && !moveOpen) return;
+    const close = (event: PointerEvent) => { if (!ref.current?.contains(event.target as Node)) { setOpen(false); setMoveOpen(false); } };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open, moveOpen]);
+  return <div ref={ref} style={{ position: "relative" }} onKeyDown={event => { if (event.key === "Escape") { setOpen(false); setMoveOpen(false); } }}>
+    <MoreMenuButton open={open} label={t("fileOperation.menu")} onClick={() => { setMoveOpen(false); setOpen(value => !value); }} />
+    {open && <div role="menu" style={moreMenuPopoverStyle}>
+      <button type="button" role="menuitem" style={fileMenuItemStyle} disabled={!root || downloading} onClick={() => { setOpen(false); onDownload(); }}><FileMenuIcon action="download" /><span>{t("fileOperation.download")}</span></button>
+      {onEdit && <button type="button" role="menuitem" style={fileMenuItemStyle} onClick={() => { setOpen(false); onEdit(); }}><FileMenuIcon action="edit" /><span>{t("fileEditor.edit")}</span></button>}
+      {root && !/^(?:\/|[A-Za-z]:)/.test(path) && <FileOperationItems root={root} path={path} onMove={() => { setOpen(false); setMoveOpen(true); }} onComplete={async () => { await onComplete?.(); setOpen(false); }} />}
+    </div>}
+    {moveOpen && <div style={menuOverlayStyle}><MoveFilePopover root={root} rootPath={rootPath} path={path} onComplete={async () => { setMoveOpen(false); await onComplete?.(); }} /></div>}
+  </div>;
+}
 
 type RelatedSession = {
   source_session: string;
@@ -24,6 +49,8 @@ type RelatedSession = {
 };
 
 type FileViewerProps = {
+  rootPath?: string;
+  onFileOperationComplete?: () => void | Promise<void>;
   editStore: FileEditStore;
   onFileUpdated: (file: FilePayload) => void;
   onFileSaved: (file: FilePayload) => void;
@@ -117,7 +144,7 @@ function Breadcrumbs({ root, path, onPathClick }: { root?: string; path: string;
   );
 }
 
-export function FileViewer({ editStore, onFileUpdated, onFileSaved, file, onSessionClick, onPathClick, onFileClick, onSelectionChange, initialScrollTop = 0, onScrollTopChange, isVisible = true }: FileViewerProps) {
+export function FileViewer({ rootPath, onFileOperationComplete, editStore, onFileUpdated, onFileSaved, file, onSessionClick, onPathClick, onFileClick, onSelectionChange, initialScrollTop = 0, onScrollTopChange, isVisible = true }: FileViewerProps) {
   const { t } = useI18n();
   const editKey = fileEditKey(file?.root || "", file?.path || "");
   const editSession = useSyncExternalStore(editStore.subscribe, () => editStore.get(editKey));
@@ -354,7 +381,7 @@ export function FileViewer({ editStore, onFileUpdated, onFileSaved, file, onSess
           {downloadToast.msg}
         </div>
       )}
-      <header style={{ height: "36px", padding: "0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "10px", background: "var(--mindfs-topbar-bg, transparent)", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
+      <header style={{ height: "36px", padding: "0 3px 0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "10px", background: "var(--mindfs-topbar-bg, transparent)", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", overflow: "hidden", flex: 1, minWidth: 0 }}>
           <Breadcrumbs root={file.root} path={file.path} onPathClick={onPathClick} />
 
@@ -426,27 +453,12 @@ export function FileViewer({ editStore, onFileUpdated, onFileSaved, file, onSess
               </div>
             </div>
           )}
+        </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "2px", minWidth: 0, flexShrink: 0 }}>
             <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "6px", flexShrink: 0, opacity: 0.7 }}>{(file.size / 1024).toFixed(1)} KB</div>
-            <span className="file-editor-actions" ref={setEditorActions}>
-              {!editSession && canEdit && <button type="button" className="file-editor-icon-button" title={t("fileEditor.edit")} aria-label={t("fileEditor.edit")} onClick={() => { void editStore.open(file.root!, file.path); }}>
-                {renderToolIcon("edit")}
-              </button>}
-            </span>
-            {!editSession && <button
-              type="button"
-              onClick={() => { void handleDownload(); }}
-              disabled={!file.root || isDownloading}
-              title={isDownloading ? t("fileViewer.downloading") : t("fileViewer.downloadFile")}
-              aria-label={isDownloading ? t("fileViewer.downloading") : t("fileViewer.downloadFile")}
-              className="file-editor-icon-button"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path fill="currentColor" d="M16.59 9H15V4c0-.55-.45-1-1-1h-4c-.55 0-1 .45-1 1v5H7.41c-.89 0-1.34 1.08-.71 1.71l4.59 4.59c.39.39 1.02.39 1.41 0l4.59-4.59c.63-.63.19-1.71-.7-1.71M5 19c0 .55.45 1 1 1h12c.55 0 1-.45 1-1s-.45-1-1-1H6c-.55 0-1 .45-1 1"/>
-              </svg>
-            </button>}
+            <span className="file-editor-actions" ref={setEditorActions} />
+            {!editSession && <FileViewerMenu key={editKey} root={file.root || ""} rootPath={rootPath} path={file.path} downloading={isDownloading} onDownload={() => { void handleDownload(); }} onEdit={canEdit ? () => { void editStore.open(file.root!, file.path); } : undefined} onComplete={onFileOperationComplete} />}
           </div>
-        </div>
       </header>
 
       {editSession ? <FileEditor key={editKey} actionsTarget={editorActions} store={editStore} editKey={editKey} session={editSession} isVisible={isVisible} onFileUpdated={onFileUpdated} onFileSaved={onFileSaved} onExitError={(error) => showToast(error, false)} /> : <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflow: documentPreviewKind === "powerpoint" ? "hidden" : "auto", position: "relative", WebkitOverflowScrolling: "touch" }}>

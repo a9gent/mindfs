@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	"mindfs/server/internal/api/usecase"
 	"mindfs/server/internal/fs"
 )
 
@@ -87,4 +88,18 @@ func (h *HTTPHandler) handleFileCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusCreated, map[string]any{"path": path})
+}
+
+func (h *HTTPHandler) handleFileOperation(w http.ResponseWriter, r *http.Request) {
+	var input usecase.FileOperationInput
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		respondFileEditError(w, err)
+		return
+	}
+	if err := h.service().OperateFile(input); err != nil {
+		respondFileEditError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
