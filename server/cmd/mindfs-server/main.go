@@ -22,6 +22,7 @@ func main() {
 	configFlag := flag.String("config", "", "mindfs startup config file; command-line flags override file values")
 	agentConfigFlag := flag.String("agent-config", "", "extra agents.json file")
 	notifyScriptFlag := flag.String("notify-script", "", "executable script for notification events; receives JSON payload on stdin")
+	uiTitle := flag.String("title", "MindFS", "browser tab title for the web UI; useful to tell multiple instances apart (e.g. MindFS-TX)")
 	flag.Parse()
 	explicitFlags := visitedFlags(flag.CommandLine)
 	startupCfg, err := loadStartupConfig(*configFlag)
@@ -41,6 +42,7 @@ func main() {
 		AgentConfigPath: *agentConfigFlag,
 		WebPushEnabled:  *webPushFlag,
 		NotifyScript:    *notifyScriptFlag,
+		UITitle:         *uiTitle,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)

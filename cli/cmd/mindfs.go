@@ -93,6 +93,7 @@ func main() {
 	configFlag := flag.String("config", "", "mindfs startup config file; command-line flags override file values")
 	agentConfigFlag := flag.String("agent-config", "", "extra agents.json file for customizable agent(ACP-protocol) and shell")
 	notifyScriptFlag := flag.String("notify-script", "", "executable script for notification events; receives JSON payload on stdin")
+	uiTitle := flag.String("title", "MindFS", "browser tab title for the web UI; useful to tell multiple instances apart (e.g. MindFS-TX)")
 	remove := flag.Bool("remove", false, "remove the managed directory")
 	groupCreate := flag.Bool("task-group-create", false, "create an orchestration group linked to a parent session")
 	groupList := flag.Bool("task-groups", false, "list task groups and their parent conversations")
@@ -410,6 +411,7 @@ func main() {
 			E2EEConfig:      e2eeResult.Config,
 			WebPushEnabled:  *webPushFlag,
 			NotifyScript:    *notifyScriptFlag,
+			UITitle:         *uiTitle,
 			UseTLS:          *tlsFlag,
 			CertFile:        resolvedCert,
 			KeyFile:         resolvedKey,
