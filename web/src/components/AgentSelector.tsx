@@ -32,6 +32,8 @@ type AgentSelectorProps = {
   onboardingId?: string;
   viewportMenu?: boolean;
   allowDefaultModel?: boolean;
+  /** Bump to open the menu programmatically (e.g. from a float-ball gesture). */
+  openSignal?: number;
 };
 
 const AGENT_MENU_MAX_BODY_HEIGHT = 344;
@@ -161,6 +163,7 @@ export function AgentSelector({
   onboardingId,
   viewportMenu = false,
   allowDefaultModel = false,
+  openSignal,
 }: AgentSelectorProps) {
   const { t } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
@@ -182,6 +185,34 @@ export function AgentSelector({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const agentColumnRef = useRef<HTMLDivElement>(null);
+
+  const resetMenuState = useCallback((open: boolean) => {
+    setMenuHorizontalOffset(0);
+    const selectedAgent = agents.find((item) => item.name === agent);
+    setSubmenuAgent(open && defaultExpandOptions && hasAgentOptions(selectedAgent) ? agent : null);
+    setErrorAgent(null);
+    setModelSectionExpanded(true);
+    setModeSectionExpanded(false);
+    setEffortSectionExpanded(false);
+    setServiceTierSectionExpanded(false);
+    setMenuBodyHeight(null);
+  }, [agents, agent, defaultExpandOptions]);
+
+  const openAgentMenu = useCallback(() => {
+    setViewportMenuPosition(null);
+    resetMenuState(true);
+    setIsOpen(true);
+  }, [resetMenuState]);
+
+  // Lets a parent (e.g. a float-ball gesture) open the menu programmatically.
+  const handledOpenSignal = useRef(openSignal ?? 0);
+  useEffect(() => {
+    const signal = openSignal ?? 0;
+    if (!signal || handledOpenSignal.current === signal) return;
+    handledOpenSignal.current = signal;
+    openAgentMenu();
+  }, [openSignal, openAgentMenu]);
+
   const submenuAgentStatus = useMemo(
     () => agents.find((item) => item.name === submenuAgent) ?? null,
     [agents, submenuAgent],
@@ -488,35 +519,10 @@ export function AgentSelector({
       <button
         type="button"
         onClick={() => {
+          const next = !isOpen;
           setViewportMenuPosition(null);
-          setIsOpen((prev) => {
-            const next = !prev;
-            if (next) {
-              setMenuHorizontalOffset(0);
-              const selectedAgent = agents.find((item) => item.name === agent);
-              setSubmenuAgent(
-                defaultExpandOptions && hasAgentOptions(selectedAgent)
-                  ? agent
-                  : null,
-              );
-              setErrorAgent(null);
-              setModelSectionExpanded(true);
-              setModeSectionExpanded(false);
-              setEffortSectionExpanded(false);
-              setServiceTierSectionExpanded(false);
-              setMenuBodyHeight(null);
-            } else {
-              setMenuHorizontalOffset(0);
-              setSubmenuAgent(null);
-              setErrorAgent(null);
-              setModelSectionExpanded(true);
-              setModeSectionExpanded(false);
-              setEffortSectionExpanded(false);
-              setServiceTierSectionExpanded(false);
-              setMenuBodyHeight(null);
-            }
-            return next;
-          });
+          resetMenuState(next);
+          setIsOpen(next);
         }}
         title={buttonTitle}
         style={{

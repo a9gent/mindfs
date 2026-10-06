@@ -65,6 +65,16 @@ import {
   type SendShortcut,
 } from "../services/sendShortcut";
 import {
+  FLOAT_BALL_ACTION_LABEL_KEYS,
+  FLOAT_BALL_ACTION_OPTIONS,
+  FLOAT_BALL_GESTURES,
+  FLOAT_BALL_GESTURE_LABEL_KEYS,
+  normalizeFloatBallGestureConfig,
+  type FloatBallAction,
+  type FloatBallGesture,
+  type FloatBallGestureConfig,
+} from "../services/quickSwitch";
+import {
   changeFontSize,
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
@@ -195,6 +205,8 @@ type FileTreeProps = {
   onSendShortcutChange?: (shortcut: SendShortcut | null) => void;
   sidebarsSwapped?: boolean;
   onSidebarsSwappedChange?: (enabled: boolean) => void;
+  floatBallGestures?: FloatBallGestureConfig;
+  onFloatBallGesturesChange?: (config: FloatBallGestureConfig) => void;
   gitDiffSideBySide?: boolean;
   onGitDiffSideBySideChange?: (enabled: boolean) => void;
   multiProjectSessionsEnabled?: boolean;
@@ -1486,6 +1498,8 @@ export function FileTree({
   onSendShortcutChange,
   sidebarsSwapped = false,
   onSidebarsSwappedChange,
+  floatBallGestures,
+  onFloatBallGesturesChange,
   gitDiffSideBySide = false,
   onGitDiffSideBySideChange,
   multiProjectSessionsEnabled = false,
@@ -1540,6 +1554,8 @@ export function FileTree({
   const [sendShortcutOpen, setSendShortcutOpen] = React.useState(false);
   const [sendShortcutDraft, setSendShortcutDraft] = React.useState<SendShortcut | null>(sendShortcut);
   const [sendShortcutError, setSendShortcutError] = React.useState("");
+  const [floatBallMenuOpen, setFloatBallMenuOpen] = React.useState(false);
+  const floatBallPopoverRef = React.useRef<HTMLDivElement | null>(null);
   const [idleReleaseHours, setIdleReleaseHours] = React.useState("72");
   const [idleReleaseBusy, setIdleReleaseBusy] = React.useState(false);
   const [idleReleaseError, setIdleReleaseError] = React.useState("");
@@ -2047,6 +2063,17 @@ export function FileTree({
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [sendShortcutOpen]);
 
+  React.useEffect(() => {
+    if (!floatBallMenuOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!floatBallPopoverRef.current?.contains(event.target as Node)) {
+        setFloatBallMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [floatBallMenuOpen]);
+
   const openAgentConfigFlow = React.useCallback((flow: AgentConfigFlow) => {
 	setIdleReleaseOpen(false);
     setAgentLifecycleOpen(false);
@@ -2166,6 +2193,24 @@ export function FileTree({
     onSendShortcutChange?.(sendShortcutDraft);
     setSendShortcutOpen(false);
   }, [onSendShortcutChange, sendShortcutDraft]);
+
+  const gestureConfig = normalizeFloatBallGestureConfig(floatBallGestures);
+
+  const openFloatBallSettings = React.useCallback(() => {
+    setAgentLifecycleOpen(false);
+    setRelayServicesOpen(false);
+    setSessionNamingOpen(false);
+    setIdleReleaseOpen(false);
+    setSendShortcutOpen(false);
+    setIsMenuOpen(false);
+    setFloatBallMenuOpen(true);
+  }, []);
+
+  const updateFloatBallAction = React.useCallback((gesture: FloatBallGesture, action: FloatBallAction) => {
+    const nextActions = { ...gestureConfig.actions };
+    nextActions[gesture] = action;
+    onFloatBallGesturesChange?.({ ...gestureConfig, actions: nextActions });
+  }, [gestureConfig, onFloatBallGesturesChange]);
 
   const saveIdleSessionResourceRelease = React.useCallback(async () => {
     if (idleReleaseBusy) return;
@@ -3629,6 +3674,20 @@ export function FileTree({
                 <span>{t("fileTree.sideBySideDiff")}</span>
                 <span style={{ fontSize: "11px", opacity: gitDiffSideBySide ? 1 : 0 }}>✓</span>
               </button>
+              <button
+                type="button"
+                onClick={openFloatBallSettings}
+                style={fileTreeMenuButtonStyle}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="3.2" />
+                  <path d="M12 4.5V2M12 22v-2.5M4.5 12H2M22 12h-2.5M6.7 6.7 4.9 4.9M19.1 19.1l-1.8-1.8M6.7 17.3l-1.8 1.8M19.1 4.9l-1.8 1.8" />
+                </svg>
+                <span style={{ flex: 1 }}>{t("floatBall.title")}</span>
+                <span style={{ color: "var(--text-secondary)", fontSize: "11px" }}>
+                  {t(gestureConfig.enabled ? "floatBall.settings.on" : "floatBall.settings.off")}
+                </span>
+              </button>
               {showEnterKeySendOption ? (
                 <button
                   type="button"
@@ -3927,6 +3986,91 @@ export function FileTree({
               <button type="button" onClick={saveSendShortcut} style={agentConfigPrimaryButtonStyle(false)}>
                 {t("common.save")}
               </button>
+            </div>
+          </div>
+        ) : null}
+        {floatBallMenuOpen ? (
+          <div
+            ref={floatBallPopoverRef}
+            style={{
+              position: "absolute",
+              top: "calc(100% + 6px)",
+              left: "8px",
+              right: "3px",
+              zIndex: 40,
+              padding: "14px",
+              borderRadius: "12px",
+              border: "1px solid var(--border-color)",
+              background: "var(--menu-bg)",
+              boxShadow: "0 16px 36px rgba(15, 23, 42, 0.18)",
+              boxSizing: "border-box",
+              maxHeight: "calc(100dvh - 96px)",
+              overflowY: "auto",
+            }}
+          >
+            <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)" }}>
+              {t("floatBall.title")}
+            </div>
+            <div style={{ marginTop: "6px", fontSize: "11px", lineHeight: 1.5, color: "var(--text-secondary)" }}>
+              {t("floatBall.description")}
+            </div>
+            <button
+              type="button"
+              onClick={() => onFloatBallGesturesChange?.({ ...gestureConfig, enabled: !gestureConfig.enabled })}
+              style={{
+                width: "100%",
+                marginTop: "10px",
+                border: "none",
+                background: gestureConfig.enabled ? "var(--selection-bg)" : "transparent",
+                color: gestureConfig.enabled ? "var(--accent-color)" : "var(--text-primary)",
+                borderRadius: "8px",
+                padding: "8px 10px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                textAlign: "left",
+                cursor: "pointer",
+                fontSize: "12px",
+              }}
+            >
+              <span>{t("floatBall.enable")}</span>
+              <span style={{ fontSize: "11px", opacity: gestureConfig.enabled ? 1 : 0 }}>✓</span>
+            </button>
+            <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "2px" }}>
+              {FLOAT_BALL_GESTURES.map((gesture) => (
+                <label
+                  key={gesture}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    padding: "4px 2px",
+                    fontSize: "12px",
+                    color: "var(--text-primary)",
+                  }}
+                >
+                  <span style={{ flex: 1 }}>{t(FLOAT_BALL_GESTURE_LABEL_KEYS[gesture])}</span>
+                  <select
+                    value={gestureConfig.actions[gesture]}
+                    onChange={(event) => updateFloatBallAction(gesture, event.target.value as FloatBallAction)}
+                    style={{
+                      flex: "0 0 auto",
+                      maxWidth: "58%",
+                      padding: "4px 6px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      background: "var(--content-bg)",
+                      color: gestureConfig.actions[gesture] === "none" ? "var(--text-secondary)" : "var(--text-primary)",
+                      fontSize: "12px",
+                      outline: "none",
+                    }}
+                  >
+                    {FLOAT_BALL_ACTION_OPTIONS.map((action) => (
+                      <option key={action} value={action}>{t(FLOAT_BALL_ACTION_LABEL_KEYS[action])}</option>
+                    ))}
+                  </select>
+                </label>
+              ))}
             </div>
           </div>
         ) : null}
