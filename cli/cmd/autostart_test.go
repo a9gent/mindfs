@@ -92,9 +92,39 @@ func TestReadShellEnvironmentIgnoresRCOutputBeforeMarker(t *testing.T) {
 }
 
 func TestAutoStartArgumentsContainOnlyPersistentServerOptions(t *testing.T) {
-	got := autoStartArguments("127.0.0.1:9000", true, true, false, true, "/cert.pem", "/key.pem", "/agents.json", "/notify")
+	addr := "127.0.0.1:9000"
+	noRelayer, e2ee, webPush, tls := true, true, false, true
+	foreground, bindRelay := true, true
+	cert, key, agentConfig, notifyScript := "/cert.pem", "/key.pem", "/agents.json", "/notify"
+	trustedProxies := "127.0.0.1/32,::1/128"
+	got := autoStartArguments(startupFlags{
+		Addr:           &addr,
+		NoRelayer:      &noRelayer,
+		E2EE:           &e2ee,
+		WebPush:        &webPush,
+		Foreground:     &foreground,
+		BindRelay:      &bindRelay,
+		TLS:            &tls,
+		Cert:           &cert,
+		Key:            &key,
+		AgentConfig:    &agentConfig,
+		NotifyScript:   &notifyScript,
+		TrustedProxies: &trustedProxies,
+	})
 	joined := strings.Join(got, " ")
-	for _, expected := range []string{"--internal-autostart", "--addr 127.0.0.1:9000", "--no-relayer", "--e2ee", "--web-push=false", "--tls", "--cert /cert.pem", "--key /key.pem", "--agent-config /agents.json", "--notify-script /notify"} {
+	for _, expected := range []string{
+		"--internal-autostart",
+		"--addr 127.0.0.1:9000",
+		"--no-relayer",
+		"--e2ee",
+		"--web-push=false",
+		"--tls",
+		"--cert /cert.pem",
+		"--key /key.pem",
+		"--agent-config /agents.json",
+		"--notify-script /notify",
+		"--trusted-proxies 127.0.0.1/32,::1/128",
+	} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("arguments %q do not contain %q", joined, expected)
 		}

@@ -1,6 +1,8 @@
 import { appURL } from "./base";
 
 const SECRET_STORAGE_PREFIX = "mindfs.e2ee.secret.";
+const DEFAULT_PAIRING_RETRY_SECONDS = 30;
+const MAX_PAIRING_RETRY_SECONDS = 1800;
 export const E2EE_HEADER = "X-MindFS-E2EE";
 export const CLIENT_ID_HEADER = "X-MindFS-Client-ID";
 export const PROOF_HEADER = "X-MindFS-Proof";
@@ -38,6 +40,12 @@ type ProtectedRequest = {
   session: SessionContext;
 };
 
+export class E2EERateLimitError extends Error {
+  constructor(readonly retryAfterSeconds: number) {
+    super("e2ee_rate_limited");
+  }
+}
+
 export type NativeE2EESession = {
   required: boolean;
   nodeId: string;
@@ -53,6 +61,7 @@ class E2EEService {
   private session: SessionContext | null = null;
   private listeners = new Set<E2EEListener>();
   private openingPromise: Promise<SessionContext> | null = null;
+  private pairingRetryAt = 0;
 
   subscribe(listener: E2EEListener) {
     this.listeners.add(listener);
@@ -69,6 +78,7 @@ class E2EEService {
     this.configured = true;
     this.required = nextRequired;
     if (this.nodeId !== nextNodeId) {
+      this.pairingRetryAt = 0;
       this.zeroSession();
       this.nodeId = nextNodeId;
       this.openingPromise = null;
@@ -374,6 +384,10 @@ class E2EEService {
   }
 
   private async open(secret: string): Promise<SessionContext> {
+    const retryDelay = this.pairingRetryAt - Date.now();
+    if (retryDelay > 0) {
+      throw new E2EERateLimitError(Math.ceil(retryDelay / 1000));
+    }
     if (!globalThis.isSecureContext) {
       throw new Error("e2ee_secure_context_required");
     }
@@ -412,7 +426,16 @@ class E2EEService {
     });
     const payload = (await response.json().catch(() => ({}))) as OpenResponse & {
       error?: string;
+      retry_after?: number;
     };
+    if (response.status === 429) {
+      const rawRetryAfter = Number(response.headers.get("Retry-After") || payload.retry_after);
+      const retryAfterSeconds = Number.isFinite(rawRetryAfter) && rawRetryAfter > 0
+        ? Math.min(MAX_PAIRING_RETRY_SECONDS, Math.ceil(rawRetryAfter))
+        : DEFAULT_PAIRING_RETRY_SECONDS;
+      this.pairingRetryAt = Date.now() + retryAfterSeconds * 1000;
+      throw new E2EERateLimitError(retryAfterSeconds);
+    }
     if (!response.ok) {
       const code = String(payload?.error || `e2ee_open_failed_${response.status}`);
       this.handleServerError(code);

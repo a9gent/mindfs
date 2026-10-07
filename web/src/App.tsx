@@ -10762,9 +10762,11 @@ export function App({ onGoHome }: AppProps) {
     setE2eePromptBusy(true);
     setE2eePromptError("");
     try {
-      await bootstrapService.submitPairingSecret(trimmed);
-      didInitRef.current = false;
-      setE2eeSecretInput("");
+      const state = await bootstrapService.submitPairingSecret(trimmed);
+      if (state.phase === "ready") {
+        didInitRef.current = false;
+        setE2eeSecretInput("");
+      }
     } catch (err) {
       setE2eePromptError(describeE2EEPromptError(err));
     } finally {
@@ -14718,7 +14720,7 @@ export function App({ onGoHome }: AppProps) {
           }
         }}
       /> : null}
-      {bootstrapState.phase === "needs_pairing" &&
+      {(bootstrapState.phase === "needs_pairing" || bootstrapState.phase === "pairing_cooldown") &&
         e2eeState.required &&
         !e2eeState.unlocked ? (
         <div
@@ -14737,6 +14739,8 @@ export function App({ onGoHome }: AppProps) {
             style={{
               width: "min(460px, 100%)",
               background: "#fff",
+              color: "#0f172a",
+              colorScheme: "light",
               borderRadius: "20px",
               padding: "24px",
               boxShadow: "0 28px 80px rgba(15, 23, 42, 0.22)",
@@ -14744,75 +14748,86 @@ export function App({ onGoHome }: AppProps) {
               flexDirection: "column",
               gap: "14px",
             }}
-	          >
-	            <div style={{ fontSize: "20px", fontWeight: 700, color: "#0f172a" }}>
-	              {t("e2ee.title")}
-	            </div>
-	            <input
-	              type="text"
-              value={e2eeSecretInput}
-              onChange={(event) => {
-                setE2eeSecretInput(event.target.value);
-                if (e2eePromptError) {
-                  setE2eePromptError("");
-                }
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !e2eePromptBusy) {
-                  void submitE2EESecret();
-                }
-              }}
-	              placeholder={t("e2ee.placeholder")}
-              autoFocus
-              spellCheck={false}
-              style={{
-                width: "100%",
-                borderRadius: "14px",
-                border: "1px solid rgba(148, 163, 184, 0.4)",
-                padding: "14px 16px",
-                fontSize: "14px",
-                outline: "none",
-              }}
-            />
-            {e2eePromptError ? (
-              <div style={{ color: "#dc2626", fontSize: "13px" }}>
-                {e2eePromptError}
-              </div>
-            ) : null}
-            <div style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setE2eeSecretInput("");
-                  setE2eePromptError("");
-                }}
-                style={{
-                  border: "none",
-                  background: "transparent",
-                  color: "#64748b",
-                  padding: 0,
-                  cursor: "pointer",
-                }}
-              >
-                {t("e2ee.clear")}
-              </button>
-              <button
-                type="button"
-                onClick={() => void submitE2EESecret()}
-                disabled={e2eePromptBusy}
-                style={{
-                  border: "none",
-                  borderRadius: "999px",
-                  background: e2eePromptBusy ? "#94a3b8" : "#0f172a",
-                  color: "#fff",
-                  padding: "10px 18px",
-                  cursor: e2eePromptBusy ? "not-allowed" : "pointer",
-                  fontWeight: 600,
-                }}
-              >
-                {e2eePromptBusy ? t("e2ee.verifying") : t("e2ee.continue")}
-              </button>
+          >
+            <div style={{ fontSize: "20px", fontWeight: 700, color: "#0f172a" }}>
+              {t("e2ee.title")}
             </div>
+            {bootstrapState.phase === "pairing_cooldown" ? (
+              <div role="status">
+                {t("e2ee.rateLimited", { seconds: bootstrapState.retryAfterSeconds })}
+              </div>
+            ) : (
+              <>
+                <input
+                  type="text"
+                  value={e2eeSecretInput}
+                  onChange={(event) => {
+                    setE2eeSecretInput(event.target.value);
+                    if (e2eePromptError) {
+                      setE2eePromptError("");
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !e2eePromptBusy) {
+                      void submitE2EESecret();
+                    }
+                  }}
+                  placeholder={t("e2ee.placeholder")}
+                  autoFocus
+                  spellCheck={false}
+                  style={{
+                    width: "100%",
+                    borderRadius: "14px",
+                    border: "1px solid rgba(148, 163, 184, 0.4)",
+                    padding: "14px 16px",
+                    fontSize: "14px",
+                    background: "#fff",
+                    color: "#0f172a",
+                    caretColor: "#0f172a",
+                    outline: "none",
+                  }}
+                />
+                {e2eePromptError ? (
+                  <div style={{ color: "#dc2626", fontSize: "13px" }}>
+                    {e2eePromptError}
+                  </div>
+                ) : null}
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setE2eeSecretInput("");
+                      setE2eePromptError("");
+                    }}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      color: "#64748b",
+                      padding: 0,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {t("e2ee.clear")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void submitE2EESecret()}
+                    disabled={e2eePromptBusy}
+                    style={{
+                      border: "none",
+                      borderRadius: "999px",
+                      background: e2eePromptBusy ? "#94a3b8" : "#0f172a",
+                      color: "#fff",
+                      padding: "10px 18px",
+                      cursor: e2eePromptBusy ? "not-allowed" : "pointer",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {e2eePromptBusy ? t("e2ee.verifying") : t("e2ee.continue")}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       ) : null}

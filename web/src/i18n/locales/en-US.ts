@@ -650,6 +650,7 @@ export const enUS = {
   "root.confirmRemove": "Remove project \"{name}\"?",
   "root.removeFailed": "Failed to remove project",
   "e2ee.invalidProof": "The end-to-end pairing code is invalid, or this node identity has changed",
+  "e2ee.rateLimited": "Too many pairing attempts. Try again in {seconds} seconds.",
   "e2ee.secureContextRequired": "This connection is not a secure context. Use HTTPS or localhost for LAN pairing.",
   "e2ee.secretMissing": "Pairing initialization failed. Refresh the page and try again.",
   "e2ee.invalidResponse": "Invalid handshake response. Try again later.",

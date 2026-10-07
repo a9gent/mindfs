@@ -18,6 +18,7 @@ var version = "dev"
 func main() {
 	addr := flag.String("addr", "127.0.0.1:7331", "listen address")
 	noRelayer := flag.Bool("no-relayer", false, "disable relay integration")
+	trustedProxiesFlag := flag.String("trusted-proxies", "", "comma-separated proxy IPs/CIDRs trusted to supply X-Forwarded-For for pairing limits")
 	webPushFlag := flag.Bool("web-push", true, "enable PWA Web Push notifications")
 	configFlag := flag.String("config", "", "mindfs startup config file; command-line flags override file values")
 	agentConfigFlag := flag.String("agent-config", "", "extra agents.json file")
@@ -29,13 +30,21 @@ func main() {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
-	applyStartupConfig(startupCfg, explicitFlags, addr, noRelayer, webPushFlag, agentConfigFlag, notifyScriptFlag)
+	applyStartupConfig(startupCfg, explicitFlags, startupFlags{
+		Addr:           addr,
+		NoRelayer:      noRelayer,
+		WebPush:        webPushFlag,
+		AgentConfig:    agentConfigFlag,
+		NotifyScript:   notifyScriptFlag,
+		TrustedProxies: trustedProxiesFlag,
+	})
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	if err := app.Start(ctx, *addr, app.StartOptions{
 		NoRelayer:       *noRelayer,
+		TrustedProxies:  *trustedProxiesFlag,
 		Version:         version,
 		Args:            os.Args[1:],
 		AgentConfigPath: *agentConfigFlag,
@@ -48,13 +57,24 @@ func main() {
 }
 
 type startupConfig struct {
-	Addr          *string `json:"addr"`
-	NoRelayer     *bool   `json:"noRelayer"`
-	NoRelayerFlag *bool   `json:"no-relayer"`
-	WebPush       *bool   `json:"webPush"`
-	WebPushFlag   *bool   `json:"web-push"`
-	AgentConfig   *string `json:"agent-config"`
-	NotifyScript  *string `json:"notify-script"`
+	Addr           *string `json:"addr"`
+	NoRelayer      *bool   `json:"noRelayer"`
+	NoRelayerFlag  *bool   `json:"no-relayer"`
+	WebPush        *bool   `json:"webPush"`
+	WebPushFlag    *bool   `json:"web-push"`
+	AgentConfig    *string `json:"agent-config"`
+	NotifyScript   *string `json:"notify-script"`
+	TrustedProxies *string `json:"trusted-proxies"`
+}
+
+// startupFlags holds registered flag pointers updated from the startup configuration.
+type startupFlags struct {
+	Addr           *string
+	NoRelayer      *bool
+	WebPush        *bool
+	AgentConfig    *string
+	NotifyScript   *string
+	TrustedProxies *string
 }
 
 func loadStartupConfig(path string) (startupConfig, error) {
@@ -81,21 +101,24 @@ func visitedFlags(flags *flag.FlagSet) map[string]bool {
 	return visited
 }
 
-func applyStartupConfig(cfg startupConfig, explicit map[string]bool, addr *string, noRelayer *bool, webPush *bool, agentConfig *string, notifyScript *string) {
+func applyStartupConfig(cfg startupConfig, explicit map[string]bool, flags startupFlags) {
 	if cfg.Addr != nil && !explicit["addr"] {
-		*addr = strings.TrimSpace(*cfg.Addr)
+		*flags.Addr = strings.TrimSpace(*cfg.Addr)
 	}
 	if value := firstBool(cfg.NoRelayer, cfg.NoRelayerFlag); value != nil && !explicit["no-relayer"] {
-		*noRelayer = *value
+		*flags.NoRelayer = *value
 	}
 	if value := firstBool(cfg.WebPush, cfg.WebPushFlag); value != nil && !explicit["web-push"] {
-		*webPush = *value
+		*flags.WebPush = *value
 	}
 	if cfg.AgentConfig != nil && !explicit["agent-config"] {
-		*agentConfig = strings.TrimSpace(*cfg.AgentConfig)
+		*flags.AgentConfig = strings.TrimSpace(*cfg.AgentConfig)
 	}
 	if cfg.NotifyScript != nil && !explicit["notify-script"] {
-		*notifyScript = strings.TrimSpace(*cfg.NotifyScript)
+		*flags.NotifyScript = strings.TrimSpace(*cfg.NotifyScript)
+	}
+	if cfg.TrustedProxies != nil && !explicit["trusted-proxies"] {
+		*flags.TrustedProxies = strings.TrimSpace(*cfg.TrustedProxies)
 	}
 }
 

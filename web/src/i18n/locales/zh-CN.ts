@@ -648,6 +648,7 @@ export const zhCN = {
   "root.confirmRemove": "确认移除项目“{name}”？",
   "root.removeFailed": "移除项目失败",
   "e2ee.invalidProof": "端到端配对码无效，或当前节点标识已变化",
+  "e2ee.rateLimited": "配对请求过于频繁，请在 {seconds} 秒后重试。",
   "e2ee.secureContextRequired": "当前连接不是安全上下文，局域网配对请改用 HTTPS 或 localhost",
   "e2ee.secretMissing": "配对初始化失败，请刷新页面后重试",
   "e2ee.invalidResponse": "握手响应无效，请稍后重试",

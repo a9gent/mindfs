@@ -207,6 +207,30 @@ mindfs -tls -cert /path/to/cert.pem -key /path/to/key.pem
 
 MindFS automatically detects the availability of installed agents. This usually takes about one minute.
 
+#### Public access and pairing limits
+
+For public access, use trusted HTTPS and keep `-e2ee` in every startup command, or set `"e2ee": true` in the startup JSON config. Behind a reverse proxy, bind MindFS to `127.0.0.1:7331` and expose only the HTTPS entry point. Automatic startup preserves the pairing option and trusted proxy configuration.
+
+When pairing is enabled, `POST /api/e2ee/open` automatically applies these limits:
+
+| Limit | Default policy |
+| --- | --- |
+| Per source IP | Sustained rate of 10 attempts/minute, burst of 5 |
+| Entire node | Sustained rate of 60 attempts/minute, burst of 20 |
+| Concurrent handshakes | 2 per source, 16 per node |
+| Consecutive failures | A 5-second cooldown after the third failure, doubling up to 30 minutes; successful pairing clears the failure count |
+| Timeouts | 10 seconds to read a pairing request body; 60 seconds for idle HTTP connections |
+
+Rejected attempts receive `429`, a `Retry-After` header, and `retry_after` seconds in JSON. The UI shows the wait time and pauses new pairing requests during the cooldown. Authenticated API calls and WebSocket messages do not consume the pairing quota. Source records are capped at 4096 and reclaimed after 24 idle hours. Limits are held in memory per process and reset on restart.
+
+By default, limits use the connection's peer IP and ignore forwarding headers such as `X-Forwarded-For` and `X-Real-IP`. Only configure `-trusted-proxies` when a proxy you control overwrites or correctly appends the actual client IP. For example, with Nginx on the same machine, configure `proxy_set_header X-Forwarded-For $remote_addr;` and start:
+
+```bash
+mindfs -e2ee -addr 127.0.0.1:7331 -trusted-proxies '127.0.0.1/32,::1/128'
+```
+
+The startup JSON config also accepts `"trusted-proxies": "127.0.0.1/32,::1/128"`. Separate multiple IPs/CIDRs with commas and list only actual trusted proxies, never all addresses. Without this setting, or when Relay forwarding headers cannot be trusted, clients sharing a proxy/Relay share its source quota; apply limits by real client IP at the public entry point as well. Traffic flood protection, total connection limits, and timeouts for other endpoints remain the public proxy's responsibility.
+
 ### Enable Remote Access (Optional)
 
 1. Open MindFS in local mode and click the bind button in the bottom-left corner.
@@ -287,6 +311,7 @@ mindfs -agent-config /path/to/agents.json
 | `-agent-config string` | empty | Load one extra `agents.json` file. |
 | `-no-relayer` | `false` | Disable relay integration. Local and private-network access still work. |
 | `-e2ee` | `false` | Enable end-to-end encryption for sensitive data. The pairing code can also be used as an authentication mechanism: unpaired frontends cannot access node content. LAN access requires `-tls` to work correctly. On first enablement, the CLI prints the pairing secret. |
+| `-trusted-proxies string` | empty | Comma-separated proxy IPs/CIDRs whose `X-Forwarded-For` headers are trusted for pairing limits only. Forwarding headers are not trusted by default. |
 | `-web-push` | `true` | Enable PWA Web Push notifications. VAPID keys are generated automatically on first start. |
 | `-notify-script string` | empty | Executable script for notification events. MindFS passes the JSON payload on stdin. |
 | `-tls` | `false` | Enable HTTPS. If `-cert` and `-key` are not provided, MindFS generates and reuses a local self-signed certificate. |
