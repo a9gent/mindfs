@@ -16,7 +16,6 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	stdpath "path"
 	"path/filepath"
@@ -46,7 +45,6 @@ type HTTPHandler struct {
 	StaticDir      string
 	Version        string
 	LocalCLIToken  string
-	TrustedProxies []netip.Prefix
 	pairingLimiter pairingLimiter
 }
 
@@ -2588,7 +2586,7 @@ func (h *HTTPHandler) handleE2EEOpen(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusForbidden, errServiceUnavailable("e2ee_required"))
 		return
 	}
-	finish, retryAfter := h.pairingLimiter.begin(pairingClientIP(r, h.TrustedProxies))
+	finish, retryAfter := h.pairingLimiter.begin(pairingClientIP(r))
 	if finish == nil {
 		respondPairingRateLimit(w, retryAfter)
 		return

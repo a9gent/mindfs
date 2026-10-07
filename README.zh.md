@@ -210,7 +210,7 @@ MindFS 会自动探测已安装 Agent 的可用性，通常需要大约一分钟
 
 #### 公网访问与配对限流
 
-通过公网访问时，请使用可信 HTTPS，并在每次启动时保留 `-e2ee`，或在启动配置 JSON 中设置 `"e2ee": true`。使用反向代理时，让 MindFS 监听 `127.0.0.1:7331`，只对外开放 HTTPS 入口。自动启动会保存配对开关和可信代理配置。
+通过公网访问时，请使用可信 HTTPS，并在每次启动时保留 `-e2ee`，或在启动配置 JSON 中设置 `"e2ee": true`。使用反向代理时，让 MindFS 监听 `127.0.0.1:7331`，只对外开放 HTTPS 入口。自动启动会保存配对开关。
 
 开启配对后，`POST /api/e2ee/open` 自动启用以下限制，无需额外开关：
 
@@ -224,13 +224,7 @@ MindFS 会自动探测已安装 Agent 的可用性，通常需要大约一分钟
 
 超限返回 `429`、`Retry-After` 响应头和 JSON 中的 `retry_after` 秒数。页面会提示等待时间，并在等待期间暂停新的配对请求。配对限流不计入已配对的普通 API 调用和 WebSocket 消息。来源记录最多 4096 条，空闲 24 小时后回收；限流状态仅保存在当前进程内，重启后重置。
 
-默认使用实际连接 IP，忽略 `X-Forwarded-For`、`X-Real-IP` 等转发头。只有你控制的反代已覆盖或正确追加真实来源 IP 时，才通过 `-trusted-proxies` 明确指定其 IP/CIDR。例如，同机 Nginx 应配置 `proxy_set_header X-Forwarded-For $remote_addr;`，然后启动：
-
-```bash
-mindfs -e2ee -addr 127.0.0.1:7331 -trusted-proxies '127.0.0.1/32,::1/128'
-```
-
-也可以在启动配置 JSON 中设置 `"trusted-proxies": "127.0.0.1/32,::1/128"`。多个代理地址用逗号分隔；只列出实际可信代理，不要信任所有地址。未配置或无法确认 Relay 转发头可信时，同一个反代/Relay 的访问者共用来源额度，建议在公网入口同时按真实客户端 IP 限流。大流量防护、所有连接的总量限制和其他接口的请求超时仍需由公网反代承担。
+限流使用实际连接 IP，忽略 `X-Forwarded-For`、`X-Real-IP` 等转发头。同一个反代/Relay 的访问者共用来源额度；如需按真实客户端 IP 限流，请在公网反代上配置。大流量防护、所有连接的总量限制和其他接口的请求超时也由公网反代承担。
 
 ### 通过 relayer远程访问
 
@@ -311,7 +305,6 @@ mindfs -agent-config /path/to/agents.json
 | `-agent-config string` | 空 | 加载一个额外的 `agents.json` 文件。 |
 | `-no-relayer` | `false` | 禁用 Relay 集成。本地访问和私有网络访问仍可使用。 |
 | `-e2ee` | `false` | 启用敏感数据端到端加密。<br>启用时，CLI 会输出配对密钥。<br>配对码也可以作为一种认证手段，未配对前端无法访问节点内容。<br>局域网访问需要开启 `-tls` 才能正常使用。 |
-| `-trusted-proxies string` | 空 | 信任其 `X-Forwarded-For` 的代理 IP/CIDR 列表，以逗号分隔，仅用于配对限流。默认不信任转发头。 |
 | `-web-push` | `true` | 启用 PWA Web Push 通知。VAPID key 会在首次启动时自动生成。 |
 | `-notify-script string` | 空 | 通知事件脚本。MindFS 会通过 stdin 传入事件 JSON。 |
 | `-tls` | `false` | 启用 HTTPS。如未指定 `-cert` 和 `-key`，MindFS 会生成并复用本地自签名证书。 |

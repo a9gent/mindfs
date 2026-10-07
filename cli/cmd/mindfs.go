@@ -79,7 +79,6 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:7331", "listen address")
 	noRelayer := flag.Bool("no-relayer", false, "disable relay integration")
 	e2eeFlag := flag.Bool("e2ee", false, "enable end-to-end encryption for sensitive data")
-	trustedProxiesFlag := flag.String("trusted-proxies", "", "comma-separated proxy IPs/CIDRs trusted to supply X-Forwarded-For for pairing limits")
 	webPushFlag := flag.Bool("web-push", true, "enable PWA Web Push notifications")
 	foreground := flag.Bool("foreground", false, "run in the foreground instead of as a background service")
 	autoStart := flag.Bool("autostart", false, "register or refresh automatic startup for this user")
@@ -122,21 +121,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
-	serverFlags := startupFlags{
-		Addr:           addr,
-		NoRelayer:      noRelayer,
-		E2EE:           e2eeFlag,
-		TrustedProxies: trustedProxiesFlag,
-		WebPush:        webPushFlag,
-		Foreground:     foreground,
-		BindRelay:      bindRelay,
-		TLS:            tlsFlag,
-		Cert:           certFlag,
-		Key:            keyFlag,
-		AgentConfig:    agentConfigFlag,
-		NotifyScript:   notifyScriptFlag,
-	}
-	applyStartupConfig(startupCfg, explicitFlags, serverFlags)
+	applyStartupConfig(startupCfg, explicitFlags, addr, noRelayer, e2eeFlag, webPushFlag, foreground, bindRelay, tlsFlag, certFlag, keyFlag, agentConfigFlag, notifyScriptFlag)
 	internalAutoStart := autoStartBoot || *internalAutoStartFlag
 	if internalAutoStart {
 		*foreground = true
@@ -298,7 +283,17 @@ func main() {
 	if !daemonMode && !internalRestart && !internalAutoStart {
 		autoStartExplicit := explicitFlags["autostart"]
 		if *autoStart || (!reuseService && !autoStartExplicit && autoStartConfigured()) {
-			autoArgs := autoStartArguments(serverFlags)
+			autoArgs := autoStartArguments(
+				*addr,
+				*noRelayer,
+				*e2eeFlag,
+				*webPushFlag,
+				*tlsFlag,
+				*certFlag,
+				*keyFlag,
+				*agentConfigFlag,
+				*notifyScriptFlag,
+			)
 			if _, err := configureAutoStart(logPath, autoArgs); err != nil {
 				fmt.Fprintf(os.Stderr, "mindfs autostart warning: %v\n", err)
 			}
@@ -413,7 +408,6 @@ func main() {
 			Args:            os.Args[1:],
 			AgentConfigPath: *agentConfigFlag,
 			E2EEConfig:      e2eeResult.Config,
-			TrustedProxies:  *trustedProxiesFlag,
 			WebPushEnabled:  *webPushFlag,
 			NotifyScript:    *notifyScriptFlag,
 			UseTLS:          *tlsFlag,
@@ -524,37 +518,20 @@ func sanitizeAddrForFile(addr string) string {
 }
 
 type startupConfig struct {
-	Addr           *string `json:"addr"`
-	NoRelayer      *bool   `json:"noRelayer"`
-	NoRelayerFlag  *bool   `json:"no-relayer"`
-	E2EE           *bool   `json:"e2ee"`
-	TrustedProxies *string `json:"trusted-proxies"`
-	WebPush        *bool   `json:"webPush"`
-	WebPushFlag    *bool   `json:"web-push"`
-	Foreground     *bool   `json:"foreground"`
-	BindRelay      *bool   `json:"bindRelay"`
-	BindRelayFlag  *bool   `json:"bind-relay"`
-	TLS            *bool   `json:"tls"`
-	Cert           *string `json:"cert"`
-	Key            *string `json:"key"`
-	AgentConfig    *string `json:"agent-config"`
-	NotifyScript   *string `json:"notify-script"`
-}
-
-// startupFlags holds registered flag pointers shared by configuration and automatic startup.
-type startupFlags struct {
-	Addr           *string
-	NoRelayer      *bool
-	E2EE           *bool
-	TrustedProxies *string
-	WebPush        *bool
-	Foreground     *bool
-	BindRelay      *bool
-	TLS            *bool
-	Cert           *string
-	Key            *string
-	AgentConfig    *string
-	NotifyScript   *string
+	Addr          *string `json:"addr"`
+	NoRelayer     *bool   `json:"noRelayer"`
+	NoRelayerFlag *bool   `json:"no-relayer"`
+	E2EE          *bool   `json:"e2ee"`
+	WebPush       *bool   `json:"webPush"`
+	WebPushFlag   *bool   `json:"web-push"`
+	Foreground    *bool   `json:"foreground"`
+	BindRelay     *bool   `json:"bindRelay"`
+	BindRelayFlag *bool   `json:"bind-relay"`
+	TLS           *bool   `json:"tls"`
+	Cert          *string `json:"cert"`
+	Key           *string `json:"key"`
+	AgentConfig   *string `json:"agent-config"`
+	NotifyScript  *string `json:"notify-script"`
 }
 
 func loadStartupConfig(path string) (startupConfig, error) {
@@ -581,42 +558,53 @@ func visitedFlags(flags *flag.FlagSet) map[string]bool {
 	return visited
 }
 
-func applyStartupConfig(cfg startupConfig, explicit map[string]bool, flags startupFlags) {
+func applyStartupConfig(
+	cfg startupConfig,
+	explicit map[string]bool,
+	addr *string,
+	noRelayer *bool,
+	e2ee *bool,
+	webPush *bool,
+	foreground *bool,
+	bindRelay *bool,
+	tlsFlag *bool,
+	cert *string,
+	key *string,
+	agentConfig *string,
+	notifyScript *string,
+) {
 	if cfg.Addr != nil && !explicit["addr"] {
-		*flags.Addr = strings.TrimSpace(*cfg.Addr)
+		*addr = strings.TrimSpace(*cfg.Addr)
 	}
 	if value := firstBool(cfg.NoRelayer, cfg.NoRelayerFlag); value != nil && !explicit["no-relayer"] {
-		*flags.NoRelayer = *value
+		*noRelayer = *value
 	}
 	if cfg.E2EE != nil && !explicit["e2ee"] {
-		*flags.E2EE = *cfg.E2EE
-	}
-	if cfg.TrustedProxies != nil && !explicit["trusted-proxies"] {
-		*flags.TrustedProxies = strings.TrimSpace(*cfg.TrustedProxies)
+		*e2ee = *cfg.E2EE
 	}
 	if value := firstBool(cfg.WebPush, cfg.WebPushFlag); value != nil && !explicit["web-push"] {
-		*flags.WebPush = *value
+		*webPush = *value
 	}
 	if cfg.Foreground != nil && !explicit["foreground"] {
-		*flags.Foreground = *cfg.Foreground
+		*foreground = *cfg.Foreground
 	}
 	if value := firstBool(cfg.BindRelay, cfg.BindRelayFlag); value != nil && !explicit["bind-relay"] {
-		*flags.BindRelay = *value
+		*bindRelay = *value
 	}
 	if cfg.TLS != nil && !explicit["tls"] {
-		*flags.TLS = *cfg.TLS
+		*tlsFlag = *cfg.TLS
 	}
 	if cfg.Cert != nil && !explicit["cert"] {
-		*flags.Cert = strings.TrimSpace(*cfg.Cert)
+		*cert = strings.TrimSpace(*cfg.Cert)
 	}
 	if cfg.Key != nil && !explicit["key"] {
-		*flags.Key = strings.TrimSpace(*cfg.Key)
+		*key = strings.TrimSpace(*cfg.Key)
 	}
 	if cfg.AgentConfig != nil && !explicit["agent-config"] {
-		*flags.AgentConfig = strings.TrimSpace(*cfg.AgentConfig)
+		*agentConfig = strings.TrimSpace(*cfg.AgentConfig)
 	}
 	if cfg.NotifyScript != nil && !explicit["notify-script"] {
-		*flags.NotifyScript = strings.TrimSpace(*cfg.NotifyScript)
+		*notifyScript = strings.TrimSpace(*cfg.NotifyScript)
 	}
 }
 

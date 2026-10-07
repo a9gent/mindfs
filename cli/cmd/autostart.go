@@ -310,29 +310,28 @@ func removeAutoStart() error {
 	return nil
 }
 
-func autoStartArguments(flags startupFlags) []string {
-	args := []string{"--internal-autostart", "--addr", *flags.Addr}
-	if *flags.NoRelayer {
+func autoStartArguments(addr string, noRelayer, e2ee, webPush, tlsEnabled bool, cert, key, agentConfig, notifyScript string) []string {
+	args := []string{"--internal-autostart", "--addr", addr}
+	if noRelayer {
 		args = append(args, "--no-relayer")
 	}
-	if *flags.E2EE {
+	if e2ee {
 		args = append(args, "--e2ee")
 	}
-	if !*flags.WebPush {
+	if !webPush {
 		args = append(args, "--web-push=false")
 	}
-	if *flags.TLS {
+	if tlsEnabled {
 		args = append(args, "--tls")
 	}
 	for _, item := range []struct {
 		flag  string
 		value string
 	}{
-		{"--cert", *flags.Cert},
-		{"--key", *flags.Key},
-		{"--agent-config", *flags.AgentConfig},
-		{"--notify-script", *flags.NotifyScript},
-		{"--trusted-proxies", *flags.TrustedProxies},
+		{"--cert", cert},
+		{"--key", key},
+		{"--agent-config", agentConfig},
+		{"--notify-script", notifyScript},
 	} {
 		if value := strings.TrimSpace(item.value); value != "" {
 			args = append(args, item.flag, value)

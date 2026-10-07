@@ -45,7 +45,6 @@ type StartOptions struct {
 	UseTLS          bool
 	CertFile        string
 	KeyFile         string
-	TrustedProxies  string
 }
 
 type E2EEConfig struct {
@@ -76,10 +75,6 @@ func EnsureE2EEConfig(enabled bool) (E2EEEnsureResult, error) {
 
 // Start boots the HTTP/WS server.
 func Start(ctx context.Context, addr string, opts StartOptions) error {
-	trustedProxies, err := api.ParseTrustedProxies(opts.TrustedProxies)
-	if err != nil {
-		return err
-	}
 	registry, err := fs.NewDefaultRegistry()
 	if err != nil {
 		return err
@@ -154,10 +149,9 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	}
 	services.GitHub = githubImportSvc
 	httpHandler := &api.HTTPHandler{
-		AppContext:     services,
-		StaticDir:      resolveStaticDir(),
-		Version:        opts.Version,
-		TrustedProxies: trustedProxies,
+		AppContext: services,
+		StaticDir:  resolveStaticDir(),
+		Version:    opts.Version,
 	}
 	wsHandler := &api.WSHandler{AppContext: services}
 
