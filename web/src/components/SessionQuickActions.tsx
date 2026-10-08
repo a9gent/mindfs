@@ -3,20 +3,20 @@ import { createPortal } from "react-dom";
 import { useI18n } from "../i18n";
 import { sessionService, type Session } from "../services/session";
 import {
-  effectiveFloatBallActions,
-  FLOAT_BALL_ACTION_LABEL_KEYS,
-  FLOAT_BALL_GESTURE_LABEL_KEYS,
+  effectiveBlueRingActions,
+  BLUE_RING_ACTION_LABEL_KEYS,
+  BLUE_RING_GESTURE_LABEL_KEYS,
   recentQuickSwitchGroups,
   ringPathGesture,
-  type FloatBallAction,
-  type FloatBallGestureConfig,
+  type BlueRingAction,
+  type BlueRingGestureConfig,
   type RingPathPoint,
 } from "../services/quickSwitch";
 
 export type SessionQuickActionsProps = {
   currentRootId?: string | null;
   currentSessionKey?: string;
-  gestureConfig?: FloatBallGestureConfig;
+  gestureConfig?: BlueRingGestureConfig;
   onNewSession: () => void;
   onSelectProject: (rootId: string) => void;
   onSelectSession: (session: Session) => void;
@@ -71,11 +71,11 @@ export function SessionQuickActions({ currentRootId, currentSessionKey, gestureC
     };
   }, [open]);
 
-  const actions = effectiveFloatBallActions(gestureConfig);
+  const actions = effectiveBlueRingActions(gestureConfig);
   const gesturesEnabled = gestureConfig?.enabled === true;
 
   const reset = () => { drag.current = null; setPath([]); };
-  const runAction = (action: FloatBallAction) => {
+  const runAction = (action: BlueRingAction) => {
     switch (action) {
       case "newSession": setOpen(false); onNewSession(); break;
       case "quickSwitch": setOpen(true); break;
@@ -106,14 +106,14 @@ export function SessionQuickActions({ currentRootId, currentSessionKey, gestureC
   const last = path.length ? path[path.length - 1] : null;
   const offset = start && last ? { x: last.x - start.x, y: last.y - start.y } : { x: 0, y: 0 };
   const hint = ringPathGesture(path, false);
-  const hintAction: FloatBallAction | null = hint ? actions[hint.gesture] : null;
+  const hintAction: BlueRingAction | null = hint ? actions[hint.gesture] : null;
   const hintText = hint && hintAction && hintAction !== "none"
     ? (gesturesEnabled
       ? (() => {
-        const actionLabel = t(FLOAT_BALL_ACTION_LABEL_KEYS[hintAction]);
+        const actionLabel = t(BLUE_RING_ACTION_LABEL_KEYS[hintAction]);
         return hint.ready
           ? t("action.gestureReady", { action: actionLabel })
-          : t("action.gesturePending", { gesture: t(FLOAT_BALL_GESTURE_LABEL_KEYS[hint.gesture]), action: actionLabel });
+          : t("action.gesturePending", { gesture: t(BLUE_RING_GESTURE_LABEL_KEYS[hint.gesture]), action: actionLabel });
       })()
       : t(hint.gesture === "left"
         ? hint.ready ? "action.releaseNewSession" : "action.swipeNewSession"
@@ -138,7 +138,7 @@ export function SessionQuickActions({ currentRootId, currentSessionKey, gestureC
       }}
       onPointerUp={(event) => {
         if (drag.current?.id !== event.pointerId) return;
-        const points = drag.current.points;
+        const points = [...drag.current.points, { x: event.clientX, y: event.clientY }];
         reset();
         const match = ringPathGesture(points, true);
         if (match) runAction(actions[match.gesture]);

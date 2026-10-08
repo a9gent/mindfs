@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import {
-  DEFAULT_FLOAT_BALL_ACTIONS,
-  effectiveFloatBallActions,
-  normalizeFloatBallGestureConfig,
+  DEFAULT_BLUE_RING_ACTIONS,
+  effectiveBlueRingActions,
+  normalizeBlueRingGestureConfig,
   recentQuickSwitchGroups,
   ringGesture,
   ringPathGesture,
@@ -23,10 +23,15 @@ assert.deepEqual(ringPathGesture(path([0, 0], [-40, 0]), true), { gesture: "left
 assert.deepEqual(ringPathGesture(path([0, 0], [40, 0]), true), { gesture: "right", ready: true });
 assert.deepEqual(ringPathGesture(path([0, 0], [0, -40]), true), { gesture: "up", ready: true });
 assert.equal(ringPathGesture(path([0, 0], [-39, 0]), true), null);
-assert.equal(ringPathGesture(path([0, 0], [-50, -50]), true), null, "diagonal swipes stay unrecognized");
+assert.deepEqual(ringPathGesture(path([0, 0], [-50, -50]), true), { gesture: "upLeft", ready: true });
 assert.equal(ringPathGesture(path([0, 0], [0, 40]), true), null, "downward swipes stay unrecognized");
 
-// Two-phase gestures: reach the top, then turn sideways while staying high.
+// Upper corners work directly and are independent of the path taken.
+assert.deepEqual(ringPathGesture(path([0, 0], [40, -40]), true), { gesture: "upRight", ready: true });
+assert.deepEqual(ringPathGesture(path([100, 100], [60, 60]), true), { gesture: "upLeft", ready: true });
+assert.equal(ringPathGesture(path([0, 0], [-39, -39]), true), null);
+assert.deepEqual(ringPathGesture(path([0, 0], [-39, -39]), false), { gesture: "upLeft", ready: false });
+assert.deepEqual(ringPathGesture(path([0, 0], [-90, 0], [-50, -50]), true), { gesture: "upLeft", ready: true });
 assert.deepEqual(ringPathGesture(path([0, 0], [0, -90], [-50, -84]), true), { gesture: "upLeft", ready: true });
 assert.deepEqual(ringPathGesture(path([0, 0], [0, -90], [50, -84]), true), { gesture: "upRight", ready: true });
 assert.deepEqual(
@@ -37,31 +42,31 @@ assert.deepEqual(
 assert.deepEqual(
   ringPathGesture(path([0, 0], [-40, -45], [-100, -25]), true),
   { gesture: "left", ready: true },
-  "an arced left swipe must not become an up-then-left gesture",
+  "a mostly horizontal swipe stays left",
 );
 assert.deepEqual(
   ringPathGesture(path([0, 0], [-30, -50], [-90, -45]), true),
   { gesture: "upLeft", ready: true },
-  "an arced left swipe that ends high counts as up-then-left",
+  "an arced swipe ending in the upper corner counts as upper left",
 );
 
 // Live hints use loose thresholds and mark when the strict gesture commits.
 assert.deepEqual(ringPathGesture(path([0, 0], [-15, 0]), false), { gesture: "left", ready: false });
 assert.deepEqual(ringPathGesture(path([0, 0], [15, 0]), false), { gesture: "right", ready: false });
 assert.deepEqual(ringPathGesture(path([0, 0], [0, -15]), false), { gesture: "up", ready: false });
-assert.deepEqual(ringPathGesture(path([0, 0], [0, -90], [-20, -84]), false), { gesture: "upLeft", ready: false });
+assert.deepEqual(ringPathGesture(path([0, 0], [0, -90], [-20, -84]), false), { gesture: "up", ready: true });
 assert.deepEqual(ringPathGesture(path([0, 0], [0, -90], [-50, -84]), false), { gesture: "upLeft", ready: true });
 assert.equal(ringPathGesture(path([0, 0], [5, -5]), false), null);
 
 // Gesture config: unknown values fall back to the original behavior.
-assert.deepEqual(normalizeFloatBallGestureConfig(null), { enabled: false, actions: { ...DEFAULT_FLOAT_BALL_ACTIONS } });
+assert.deepEqual(normalizeBlueRingGestureConfig(null), { enabled: false, actions: { ...DEFAULT_BLUE_RING_ACTIONS } });
 assert.deepEqual(
-  normalizeFloatBallGestureConfig({ enabled: "yes", actions: { left: "toggleFileSidebar", up: 42 } }),
-  { enabled: false, actions: { ...DEFAULT_FLOAT_BALL_ACTIONS, left: "toggleFileSidebar" } },
+  normalizeBlueRingGestureConfig({ enabled: "yes", actions: { left: "toggleFileSidebar", up: 42 } }),
+  { enabled: false, actions: { ...DEFAULT_BLUE_RING_ACTIONS, left: "toggleFileSidebar" } },
 );
-assert.deepEqual(effectiveFloatBallActions({ enabled: false, actions: { ...DEFAULT_FLOAT_BALL_ACTIONS, left: "modelSelector" } }), DEFAULT_FLOAT_BALL_ACTIONS, "disabled config keeps the original mapping");
+assert.deepEqual(effectiveBlueRingActions({ enabled: false, actions: { ...DEFAULT_BLUE_RING_ACTIONS, left: "modelSelector" } }), DEFAULT_BLUE_RING_ACTIONS, "disabled config keeps the original mapping");
 assert.deepEqual(
-  effectiveFloatBallActions(normalizeFloatBallGestureConfig({ enabled: true, actions: { upLeft: "toggleSessionSidebar" } })).upLeft,
+  effectiveBlueRingActions(normalizeBlueRingGestureConfig({ enabled: true, actions: { upLeft: "toggleSessionSidebar" } })).upLeft,
   "toggleSessionSidebar",
 );
 
@@ -91,23 +96,23 @@ const service = readFileSync(new URL("../src/services/quickSwitch.ts", import.me
 
 assert.match(
   app,
-  /useState<FloatBallGestureConfig>\(loadFloatBallGestureConfig\)[\s\S]*?persistFloatBallGestureConfig\(floatBallGestures\)/,
+  /useState<BlueRingGestureConfig>\(loadBlueRingGestureConfig\)[\s\S]*?persistBlueRingGestureConfig\(blueRingGestures\)/,
   "the gesture config should survive app reloads",
 );
 assert.match(
   fileTree,
-  /floatBall\.title[\s\S]*?FLOAT_BALL_GESTURES\.map/,
+  /blueRing\.title[\s\S]*?BLUE_RING_GESTURES\.map/,
   "the sidebar menu should offer per-gesture action binding",
 );
 assert.match(
   quickActions,
-  /effectiveFloatBallActions\(gestureConfig\)[\s\S]*?ringPathGesture\(/,
-  "the float ball must resolve actions through the effective config",
+  /effectiveBlueRingActions\(gestureConfig\)[\s\S]*?ringPathGesture\(/,
+  "the blue ring must resolve actions through the effective config",
 );
 assert.match(
   actionBar,
-  /gestureConfig=\{floatBallGestures\}[\s\S]*?onToggleFileSidebar=\{onToggleLeftSidebar\}[\s\S]*?onToggleSessionSidebar=\{onToggleRightSidebar\}/,
-  "sidebar toggles must be reachable from float ball gestures",
+  /gestureConfig=\{blueRingGestures\}[\s\S]*?onToggleFileSidebar=\{onToggleLeftSidebar\}[\s\S]*?onToggleSessionSidebar=\{onToggleRightSidebar\}/,
+  "sidebar toggles must be reachable from blue ring gestures",
 );
 assert.match(
   actionBar,
@@ -122,4 +127,3 @@ assert.match(
 for (const action of ["toggleFileSidebar", "toggleSessionSidebar", "modelSelector", "recentSession"]) {
   assert.match(service, new RegExp(`"${action}"`), `${action} should stay part of the action registry`);
 }
-

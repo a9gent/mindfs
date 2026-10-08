@@ -60,9 +60,9 @@ import {
   type SendShortcut,
 } from "./services/sendShortcut";
 import {
-  loadFloatBallGestureConfig,
-  persistFloatBallGestureConfig,
-  type FloatBallGestureConfig,
+  loadBlueRingGestureConfig,
+  persistBlueRingGestureConfig,
+  type BlueRingGestureConfig,
 } from "./services/quickSwitch";
 import {
   loadFontSizePreferences,
@@ -1713,7 +1713,7 @@ export function App({ onGoHome }: AppProps) {
   const { isMobile, isTablet } = useResponsive();
   const [mobileEnterKeySends, setMobileEnterKeySends] = useState(loadMobileEnterKeySends);
   const [sendShortcut, setSendShortcut] = useState<SendShortcut | null>(loadSendShortcut);
-  const [floatBallGestures, setFloatBallGestures] = useState<FloatBallGestureConfig>(loadFloatBallGestureConfig);
+  const [blueRingGestures, setBlueRingGestures] = useState<BlueRingGestureConfig>(loadBlueRingGestureConfig);
   const [sidebarsSwapped, setSidebarsSwapped] = useState(loadSidebarsSwapped);
   const [fontSizePreferences, setFontSizePreferences] = useState<FontSizePreferences>(loadFontSizePreferences);
   const [gitDiffSideBySide, setGitDiffSideBySide] = useState(loadGitDiffSideBySide);
@@ -2376,8 +2376,8 @@ export function App({ onGoHome }: AppProps) {
   }, [sendShortcut]);
 
   useEffect(() => {
-    persistFloatBallGestureConfig(floatBallGestures);
-  }, [floatBallGestures]);
+    persistBlueRingGestureConfig(blueRingGestures);
+  }, [blueRingGestures]);
 
   useEffect(() => {
     persistFontSizePreferences(fontSizePreferences);
@@ -14487,8 +14487,8 @@ export function App({ onGoHome }: AppProps) {
             onSendShortcutChange={setSendShortcut}
             sidebarsSwapped={sidebarsSwapped}
             onSidebarsSwappedChange={setSidebarsSwapped}
-            floatBallGestures={floatBallGestures}
-            onFloatBallGesturesChange={setFloatBallGestures}
+            blueRingGestures={blueRingGestures}
+            onBlueRingGesturesChange={setBlueRingGestures}
             gitDiffSideBySide={gitDiffSideBySide}
             onGitDiffSideBySideChange={setGitDiffSideBySide}
             multiProjectSessionsEnabled={multiProjectSessionsEnabled}
@@ -14614,7 +14614,7 @@ export function App({ onGoHome }: AppProps) {
               onToggleLeftSidebar={() => setIsLeftOpen((v) => !v)}
               onToggleRightSidebar={() => setIsRightOpen((v) => !v)}
               sidebarsSwapped={sidebarsSwapped}
-              floatBallGestures={floatBallGestures}
+              blueRingGestures={blueRingGestures}
             />
           </div>
         }

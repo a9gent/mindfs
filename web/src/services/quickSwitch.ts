@@ -7,11 +7,11 @@ export function ringGesture(x: number, y: number): "new" | "switch" | null {
   return null;
 }
 
-/** Gestures recognized on the float ball (blue ring next to the message input). */
-export type FloatBallGesture = "left" | "right" | "up" | "upLeft" | "upRight";
+/** Gestures recognized on the blue ring next to the message input. */
+export type BlueRingGesture = "left" | "right" | "up" | "upLeft" | "upRight";
 
-/** Actions a float ball gesture can trigger. */
-export type FloatBallAction =
+/** Actions a blue ring gesture can trigger. */
+export type BlueRingAction =
   | "none"
   | "newSession"
   | "quickSwitch"
@@ -20,15 +20,16 @@ export type FloatBallAction =
   | "toggleSessionSidebar"
   | "modelSelector";
 
-export type FloatBallGestureConfig = {
+export type BlueRingGestureConfig = {
   enabled: boolean;
-  actions: Record<FloatBallGesture, FloatBallAction>;
+  actions: Record<BlueRingGesture, BlueRingAction>;
 };
 
-export const FLOAT_BALL_GESTURE_STORAGE_KEY = "mindfs-float-ball-gestures";
+// Keep the persisted key compatible with existing gesture preferences.
+export const BLUE_RING_GESTURE_STORAGE_KEY = "mindfs-float-ball-gestures";
 
 /** Mirrors the original behavior: left = new session, up = quick switch. */
-export const DEFAULT_FLOAT_BALL_ACTIONS: Record<FloatBallGesture, FloatBallAction> = {
+export const DEFAULT_BLUE_RING_ACTIONS: Record<BlueRingGesture, BlueRingAction> = {
   left: "newSession",
   right: "none",
   up: "quickSwitch",
@@ -36,9 +37,9 @@ export const DEFAULT_FLOAT_BALL_ACTIONS: Record<FloatBallGesture, FloatBallActio
   upRight: "none",
 };
 
-export const FLOAT_BALL_GESTURES: readonly FloatBallGesture[] = ["left", "right", "up", "upLeft", "upRight"];
+export const BLUE_RING_GESTURES: readonly BlueRingGesture[] = ["left", "right", "up", "upLeft", "upRight"];
 
-export const FLOAT_BALL_ACTION_OPTIONS: readonly FloatBallAction[] = [
+export const BLUE_RING_ACTION_OPTIONS: readonly BlueRingAction[] = [
   "none",
   "newSession",
   "quickSwitch",
@@ -48,99 +49,85 @@ export const FLOAT_BALL_ACTION_OPTIONS: readonly FloatBallAction[] = [
   "modelSelector",
 ];
 
-export const FLOAT_BALL_GESTURE_LABEL_KEYS: Record<FloatBallGesture, MessageKey> = {
-  left: "floatBall.gesture.left",
-  right: "floatBall.gesture.right",
-  up: "floatBall.gesture.up",
-  upLeft: "floatBall.gesture.upLeft",
-  upRight: "floatBall.gesture.upRight",
+export const BLUE_RING_GESTURE_LABEL_KEYS: Record<BlueRingGesture, MessageKey> = {
+  left: "blueRing.gesture.left",
+  right: "blueRing.gesture.right",
+  up: "blueRing.gesture.up",
+  upLeft: "blueRing.gesture.upLeft",
+  upRight: "blueRing.gesture.upRight",
 };
 
-export const FLOAT_BALL_ACTION_LABEL_KEYS: Record<FloatBallAction, MessageKey> = {
-  none: "floatBall.action.none",
-  newSession: "floatBall.action.newSession",
-  quickSwitch: "floatBall.action.quickSwitch",
-  recentSession: "floatBall.action.recentSession",
-  toggleFileSidebar: "floatBall.action.toggleFileSidebar",
-  toggleSessionSidebar: "floatBall.action.toggleSessionSidebar",
-  modelSelector: "floatBall.action.modelSelector",
+export const BLUE_RING_ACTION_LABEL_KEYS: Record<BlueRingAction, MessageKey> = {
+  none: "blueRing.action.none",
+  newSession: "blueRing.action.newSession",
+  quickSwitch: "blueRing.action.quickSwitch",
+  recentSession: "blueRing.action.recentSession",
+  toggleFileSidebar: "blueRing.action.toggleFileSidebar",
+  toggleSessionSidebar: "blueRing.action.toggleSessionSidebar",
+  modelSelector: "blueRing.action.modelSelector",
 };
 
-const FLOAT_BALL_ACTION_SET = new Set<string>(FLOAT_BALL_ACTION_OPTIONS);
+const BLUE_RING_ACTION_SET = new Set<string>(BLUE_RING_ACTION_OPTIONS);
 
-function normalizeFloatBallAction(value: unknown, fallback: FloatBallAction): FloatBallAction {
-  return typeof value === "string" && FLOAT_BALL_ACTION_SET.has(value) ? value as FloatBallAction : fallback;
+function normalizeBlueRingAction(value: unknown, fallback: BlueRingAction): BlueRingAction {
+  return typeof value === "string" && BLUE_RING_ACTION_SET.has(value) ? value as BlueRingAction : fallback;
 }
 
-export function normalizeFloatBallGestureConfig(value: unknown): FloatBallGestureConfig {
-  const input = value && typeof value === "object" ? value as Partial<FloatBallGestureConfig> : {};
+export function normalizeBlueRingGestureConfig(value: unknown): BlueRingGestureConfig {
+  const input = value && typeof value === "object" ? value as Partial<BlueRingGestureConfig> : {};
   const actions = input.actions && typeof input.actions === "object"
-    ? input.actions as Partial<Record<FloatBallGesture, unknown>>
+    ? input.actions as Partial<Record<BlueRingGesture, unknown>>
     : {};
   return {
     enabled: input.enabled === true,
     actions: {
-      left: normalizeFloatBallAction(actions.left, DEFAULT_FLOAT_BALL_ACTIONS.left),
-      right: normalizeFloatBallAction(actions.right, DEFAULT_FLOAT_BALL_ACTIONS.right),
-      up: normalizeFloatBallAction(actions.up, DEFAULT_FLOAT_BALL_ACTIONS.up),
-      upLeft: normalizeFloatBallAction(actions.upLeft, DEFAULT_FLOAT_BALL_ACTIONS.upLeft),
-      upRight: normalizeFloatBallAction(actions.upRight, DEFAULT_FLOAT_BALL_ACTIONS.upRight),
+      left: normalizeBlueRingAction(actions.left, DEFAULT_BLUE_RING_ACTIONS.left),
+      right: normalizeBlueRingAction(actions.right, DEFAULT_BLUE_RING_ACTIONS.right),
+      up: normalizeBlueRingAction(actions.up, DEFAULT_BLUE_RING_ACTIONS.up),
+      upLeft: normalizeBlueRingAction(actions.upLeft, DEFAULT_BLUE_RING_ACTIONS.upLeft),
+      upRight: normalizeBlueRingAction(actions.upRight, DEFAULT_BLUE_RING_ACTIONS.upRight),
     },
   };
 }
 
-export function loadFloatBallGestureConfig(): FloatBallGestureConfig {
+export function loadBlueRingGestureConfig(): BlueRingGestureConfig {
   let raw: string | null = null;
   try {
-    raw = typeof window === "undefined" ? null : window.localStorage.getItem(FLOAT_BALL_GESTURE_STORAGE_KEY);
+    raw = typeof window === "undefined" ? null : window.localStorage.getItem(BLUE_RING_GESTURE_STORAGE_KEY);
   } catch {
     raw = null;
   }
-  if (!raw) return { enabled: false, actions: { ...DEFAULT_FLOAT_BALL_ACTIONS } };
+  if (!raw) return { enabled: false, actions: { ...DEFAULT_BLUE_RING_ACTIONS } };
   try {
-    return normalizeFloatBallGestureConfig(JSON.parse(raw));
+    return normalizeBlueRingGestureConfig(JSON.parse(raw));
   } catch {
-    return { enabled: false, actions: { ...DEFAULT_FLOAT_BALL_ACTIONS } };
+    return { enabled: false, actions: { ...DEFAULT_BLUE_RING_ACTIONS } };
   }
 }
 
-export function persistFloatBallGestureConfig(config: FloatBallGestureConfig): void {
+export function persistBlueRingGestureConfig(config: BlueRingGestureConfig): void {
   try {
-    window.localStorage.setItem(FLOAT_BALL_GESTURE_STORAGE_KEY, JSON.stringify(config));
+    window.localStorage.setItem(BLUE_RING_GESTURE_STORAGE_KEY, JSON.stringify(config));
   } catch {
     // Ignore storage failures; the setting can still apply for this session.
   }
 }
 
 /** Actions that actually run: while the feature is off the original mapping applies. */
-export function effectiveFloatBallActions(config: FloatBallGestureConfig | null | undefined): Record<FloatBallGesture, FloatBallAction> {
-  if (!config?.enabled) return { ...DEFAULT_FLOAT_BALL_ACTIONS };
-  return { ...DEFAULT_FLOAT_BALL_ACTIONS, ...config.actions };
+export function effectiveBlueRingActions(config: BlueRingGestureConfig | null | undefined): Record<BlueRingGesture, BlueRingAction> {
+  if (!config?.enabled) return { ...DEFAULT_BLUE_RING_ACTIONS };
+  return { ...DEFAULT_BLUE_RING_ACTIONS, ...config.actions };
 }
 
 export type RingPathPoint = { x: number; y: number };
 
-export type RingGestureMatch = { gesture: FloatBallGesture; ready: boolean };
+export type RingGestureMatch = { gesture: BlueRingGesture; ready: boolean };
 
 const RING_SWIPE_THRESHOLD = 40;
 const RING_SWIPE_HINT_THRESHOLD = 10;
-const RING_TURN_THRESHOLD = 36;
-const RING_TURN_HINT_THRESHOLD = 14;
-/** After reaching the top, the finger must stay near it while turning sideways. */
-const RING_TURN_SAG_LIMIT = 24;
-/** Two-phase gestures must end well above the starting point. */
-const RING_TURN_MIN_HEIGHT = 30;
-
-function ringApex(points: RingPathPoint[]): RingPathPoint {
-  let apex = points[0];
-  for (const point of points) {
-    if (point.y < apex.y) apex = point;
-  }
-  return apex;
-}
 
 /**
- * Classify the pointer path of a float ball drag. Strict thresholds commit an
+ * Classify the pointer path of a blue ring drag. Strict thresholds commit an
  * action on release; loose thresholds drive the live hint while dragging
  * (ready marks the point where the strict gesture would commit).
  */
@@ -150,17 +137,13 @@ export function ringPathGesture(points: RingPathPoint[], strict: boolean): RingG
   const end = points[points.length - 1];
   const dx = end.x - start.x;
   const dy = end.y - start.y;
-  // Two-phase gestures: reach the top first, then turn left/right while keeping the finger high.
-  const apex = ringApex(points);
-  const turnX = end.x - apex.x;
-  const turnY = end.y - apex.y;
-  const turnLimit = strict ? RING_TURN_THRESHOLD : RING_TURN_HINT_THRESHOLD;
-  if (apex.y - start.y <= -RING_SWIPE_THRESHOLD
-    && Math.abs(turnX) >= turnLimit
-    && Math.abs(turnX) > Math.abs(turnY)
-    && turnY <= RING_TURN_SAG_LIMIT
-    && end.y - start.y <= -RING_TURN_MIN_HEIGHT) {
-    return { gesture: turnX < 0 ? "upLeft" : "upRight", ready: Math.abs(turnX) >= RING_TURN_THRESHOLD };
+  // The upper corners depend only on displacement, not on the route taken.
+  const horizontal = Math.abs(dx);
+  const upward = -dy;
+  if (upward > 0 && horizontal >= upward / 2 && upward >= horizontal / 2) {
+    const ready = horizontal >= RING_SWIPE_THRESHOLD && upward >= RING_SWIPE_THRESHOLD;
+    if (strict ? !ready : Math.min(horizontal, upward) < RING_SWIPE_HINT_THRESHOLD) return null;
+    return { gesture: dx < 0 ? "upLeft" : "upRight", ready };
   }
   if (Math.abs(dx) >= RING_SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
     return { gesture: dx < 0 ? "left" : "right", ready: true };

@@ -32,7 +32,7 @@ type AgentSelectorProps = {
   onboardingId?: string;
   viewportMenu?: boolean;
   allowDefaultModel?: boolean;
-  /** Bump to open the menu programmatically (e.g. from a float-ball gesture). */
+  /** Bump to open the menu programmatically (e.g. from a blue ring gesture). */
   openSignal?: number;
 };
 
@@ -204,7 +204,7 @@ export function AgentSelector({
     setIsOpen(true);
   }, [resetMenuState]);
 
-  // Lets a parent (e.g. a float-ball gesture) open the menu programmatically.
+  // Lets a parent (e.g. a blue ring gesture) open the menu programmatically.
   const handledOpenSignal = useRef(openSignal ?? 0);
   useEffect(() => {
     const signal = openSignal ?? 0;

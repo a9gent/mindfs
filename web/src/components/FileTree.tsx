@@ -65,14 +65,14 @@ import {
   type SendShortcut,
 } from "../services/sendShortcut";
 import {
-  FLOAT_BALL_ACTION_LABEL_KEYS,
-  FLOAT_BALL_ACTION_OPTIONS,
-  FLOAT_BALL_GESTURES,
-  FLOAT_BALL_GESTURE_LABEL_KEYS,
-  normalizeFloatBallGestureConfig,
-  type FloatBallAction,
-  type FloatBallGesture,
-  type FloatBallGestureConfig,
+  BLUE_RING_ACTION_LABEL_KEYS,
+  BLUE_RING_ACTION_OPTIONS,
+  BLUE_RING_GESTURES,
+  BLUE_RING_GESTURE_LABEL_KEYS,
+  normalizeBlueRingGestureConfig,
+  type BlueRingAction,
+  type BlueRingGesture,
+  type BlueRingGestureConfig,
 } from "../services/quickSwitch";
 import {
   changeFontSize,
@@ -205,8 +205,8 @@ type FileTreeProps = {
   onSendShortcutChange?: (shortcut: SendShortcut | null) => void;
   sidebarsSwapped?: boolean;
   onSidebarsSwappedChange?: (enabled: boolean) => void;
-  floatBallGestures?: FloatBallGestureConfig;
-  onFloatBallGesturesChange?: (config: FloatBallGestureConfig) => void;
+  blueRingGestures?: BlueRingGestureConfig;
+  onBlueRingGesturesChange?: (config: BlueRingGestureConfig) => void;
   gitDiffSideBySide?: boolean;
   onGitDiffSideBySideChange?: (enabled: boolean) => void;
   multiProjectSessionsEnabled?: boolean;
@@ -1498,8 +1498,8 @@ export function FileTree({
   onSendShortcutChange,
   sidebarsSwapped = false,
   onSidebarsSwappedChange,
-  floatBallGestures,
-  onFloatBallGesturesChange,
+  blueRingGestures,
+  onBlueRingGesturesChange,
   gitDiffSideBySide = false,
   onGitDiffSideBySideChange,
   multiProjectSessionsEnabled = false,
@@ -1554,8 +1554,8 @@ export function FileTree({
   const [sendShortcutOpen, setSendShortcutOpen] = React.useState(false);
   const [sendShortcutDraft, setSendShortcutDraft] = React.useState<SendShortcut | null>(sendShortcut);
   const [sendShortcutError, setSendShortcutError] = React.useState("");
-  const [floatBallMenuOpen, setFloatBallMenuOpen] = React.useState(false);
-  const floatBallPopoverRef = React.useRef<HTMLDivElement | null>(null);
+  const [blueRingMenuOpen, setBlueRingMenuOpen] = React.useState(false);
+  const blueRingPopoverRef = React.useRef<HTMLDivElement | null>(null);
   const [idleReleaseHours, setIdleReleaseHours] = React.useState("72");
   const [idleReleaseBusy, setIdleReleaseBusy] = React.useState(false);
   const [idleReleaseError, setIdleReleaseError] = React.useState("");
@@ -2064,15 +2064,15 @@ export function FileTree({
   }, [sendShortcutOpen]);
 
   React.useEffect(() => {
-    if (!floatBallMenuOpen) return;
+    if (!blueRingMenuOpen) return;
     const handlePointerDown = (event: MouseEvent) => {
-      if (!floatBallPopoverRef.current?.contains(event.target as Node)) {
-        setFloatBallMenuOpen(false);
+      if (!blueRingPopoverRef.current?.contains(event.target as Node)) {
+        setBlueRingMenuOpen(false);
       }
     };
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [floatBallMenuOpen]);
+  }, [blueRingMenuOpen]);
 
   const openAgentConfigFlow = React.useCallback((flow: AgentConfigFlow) => {
 	setIdleReleaseOpen(false);
@@ -2194,23 +2194,23 @@ export function FileTree({
     setSendShortcutOpen(false);
   }, [onSendShortcutChange, sendShortcutDraft]);
 
-  const gestureConfig = normalizeFloatBallGestureConfig(floatBallGestures);
+  const gestureConfig = normalizeBlueRingGestureConfig(blueRingGestures);
 
-  const openFloatBallSettings = React.useCallback(() => {
+  const openBlueRingSettings = React.useCallback(() => {
     setAgentLifecycleOpen(false);
     setRelayServicesOpen(false);
     setSessionNamingOpen(false);
     setIdleReleaseOpen(false);
     setSendShortcutOpen(false);
     setIsMenuOpen(false);
-    setFloatBallMenuOpen(true);
+    setBlueRingMenuOpen(true);
   }, []);
 
-  const updateFloatBallAction = React.useCallback((gesture: FloatBallGesture, action: FloatBallAction) => {
+  const updateBlueRingAction = React.useCallback((gesture: BlueRingGesture, action: BlueRingAction) => {
     const nextActions = { ...gestureConfig.actions };
     nextActions[gesture] = action;
-    onFloatBallGesturesChange?.({ ...gestureConfig, actions: nextActions });
-  }, [gestureConfig, onFloatBallGesturesChange]);
+    onBlueRingGesturesChange?.({ ...gestureConfig, actions: nextActions });
+  }, [gestureConfig, onBlueRingGesturesChange]);
 
   const saveIdleSessionResourceRelease = React.useCallback(async () => {
     if (idleReleaseBusy) return;
@@ -3676,16 +3676,16 @@ export function FileTree({
               </button>
               <button
                 type="button"
-                onClick={openFloatBallSettings}
+                onClick={openBlueRingSettings}
                 style={fileTreeMenuButtonStyle}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <circle cx="12" cy="12" r="3.2" />
                   <path d="M12 4.5V2M12 22v-2.5M4.5 12H2M22 12h-2.5M6.7 6.7 4.9 4.9M19.1 19.1l-1.8-1.8M6.7 17.3l-1.8 1.8M19.1 4.9l-1.8 1.8" />
                 </svg>
-                <span style={{ flex: 1 }}>{t("floatBall.title")}</span>
+                <span style={{ flex: 1 }}>{t("blueRing.title")}</span>
                 <span style={{ color: "var(--text-secondary)", fontSize: "11px" }}>
-                  {t(gestureConfig.enabled ? "floatBall.settings.on" : "floatBall.settings.off")}
+                  {t(gestureConfig.enabled ? "blueRing.settings.on" : "blueRing.settings.off")}
                 </span>
               </button>
               {showEnterKeySendOption ? (
@@ -3989,9 +3989,9 @@ export function FileTree({
             </div>
           </div>
         ) : null}
-        {floatBallMenuOpen ? (
+        {blueRingMenuOpen ? (
           <div
-            ref={floatBallPopoverRef}
+            ref={blueRingPopoverRef}
             style={{
               position: "absolute",
               top: "calc(100% + 6px)",
@@ -4009,36 +4009,32 @@ export function FileTree({
             }}
           >
             <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)" }}>
-              {t("floatBall.title")}
+              {t("blueRing.title")}
             </div>
             <div style={{ marginTop: "6px", fontSize: "11px", lineHeight: 1.5, color: "var(--text-secondary)" }}>
-              {t("floatBall.description")}
+              {t("blueRing.description")}
             </div>
-            <button
-              type="button"
-              onClick={() => onFloatBallGesturesChange?.({ ...gestureConfig, enabled: !gestureConfig.enabled })}
+            <label
               style={{
-                width: "100%",
-                marginTop: "10px",
-                border: "none",
-                background: gestureConfig.enabled ? "var(--selection-bg)" : "transparent",
-                color: gestureConfig.enabled ? "var(--accent-color)" : "var(--text-primary)",
-                borderRadius: "8px",
-                padding: "8px 10px",
+                marginTop: "12px",
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "space-between",
-                textAlign: "left",
+                gap: "8px",
+                color: "var(--text-primary)",
+                fontSize: "13px",
                 cursor: "pointer",
-                fontSize: "12px",
               }}
             >
-              <span>{t("floatBall.enable")}</span>
-              <span style={{ fontSize: "11px", opacity: gestureConfig.enabled ? 1 : 0 }}>✓</span>
-            </button>
+              <input
+                type="checkbox"
+                checked={gestureConfig.enabled}
+                onChange={(event) => onBlueRingGesturesChange?.({ ...gestureConfig, enabled: event.target.checked })}
+              />
+              <span>{t("blueRing.enable")}</span>
+            </label>
             <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "2px" }}>
-              {FLOAT_BALL_GESTURES.map((gesture) => (
-                <label
+              {BLUE_RING_GESTURES.map((gesture) => (
+                <div
                   key={gesture}
                   style={{
                     display: "flex",
@@ -4049,27 +4045,26 @@ export function FileTree({
                     color: "var(--text-primary)",
                   }}
                 >
-                  <span style={{ flex: 1 }}>{t(FLOAT_BALL_GESTURE_LABEL_KEYS[gesture])}</span>
-                  <select
+                  <span style={{ flex: 1 }}>{t(BLUE_RING_GESTURE_LABEL_KEYS[gesture])}</span>
+                  <ProviderModelSelect
+                    models={[...BLUE_RING_ACTION_OPTIONS]}
                     value={gestureConfig.actions[gesture]}
-                    onChange={(event) => updateFloatBallAction(gesture, event.target.value as FloatBallAction)}
+                    label={t(BLUE_RING_GESTURE_LABEL_KEYS[gesture])}
+                    getOptionLabel={(action) => t(BLUE_RING_ACTION_LABEL_KEYS[action as BlueRingAction])}
+                    onChange={(action) => updateBlueRingAction(gesture, action as BlueRingAction)}
                     style={{
-                      flex: "0 0 auto",
+                      flex: "0 1 58%",
                       maxWidth: "58%",
+                      height: "32px",
                       padding: "4px 6px",
                       borderRadius: "8px",
                       border: "1px solid var(--border-color)",
                       background: "var(--content-bg)",
                       color: gestureConfig.actions[gesture] === "none" ? "var(--text-secondary)" : "var(--text-primary)",
                       fontSize: "12px",
-                      outline: "none",
                     }}
-                  >
-                    {FLOAT_BALL_ACTION_OPTIONS.map((action) => (
-                      <option key={action} value={action}>{t(FLOAT_BALL_ACTION_LABEL_KEYS[action])}</option>
-                    ))}
-                  </select>
-                </label>
+                  />
+                </div>
               ))}
             </div>
           </div>

@@ -6,9 +6,11 @@ type Props = {
   value: string;
   label: string;
   onChange: (model: string) => void;
+  getOptionLabel?: (value: string) => string;
+  style?: React.CSSProperties;
 };
 
-export function ProviderModelSelect({ models, value, label, onChange }: Props) {
+export function ProviderModelSelect({ models, value, label, onChange, getOptionLabel = (option) => option, style }: Props) {
   const [open, setOpen] = React.useState(false);
   const [active, setActive] = React.useState(0);
   const [position, setPosition] = React.useState<React.CSSProperties>({});
@@ -81,7 +83,7 @@ export function ProviderModelSelect({ models, value, label, onChange }: Props) {
         aria-expanded={open}
         aria-controls={open ? id : undefined}
         aria-activedescendant={open ? `${id}-${active}` : undefined}
-        title={value}
+        title={getOptionLabel(value)}
         onBlur={() => setOpen(false)}
         onClick={(event) => { event.stopPropagation(); if (open) setOpen(false); else show(); }}
         onKeyDown={(event) => {
@@ -96,25 +98,25 @@ export function ProviderModelSelect({ models, value, label, onChange }: Props) {
             else setActive((index) => Math.max(0, Math.min(models.length - 1, index + (event.key === "ArrowDown" ? 1 : -1))));
           }
         }}
-        style={{ flex: 1, minWidth: 0, height: "22px", minHeight: 0, boxSizing: "border-box", padding: "0 6px", border: "1px solid var(--border-color)", borderRadius: "6px", background: "var(--menu-bg)", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", cursor: "pointer" }}
+        style={{ flex: 1, minWidth: 0, height: "22px", minHeight: 0, boxSizing: "border-box", padding: "0 6px", border: "1px solid var(--border-color)", borderRadius: "6px", background: "var(--menu-bg)", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", cursor: "pointer", ...style }}
       >
-        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>{value}</span>
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>{getOptionLabel(value)}</span>
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true" style={{ flexShrink: 0 }}><path d="m6 9 6 6 6-6" /></svg>
       </button>
       {open && createPortal(
         <div
           ref={menu} id={id} role="listbox" aria-label={label}
-          onMouseDown={(event) => event.preventDefault()}
+          onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
           onClick={(event) => event.stopPropagation()}
           style={{ ...position, zIndex: 10000, boxSizing: "border-box", overflowY: "auto", overscrollBehavior: "contain", padding: "3px", border: "1px solid var(--menu-border)", borderRadius: "6px", background: "var(--menu-bg)", boxShadow: "0 6px 20px rgba(0,0,0,0.18)" }}
         >
           {models.map((model, index) => (
             <div
               key={model} id={`${id}-${index}`} role="option" aria-selected={model === value} data-index={index}
-              title={model}
+              title={getOptionLabel(model)}
               onClick={() => select(model)}
               style={{ padding: "7px 6px", fontSize: "12px", lineHeight: "18px", borderRadius: "4px", overflowWrap: "anywhere", cursor: "pointer", background: index === active ? "var(--selection-bg)" : "transparent", color: model === value ? "var(--accent-color)" : "var(--text-primary)" }}
-            >{model}</div>
+            >{getOptionLabel(model)}</div>
           ))}
         </div>, document.body,
       )}
