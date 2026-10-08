@@ -24,6 +24,7 @@ import { CodexRateLimitIndicator } from "./CodexRateLimitIndicator";
 import { AgentMemoryIndicator } from "./AgentMemoryIndicator";
 import { deletePrompt, savePrompt } from "../services/prompts";
 import { matchesSendShortcut, type SendShortcut } from "../services/sendShortcut";
+import type { FloatBallGestureConfig } from "../services/quickSwitch";
 import { SessionQuickActions, type SessionQuickActionsProps } from "./SessionQuickActions";
 
 type SessionInfo = {
@@ -123,6 +124,7 @@ type ActionBarProps = {
   onToggleLeftSidebar?: () => void;
   onToggleRightSidebar?: () => void;
   sidebarsSwapped?: boolean;
+  floatBallGestures?: FloatBallGestureConfig;
 };
 
 function wsStatusMeta(status: WSStatus, t: (key: MessageKey) => string): {
@@ -418,8 +420,10 @@ export function ActionBar({
   mobileEnterKeySends = false,
   sendShortcut = null,
   sidebarsSwapped = false,
+  floatBallGestures,
 }: ActionBarProps) {
   const { t } = useI18n();
+  const [modelSelectorSignal, setModelSelectorSignal] = useState(0);
   const [mode, setMode] = useState<SessionMode>("chat");
   const [agent, setAgent] = useState("");
   const [model, setModel] = useState("");
@@ -1800,7 +1804,7 @@ export function ActionBar({
             />
 
             <div data-onboarding="input-controls" style={{ position: "absolute", right: isMobile ? "4px" : "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: isMobile ? "0px" : "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
-              <SessionQuickActions currentRootId={currentRootId} currentSessionKey={currentSession?.key || currentSession?.session_key} onNewSession={() => { resetForNewSession(); onNewSession(); }} onSelectProject={onSelectProject} onSelectSession={onSelectSession} />
+              <SessionQuickActions currentRootId={currentRootId} currentSessionKey={currentSession?.key || currentSession?.session_key} gestureConfig={floatBallGestures} onNewSession={() => { resetForNewSession(); onNewSession(); }} onSelectProject={onSelectProject} onSelectSession={onSelectSession} onToggleFileSidebar={onToggleLeftSidebar} onToggleSessionSidebar={onToggleRightSidebar} onOpenModelSelector={() => setModelSelectorSignal((value) => value + 1)} />
               <>
                 <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} onboardingId="mode-selector" viewportMenu />
                 {mode !== "command" ? (
@@ -1834,6 +1838,7 @@ export function ActionBar({
                     defaultExpandOptions
                     onboardingId="agent-selector"
                     viewportMenu
+                    openSignal={modelSelectorSignal}
                     />
                   </div>
                 ) : (
