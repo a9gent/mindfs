@@ -16,6 +16,8 @@ import { copyText } from "../services/clipboard";
 import type { AgentStatus } from "../services/agents";
 import { useI18n, type Locale } from "../i18n";
 import { formatSessionDuration } from "../services/sessionDuration";
+import { DEFAULT_REPLY_INFO_PREFERENCES, useReplyInfoPreferences } from "../services/replyInfoPreferences";
+import { ReplyInfoMenu } from "./ReplyInfoMenu";
 import {
   relatedFileStatKey,
   useRelatedFileStats,
@@ -1077,6 +1079,8 @@ function SessionViewerInner({
     }
     return window.matchMedia("(max-width: 767px)").matches;
   });
+  const replyInfoPreferences = useReplyInfoPreferences();
+  const visibleReplyInfo = isMobile ? replyInfoPreferences : DEFAULT_REPLY_INFO_PREFERENCES;
   const [savedPromptKeys, setSavedPromptKeys] = useState<Record<string, true>>(
     {},
   );
@@ -1101,6 +1105,13 @@ function SessionViewerInner({
     isAwaiting,
   );
   const shouldStickToBottomRef = useRef(true);
+  const latestCompletedReplyIndex = useMemo(() => {
+    for (let index = timeline.length - 1; index >= 0; index--) {
+      if (timeline[index].type === "assistant_text" &&
+          (timeline[index + 1]?.type === "user_text" || (index === timeline.length - 1 && !isStreaming))) return index;
+    }
+    return -1;
+  }, [timeline, isStreaming]);
   const lastSessionKeyRef = useRef<string | null>(null);
   const targetSeqScrollKeyRef = useRef("");
   const targetSeqFrameRef = useRef<number | null>(null);
@@ -2325,10 +2336,10 @@ function SessionViewerInner({
                       <ForkIcon />
                     </button>
                   ) : null}
-                  <AgentIcon
+                  {visibleReplyInfo.agent && <AgentIcon
                     agentName={item.agent || ""}
                     style={{ width: "12px", height: "12px", flexShrink: 0, opacity: 0.5 }}
-                  />
+                  />}
                 </span>
                 <span
                   style={{
@@ -2342,7 +2353,7 @@ function SessionViewerInner({
                     opacity: 0.5,
                   }}
                 >
-                  {assistantExchangeMeta ? (
+                  {visibleReplyInfo.model && assistantExchangeMeta ? (
                     <span
                       style={{
                         display: "inline-flex",
@@ -2356,7 +2367,7 @@ function SessionViewerInner({
                       {assistantExchangeMeta}
                     </span>
                   ) : null}
-                  <span
+                  {visibleReplyInfo.tokens && <span
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
@@ -2367,8 +2378,8 @@ function SessionViewerInner({
                     }}
                   >
                     <TurnTokenUsage usage={item.tokenUsage} totalUsage={cumulativeTokenUsage[idx]} />
-                  </span>
-                  <span
+                  </span>}
+                  {visibleReplyInfo.time && <span
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
@@ -2380,8 +2391,8 @@ function SessionViewerInner({
                     }}
                   >
                     {time}{assistantDurationLabel}
-                  </span>
-                  <span
+                  </span>}
+                  {visibleReplyInfo.context && <span
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
@@ -2392,8 +2403,11 @@ function SessionViewerInner({
                     }}
                   >
                     <ContextWindowBadge contextWindow={item.contextWindow} />
-                  </span>
+                  </span>}
                 </span>
+                {isMobile && idx === latestCompletedReplyIndex && (
+                  <ReplyInfoMenu key={sessionKey} preferences={replyInfoPreferences} />
+                )}
               </span>
             )}
           </div>
