@@ -969,7 +969,8 @@ function MarkdownViewerInner({
 
   const renderedMarkdown = useMemo(() => (
     <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
+        // Single tildes denote ranges (21~22, 6~7); require ~~ for strikethrough.
+        remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkMath]}
         remarkRehypeOptions={{ allowDangerousHtml: true }}
         rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema], rehypeKatex]}
         components={markdownComponents}
