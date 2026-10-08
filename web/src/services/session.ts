@@ -1240,6 +1240,13 @@ class SessionService {
     }
   }
 
+  async getSessionLogPath(rootId: string, sessionKey: string): Promise<string> {
+    const data = await protectedJSON<{ path: string }>(
+      appURL(`/api/sessions/${encodeURIComponent(sessionKey)}/log-path`, new URLSearchParams({ root: rootId })),
+    );
+    return data.path;
+  }
+
   async getSession(
     rootId: string,
     sessionKey: string,

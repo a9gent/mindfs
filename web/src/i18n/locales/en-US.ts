@@ -395,6 +395,8 @@ export const enUS = {
   "sessionList.syncing": "Syncing",
   "sessionList.sync": "Sync",
   "sessionList.rename": "Rename",
+  "sessionList.copyId": "Copy session ID",
+  "sessionList.copyPath": "Copy session path",
   "sessionList.replying": "Replying",
   "sessionList.menu": "Session menu",
   "sessionList.searchCurrentProject": "Search current project sessions",

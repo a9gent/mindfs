@@ -393,6 +393,8 @@ export const zhCN = {
   "sessionList.syncing": "同步中",
   "sessionList.sync": "同步",
   "sessionList.rename": "重命名",
+  "sessionList.copyId": "复制会话 ID",
+  "sessionList.copyPath": "复制会话路径",
   "sessionList.replying": "正在回复",
   "sessionList.menu": "会话菜单",
   "sessionList.searchCurrentProject": "搜索当前项目会话",

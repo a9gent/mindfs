@@ -719,6 +719,24 @@ type GetSessionExchangeAuxInput struct {
 	Seq    int
 }
 
+func (s *Service) GetSessionLogPath(ctx context.Context, in GetSessionInput) (string, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return "", err
+	}
+	manager, err := s.Registry.GetSessionManager(in.RootID)
+	if err != nil {
+		return "", err
+	}
+	if _, err := manager.Get(ctx, in.Key, 0); err != nil {
+		return "", err
+	}
+	path := manager.ExchangeLogAbsolutePath(in.Key)
+	if path == "" {
+		return "", errors.New("session log path unavailable")
+	}
+	return path, nil
+}
+
 func (s *Service) GetSessionExchangeAux(ctx context.Context, in GetSessionExchangeAuxInput) (map[int][]session.ExchangeAux, error) {
 	if err := s.ensureRegistry(); err != nil {
 		return nil, err
