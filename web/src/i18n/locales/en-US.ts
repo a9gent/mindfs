@@ -509,6 +509,7 @@ export const enUS = {
   "scheduled.taskNamePlaceholder": "Enter task name",
   "scheduled.taskCron": "Task schedule (standard crontab)",
   "scheduled.newSessionPlan": "New session schedule",
+  "scheduled.fixedSession": "Fixed session",
   "scheduled.alwaysNewSession": "Always start a new session",
   "scheduled.alwaysReuseSession": "Always reuse existing session",
   "scheduled.prompt": "Task prompt",

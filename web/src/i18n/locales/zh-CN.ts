@@ -507,6 +507,7 @@ export const zhCN = {
   "scheduled.taskNamePlaceholder": "请输入任务名称",
   "scheduled.taskCron": "任务计划（标准 crontab 规则）",
   "scheduled.newSessionPlan": "新会话计划",
+  "scheduled.fixedSession": "固定会话",
   "scheduled.alwaysNewSession": "总是开启新会话",
   "scheduled.alwaysReuseSession": "总是复用已有会话",
   "scheduled.prompt": "任务提示词",

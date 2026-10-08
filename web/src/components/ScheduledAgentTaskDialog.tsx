@@ -3,6 +3,7 @@ import { AgentIcon } from "./AgentIcon";
 import { AgentSelector } from "./AgentSelector";
 import { renderToolIcon } from "./stream/ToolCallCard";
 import type { AgentStatus } from "../services/agents";
+import type { SessionItem } from "./SessionList";
 import {
   createScheduledAgentTask,
   deleteScheduledAgentTask,
@@ -31,6 +32,7 @@ type FormState = {
 type Props = {
   open: boolean;
   rootId?: string | null;
+  session?: SessionItem | null;
   agents: AgentStatus[];
   onClose: () => void;
 };
@@ -407,6 +409,7 @@ function CronEditor({
 export function ScheduledAgentTaskDialog({
   open,
   rootId,
+  session,
   agents,
   onClose,
 }: Props) {
@@ -441,11 +444,31 @@ export function ScheduledAgentTaskDialog({
 
   useEffect(() => {
     if (!open) return;
+    let active = true;
     setView("list");
+    setTasks([]);
     setSelected(null);
-    setForm(emptyForm(defaultAgent));
-    void loadTasks();
-  }, [open, rootId, defaultAgent]);
+    setForm(emptyForm(session?.agent || defaultAgent));
+    setLoading(true);
+    setError("");
+    void fetchScheduledAgentTasks(rootId || "").then((items) => {
+      if (!active) return;
+      setTasks(items);
+      if (session) {
+        const key = session.key || session.session_key;
+        const task = items.find((item) => item.fixed_session_key === key)
+          || items.find((item) => item.session_key === key);
+        setSelected(task || null);
+        setForm(task ? taskToForm(task) : { ...emptyForm(session.agent || defaultAgent), name: session.name || "" });
+        setView(task ? "edit" : "create");
+      }
+    }).catch((err) => {
+      if (active) setError(err instanceof Error ? err.message : String(err));
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [open, rootId, defaultAgent, session]);
 
   useEffect(() => {
     if (!open) return;
@@ -474,6 +497,8 @@ export function ScheduledAgentTaskDialog({
   }, [open]);
 
   if (!open) return null;
+
+  const fixedSessionKey = session?.key || session?.session_key || selected?.fixed_session_key || "";
 
   const startCreate = () => {
     setSelected(null);
@@ -509,12 +534,17 @@ export function ScheduledAgentTaskDialog({
         effort: form.effort,
         fast_service: form.fast_service,
         prompt: form.prompt,
-        new_session_cron: form.new_session_cron,
+        new_session_cron: fixedSessionKey ? "" : form.new_session_cron,
+        fixed_session_key: fixedSessionKey || undefined,
       };
       if (view === "edit" && selected) {
         await updateScheduledAgentTask(selected.id, payload);
       } else {
         await createScheduledAgentTask(payload);
+      }
+      if (session) {
+        onClose();
+        return;
       }
       await loadTasks();
       setView("list");
@@ -568,6 +598,7 @@ export function ScheduledAgentTaskDialog({
         fast_service: task.fast_service || "",
         prompt: task.prompt,
         new_session_cron: task.new_session_cron || "",
+        fixed_session_key: task.fixed_session_key,
       });
       await loadTasks();
     } catch (err) {
@@ -738,7 +769,7 @@ export function ScheduledAgentTaskDialog({
                 >
                   <span>{task.enabled ? t("scheduled.enabled") : t("scheduled.disabled")}</span>
                   <span>{task.task_cron}</span>
-                  {task.new_session_cron ? (
+                  {task.fixed_session_key ? <span>{t("scheduled.fixedSession")}</span> : task.new_session_cron ? (
                     <span>{t("scheduled.newSessionCron", { cron: task.new_session_cron })}</span>
                   ) : null}
                   {task.running ? (
@@ -808,7 +839,7 @@ export function ScheduledAgentTaskDialog({
         onChange={(value) => setForm((prev) => ({ ...prev, task_cron: value }))}
         placeholder="0 9 * * 1-5"
       />
-      <CronEditor
+      {!fixedSessionKey && <CronEditor
         label={t("scheduled.newSessionPlan")}
         value={form.new_session_cron}
         onChange={(value) =>
@@ -841,7 +872,7 @@ export function ScheduledAgentTaskDialog({
             </button>
           </>
         }
-      />
+      />}
       <label
         style={{
           display: "flex",
@@ -851,7 +882,12 @@ export function ScheduledAgentTaskDialog({
           color: "var(--text-secondary)",
         }}
       >
-        {t("scheduled.prompt")}
+        <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <span>{t("scheduled.prompt")}</span>
+          {fixedSessionKey ? (
+            <span style={{ ...strategyButtonStyle, cursor: "default" }}>{t("scheduled.fixedSession")}</span>
+          ) : null}
+        </span>
         <textarea
           className="scheduled-agent-task-input"
           value={form.prompt}
@@ -872,7 +908,7 @@ export function ScheduledAgentTaskDialog({
       >
         <button
           type="button"
-          onClick={() => setView("list")}
+          onClick={() => session ? onClose() : setView("list")}
           style={menuButtonStyle}
         >
           {t("common.cancel")}
@@ -966,7 +1002,7 @@ export function ScheduledAgentTaskDialog({
                 ? t("scheduled.createTitle")
                 : t("scheduled.editTitle")}
           </div>
-          {view === "list" ? (
+          {view === "list" && !session ? (
             <button
               type="button"
               onClick={startCreate}
@@ -979,7 +1015,7 @@ export function ScheduledAgentTaskDialog({
             >
               {t("scheduled.create")}
             </button>
-          ) : (
+          ) : view !== "list" ? (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <AgentSelector
                 agent={form.agent}
@@ -1036,7 +1072,7 @@ export function ScheduledAgentTaskDialog({
                 {t("scheduled.enable")}
               </label>
             </div>
-          )}
+          ) : null}
         </div>
         <div
           className="scheduled-agent-task-dialog-body"

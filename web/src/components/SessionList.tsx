@@ -51,6 +51,7 @@ type SessionListProps = {
   onSync?: (session: SessionItem) => Promise<void> | void;
   onPin?: (session: SessionItem, pinned: boolean) => Promise<boolean> | boolean;
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
+  onScheduledTask?: (session: SessionItem) => void;
   onDelete?: (session: SessionItem) => void;
   onLoadChildren?: (
     session: SessionItem,
@@ -98,6 +99,7 @@ type ProjectSessionListProps = {
   onSync?: (session: SessionItem) => Promise<void> | void;
   onPin?: (session: SessionItem, pinned: boolean) => Promise<boolean> | boolean;
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
+  onScheduledTask?: (session: SessionItem) => void;
   onDelete?: (session: SessionItem) => void;
   onProjectClick?: (rootId: string) => void;
   onLoadMoreProject?: (group: ProjectSessionGroup) => Promise<void> | void;
@@ -314,6 +316,7 @@ export function SessionList({
   onSync,
   onPin,
   onRename,
+  onScheduledTask,
   onDelete,
   onLoadChildren,
   onLoadOlder,
@@ -695,6 +698,7 @@ export function SessionList({
                   onSync={onSync}
                   onPin={onPin}
                   onRename={onRename}
+                  onScheduledTask={onScheduledTask}
                   onDelete={onDelete}
                 />
               );
@@ -748,6 +752,7 @@ export function MultiProjectSessionList({
   onSync,
   onPin,
   onRename,
+  onScheduledTask,
   onDelete,
   onProjectClick,
   onLoadMoreProject,
@@ -1169,6 +1174,7 @@ export function MultiProjectSessionList({
                           onSync={onSync}
                           onPin={onPin}
                           onRename={onRename}
+                          onScheduledTask={onScheduledTask}
                           onDelete={onDelete}
                         />
                       );
@@ -1225,6 +1231,7 @@ function SessionCard({
   onSync,
   onPin,
   onRename,
+  onScheduledTask,
   onDelete,
 }: {
   session: SessionItem;
@@ -1238,6 +1245,7 @@ function SessionCard({
   onSync?: (session: SessionItem) => Promise<void> | void;
   onPin?: (session: SessionItem, pinned: boolean) => Promise<boolean> | boolean;
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
+  onScheduledTask?: (session: SessionItem) => void;
   onDelete?: (session: SessionItem) => void;
 }) {
   const { locale, t } = useI18n();
@@ -1842,6 +1850,22 @@ function SessionCard({
               </span>
               {isPinned ? t("sessionList.unpin") : t("sessionList.pin")}
             </button>
+            {onScheduledTask && !session.pending && (!session.type || session.type === "chat") ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setMenuOpen(false);
+                  onScheduledTask(session);
+                }}
+                style={{ ...menuItemStyle, color: "var(--text-primary)" }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
+                </svg>
+                {t("scheduled.title")}
+              </button>
+            ) : null}
             <button
               type="button"
               disabled={syncing}

@@ -1638,6 +1638,11 @@ export function App({ onGoHome }: AppProps) {
   const taskCreateTemplateMenuRef = useRef<HTMLDivElement | null>(null);
   const [availableAgents, setAvailableAgents] = useState<AgentStatus[]>([]);
   const [scheduledAgentDialogOpen, setScheduledAgentDialogOpen] = useState(false);
+  const [scheduledAgentSession, setScheduledAgentSession] = useState<SessionItem | null>(null);
+  const openSessionScheduledTask = (session: SessionItem) => {
+    setScheduledAgentSession({ ...session, root_id: session.root_id || currentRootId || undefined });
+    setScheduledAgentDialogOpen(true);
+  };
   const [taskTemplates, setTaskTemplates] = useState<TaskTemplate[]>([]);
   const [taskTemplateDialogOpen, setTaskTemplateDialogOpen] = useState(false);
   const [taskTemplateDialogTemplate, setTaskTemplateDialogTemplate] = useState<TaskTemplate | null>(null);
@@ -13701,7 +13706,10 @@ export function App({ onGoHome }: AppProps) {
         onCreateWorktree={handleOpenWorktreeLocation}
         onSwitchWorktree={handleSwitchWorktreeStart}
         onRemoveWorktree={handleRemoveCurrentWorktree}
-        onOpenScheduledAgentTasks={() => setScheduledAgentDialogOpen(true)}
+        onOpenScheduledAgentTasks={() => {
+          setScheduledAgentSession(null);
+          setScheduledAgentDialogOpen(true);
+        }}
         menuOverlay={
           projectAddMode === "worktree_location"
             ? projectAddOverlay
@@ -14120,6 +14128,7 @@ export function App({ onGoHome }: AppProps) {
         onSync={handleSyncSession}
         onPin={handlePinSession}
         onRename={handleRenameSession}
+        onScheduledTask={openSessionScheduledTask}
         onDelete={handleDeleteSession}
         onProjectClick={(rootId) => {
           actionHandlers.open_dir({
@@ -14206,6 +14215,7 @@ export function App({ onGoHome }: AppProps) {
         onSync={handleSyncSession}
         onPin={handlePinSession}
         onRename={handleRenameSession}
+        onScheduledTask={openSessionScheduledTask}
         onDelete={handleDeleteSession}
         onLoadChildren={
           sessionSearchOpen && sessionSearchResultsMode
@@ -15302,7 +15312,8 @@ export function App({ onGoHome }: AppProps) {
       ) : null}
       <ScheduledAgentTaskDialog
         open={scheduledAgentDialogOpen}
-        rootId={currentRootId}
+        rootId={scheduledAgentSession?.root_id || currentRootId}
+        session={scheduledAgentSession}
         agents={availableAgents}
         onClose={() => setScheduledAgentDialogOpen(false)}
       />

@@ -15,6 +15,7 @@ export type ScheduledAgentTask = {
   prompt: string;
   new_session_cron?: string;
   session_key?: string;
+  fixed_session_key?: string;
   last_run_at?: string;
   last_success_at?: string;
   last_error?: string;
@@ -27,6 +28,7 @@ export type ScheduledAgentTask = {
 };
 
 export type ScheduledAgentTaskInput = {
+  fixed_session_key?: string;
   root_id: string;
   name?: string;
   enabled: boolean;

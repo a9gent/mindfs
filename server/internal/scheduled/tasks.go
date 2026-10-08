@@ -51,6 +51,7 @@ type Task struct {
 	Prompt             string     `json:"prompt"`
 	NewSessionCron     string     `json:"new_session_cron,omitempty"`
 	SessionKey         string     `json:"session_key,omitempty"`
+	FixedSessionKey    string     `json:"fixed_session_key,omitempty"`
 	LastRunAt          *time.Time `json:"last_run_at,omitempty"`
 	LastSuccessAt      *time.Time `json:"last_success_at,omitempty"`
 	LastError          string     `json:"last_error,omitempty"`
@@ -161,18 +162,19 @@ func (s *Service) List(ctx context.Context, rootID string) ([]Task, error) {
 }
 
 type SaveInput struct {
-	ID             string `json:"id"`
-	RootID         string `json:"root_id"`
-	Name           string `json:"name"`
-	Enabled        bool   `json:"enabled"`
-	TaskCron       string `json:"task_cron"`
-	Agent          string `json:"agent"`
-	Model          string `json:"model"`
-	Mode           string `json:"mode"`
-	Effort         string `json:"effort"`
-	FastService    string `json:"fast_service"`
-	Prompt         string `json:"prompt"`
-	NewSessionCron string `json:"new_session_cron"`
+	ID              string `json:"id"`
+	RootID          string `json:"root_id"`
+	Name            string `json:"name"`
+	Enabled         bool   `json:"enabled"`
+	TaskCron        string `json:"task_cron"`
+	Agent           string `json:"agent"`
+	Model           string `json:"model"`
+	Mode            string `json:"mode"`
+	Effort          string `json:"effort"`
+	FastService     string `json:"fast_service"`
+	Prompt          string `json:"prompt"`
+	NewSessionCron  string `json:"new_session_cron"`
+	FixedSessionKey string `json:"fixed_session_key"`
 }
 
 func (s *Service) Create(ctx context.Context, in SaveInput) (Task, error) {
@@ -189,20 +191,22 @@ func (s *Service) Create(ctx context.Context, in SaveInput) (Task, error) {
 	}
 	now := time.Now().UTC()
 	task := Task{
-		ID:             newID(),
-		RootID:         strings.TrimSpace(in.RootID),
-		Name:           strings.TrimSpace(in.Name),
-		Enabled:        in.Enabled,
-		TaskCron:       strings.TrimSpace(in.TaskCron),
-		Agent:          strings.TrimSpace(in.Agent),
-		Model:          strings.TrimSpace(in.Model),
-		Mode:           strings.TrimSpace(in.Mode),
-		Effort:         strings.TrimSpace(in.Effort),
-		FastService:    strings.TrimSpace(in.FastService),
-		Prompt:         strings.TrimSpace(in.Prompt),
-		NewSessionCron: strings.TrimSpace(in.NewSessionCron),
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:              newID(),
+		RootID:          strings.TrimSpace(in.RootID),
+		Name:            strings.TrimSpace(in.Name),
+		Enabled:         in.Enabled,
+		TaskCron:        strings.TrimSpace(in.TaskCron),
+		Agent:           strings.TrimSpace(in.Agent),
+		Model:           strings.TrimSpace(in.Model),
+		Mode:            strings.TrimSpace(in.Mode),
+		Effort:          strings.TrimSpace(in.Effort),
+		FastService:     strings.TrimSpace(in.FastService),
+		Prompt:          strings.TrimSpace(in.Prompt),
+		NewSessionCron:  strings.TrimSpace(in.NewSessionCron),
+		FixedSessionKey: strings.TrimSpace(in.FixedSessionKey),
+		SessionKey:      strings.TrimSpace(in.FixedSessionKey),
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	tasks = append(tasks, task)
 	if err := store.Save(tasks); err != nil {
@@ -244,6 +248,14 @@ func (s *Service) Update(ctx context.Context, in SaveInput) (Task, error) {
 		tasks[i].FastService = strings.TrimSpace(in.FastService)
 		tasks[i].Prompt = strings.TrimSpace(in.Prompt)
 		tasks[i].NewSessionCron = strings.TrimSpace(in.NewSessionCron)
+		// Older clients may omit the binding; never detach an existing fixed task.
+		if key := strings.TrimSpace(in.FixedSessionKey); key != "" {
+			tasks[i].FixedSessionKey = key
+			tasks[i].SessionKey = key
+		}
+		if tasks[i].FixedSessionKey != "" {
+			tasks[i].NewSessionCron = ""
+		}
 		tasks[i].UpdatedAt = time.Now().UTC()
 		if err := store.Save(tasks); err != nil {
 			return Task{}, err
@@ -360,6 +372,22 @@ func (s *Service) store(rootID string) (*Store, error) {
 }
 
 func (s *Service) validateInput(in SaveInput) error {
+	if key := strings.TrimSpace(in.FixedSessionKey); key != "" {
+		if strings.TrimSpace(in.NewSessionCron) != "" {
+			return errors.New("fixed session tasks cannot create new sessions")
+		}
+		manager, err := s.registry.GetSessionManager(strings.TrimSpace(in.RootID))
+		if err != nil {
+			return err
+		}
+		sess, err := manager.Get(context.Background(), key, 0)
+		if err != nil {
+			return fmt.Errorf("fixed session unavailable: %w", err)
+		}
+		if sess.Type != session.TypeChat {
+			return errors.New("fixed session must be a chat session")
+		}
+	}
 	if strings.TrimSpace(in.RootID) == "" {
 		return errors.New("root id required")
 	}
@@ -445,7 +473,14 @@ func (s *Service) runTask(ctx context.Context, task Task, force bool) error {
 		return err
 	}
 	sessionKey := strings.TrimSpace(current.SessionKey)
-	if sessionKey != "" {
+	if current.FixedSessionKey != "" {
+		sessionKey = current.FixedSessionKey
+		if _, err := manager.Get(ctx, sessionKey, 0); err != nil {
+			_ = s.recordRunError(current, err)
+			broadcaster.BroadcastScheduledTaskFailed(current.RootID, current.ID, current.Name, sessionKey, err.Error())
+			return err
+		}
+	} else if sessionKey != "" {
 		if _, err := manager.Get(ctx, sessionKey, 0); err != nil {
 			sessionKey = ""
 		}
@@ -567,6 +602,9 @@ func (s *Service) updateTask(rootID, id string, update func(*Task)) error {
 }
 
 func (s *Service) shouldCreateNewSession(task Task, now time.Time) bool {
+	if task.FixedSessionKey != "" {
+		return false
+	}
 	if strings.TrimSpace(task.NewSessionCron) == "" {
 		return false
 	}
@@ -589,7 +627,7 @@ func (s *Service) decorateTask(task *Task) {
 		next := schedule.Next(time.Now())
 		task.NextRunAt = &next
 	}
-	if strings.TrimSpace(task.NewSessionCron) != "" {
+	if task.FixedSessionKey == "" && strings.TrimSpace(task.NewSessionCron) != "" {
 		if schedule, err := s.parser.Parse(strings.TrimSpace(task.NewSessionCron)); err == nil {
 			base := time.Now()
 			if task.LastSessionResetAt != nil && !task.LastSessionResetAt.IsZero() {
