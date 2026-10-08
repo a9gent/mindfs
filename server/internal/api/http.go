@@ -41,10 +41,11 @@ import (
 
 // HTTPHandler provides REST endpoints for health, tree, file, and action.
 type HTTPHandler struct {
-	AppContext    *AppContext
-	StaticDir     string
-	Version       string
-	LocalCLIToken string
+	AppContext     *AppContext
+	StaticDir      string
+	Version        string
+	LocalCLIToken  string
+	pairingLimiter pairingLimiter
 }
 
 type protectedResponseWriter struct {
@@ -2576,11 +2577,23 @@ func (h *HTTPHandler) handleRelayTips(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *HTTPHandler) handleE2EEOpen(w http.ResponseWriter, r *http.Request) {
+	// Keep this deadline through net/http's post-handler body drain, including
+	// rejected requests. net/http resets it for the next keep-alive request.
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(pairingRequestTimeout))
 	manager := h.AppContext.GetE2EEManager()
 	if manager == nil || !manager.Enabled() {
 		respondError(w, http.StatusForbidden, errServiceUnavailable("e2ee_required"))
 		return
 	}
+	finish, retryAfter := h.pairingLimiter.begin(pairingClientIP(r))
+	if finish == nil {
+		respondPairingRateLimit(w, retryAfter)
+		return
+	}
+	success := false
+	defer func() { finish(success) }()
+	w.Header().Set("Cache-Control", "no-store")
 	var req struct {
 		ClientID    string `json:"client_id"`
 		NodeID      string `json:"node_id"`
@@ -2635,6 +2648,7 @@ func (h *HTTPHandler) handleE2EEOpen(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusServiceUnavailable, err)
 		return
 	}
+	success = true
 	respondJSON(w, http.StatusOK, map[string]any{
 		"ok":           true,
 		"node_eph_pk":  nodeEphPK,

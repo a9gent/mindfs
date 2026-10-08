@@ -165,6 +165,7 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
