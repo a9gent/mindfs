@@ -136,6 +136,8 @@ export const enUS = {
   "fileTree.closeAd": "Close ad",
   "fileTree.nextTip": "Next tip",
   "fileTree.goHome": "Back to node page",
+  "nodes.empty": "No nodes yet. Add one below.",
+  "nodes.retry": "Retry",
   "fileTree.create": "Create",
   "fileTree.boundSession": "Bound session",
   "fileTree.boundSessionReplying": "Bound session, replying",

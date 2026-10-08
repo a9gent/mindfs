@@ -1868,7 +1868,7 @@ export function FileTree({
     !!relayActionLabel ||
     !!relayActionHelp ||
     shouldShowRelayTip ||
-    (isNativeApp && !!onGoHome) ||
+    !!onGoHome ||
     shouldShowInstallButton ||
     shouldShowInstallHelp;
 
@@ -4561,7 +4561,7 @@ export function FileTree({
             {relayActionHelp}
           </div>
         ) : null}
-        {isNativeApp && onGoHome ? (
+        {onGoHome ? (
           <button
             type="button"
             onClick={() => onGoHome()}

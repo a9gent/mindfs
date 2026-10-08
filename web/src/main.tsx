@@ -6,9 +6,12 @@ import { registerServiceWorker } from "./registerServiceWorker";
 import { applyAppearanceMode, getAppearanceMode } from "./services/appearance";
 import { isHarmonyRuntime, isNativeShellRuntime } from "./services/runtime";
 import { Login } from "./components/Login";
+import { NodesPage } from "./components/NodesPage";
+import { isNodePage, rememberNodePage, returnNodePageURL } from "./services/nodePage";
 import { I18nProvider, translateNow } from "./i18n";
 
 applyAppearanceMode();
+rememberNodePage();
 if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
   const media = window.matchMedia("(prefers-color-scheme: dark)");
   const syncSystemAppearance = () => {
@@ -390,11 +393,11 @@ function installIOSKeyboardPanLock(): () => void {
 function AppRoot() {
   const [ready] = useState(() => !isNativeLauncherOrigin());
 
-  const goToLauncher = () => {
+  const goToNodePage = () => {
     if (typeof window === "undefined") {
       return;
     }
-    window.location.assign(nativeLauncherURL());
+    window.location.assign(isNativeShellRuntime() ? nativeLauncherURL() : returnNodePageURL());
   };
 
   useEffect(() => {
@@ -606,7 +609,8 @@ function AppRoot() {
   if (!ready) {
     return <Login onOpenNode={(nodeURL) => window.location.assign(nodeURL)} />;
   }
-  return <App onGoHome={goToLauncher} />;
+  if (isNodePage()) return <NodesPage />;
+  return <App onGoHome={goToNodePage} />;
 }
 
 const container = document.getElementById("root");

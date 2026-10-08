@@ -21,6 +21,10 @@ import { useI18n, type MessageKey, type MessageParams } from "../i18n";
 
 type LoginProps = {
   onOpenNode: (nodeURL: string) => void;
+  repository?: {
+    load: () => Promise<LauncherNode[]>;
+    save: (nodes: LauncherNode[]) => Promise<LauncherNode[]>;
+  };
 };
 
 const RELAY_URL = "https://relay.a9gent.com/nodes";
@@ -43,7 +47,7 @@ function normalizeNodeURL(value: string): string {
   const withScheme = /^[a-z]+:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
   try {
     const parsed = new URL(withScheme);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password) {
       return "";
     }
     parsed.hash = "";
@@ -124,9 +128,26 @@ function appUpdateSummary(state: AppUpdateState, t: (key: MessageKey, params?: M
   return "";
 }
 
-export function Login({ onOpenNode }: LoginProps): ReactElement {
+export function Login({ onOpenNode, repository }: LoginProps): ReactElement {
   const { t } = useI18n();
-  const [nodes, setNodes] = useState<LauncherNode[]>(() => sortNodes(getStoredLauncherNodes()));
+  const [nodes, setNodes] = useState<LauncherNode[]>(() => repository ? [] : sortNodes(getStoredLauncherNodes()));
+  const [busy, setBusy] = useState(!!repository);
+  const [loaded, setLoaded] = useState(!repository);
+  const [storageError, setStorageError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!repository) return;
+    let cancelled = false;
+    setBusy(true);
+    setStorageError("");
+    void repository.load().then((items) => {
+      if (!cancelled) { setNodes(sortNodes(items)); setLoaded(true); }
+    }).catch((error) => {
+      if (!cancelled) setStorageError(String(error instanceof Error ? error.message : error));
+    }).finally(() => { if (!cancelled) setBusy(false); });
+    return () => { cancelled = true; };
+  }, [repository, loadAttempt]);
   const [composerOpen, setComposerOpen] = useState(false);
   const [nodeName, setNodeName] = useState("");
   const [nodeURL, setNodeURL] = useState("");
@@ -138,11 +159,24 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
   const [appUpdateNotesOpen, setAppUpdateNotesOpen] = useState(false);
   const [appUpdateBusy, setAppUpdateBusy] = useState(false);
 
-  function persistNodes(nextNodes: LauncherNode[]): void {
+  async function persistNodes(nextNodes: LauncherNode[]): Promise<boolean> {
+    if (busy || !loaded) return false;
     const sorted = sortNodes(nextNodes);
+    if (repository) {
+      setBusy(true);
+      setStorageError("");
+      try {
+        setNodes(sortNodes(await repository.save(sorted)));
+        return true;
+      } catch (error) {
+        setStorageError(String(error instanceof Error ? error.message : error));
+        return false;
+      } finally { setBusy(false); }
+    }
     setNodes(sorted);
     setStoredLauncherNodes(sorted);
     void setNativeLauncherNodes(sorted);
+    return true;
   }
 
   function openNode(node: LauncherNode): void {
@@ -188,7 +222,7 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
     setEditingNodeName("");
   }
 
-  function handleSaveNode(event: React.FormEvent): void {
+  async function handleSaveNode(event: React.FormEvent): Promise<void> {
     event.preventDefault();
     const trimmedName = nodeName.trim();
     const normalizedURL = normalizeNodeURL(nodeURL);
@@ -211,7 +245,7 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
       url: normalizedURL,
       createdAt,
     };
-    persistNodes([nextNode, ...nodes]);
+    if (!await persistNodes([nextNode, ...nodes])) return;
     setNodeName("");
     setNodeURL("");
     setFormError("");
@@ -257,6 +291,7 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
   }
 
   useEffect(() => {
+    if (repository) return;
     let cancelled = false;
     const timers: number[] = [];
 
@@ -318,7 +353,7 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
       window.removeEventListener("mindfs:launcher-nodes-updated", handleLauncherNodesUpdated);
       timers.forEach((timer) => window.clearTimeout(timer));
     };
-  }, []);
+  }, [repository]);
 
   useEffect(() => {
     if (!isUpdatableNativeRuntime() || nodes.length === 0) {
@@ -387,9 +422,15 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
           zIndex: 0,
         }}
       />
-      <div
+      <fieldset
+        disabled={busy || !loaded}
+        aria-busy={busy}
         style={{
           position: "relative",
+          border: 0,
+          padding: 0,
+          margin: 0,
+          minWidth: 0,
           zIndex: 1,
           width: "100%",
           maxWidth: "640px",
@@ -400,6 +441,13 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
           gap: "8px",
         }}
       >
+        {busy ? <div role="status">{t("common.loading")}</div> : null}
+        {storageError ? <div role="alert" style={{ color: "var(--mindfs-launcher-error-text)" }}>
+          {storageError}
+        </div> : null}
+        {!loaded && !busy ? <a href="#" onClick={(event) => { event.preventDefault(); setLoadAttempt((value) => value + 1); }}>{t("nodes.retry")}</a> : null}
+        {repository && loaded && nodes.length === 0 ? <p>{t("nodes.empty")}</p> : null}
+        {!repository ? (
         <button
           type="button"
           onClick={() => onOpenNode(RELAY_URL)}
@@ -441,6 +489,7 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
             </div>
           </div>
         </button>
+        ) : null}
 
         {nodes.map((node) => (
           <div
@@ -459,8 +508,15 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
             }}
           >
             <div
+              role={editingNodeID === node.id ? undefined : "link"}
+              tabIndex={editingNodeID === node.id ? undefined : 0}
+              onKeyDown={(event) => {
+                if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ") && !busy) {
+                  event.preventDefault(); openNode(node);
+                }
+              }}
               onClick={() => {
-                if (editingNodeID !== node.id) {
+                if (!busy && editingNodeID !== node.id) {
                   openNode(node);
                 }
               }}
@@ -751,7 +807,7 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
         >
           +
         </button>
-      </div>
+      </fieldset>
 
       {composerOpen ? (
         <div
@@ -781,6 +837,7 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
               gap: "12px",
             }}
           >
+            {formError ? <div role="alert" style={{ color: "var(--mindfs-launcher-error-text)" }}>{formError}</div> : null}
             <input
               type="text"
               value={nodeName}
@@ -799,6 +856,7 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
                 boxSizing: "border-box",
               }}
             />
+            {storageError ? <div role="alert" style={{ color: "var(--mindfs-launcher-error-text)" }}>{storageError}</div> : null}
 
             <input
               type="text"
@@ -848,6 +906,7 @@ export function Login({ onOpenNode }: LoginProps): ReactElement {
               </button>
               <button
                 type="submit"
+                disabled={busy || !loaded}
                 style={{
                   border: "none",
                   borderRadius: "14px",

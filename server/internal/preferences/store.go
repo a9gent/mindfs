@@ -3,6 +3,7 @@ package preferences
 import (
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,10 +25,53 @@ type Store struct {
 }
 
 type UserPreferences struct {
+	LauncherNodes                   []LauncherNode           `json:"launcher_nodes,omitempty"`
 	Agents                          map[string]AgentDefaults `json:"agents,omitempty"`
 	SessionNaming                   SessionNamingDefaults    `json:"session_naming,omitempty"`
 	IdleSessionResourceReleaseHours int                      `json:"idle_session_resource_release_hours,omitempty"`
 	NewProjectMetaLocation          string                   `json:"new_project_meta_location,omitempty"`
+}
+
+type LauncherNode struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	CreatedAt string `json:"createdAt"`
+}
+
+func (s *Store) LauncherNodes() []LauncherNode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]LauncherNode{}, s.data.LauncherNodes...)
+}
+
+func (s *Store) UpdateLauncherNodes(nodes []LauncherNode) error {
+	if len(nodes) > 1000 {
+		return errors.New("too many nodes")
+	}
+	next := append([]LauncherNode{}, nodes...)
+	ids, urls := map[string]bool{}, map[string]bool{}
+	for i := range next {
+		n := &next[i]
+		n.ID, n.Name, n.URL = strings.TrimSpace(n.ID), strings.TrimSpace(n.Name), strings.TrimSpace(n.URL)
+		u, err := url.Parse(n.URL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || n.ID == "" || n.Name == "" || n.CreatedAt == "" {
+			return errors.New("invalid node: name, id, creation time and HTTP(S) URL are required")
+		}
+		if ids[n.ID] || urls[n.URL] {
+			return errors.New("duplicate node")
+		}
+		ids[n.ID], urls[n.URL] = true, true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.data.LauncherNodes
+	s.data.LauncherNodes = next
+	if err := s.saveLocked(); err != nil {
+		s.data.LauncherNodes = previous
+		return err
+	}
+	return nil
 }
 
 func (s *Store) NewProjectMetaLocation() string {

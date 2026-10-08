@@ -134,6 +134,8 @@ export const zhCN = {
   "fileTree.closeAd": "关闭广告",
   "fileTree.nextTip": "下一个提示",
   "fileTree.goHome": "回到节点页",
+  "nodes.empty": "还没有节点，点击下方按钮添加。",
+  "nodes.retry": "重试",
   "fileTree.create": "创建",
   "fileTree.boundSession": "已绑定会话",
   "fileTree.boundSessionReplying": "已绑定会话，正在回复",
