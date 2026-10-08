@@ -1129,7 +1129,7 @@ func (s *Service) BuildPrompt(in BuildPromptInput) string {
 		if in.Session.TaskID != "" {
 			prompt += " task_id=" + in.Session.TaskID
 		}
-		prompt += ". If asked to orchestrate tasks, read mindfs -orchestration; create a task group with this parent session_key, then create ordinary template tasks in that group.\n"
+		prompt += ". Use MindFS task orchestration only when the user explicitly requests it or clearly expresses intent to use it. General requests to plan, split, or execute work, task complexity, and the presence of this context do not imply that intent. Only when that intent is clear, read mindfs -orchestration; create a task group with this parent session_key, then create ordinary template tasks in that group.\n"
 	}
 	return prependSwitchHint(in, prompt)
 }
