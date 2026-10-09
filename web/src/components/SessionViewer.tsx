@@ -3105,7 +3105,7 @@ function SessionViewerInner({
                   }
                   shouldStickToBottomRef.current = true;
                   setShowJumpToLatest(false);
-                  stickSessionToBottom("smooth");
+                  stickSessionToBottom("instant");
                 }}
                 aria-label={t("session.jumpLatest")}
                 title={t("session.jumpLatest")}
