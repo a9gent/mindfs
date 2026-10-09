@@ -661,6 +661,7 @@ export const zhCN = {
   "e2ee.secretMissing": "配对初始化失败，请刷新页面后重试",
   "e2ee.invalidResponse": "握手响应无效，请稍后重试",
   "e2ee.openFailed": "握手请求失败，请检查当前节点连接状态",
+  "e2ee.rateLimited": "配对请求繁忙，请稍后重试。",
   "e2ee.failed": "端到端握手失败，请重试",
   "e2ee.codeRequired": "请输入端到端配对码",
   "e2ee.title": "端到端配对码",

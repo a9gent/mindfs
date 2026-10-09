@@ -663,6 +663,7 @@ export const enUS = {
   "e2ee.secretMissing": "Pairing initialization failed. Refresh the page and try again.",
   "e2ee.invalidResponse": "Invalid handshake response. Try again later.",
   "e2ee.openFailed": "Handshake request failed. Check the current node connection status.",
+  "e2ee.rateLimited": "Too many pairing requests. Please wait a moment and try again.",
   "e2ee.failed": "End-to-end handshake failed. Try again.",
   "e2ee.codeRequired": "Enter the end-to-end pairing code",
   "e2ee.title": "End-to-end pairing code",

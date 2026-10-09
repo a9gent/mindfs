@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"mindfs/server/internal/agent"
@@ -41,10 +42,11 @@ import (
 
 // HTTPHandler provides REST endpoints for health, tree, file, and action.
 type HTTPHandler struct {
-	AppContext    *AppContext
-	StaticDir     string
-	Version       string
-	LocalCLIToken string
+	AppContext     *AppContext
+	StaticDir      string
+	Version        string
+	LocalCLIToken  string
+	pairingLimiter pairingLimiter
 }
 
 type protectedResponseWriter struct {
@@ -66,6 +68,9 @@ const (
 	e2eeTSHeaderName      = "X-MindFS-TS"
 	localCLIHeaderName    = "X-MindFS-Local-CLI-Token"
 	requestProofMaxSkew   = 5 * time.Minute
+	pairingInterval       = 3 * time.Second
+	pairingMaxInFlight    = 4
+	pairingRequestTimeout = 10 * time.Second
 )
 
 var indexResourceRefPattern = regexp.MustCompile(`(?i)\b(?:src|href)\s*=\s*["']([^"']+)["']`)
@@ -2602,12 +2607,55 @@ func (h *HTTPHandler) handleRelayTips(w http.ResponseWriter, _ *http.Request) {
 	respondJSON(w, http.StatusOK, h.AppContext.GetRelayTipsService().Get())
 }
 
+// pairingLimiter bounds work per handler, without retaining client identities or
+// authentication failures. Admitted requests are spaced at least three seconds apart.
+type pairingLimiter struct {
+	mu       sync.Mutex
+	next     time.Time
+	inFlight int
+}
+
+func (l *pairingLimiter) begin(now time.Time) (bool, time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delay := max(0, l.next.Sub(now))
+	if l.inFlight >= pairingMaxInFlight {
+		delay = max(delay, time.Second)
+	}
+	if delay > 0 {
+		return false, delay
+	}
+	l.next = now.Add(pairingInterval)
+	l.inFlight++
+	return true, 0
+}
+
+func (l *pairingLimiter) finish() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.inFlight--
+}
+
 func (h *HTTPHandler) handleE2EEOpen(w http.ResponseWriter, r *http.Request) {
+	// Keep the deadline through net/http's post-handler body drain, including
+	// rejected requests. net/http resets it for the next keep-alive request.
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(pairingRequestTimeout))
+	w.Header().Set("Cache-Control", "no-store")
 	manager := h.AppContext.GetE2EEManager()
 	if manager == nil || !manager.Enabled() {
 		respondError(w, http.StatusForbidden, errServiceUnavailable("e2ee_required"))
 		return
 	}
+	if allowed, delay := h.pairingLimiter.begin(time.Now()); !allowed {
+		seconds := max(1, int((delay+time.Second-1)/time.Second))
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		respondJSON(w, http.StatusTooManyRequests, map[string]any{
+			"error":       "e2ee_rate_limited",
+			"retry_after": seconds,
+		})
+		return
+	}
+	defer h.pairingLimiter.finish()
 	var req struct {
 		ClientID    string `json:"client_id"`
 		NodeID      string `json:"node_id"`

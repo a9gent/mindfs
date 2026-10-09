@@ -143,7 +143,10 @@ class BootstrapService {
             } else {
               e2eeService.clearSession();
             }
-            this.setState({ phase: "needs_pairing", error: "" });
+            this.setState({
+              phase: "needs_pairing",
+              error: err instanceof Error && err.message === "e2ee_rate_limited" ? err.message : "",
+            });
           }
         } else {
           this.setState({ phase: "needs_pairing", error: "" });
@@ -154,7 +157,7 @@ class BootstrapService {
       return this.snapshot();
     } catch (err) {
       this.setState({
-        phase: "error",
+        phase: err instanceof Error && err.message === "e2ee_rate_limited" ? "needs_pairing" : "error",
         error: err instanceof Error ? err.message : "bootstrap_failed",
       });
       return this.snapshot();

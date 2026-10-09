@@ -10769,6 +10769,9 @@ export function App({ onGoHome }: AppProps) {
   const describeE2EEPromptError = useCallback((err: unknown) => {
     const code = err instanceof Error ? String(err.message || "").trim() : "";
     switch (code) {
+      case "e2ee_rate_limited":
+      case "e2ee_open_failed_429":
+        return t("e2ee.rateLimited");
       case "e2ee_proof_invalid":
         return t("e2ee.invalidProof");
       case "e2ee_secure_context_required":
@@ -10787,7 +10790,8 @@ export function App({ onGoHome }: AppProps) {
   }, [t]);
 
   const submitE2EESecret = useCallback(async () => {
-    const trimmed = e2eeSecretInput.trim();
+    const trimmed = e2eeSecretInput.trim() ||
+      (bootstrapState.error === "e2ee_rate_limited" ? e2eeService.getSecret() : "");
     if (!trimmed) {
       setE2eePromptError(t("e2ee.codeRequired"));
       return;
@@ -10803,7 +10807,7 @@ export function App({ onGoHome }: AppProps) {
     } finally {
       setE2eePromptBusy(false);
     }
-  }, [describeE2EEPromptError, e2eeSecretInput, t]);
+  }, [bootstrapState.error, describeE2EEPromptError, e2eeSecretInput, t]);
 
   useEffect(() => {
     if (!isRelayPWAContext()) {
@@ -14812,9 +14816,9 @@ export function App({ onGoHome }: AppProps) {
                 outline: "none",
               }}
             />
-            {e2eePromptError ? (
+            {e2eePromptError || bootstrapState.error === "e2ee_rate_limited" ? (
               <div style={{ color: "#dc2626", fontSize: "13px" }}>
-                {e2eePromptError}
+                {e2eePromptError || t("e2ee.rateLimited")}
               </div>
             ) : null}
             <div style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}>
