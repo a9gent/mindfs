@@ -20,3 +20,10 @@ search jumps, lazy detail loading, expansion/detail retention across unmounts,
 reading position during append, reopening, tail following, short sessions,
 large diff expansion, pending question retention, and default user-shell expansion. No live agent
 or session is required. The fixture is not a production build entry point.
+
+# Lexical IME regression
+
+`node --test tests/lexical-ime.e2e.test.mjs` boots the real `TokenEditor` from
+`tests/lexical-ime/` in a system Chromium via `playwright-core` and replays the
+iFlytek-style empty-`compositionend` commit sequence over CDP. It guards the
+Lexical 0.46.0 upgrade (upstream facebook/lexical#8701): committed English text
