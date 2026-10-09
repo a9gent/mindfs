@@ -99,6 +99,7 @@ export type ExchangeAux = {
 
 export type Session = {
   key: string;
+  history_revision?: number;
   session_key?: string;
   root_id?: string;
   type: SessionType;
@@ -715,7 +716,56 @@ class SessionService {
     payload: Record<string, unknown>,
     msg: any,
   ) {
+    const key = this.eventCursorKey(String(payload.root_id || ""), sessionKey);
+    const previous = this.historyEventQueues.get(key);
+    if (type !== "session.truncated" && !previous) {
+      this.dispatchDecrypted(type, sessionKey, payload, msg);
+      return;
+    }
+    // Keep subsequent user/stream/done events behind the cache reset and any
+    // full-history recovery, so a late recovery cannot overwrite a new reply.
+    const next = (previous || Promise.resolve()).then(async () => {
+      if (type === "session.truncated") {
+        const revision = Number(payload.history_revision);
+        if ((this.truncatedRevisions.get(key) ?? -1) >= revision) return;
+        const rootId = String(payload.root_id || "");
+        const boundary = payload as unknown as SessionTruncation;
+        let recovered = await truncateCachedSession(rootId, sessionKey, boundary);
+        if (!recovered) {
+          recovered = await this.getSession(rootId, sessionKey);
+          if (recovered && Number(recovered.history_revision || 0) >= revision) {
+            await saveCachedSession(rootId, recovered);
+          } else {
+            recovered = null;
+          }
+        }
+        this.truncatedRevisions.set(key, revision);
+        this.dispatchDecrypted(type, sessionKey, { ...payload, recovered_session: recovered }, msg);
+      } else {
+        this.dispatchDecrypted(type, sessionKey, payload, msg);
+      }
+    }).catch((error) => console.error("[Session] History synchronization failed", error));
+    this.historyEventQueues.set(key, next);
+    void next.finally(() => {
+      if (this.historyEventQueues.get(key) === next) this.historyEventQueues.delete(key);
+    });
+  }
+
+  private historyEventQueues = new Map<string, Promise<void>>();
+  private truncatedRevisions = new Map<string, number>();
+
+  private dispatchDecrypted(
+    type: string,
+    sessionKey: string,
+    payload: Record<string, unknown>,
+    msg: any,
+  ) {
     const nextPayload = { ...payload };
+    if (type === "session.truncated") {
+      this.pendingStreams.delete(sessionKey);
+      this.activeStreams.delete(sessionKey);
+      this.clearEventCursor(String(payload.root_id || ""), sessionKey);
+    }
     this.emit({ type, sessionKey, payload: nextPayload });
 
     if (!sessionKey) return;
@@ -752,6 +802,7 @@ class SessionService {
           handler.onStream?.(nextPayload.event as StreamEvent);
         }
         break;
+      case "session.truncated":
       case "session.done":
         for (const handler of handlers) {
           handler.onDone?.();
@@ -1251,9 +1302,10 @@ class SessionService {
     rootId: string,
     sessionKey: string,
     seq?: number,
+    historyRevision = 0,
   ): Promise<Session | null> {
     try {
-      const params = new URLSearchParams({ root: rootId });
+      const params = new URLSearchParams({ root: rootId, history_revision: String(historyRevision) });
       if (typeof seq === "number" && seq > 0) {
         params.set("seq", String(seq));
       }
@@ -1271,9 +1323,10 @@ class SessionService {
     rootId: string,
     sessionKey: string,
     seq?: number,
+    historyRevision = 0,
   ): Promise<Session | null> {
     try {
-      const params = new URLSearchParams({ root: rootId });
+      const params = new URLSearchParams({ root: rootId, history_revision: String(historyRevision) });
       if (typeof seq === "number" && seq > 0) {
         params.set("seq", String(seq));
       }
@@ -1468,6 +1521,14 @@ class SessionService {
       console.error("[Session] Failed to fork session:", err);
       throw err;
     }
+  }
+
+  async editMessage(rootId: string, sessionKey: string, seq: number, content: string, originalContent: string, originalTimestamp: string): Promise<void> {
+    await protectedJSON(appURL("/api/sessions/edit"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root_id: rootId, session_key: sessionKey, seq, content, original_content: originalContent, original_timestamp: originalTimestamp }),
+    });
   }
 
   async fetchExternalSessions(
@@ -1821,6 +1882,9 @@ function appendSessionDelta(
   base: Session | null | undefined,
   incoming: Session | null | undefined,
 ): Session | null {
+  if (Number(incoming?.history_revision || 0) !== Number(base?.history_revision || 0)) {
+    return withSessionMeta(null, incoming);
+  }
   const baseWithMeta = withSessionMeta(base, incoming);
   if (!baseWithMeta) {
     return null;
@@ -1844,6 +1908,55 @@ function appendSessionDelta(
   };
 }
 
+export type SessionTruncation = {
+  from_seq: number;
+  previous_revision: number;
+  history_revision: number;
+};
+
+export function truncateSessionHistory(base: Session | null | undefined, boundary: SessionTruncation): Session | null {
+  if (!base || (base as any).history_incomplete) return null;
+  const revision = Number(base.history_revision || 0);
+  if (revision >= boundary.history_revision) return base;
+  if (revision !== boundary.previous_revision) return null;
+  const retained = (seq: unknown) => Number(seq) > 0 && Number(seq) < boundary.from_seq;
+  return {
+    ...base,
+    history_revision: boundary.history_revision,
+    exchanges: (base.exchanges || []).filter((item) => retained(item.seq) && !item.pending_ack),
+    exchange_aux: Object.fromEntries(Object.entries(base.exchange_aux || {})
+      .filter(([seq]) => retained(seq))
+      .map(([seq, items]) => [seq, items.filter((item) => retained(item.seq))])),
+    context_window: undefined,
+    pending: false,
+  } as Session;
+}
+
+// Read, validate and truncate in one transaction; other tabs may share this DB.
+async function truncateCachedSession(rootId: string, sessionKey: string, boundary: SessionTruncation): Promise<Session | null> {
+  try {
+    return await withSessionStore("readwrite", (store) => new Promise<Session | null>((resolve, reject) => {
+      const key = buildSessionCacheKey(rootId, sessionKey);
+      const get = store.get(key);
+      get.onerror = () => reject(get.error);
+      get.onsuccess = () => {
+        const record = get.result as CachedSessionRecord | undefined;
+        const next = truncateSessionHistory(record?.session, boundary);
+        // Keep a revision marker even when recovery is required. Deleting the
+        // record would let an older in-flight HTTP response recreate stale history.
+        const stored = next || {
+          key: sessionKey, history_revision: boundary.history_revision,
+          history_incomplete: true, exchanges: [], exchange_aux: {},
+        } as unknown as Session;
+        const write = store.put({ ...record, cacheKey: key, rootId, sessionKey,
+          session: toPersistentSession(stored), touchedAt: Date.now() });
+        write.onerror = () => reject(write.error);
+        write.onsuccess = () => resolve(next);
+      };
+    }));
+  } catch { return null; }
+}
+
 async function loadCachedSession(
   rootId: string,
   sessionKey: string,
@@ -1856,7 +1969,7 @@ async function loadCachedSession(
         >,
       ),
     );
-    return record?.session || null;
+    return (record?.session as any)?.history_incomplete ? null : record?.session || null;
   } catch {
     return null;
   }
@@ -1879,7 +1992,16 @@ async function saveCachedSession(
   };
   try {
     await withSessionStore("readwrite", (store) =>
-      sessionRequestToPromise(store.put(record)),
+      new Promise<void>((resolve, reject) => {
+        const get = store.get(record.cacheKey);
+        get.onerror = () => reject(get.error);
+        get.onsuccess = () => {
+          if (Number(get.result?.session?.history_revision || 0) > Number(persistentSession?.history_revision || 0)) { resolve(); return; }
+          const put = store.put(record);
+          put.onsuccess = () => resolve();
+          put.onerror = () => reject(put.error);
+        };
+      }),
     );
   } catch {}
 }
@@ -1976,8 +2098,8 @@ export async function syncSession(
   const base = await getCachedSession(rootId, sessionKey);
   const seq = getSessionMaxSeq(base);
   const incoming = options?.full
-    ? await sessionService.syncExternalSession(rootId, sessionKey, seq)
-    : await sessionService.getSession(rootId, sessionKey, seq);
+    ? await sessionService.syncExternalSession(rootId, sessionKey, seq, base?.history_revision || 0)
+    : await sessionService.getSession(rootId, sessionKey, seq, base?.history_revision || 0);
   if (!incoming) {
     return { session: base, hasDelta: false };
   }

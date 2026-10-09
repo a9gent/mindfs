@@ -26,6 +26,7 @@ import {
   sessionService,
   setCachedSessionRelatedFiles,
   syncSession,
+  truncateSessionHistory,
   type MultiRootSessionGroup,
   type SyncSessionResult,
   type RelatedFile,
@@ -3564,10 +3565,12 @@ export function App({ onGoHome }: AppProps) {
       }
       const syncResult = await request;
       let fullSession = syncResult?.session;
+      const latestAfterSync = sessionCacheRef.current[cacheKey];
+      if (Number(latestAfterSync?.history_revision || 0) > Number(fullSession?.history_revision || 0)) return latestAfterSync;
       if (!fullSession) {
         return null;
       }
-      if (resumeCursor) {
+      if (resumeCursor && Number(cachedBeforeSync?.history_revision || 0) === Number(fullSession.history_revision || 0)) {
         const incomingExchanges = Array.isArray((fullSession as any).exchanges)
           ? ((fullSession as any).exchanges as Exchange[])
           : [];
@@ -10093,6 +10096,7 @@ export function App({ onGoHome }: AppProps) {
           ) {
             const rootID = payload.root_id;
             const sessionKey = payload.session_key;
+            setSelectedPendingByKey(sessionKey, true);
             setMultiProjectSessionPending(rootID, sessionKey, true);
             const exchange = payload.exchange;
             const sessionMeta = payload.session;
@@ -10197,11 +10201,15 @@ export function App({ onGoHome }: AppProps) {
                       pending_ack: false,
                     },
                   ],
+              pending: true,
               updated_at:
                 sessionMeta?.updated_at ||
                 exchange?.timestamp ||
                 new Date().toISOString(),
             } as Session;
+            if (boundSessionByRootRef.current[rootID] === sessionKey) {
+              setDrawerSessionForRoot(rootID, sessionCacheRef.current[cacheKey]);
+            }
             const runtimeAgent = sessionMeta?.agent || exchange?.agent || "";
             if (runtimeAgent) {
               updateSessionAgentForKey(
@@ -10259,6 +10267,26 @@ export function App({ onGoHome }: AppProps) {
             }
           }
           break;
+        case "session.truncated": {
+          const rootID = String(payload?.root_id || "");
+          const key = String(payload?.session_key || "");
+          if (rootID && key) {
+            const cacheKey = rootSessionKey(rootID, key);
+            const cached = sessionCacheRef.current[cacheKey];
+            if (cached && Number(cached.history_revision || 0) >= Number(payload.history_revision)) break;
+            const truncated = truncateSessionHistory(cached, payload);
+            const next = truncated || payload.recovered_session || {
+              ...cached, key, root_id: rootID, history_revision: payload.history_revision,
+              exchanges: [], exchange_aux: {}, pending: false, context_window: undefined,
+            };
+            sessionCacheRef.current[cacheKey] = next;
+            loadedSessionRef.current[cacheKey] = !!(truncated || payload.recovered_session);
+            if (boundSessionByRootRef.current[rootID] === key) setDrawerSessionForRoot(rootID, next);
+            bumpCacheVersion();
+            if (!truncated && !payload.recovered_session) void restoreActiveSession(rootID, key);
+          }
+          break;
+        }
         case "session.meta.updated":
           if (
             typeof payload?.root_id === "string" &&

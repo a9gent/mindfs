@@ -1,7 +1,7 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import { useSessionStream, type TimelineItem } from "../hooks/useSessionStream";
-import type { TodoUpdate } from "../services/session";
+import { sessionService, type TodoUpdate } from "../services/session";
 import { ThinkingBlock } from "./stream/ThinkingBlock";
 import { ToolCallCard, renderToolIcon, type ToolCallViewCache } from "./stream/ToolCallCard";
 import { AgentIcon } from "./AgentIcon";
@@ -1095,6 +1095,10 @@ function SessionViewerInner({
   const userSummaryRootRef = useRef<HTMLDivElement | null>(null);
   const userSummaryListRef = useRef<HTMLDivElement | null>(null);
   const sessionKey = session?.key || session?.session_key || null;
+  const [editingMessage, setEditingMessage] = useState<{ seq: number; original: string; timestamp: string; content: string } | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState("");
+  useEffect(() => { setEditingMessage(null); setEditError(""); }, [rootId, sessionKey]);
   const exchanges = Array.isArray(session?.exchanges) ? session.exchanges : [];
   const isAwaiting = !!(session as any)?.pending;
   const { timeline, isStreaming, streamVersion, streamStatusText } = useSessionStream(
@@ -1105,6 +1109,7 @@ function SessionViewerInner({
     isAwaiting,
   );
   const shouldStickToBottomRef = useRef(true);
+  const latestUserIndex = timeline.reduce((last, item, index) => item.type === "user_text" ? index : last, -1);
   const latestCompletedReplyIndex = useMemo(() => {
     for (let index = timeline.length - 1; index >= 0; index--) {
       if (timeline[index].type === "assistant_text" &&
@@ -1912,6 +1917,8 @@ function SessionViewerInner({
       ? formatSessionDuration(timelineNavigation.rows[idx].previousUserTime, item.timestamp)
       : "";
     const canForkAgentMessage = !isUser && Number(item.seq || 0) > 0 && !!onForkAgentMessage;
+    const canEditInPlace = isUser && idx === latestUserIndex && !item.pendingAck && !!item.timestamp && session?.type === "chat" && !(session as any)?.closed_at;
+    const isEditing = isUser && editingMessage?.timestamp === item.timestamp && editingMessage?.original === item.content;
     return (
       <div
         key={timelineItemKey}
@@ -1920,8 +1927,8 @@ function SessionViewerInner({
         style={{
           marginTop: spacing,
           alignSelf: isUser ? "flex-end" : "flex-start",
-          width: isUser ? userMessageWidth : "100%",
-          maxWidth: isUser ? "80%" : "100%",
+          width: isEditing ? "min(560px, 100%)" : isUser ? userMessageWidth : "100%",
+          maxWidth: isEditing ? "100%" : isUser ? "80%" : "100%",
           minWidth: 0,
           position: "relative",
           display: "flex",
@@ -1935,12 +1942,12 @@ function SessionViewerInner({
               flexDirection: "column",
               alignItems: "stretch",
               gap: "6px",
-              width: userMessageWidth,
+              width: isEditing ? "100%" : userMessageWidth,
               maxWidth: "100%",
               minWidth: 0,
             }}
           >
-            {hasRichUserAttachments ? (
+            {!isEditing && hasRichUserAttachments ? (
               <div
                 style={{
                   width: "100%",
@@ -2015,7 +2022,7 @@ function SessionViewerInner({
                 ) : null}
               </div>
             ) : null}
-            {!hasRichUserAttachments && displayContent ? (
+            {!isEditing && !hasRichUserAttachments && displayContent ? (
               <div
                 style={{
                   padding: "10px 16px",
@@ -2040,12 +2047,33 @@ function SessionViewerInner({
                 />
               </div>
             ) : null}
+            {isEditing && editingMessage ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <textarea autoFocus aria-label={t("session.editMessage")} value={editingMessage.content} disabled={savingEdit}
+                  onChange={(event) => setEditingMessage({ ...editingMessage, content: event.target.value })}
+                  rows={3} style={{ width: "100%", boxSizing: "border-box", resize: "vertical", padding: "10px 16px", border: "1px solid var(--border-color, #d1d5db)", borderRadius: "18px 18px 4px 18px", font: "inherit", fontSize: 14, lineHeight: 1.5, color: "var(--text-primary)", background: "rgba(148,163,184,0.14)" }} />
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <span style={{ flex: "1 1 auto", minWidth: 0, fontSize: 11, lineHeight: 1.5, color: "var(--text-secondary, #64748b)" }}><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={{ verticalAlign: "-2px", marginRight: 4 }}><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7v1" /></svg>{t("session.editNotice")}</span>
+                  <button type="button" disabled={savingEdit} style={{ flexShrink: 0, padding: "2px 8px", fontSize: 12, lineHeight: "16px", borderRadius: 5, border: "1px solid var(--border-color, #d1d5db)", background: "transparent", color: "var(--text-primary)" }} onClick={() => setEditingMessage(null)}>{t("common.cancel")}</button>
+                  <button type="button" disabled={savingEdit || !editingMessage.content.trim()} style={{ flexShrink: 0, padding: "2px 8px", fontSize: 12, lineHeight: "16px", borderRadius: 5, border: "1px solid transparent", background: "#2563eb", color: "white", opacity: savingEdit || !editingMessage.content.trim() ? 0.5 : 1 }} onClick={async () => {
+                    if (!rootId || !sessionKey) return;
+                    setSavingEdit(true); setEditError("");
+                    try {
+                      await sessionService.editMessage(rootId, sessionKey, editingMessage.seq, editingMessage.content, editingMessage.original, editingMessage.timestamp);
+                      setEditingMessage(null);
+                    } catch (error) { setEditError(error instanceof Error ? error.message : String(error)); }
+                    finally { setSavingEdit(false); }
+                  }}>{t(savingEdit ? "session.editSaving" : "session.editRegenerate")}</button>
+                </div>
+                {editError && <span role="alert" style={{ fontSize: 12, color: "var(--text-danger, #dc2626)" }}>{editError}</span>}
+              </div>
+            ) : null}
             <span
               style={{
                 fontSize: "10px",
                 color: "var(--text-secondary)",
                 alignSelf: "flex-end",
-                display: "inline-flex",
+                display: isEditing ? "none" : "inline-flex",
                 alignItems: "center",
                 gap: "4px",
               }}
@@ -2068,11 +2096,15 @@ function SessionViewerInner({
               <button
                 type="button"
                 onClick={() => {
-                  onEditUserMessage?.(item.content || "");
+                  if (canEditInPlace) {
+                    setEditError("");
+                    setEditingMessage({ seq: Number(item.seq || 0), original: item.content || "", timestamp: item.timestamp!, content: item.content || "" });
+                  } else { onEditUserMessage?.(item.content || ""); }
                 }}
                 style={userMetaButtonStyle}
-                aria-label={t("session.editMessage")}
-                title={t("session.editMessage")}
+                disabled={savingEdit}
+                aria-label={t(canEditInPlace ? "session.editMessage" : "session.copyToComposer")}
+                title={t(canEditInPlace ? "session.editMessage" : "session.copyToComposer")}
               >
                 {renderToolIcon("edit")}
               </button>

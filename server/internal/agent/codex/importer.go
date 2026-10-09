@@ -320,10 +320,11 @@ func (i *Importer) ResolveForkPointByAgentTurnIndex(ctx context.Context, in agen
 		return agenttypes.ResolveForkPointOutput{}, err
 	}
 	turns := buildImportedTurns(items)
-	if in.AgentTurnIndex > len(turns) {
+	turnIndex := in.AgentTurnIndex
+	if turnIndex <= 0 || turnIndex > len(turns) {
 		return agenttypes.ResolveForkPointOutput{}, errors.New("agent turn index out of range")
 	}
-	agent := turns[in.AgentTurnIndex-1].Agent
+	agent := turns[turnIndex-1].Agent
 	return agenttypes.ResolveForkPointOutput{
 		Kind:             agenttypes.ForkPointCodexUserOrdinal,
 		AgentSessionID:   targetID,
@@ -581,17 +582,11 @@ func readCodexImportedExchanges(path string, after time.Time) ([]agenttypes.Impo
 }
 
 func readCodexImportedExchangeLocators(path string, after time.Time) ([]importedExchangeLocator, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, apperr.Wrap("open", path, err)
-	}
-	defer file.Close()
-
 	items := make([]agenttypes.ImportedExchange, 0)
 	toolLocations := make(map[string]importedToolLocation)
 	toolOrdinal := 0
 	sessionShell := ""
-	err = forEachJSONLLine(file, func(line string) error {
+	err := forEachCodexHistoryLine(path, -1, map[string]bool{}, func(line string) error {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			return nil
@@ -671,6 +666,83 @@ func readCodexImportedExchangeLocators(path string, after time.Time) ([]imported
 	return codexExchangeLocatorsAfter(items, after), nil
 }
 
+// Paginated forks store a reference to an immutable parent prefix, not a copy.
+// Visit that prefix before the child's records, including nested fork bases.
+func forEachCodexHistoryLine(path string, limit int64, visiting map[string]bool, visit func(string) error) error {
+	if visiting[path] || len(visiting) >= 64 {
+		return errors.New("cyclic or excessively deep Codex history base")
+	}
+	visiting[path] = true
+	defer delete(visiting, path)
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var reader io.Reader = f
+	if limit >= 0 {
+		info, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		if info.Size() < limit {
+			return errors.New("Codex history base prefix is incomplete")
+		}
+		reader = io.LimitReader(f, limit)
+	}
+	return forEachJSONLLine(reader, func(line string) error {
+		var record struct {
+			Type    string `json:"type"`
+			Payload struct {
+				HistoryMode string `json:"history_mode"`
+				Base        *struct {
+					ThreadID      string `json:"thread_id"`
+					EndByteOffset int64  `json:"end_byte_offset"`
+				} `json:"history_base"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal([]byte(line), &record) == nil && record.Type == "session_meta" && record.Payload.HistoryMode == "paginated" && record.Payload.Base != nil {
+			base := record.Payload.Base
+			if base.ThreadID == "" || base.EndByteOffset <= 0 {
+				return errors.New("invalid Codex history base")
+			}
+			searchRoot := filepath.Dir(path)
+			sessionsRoot := false
+			for dir := searchRoot; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+				if filepath.Base(dir) == "sessions" || filepath.Base(dir) == "archived_sessions" {
+					searchRoot = filepath.Dir(dir)
+					sessionsRoot = true
+					break
+				}
+			}
+			parent := ""
+			err := filepath.WalkDir(searchRoot, func(candidate string, entry os.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return nil
+				}
+				if sessionsRoot && entry.IsDir() && filepath.Dir(candidate) == searchRoot && entry.Name() != "sessions" && entry.Name() != "archived_sessions" {
+					return filepath.SkipDir
+				}
+				if !entry.IsDir() && strings.HasSuffix(entry.Name(), "-"+base.ThreadID+".jsonl") {
+					parent = candidate
+					return filepath.SkipAll
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			if parent == "" {
+				return fmt.Errorf("Codex history base %s not found", base.ThreadID)
+			}
+			if err := forEachCodexHistoryLine(parent, base.EndByteOffset, visiting, visit); err != nil {
+				return err
+			}
+		}
+		return visit(line)
+	})
+}
+
 func extractImportedCodexProposedPlan(text string) (string, []agenttypes.ImportedExchangeAux) {
 	const openTag = "<proposed_plan>"
 	const closeTag = "</proposed_plan>"
@@ -709,7 +781,7 @@ func nonEmptyStrings(values ...string) []string {
 
 var errStopJSONL = errors.New("stop jsonl")
 
-func forEachJSONLLine(file *os.File, fn func(string) error) error {
+func forEachJSONLLine(file io.Reader, fn func(string) error) error {
 	reader := bufio.NewReader(file)
 	for {
 		line, err := reader.ReadBytes('\n')

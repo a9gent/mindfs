@@ -28,6 +28,8 @@ type StreamHub struct {
 	pendingSessions map[string]*SessionPendingState
 	replayStates    map[string]*ClientReplayState
 	completed       map[string]*CompletedSessionState
+	edits           map[string]bool
+	jobs            map[string]int
 }
 
 type PendingUserMessage struct {
@@ -445,7 +447,10 @@ func (h *StreamHub) reserveOrQueueSessionMessage(rootID, key, title string, item
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	state := h.ensurePendingSessionLocked(key)
-	if state.Active {
+	if state.Active || h.edits[key] {
+		if h.edits[key] {
+			state.QueueFrozen = true
+		}
 		return h.enqueueSessionMessageLocked(rootID, key, title, item), true
 	}
 	delete(h.completed, key)
@@ -533,6 +538,12 @@ func (h *StreamHub) UnfreezeQueuedSessionMessages(sessionKey string) ([]QueuedUs
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	state := h.pendingSessions[sessionKey]
+	if h.edits[sessionKey] {
+		if state == nil {
+			return nil, false
+		}
+		return cloneQueue(state.Queue), false
+	}
 	if state == nil || !state.QueueFrozen {
 		if state == nil {
 			return nil, false
@@ -548,6 +559,9 @@ func (h *StreamHub) PopQueuedSessionMessage(sessionKey, queueID string) (QueuedU
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	state := h.pendingSessions[sessionKey]
+	if h.edits[sessionKey] {
+		return QueuedUserMessage{}, nil, false
+	}
 	if state == nil || len(state.Queue) == 0 {
 		return QueuedUserMessage{}, nil, false
 	}
@@ -581,6 +595,9 @@ func (h *StreamHub) PromoteQueuedSessionMessage(sessionKey, queueID string) ([]Q
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	state := h.pendingSessions[sessionKey]
+	if h.edits[sessionKey] {
+		return nil, false
+	}
 	if state == nil || len(state.Queue) == 0 || strings.TrimSpace(queueID) == "" {
 		return nil, false
 	}

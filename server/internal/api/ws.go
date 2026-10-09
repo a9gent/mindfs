@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"mindfs/server/internal/agent"
@@ -887,6 +888,8 @@ func (h *WSHandler) switchSessionRuntimePlanMode(ctx context.Context, key string
 }
 
 func (h *WSHandler) runSessionMessage(job sessionMessageJob) {
+	h.AppContext.GetSessionStreamHub().trackSessionJob(job.Key, 1)
+	defer h.AppContext.GetSessionStreamHub().trackSessionJob(job.Key, -1)
 	rootID := job.RootID
 	key := job.Key
 	requestID := strings.TrimSpace(job.RequestID)
@@ -896,6 +899,8 @@ func (h *WSHandler) runSessionMessage(job sessionMessageJob) {
 	defer cancel()
 	updateTracker := newTurnUpdateTracker()
 	subTrackers := map[string]*turnUpdateTracker{}
+	var acceptUpdates atomic.Bool
+	acceptUpdates.Store(true)
 	var subTrackersMu sync.Mutex
 	subTrackerFor := func(sessionKey string) *turnUpdateTracker {
 		subTrackersMu.Lock()
@@ -930,6 +935,9 @@ func (h *WSHandler) runSessionMessage(job sessionMessageJob) {
 		OnUpdate: func(update agenttypes.Event) {
 			updateTracker.Begin()
 			defer updateTracker.End()
+			if !acceptUpdates.Load() {
+				return
+			}
 			if updateToEvent(update) == nil {
 				return
 			}
@@ -945,6 +953,9 @@ func (h *WSHandler) runSessionMessage(job sessionMessageJob) {
 			}
 		},
 		OnSubSessionUpdate: func(sessionKey string, update agenttypes.Event) {
+			if !acceptUpdates.Load() {
+				return
+			}
 			tracker := subTrackerFor(sessionKey)
 			tracker.Begin()
 			if updateToEvent(update) == nil {
@@ -963,6 +974,7 @@ func (h *WSHandler) runSessionMessage(job sessionMessageJob) {
 			tracker.End()
 		},
 	})
+	acceptUpdates.Store(false)
 	if err != nil {
 		log.Printf("[ws] session.message.error root=%s session=%s request=%s err=%v", rootID, key, requestID, err)
 		h.AppContext.BroadcastSessionError(rootID, key, err.Error())

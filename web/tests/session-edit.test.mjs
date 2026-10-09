@@ -1,0 +1,52 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import ts from "typescript";
+import vm from "node:vm";
+
+const source = fs.readFileSync("src/services/session.ts", "utf8") + "\nexport { appendSessionDelta };";
+const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+const sandbox = { exports: {}, require: (name) => name === "./e2ee" ? { e2eeService: { setClientId() {} } } : {}, console };
+vm.runInNewContext(compiled, sandbox);
+const { appendSessionDelta, truncateSessionHistory, sessionService } = sandbox.exports;
+const base = { key: "chat", history_revision: 0, exchanges: [{ seq: 1, role: "user", content: "wrong" }, { seq: 2, role: "agent", content: "old answer" }], exchange_aux: { 2: [{ seq: 2, thought: "old" }] } };
+const reset = appendSessionDelta(base, { key: "chat", history_revision: 1, exchanges: [], exchange_aux: {} });
+assert.equal(reset.exchanges.length, 0);
+assert.equal(Object.keys(reset.exchange_aux).length, 0);
+const edited = appendSessionDelta(base, { key: "chat", history_revision: 1, exchanges: [{ seq: 1, role: "user", content: "correct" }], exchange_aux: {} });
+assert.equal(edited.exchanges.length, 1);
+assert.equal(edited.exchanges[0].content, "correct");
+const reply = appendSessionDelta(edited, { key: "chat", history_revision: 1, exchanges: [{ seq: 2, role: "agent", content: "new answer" }] });
+assert.equal(reply.exchanges.length, 2);
+assert.equal(reply.exchanges[1].content, "new answer");
+const boundary = {from_seq: 3, previous_revision: 0, history_revision: 1};
+const history = {...base, exchanges: [...base.exchanges, {seq:3,role:"user",content:"edit me"}, {seq:4,role:"agent"}, {seq:0,role:"user",pending_ack:true}], exchange_aux: {2:[{seq:2}],4:[{seq:4}],0:[{seq:0}]}};
+const truncated = truncateSessionHistory(history, boundary);
+assert.deepEqual(Array.from(truncated.exchanges, e => e.seq), [1,2]);
+assert.deepEqual(Object.keys(truncated.exchange_aux), ["2"]);
+assert.equal(truncated.history_revision, 1);
+assert.equal(truncateSessionHistory(truncated, boundary), truncated, "duplicate must not truncate replacement messages");
+assert.equal(truncateSessionHistory({...history,history_revision:3}, boundary).history_revision, 3);
+assert.equal(truncateSessionHistory(history, {...boundary,previous_revision:2,history_revision:3}), null);
+assert.equal(truncateSessionHistory(null, boundary), null);
+assert.equal(truncateSessionHistory(history, {...boundary,from_seq:1}).exchanges.length, 0);
+
+// A missing persistent cache requires HTTP recovery. Later websocket messages
+// must wait until recovery completes, and duplicate truncations must be ignored.
+let release;
+let started;
+const recoveryStarted = new Promise(resolve => { started = resolve; });
+sessionService.getSession = () => { started(); return new Promise(resolve => { release = resolve; }); };
+const events = [];
+sessionService.listeners.add(event => events.push(event));
+const payload = {root_id:"root",session_key:"chat",...boundary};
+sessionService.emitDecrypted("session.truncated", "chat", payload, {});
+sessionService.emitDecrypted("session.user_message", "chat", {root_id:"root"}, {});
+await recoveryStarted;
+assert.equal(events.length, 0);
+release(truncated);
+await Promise.all(Array.from(sessionService.historyEventQueues.values()));
+assert.deepEqual(events.map(e => e.type), ["session.truncated","session.user_message"]);
+sessionService.emitDecrypted("session.truncated", "chat", payload, {});
+await Promise.all(Array.from(sessionService.historyEventQueues.values()));
+assert.equal(events.length, 2);
+console.log("Session edit cache and event ordering checks passed");

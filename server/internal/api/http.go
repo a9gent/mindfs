@@ -346,6 +346,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/sessions/import", h.protectedEndpoint(h.handleExternalSessionImport))
 	r.Post("/api/sessions/import/batch", h.protectedEndpoint(h.handleExternalSessionImportBatch))
 	r.Post("/api/sessions/fork", h.protectedEndpoint(h.handleSessionFork))
+	r.Post("/api/sessions/edit", h.protectedEndpoint(h.handleSessionEdit))
 	r.Get("/api/sessions/{key}/toolcalls/{callID}", h.protectedEndpoint(h.handleSessionToolCallGet))
 	r.Post("/api/sessions/{key}/sync", h.protectedEndpoint(h.handleSessionSync))
 	r.Get("/api/sessions/{key}", h.protectedEndpoint(h.handleSessionGet))
@@ -829,6 +830,7 @@ func (h *HTTPHandler) handleExternalSessionImportBatch(w http.ResponseWriter, r 
 }
 
 func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {
+	historyRevision, _ := strconv.Atoi(r.URL.Query().Get("history_revision"))
 	rootID := r.URL.Query().Get("root")
 	key := chi.URLParam(r, "key")
 	if strings.TrimSpace(key) == "" {
@@ -854,13 +856,17 @@ func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	out, err := uc.GetSession(r.Context(), usecase.GetSessionInput{
-		RootID: rootID,
-		Key:    key,
-		Seq:    afterSeq,
+		RootID:          rootID,
+		Key:             key,
+		Seq:             afterSeq,
+		HistoryRevision: historyRevision,
 	})
 	if err != nil {
 		respondError(w, http.StatusNotFound, err)
 		return
+	}
+	if out.HistoryRevision != historyRevision {
+		afterSeq = 0
 	}
 	contextWindow, _ := uc.GetSessionContextWindow(r.Context(), usecase.GetSessionContextWindowInput{
 		RootID: rootID,
@@ -887,6 +893,7 @@ func (h *HTTPHandler) handleSessionLogPathGet(w http.ResponseWriter, r *http.Req
 }
 
 func (h *HTTPHandler) handleSessionSync(w http.ResponseWriter, r *http.Request) {
+	historyRevision, _ := strconv.Atoi(r.URL.Query().Get("history_revision"))
 	rootID := r.URL.Query().Get("root")
 	key := chi.URLParam(r, "key")
 	if strings.TrimSpace(key) == "" {
@@ -908,13 +915,17 @@ func (h *HTTPHandler) handleSessionSync(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	out, err := uc.GetSession(r.Context(), usecase.GetSessionInput{
-		RootID: rootID,
-		Key:    key,
-		Seq:    afterSeq,
+		RootID:          rootID,
+		Key:             key,
+		Seq:             afterSeq,
+		HistoryRevision: historyRevision,
 	})
 	if err != nil {
 		respondError(w, http.StatusNotFound, err)
 		return
+	}
+	if out.HistoryRevision != historyRevision {
+		afterSeq = 0
 	}
 	contextWindow, _ := uc.GetSessionContextWindow(r.Context(), usecase.GetSessionContextWindowInput{
 		RootID: rootID,
@@ -1186,6 +1197,7 @@ func (h *HTTPHandler) sessionResponse(
 		"name":                s.Name,
 		"exchanges":           exchanges,
 		"exchange_aux":        auxPayload,
+		"history_revision":    s.HistoryRevision,
 		"related_files":       s.RelatedFiles,
 		"related_worktree":    s.RelatedWorktree,
 		"context_window":      contextWindow,

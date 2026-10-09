@@ -1,6 +1,8 @@
 package codex
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +10,42 @@ import (
 
 	agenttypes "mindfs/server/internal/agent/types"
 )
+
+func TestForkPointIncludesInheritedHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	turn := func(n int) string {
+		return fmt.Sprintf("{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"question %d\"}]}}\n", n) + fmt.Sprintf("{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer %d\"}]}}\n", n)
+	}
+	grandparent := filepath.Join(filepath.Dir(path), "rollout-grandparent.jsonl")
+	if err := os.WriteFile(grandparent, []byte(turn(1)+turn(98)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	base := fmt.Sprintf("{\"type\":\"session_meta\",\"payload\":{\"history_mode\":\"paginated\",\"history_base\":{\"thread_id\":\"grandparent\",\"end_byte_offset\":%d}}}\n", len(turn(1))) + turn(2)
+	parent := filepath.Join(filepath.Dir(path), "rollout-parent.jsonl")
+	if err := os.WriteFile(parent, []byte(base+turn(99)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	content := fmt.Sprintf("{\"type\":\"session_meta\",\"payload\":{\"history_mode\":\"paginated\",\"history_base\":{\"thread_id\":\"parent\",\"end_byte_offset\":%d}}}\n", len(base)) + turn(3) + turn(4) + turn(5)
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	i := &Importer{index: map[string]codexSessionFile{"native": {Path: path, Cwd: "/project"}}}
+	in := agenttypes.ResolveForkPointInput{RootPath: "/project", AgentSessionID: "native", AgentTurnIndex: 4}
+	point, err := i.ResolveForkPointByAgentTurnIndex(context.Background(), in)
+	if err != nil || point.CodexUserOrdinal != 4 {
+		t.Fatalf("inherited boundary: %+v %v", point, err)
+	}
+	in.AgentTurnIndex = 6
+	if _, err := i.ResolveForkPointByAgentTurnIndex(context.Background(), in); err == nil {
+		t.Fatal("included parent records after the fork boundary")
+	}
+	if err := os.Remove(parent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readCodexImportedExchangeLocators(path, time.Time{}); err == nil {
+		t.Fatal("silently ignored missing parent")
+	}
+}
 
 func TestInspectCodexSessionFileSkipsInjectedUserPromptBlocks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")

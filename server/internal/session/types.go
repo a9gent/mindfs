@@ -15,6 +15,7 @@ const (
 
 type Session struct {
 	Key               string                   `json:"key"`
+	HistoryRevision   int                      `json:"history_revision"`
 	Type              string                   `json:"type"`
 	ParentSessionKey  string                   `json:"parent_session_key,omitempty"`
 	ParentToolCallID  string                   `json:"parent_tool_call_id,omitempty"`

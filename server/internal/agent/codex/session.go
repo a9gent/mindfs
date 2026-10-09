@@ -44,7 +44,7 @@ func NewRuntime() *Runtime {
 	return &Runtime{clients: make(map[string]*codexsdk.Codex)}
 }
 
-func (r *Runtime) OpenSession(_ context.Context, opts OpenOptions) (types.Session, error) {
+func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Session, error) {
 	if opts.SessionKey == "" {
 		return nil, errors.New("session key required")
 	}
@@ -74,7 +74,7 @@ func (r *Runtime) OpenSession(_ context.Context, opts OpenOptions) (types.Sessio
 
 	var thread *codexsdk.Thread
 	if strings.TrimSpace(opts.ForkSessionID) != "" {
-		threadID, err := forkCodexThread(context.Background(), client, threadOptions, strings.TrimSpace(opts.ForkSessionID), opts.CodexUserOrdinal)
+		threadID, err := forkCodexThread(ctx, client, threadOptions, strings.TrimSpace(opts.ForkSessionID), opts.CodexUserOrdinal)
 		if err != nil {
 			return nil, err
 		}

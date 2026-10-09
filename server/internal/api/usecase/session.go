@@ -697,9 +697,10 @@ func copyForkHistory(ctx context.Context, manager *session.Manager, from, to *se
 }
 
 type GetSessionInput struct {
-	RootID string
-	Key    string
-	Seq    int
+	RootID          string
+	Key             string
+	Seq             int
+	HistoryRevision int
 }
 
 func (s *Service) GetSession(ctx context.Context, in GetSessionInput) (*session.Session, error) {
@@ -710,7 +711,11 @@ func (s *Service) GetSession(ctx context.Context, in GetSessionInput) (*session.
 	if err != nil {
 		return nil, err
 	}
-	return manager.Get(ctx, in.Key, in.Seq)
+	current, err := manager.Get(ctx, in.Key, in.Seq)
+	if err == nil && in.Seq > 0 && current.HistoryRevision != in.HistoryRevision {
+		return manager.Get(ctx, in.Key, 0)
+	}
+	return current, err
 }
 
 type GetSessionExchangeAuxInput struct {
