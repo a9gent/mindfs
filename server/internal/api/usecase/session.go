@@ -748,7 +748,11 @@ func (s *Service) GetSessionLogPath(ctx context.Context, in GetSessionInput) (Se
 	out := SessionLogPath{Path: path}
 	agentName := strings.TrimSpace(session.InferAgentFromSession(current))
 	if agentName != "" {
-		if binding, err := manager.FindAgentBinding(ctx, in.Key, agentName); err == nil && binding != nil {
+		binding, err := manager.FindAgentBinding(ctx, in.Key, agentName)
+		if err != nil {
+			// 静默降级为空 agent_session_id，但留日志便于排查接力包缺 ID 的反馈
+			log.Printf("[session] FindAgentBinding failed for %s/%s: %v", in.RootID, in.Key, err)
+		} else if binding != nil {
 			out.AgentSessionID = strings.TrimSpace(binding.AgentSessionID)
 		}
 	}

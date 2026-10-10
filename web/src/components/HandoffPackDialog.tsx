@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import { copyText } from "../services/clipboard";
 import { sessionService } from "../services/session";
@@ -43,7 +43,7 @@ const dialogStyle: React.CSSProperties = {
 const actionButtonStyle: React.CSSProperties = {
   border: "1px solid var(--border-color)",
   borderRadius: "8px",
-  padding: "7px 12px",
+  padding: "8px 14px",
   background: "transparent",
   color: "var(--text-primary)",
   fontSize: "12px",
@@ -56,7 +56,24 @@ const primaryButtonStyle: React.CSSProperties = {
   background: "var(--accent-color)",
   borderColor: "var(--accent-color)",
   color: "#fff",
+  fontWeight: 600,
 };
+
+const dialogScopedStyle = `
+  @media (max-width: 640px) {
+    .mindfs-handoff-overlay {
+      top: 36px !important;
+      align-items: flex-start !important;
+      padding: 12px !important;
+    }
+    .mindfs-handoff-dialog {
+      max-height: calc(100dvh - 56px) !important;
+    }
+    .mindfs-handoff-textarea {
+      min-height: 120px !important;
+    }
+  }
+`;
 
 export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDialogProps) {
   const { t } = useI18n();
@@ -65,10 +82,9 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
   const [pack, setPack] = useState("");
   const [copied, setCopied] = useState(false);
   const [templateSaved, setTemplateSaved] = useState(false);
+  const [templateSaveBlocked, setTemplateSaveBlocked] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const requestSeqRef = useRef(0);
-
-  const template = useMemo(() => loadHandoffTemplate(), [session?.key]);
 
   useEffect(() => {
     if (!session?.root_id) {
@@ -77,8 +93,11 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
     const seq = ++requestSeqRef.current;
     setContext(null);
     setLoadError(false);
+    // 清掉上一会话的包，避免加载间隙泄露旧路径
+    setPack("");
     setCopied(false);
     setTemplateSaved(false);
+    setTemplateSaveBlocked(false);
     sessionService
       .getSessionLogPath(session.root_id, session.session_key || session.key)
       .then(({ path, agentSessionId }) => {
@@ -114,13 +133,19 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
       return;
     }
     const onKeyDown = (e: KeyboardEvent) => {
+      // IME 组合中的 Esc 是取消候选词，不能关弹层丢内容
+      if (e.isComposing || e.keyCode === 229) {
+        return;
+      }
       if (e.key === "Escape") {
+        // 捕获阶段注册：抢在 ActionBar 等冒泡监听（取消运行中任务）之前消费掉
+        e.preventDefault();
         e.stopPropagation();
         onClose();
       }
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [session, onClose]);
 
   useEffect(() => {
@@ -134,7 +159,14 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
     if (!context) {
       return;
     }
-    persistHandoffTemplate(templateFromRenderedPack(pack, context));
+    const nextTemplate = templateFromRenderedPack(pack, context);
+    if (!nextTemplate.includes("{jsonl_path}") || !nextTemplate.includes("{session_key}")) {
+      setTemplateSaved(false);
+      setTemplateSaveBlocked(true);
+      return;
+    }
+    persistHandoffTemplate(nextTemplate);
+    setTemplateSaveBlocked(false);
     setTemplateSaved(true);
   };
 
@@ -144,14 +176,24 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
 
   return (
     <div
+      className="mindfs-handoff-overlay"
       style={overlayStyle}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {
+      // onMouseDown 而非 onClick：文本选区拖拽出弹层不会误关；仅左键生效
+      onMouseDown={(e) => {
+        if (e.button === 0) {
           onClose();
         }
       }}
     >
-      <div style={dialogStyle} role="dialog" aria-modal="true" aria-label={t("session.handoff.title")}>
+      <style>{dialogScopedStyle}</style>
+      <div
+        className="mindfs-handoff-dialog"
+        style={dialogStyle}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("session.handoff.title")}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div
           style={{
             padding: "14px 16px 10px",
@@ -185,8 +227,8 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
             onClick={onClose}
             aria-label={t("common.close")}
             style={{
-              width: "28px",
-              height: "28px",
+              width: "32px",
+              height: "32px",
               border: "none",
               borderRadius: "8px",
               background: "transparent",
@@ -214,10 +256,12 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
           <textarea
             ref={textareaRef}
             value={pack}
+            className="mindfs-handoff-textarea"
             onChange={(e) => {
               setPack(e.target.value);
               setCopied(false);
               setTemplateSaved(false);
+              setTemplateSaveBlocked(false);
             }}
             spellCheck={false}
             style={{
@@ -236,7 +280,11 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
             }}
           />
           <div style={{ fontSize: "11px", color: "var(--text-secondary)", padding: "8px 2px 0", lineHeight: 1.5 }}>
-            {t("session.handoff.hint")}
+            {templateSaveBlocked ? (
+              <span style={{ color: "#dc2626" }}>{t("session.handoff.templateInvalid")}</span>
+            ) : (
+              t("session.handoff.hint")
+            )}
           </div>
         </div>
 

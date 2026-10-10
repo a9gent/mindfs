@@ -144,17 +144,19 @@ test("applySessionFilters splits running to top and honors time window + sortAsc
     { key: "b", pending: false, updated_at: new Date(now - 7200000).toISOString() },
     { key: "c", pending: false, updated_at: new Date(now - 60000).toISOString() },
     { key: "d", pending: false, updated_at: new Date(now - 90000000).toISOString() },
+    { key: "e", pending: true, updated_at: new Date(now - 7200000).toISOString() },
   ];
   const all = applySessionFilters(sessions, { runningOnly: false, timeWindow: "all", sortAsc: false }, now);
-  assert.deepEqual(all.running.map((s) => s.key), ["a"]);
+  assert.deepEqual(all.running.map((s) => s.key), ["a", "e"]);
   assert.deepEqual(all.rest.map((s) => s.key), ["b", "c", "d"]);
 
   const hour = applySessionFilters(sessions, { runningOnly: false, timeWindow: "1h", sortAsc: false }, now);
-  assert.deepEqual(hour.running.map((s) => s.key), ["a"]);
+  // 运行中会话豁免时间窗：2 小时没更新的 pending 仍保留在置顶区
+  assert.deepEqual(hour.running.map((s) => s.key), ["a", "e"]);
   assert.deepEqual(hour.rest.map((s) => s.key), ["c"]);
 
   const runningOnly = applySessionFilters(sessions, { runningOnly: true, timeWindow: "all", sortAsc: false }, now);
-  assert.deepEqual(runningOnly.running.map((s) => s.key), ["a"]);
+  assert.deepEqual(runningOnly.running.map((s) => s.key), ["a", "e"]);
   assert.deepEqual(runningOnly.rest, []);
 
   const asc = applySessionFilters(sessions, { runningOnly: false, timeWindow: "all", sortAsc: true }, now);
@@ -207,5 +209,21 @@ test("templateFromRenderedPack restores placeholders from rendered pack", () => 
   assert.ok(restored.includes("{jsonl_path}"));
   assert.ok(restored.includes("{session_key}"));
   assert.ok(restored.includes("{agent_session_id}"));
+  assert.equal(renderHandoffPack(restored, context), rendered);
+});
+
+test("templateFromRenderedPack restores placeholders from fallback literals", () => {
+  const context = {
+    sessionKey: "k2",
+    jsonlPath: "",
+    agentSessionId: "",
+  };
+  const rendered = renderHandoffPack(DEFAULT_HANDOFF_TEMPLATE, context);
+  const restored = templateFromRenderedPack(rendered, context);
+  // 兜底文案必须还原为占位符，否则存模板会把「（无）」烧死进去
+  assert.ok(restored.includes("{jsonl_path}"));
+  assert.ok(restored.includes("{session_key}"));
+  assert.ok(restored.includes("{agent_session_id}"));
+  assert.ok(!restored.includes("（无）"));
   assert.equal(renderHandoffPack(restored, context), rendered);
 });

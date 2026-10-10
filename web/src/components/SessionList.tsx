@@ -414,19 +414,19 @@ export function SessionList({
   }, [childrenHasMore, effectiveSessions, expandedChildren, searchResultsMode, selectedKey, sessions]);
   const childCountByParent = useMemo(() => {
     const counts = new Map<string, number>();
-    const keys = new Set(sessions.map((item) => item.key));
-    for (const item of sessions) {
+    const keys = new Set(effectiveSessions.map((item) => item.key));
+    for (const item of effectiveSessions) {
       const parentKey = String(item.parent_session_key || "").trim();
       if (parentKey && keys.has(parentKey)) {
         counts.set(parentKey, (counts.get(parentKey) || 0) + 1);
       }
     }
     return counts;
-  }, [sessions]);
+  }, [effectiveSessions]);
   const selectedParentKey = useMemo(() => {
     if (!selectedKey) return "";
-    return sessions.find((item) => item.key === selectedKey)?.parent_session_key || "";
-  }, [selectedKey, sessions]);
+    return effectiveSessions.find((item) => item.key === selectedKey)?.parent_session_key || "";
+  }, [selectedKey, effectiveSessions]);
   const sessionByKey = useMemo(() => {
     const byKey = new Map<string, SessionItem>();
     for (const item of sessions) {
@@ -873,19 +873,31 @@ export function MultiProjectSessionList({
       return null;
     }
     const now = Date.now();
-    return groups.map((group) => {
-      const result = applySessionFilters(group.sessions, filter, now);
-      const matchCount = result.running.length + result.rest.length;
-      const unloaded = Math.max(0, group.totalCount - group.sessions.length);
-      return {
-        ...group,
-        sessions: [...result.running, ...result.rest],
-        // 剩余计数基于「未加载 + 命中筛选」，避免被移到置顶区的运行中会话被重复计入
-        totalCount: unloaded + matchCount,
-      };
-    });
+    return groups
+      .map((group) => {
+        const result = applySessionFilters(group.sessions, filter, now);
+        const matchCount = result.running.length + result.rest.length;
+        const unloaded = Math.max(0, group.totalCount - group.sessions.length);
+        return {
+          ...group,
+          sessions: [...result.running, ...result.rest],
+          // 剩余计数基于「未加载 + 命中」，避免被移到置顶区的运行中会话被重复计入
+          totalCount: unloaded + matchCount,
+        };
+      })
+      .filter((group) => group.sessions.length > 0 || group.totalCount > group.sessions.length);
   }, [filter, filterActive, groups]);
   const effectiveGroups = filteredGroups ?? groups;
+  // 筛选态下「加载更多/剩余计数」必须用未过滤的原始分组，否则分页游标错位
+  const originalGroupByRootId = useMemo(() => {
+    const byRoot = new Map<string, ProjectSessionGroup>();
+    for (const group of groups) {
+      byRoot.set(group.rootId, group);
+    }
+    return byRoot;
+  }, [groups]);
+  const loadTargetGroup = (group: ProjectSessionGroup): ProjectSessionGroup =>
+    originalGroupByRootId.get(group.rootId) ?? group;
   const orderedGroups = useMemo(
     () =>
       effectiveGroups.slice().sort((left, right) => {
@@ -913,7 +925,8 @@ export function MultiProjectSessionList({
   };
   const sessionByKey = useMemo(() => {
     const byKey = new Map<string, SessionItem>();
-    for (const group of effectiveGroups) {
+    // 用未过滤的原始分组：fork 名/父会话查找不应随筛选结果缩水
+    for (const group of groups) {
       for (const item of group.sessions) {
         const sessionRoot = item.root_id || group.rootId;
         byKey.set(`${sessionRoot}:${item.key}`, item);
@@ -921,7 +934,7 @@ export function MultiProjectSessionList({
       }
     }
     return byKey;
-  }, [effectiveGroups]);
+  }, [groups]);
   const childStateKey = (session: SessionItem, fallbackRootId = "") => `${session.root_id || fallbackRootId}:${session.key}`;
 
   const loadChildren = async (parent: SessionItem, beforeTime?: string) => {
@@ -1017,13 +1030,15 @@ export function MultiProjectSessionList({
 
   const handleProjectToggle = async (group: ProjectSessionGroup) => {
     const expanded = !!expandedProjects[group.rootId];
-    const remaining = Math.max(0, group.totalCount - group.sessions.length);
+    // 用原始分组算剩余（未加载）数：筛选副本的 sessions 是命中子集
+    const source = loadTargetGroup(group);
+    const remaining = Math.max(0, source.totalCount - source.sessions.length);
     if (!expanded) {
       setExpandedProjects((prev) => ({ ...prev, [group.rootId]: true }));
       if (remaining > 0 && onLoadMoreProject) {
         setLoadingProjects((prev) => ({ ...prev, [group.rootId]: true }));
         try {
-          await onLoadMoreProject(group);
+          await onLoadMoreProject(source);
         } finally {
           setLoadingProjects((prev) => ({ ...prev, [group.rootId]: false }));
         }
@@ -1033,7 +1048,7 @@ export function MultiProjectSessionList({
     if (remaining > 0 && onLoadMoreProject) {
       setLoadingProjects((prev) => ({ ...prev, [group.rootId]: true }));
       try {
-        await onLoadMoreProject(group);
+        await onLoadMoreProject(source);
       } finally {
         setLoadingProjects((prev) => ({ ...prev, [group.rootId]: false }));
       }
@@ -1136,7 +1151,12 @@ export function MultiProjectSessionList({
                   childCountByParent.set(parentKey, (childCountByParent.get(parentKey) || 0) + 1);
                 }
               }
-              const remaining = Math.max(0, group.totalCount - topLevelSessions.length);
+              // 剩余数用原始分组的顶层会话数推：筛选副本会把子会话混进计数
+              const sourceGroup = loadTargetGroup(group);
+              const remaining = Math.max(
+                0,
+                sourceGroup.totalCount - topLevelSessionsForGroup(sourceGroup.sessions).length,
+              );
               const projectLoading = !!loadingProjects[group.rootId];
               return (
                 <section key={group.rootId} style={{ minWidth: 0 }}>
@@ -1287,7 +1307,14 @@ export function MultiProjectSessionList({
                               ? remaining > 0
                                 ? t("sessionList.remainingSessions", { count: remaining })
                                 : t("common.collapse")
-                              : t("sessionList.remainingSessions", { count: Math.max(0, group.totalCount - MULTI_PROJECT_VISIBLE_LIMIT) })
+                              : t("sessionList.remainingSessions", {
+                                  count: Math.max(
+                                    0,
+                                    // 减实际渲染的顶层会话数而非固定上限：筛选后可见数可能不足 6
+                                    (filterActive ? group.totalCount : sourceGroup.totalCount)
+                                      - topLevelSessionsForGroup(group.sessions).length,
+                                  ),
+                                })
                         }
                         showExpandIcon={!projectLoading && (!expanded || remaining > 0)}
                         showCollapseIcon={!projectLoading && expanded}

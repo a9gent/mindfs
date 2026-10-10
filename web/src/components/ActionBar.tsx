@@ -90,6 +90,7 @@ type ActionBarProps = {
   editDraftRequest?: {
     id: number;
     content: string;
+    mode?: "replace" | "append";
   } | null;
   queuedMessages?: QueuedMessageInfo[];
   inputHistory?: string[];
@@ -819,7 +820,12 @@ export function ActionBar({
     if (!editDraftRequest) {
       return;
     }
-    const nextText = editDraftRequest.content || "";
+    const incoming = editDraftRequest.content || "";
+    // append 模式（接力包填入）：已有草稿时拼在后面，空草稿才直接放入
+    const existing = serializedInput.trim();
+    const nextText = editDraftRequest.mode === "append" && existing
+      ? `${serializedInput.replace(/\s+$/, "")}\n\n${incoming}`
+      : incoming;
     editorRef.current?.setText(nextText);
     setSerializedInput(nextText);
     setActiveToken(null);

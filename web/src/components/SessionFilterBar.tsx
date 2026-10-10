@@ -18,6 +18,7 @@ const TIME_WINDOWS: Array<{ value: Exclude<SessionTimeWindow, "all">; labelKey: 
 ];
 
 const chipBaseStyle: React.CSSProperties = {
+  // 26px 视觉高度 + 6px 上下间距 ≈ 38px 触控目标
   height: "26px",
   border: "1px solid var(--border-color)",
   borderRadius: "999px",
@@ -42,6 +43,21 @@ const chipActiveStyle: React.CSSProperties = {
   background: "color-mix(in srgb, var(--accent-color) 12%, transparent)",
 };
 
+const filterBarScopedStyle = `
+  .mindfs-session-filter-bar {
+    scrollbar-width: none;
+  }
+  .mindfs-session-filter-bar::-webkit-scrollbar {
+    display: none;
+  }
+  @media (min-width: 768px) {
+    .mindfs-session-filter-bar {
+      flex-wrap: wrap;
+      overflow-x: visible;
+    }
+  }
+`;
+
 function RunningDot() {
   return (
     <span
@@ -50,6 +66,7 @@ function RunningDot() {
         width: "6px",
         height: "6px",
         borderRadius: "50%",
+        // 运行中=红点是需求方指定的约定，与回复中的蓝色脉冲有意区分
         background: "#ef4444",
         flexShrink: 0,
       }}
@@ -63,6 +80,9 @@ export function SessionFilterBar({ filter, onChange }: SessionFilterBarProps) {
 
   return (
     <div
+      className="mindfs-session-filter-bar"
+      role="group"
+      aria-label={t("sessionList.filterGroup")}
       style={{
         display: "flex",
         alignItems: "center",
@@ -73,12 +93,13 @@ export function SessionFilterBar({ filter, onChange }: SessionFilterBarProps) {
         overflowX: "auto",
         overflowY: "hidden",
         flexShrink: 0,
-        scrollbarWidth: "none",
       }}
     >
+      <style>{filterBarScopedStyle}</style>
       <button
         type="button"
         aria-pressed={filter.runningOnly}
+        title={t("sessionList.filterRunning")}
         onClick={() => onChange({ ...filter, runningOnly: !filter.runningOnly })}
         style={filter.runningOnly ? chipActiveStyle : chipBaseStyle}
       >
@@ -92,6 +113,7 @@ export function SessionFilterBar({ filter, onChange }: SessionFilterBarProps) {
             key={value}
             type="button"
             aria-pressed={isActive}
+            title={t(labelKey)}
             onClick={() => onChange({ ...filter, timeWindow: isActive ? "all" : value })}
             style={isActive ? chipActiveStyle : chipBaseStyle}
           >
@@ -126,6 +148,7 @@ export function SessionFilterBar({ filter, onChange }: SessionFilterBarProps) {
       {active ? (
         <button
           type="button"
+          title={t("sessionList.filterReset")}
           onClick={() =>
             onChange({ runningOnly: false, timeWindow: "all", sortAsc: false })
           }

@@ -30,7 +30,7 @@ type AppShellProps = {
 const MOBILE_BREAKPOINT = 768;
 const TABLET_BREAKPOINT = 1024;
 const MOBILE_SIDEBAR_WIDTH = "min(85vw, 360px)";
-const EDGE_HOT_ZONE_PX = 16;
+const EDGE_HOT_ZONE_PX = 12;
 
 function useResponsive() {
   const [isMobile, setIsMobile] = useState(false);
@@ -107,7 +107,24 @@ type DrawerDrag = {
   lastT: number;
   velocity: number;
   active: boolean;
+  el: HTMLElement;
 };
+
+// 热区/抽屉吃掉的轻点：还原 hit-test，把 click 还给下层真实控件
+function tapThrough(x: number, y: number, covered: HTMLElement) {
+  if (typeof document === "undefined" || !document.elementFromPoint) {
+    return;
+  }
+  const prev = covered.style.pointerEvents;
+  covered.style.pointerEvents = "none";
+  const target = document.elementFromPoint(x, y);
+  covered.style.pointerEvents = prev;
+  if (target && target !== covered) {
+    target.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, clientX: x, clientY: y }),
+    );
+  }
+}
 
 function mobileSidebarPixelWidth(): number {
   if (typeof window === "undefined") {
@@ -136,8 +153,17 @@ export function AppShell({
   const { t } = useI18n();
   const { isMobile, isTablet } = useResponsive();
   const dragRef = useRef<DrawerDrag | null>(null);
+  const dragProgressRef = useRef(0);
   const suppressClickUntilRef = useRef(0);
   const [dragPreview, setDragPreview] = useState<{ side: SidebarSide; progress: number } | null>(null);
+
+  // 拖拽中跨过 768px 断点（旋转/分屏）：桌面分支没有 pointer 处理器，
+  // 不清场会让 dragRef 永久卡死、手势整体失效
+  useEffect(() => {
+    dragRef.current = null;
+    dragProgressRef.current = 0;
+    setDragPreview(null);
+  }, [isMobile]);
 
   const sidebarWidth = isMobile ? "0px" : (isTablet ? "200px" : "260px");
   const rightWidth = isMobile ? "0px" : (rightSidebar ? (isTablet ? "240px" : "280px") : "0px");
@@ -212,7 +238,9 @@ export function AppShell({
       zIndex: 2000,
       background: "var(--mindfs-topbar-bg, var(--mobile-sidebar-bg, var(--sidebar-bg)))",
       boxShadow: side === "left" ? "4px 0 24px rgba(0,0,0,0.15)" : "-4px 0 24px rgba(0,0,0,0.15)",
-      transition: dragging ? "none" : "transform 0.28s cubic-bezier(0.32, 0.72, 0, 1)",
+      transition: dragging
+        ? "none"
+        : "transform 0.28s cubic-bezier(0.32, 0.72, 0, 1), visibility 0.28s linear",
       display: "flex",
       flexDirection: "column",
       overflow: "hidden",
@@ -223,7 +251,11 @@ export function AppShell({
       willChange: "transform",
       backfaceVisibility: "hidden",
       transform: drawerTransform(side),
-      touchAction: "pan-y",
+      // 关闭后移出命中测试与无障碍树；visibility 过渡保证展开瞬间恢复可见
+      visibility: progress <= 0 && !dragging ? "hidden" : "visible",
+      // 保持默认 touch-action：抽屉内的横向滚动区（筛选 chips 等）交给
+      // 原生滚动，浏览器接管时会发 pointercancel，拖拽自行复位
+      touchAction: "auto",
       pointerEvents: progress <= 0 && !dragging ? "none" : "auto",
     };
   };
@@ -244,6 +276,7 @@ export function AppShell({
   };
 
   const endDrag = (decision: SwipeDragMode | null, side: SidebarSide) => {
+    dragProgressRef.current = 0;
     setDragPreview(null);
     suppressClickUntilRef.current = performance.now() + 250;
     if (decision === "open") {
@@ -275,15 +308,15 @@ export function AppShell({
       lastT: performance.now(),
       velocity: 0,
       active: false,
+      el: e.currentTarget,
     };
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      // capture unsupported; move/up still fire on the element for touch
-    }
+    // 0 是合法进度（拖满关闭），不能用兜底值区分「没拖过」
+    dragProgressRef.current = fromEdge ? 0 : 1;
+    // 这里不能抢 setPointerCapture：capture 会把后续 compat click 重定向到
+    // 容器，抽屉内按钮的点击与热区下的轻点都会失灵；等手势激活后再接管
   };
 
-  const drawerPointerMove = (e: React.PointerEvent<HTMLElement>) => {
+  const drawerPointerMove = (e: { pointerId: number; clientX: number; clientY: number }) => {
     const drag = dragRef.current;
     if (!drag || e.pointerId !== drag.pointerId) {
       return;
@@ -291,6 +324,12 @@ export function AppShell({
     const dx = e.clientX - drag.startX;
     const dy = e.clientY - drag.startY;
     if (!drag.active) {
+      // 僵尸守卫：pointerup 被系统吞掉（如窗口失焦）后按钮已松开，
+      // 继续留着会让下一次鼠标移动幽灵激活拖拽
+      if ((e as { buttons?: number }).buttons === 0) {
+        dragRef.current = null;
+        return;
+      }
       const intent = classifySwipeIntent(dx, dy);
       if (intent === "vertical") {
         dragRef.current = null;
@@ -300,6 +339,11 @@ export function AppShell({
         return;
       }
       drag.active = true;
+      try {
+        drag.el.setPointerCapture(e.pointerId);
+      } catch {
+        // capture unsupported; window listeners still receive the stream
+      }
     }
     const now = performance.now();
     const dt = now - drag.lastT;
@@ -310,27 +354,34 @@ export function AppShell({
       drag.lastX = e.clientX;
     }
     const progress = swipeProgress(drag.side, drag.mode, dx, mobileSidebarPixelWidth());
+    dragProgressRef.current = progress;
     setDragPreview({ side: drag.side, progress });
   };
 
-  const drawerPointerUp = (e: React.PointerEvent<HTMLElement>) => {
+  const drawerPointerUp = (e: { pointerId: number; clientX: number; clientY: number }) => {
     const drag = dragRef.current;
     if (!drag || e.pointerId !== drag.pointerId) {
       return;
     }
     dragRef.current = null;
     if (!drag.active) {
+      // 未成手势的轻点：热区把点击还给下层控件；抽屉本体走原生点击。
+      // 起指后抽屉可能已被别的方式打开（多指/汉堡键），前提失效就不透传
+      if (drag.mode === "open") {
+        const openNow = drag.side === "left" ? physicalLeftOpen : physicalRightOpen;
+        if (!openNow) {
+          tapThrough(e.clientX, e.clientY, drag.el);
+        }
+      }
       return;
     }
-    const progress = dragPreview && dragPreview.side === drag.side
-      ? dragPreview.progress
-      : (drag.mode === "open" ? 0 : 1);
+    const progress = dragProgressRef.current;
     const openDirection = drag.side === "left" ? 1 : -1;
     const velocity = drag.velocity * openDirection;
     endDrag(swipeRelease(progress, velocity, mobileSidebarPixelWidth()), drag.side);
   };
 
-  const drawerPointerCancel = (e: React.PointerEvent<HTMLElement>) => {
+  const drawerPointerCancel = (e: { pointerId: number }) => {
     const drag = dragRef.current;
     if (!drag || e.pointerId !== drag.pointerId) {
       return;
@@ -338,6 +389,7 @@ export function AppShell({
     dragRef.current = null;
     if (drag.active) {
       // snap back to the state-derived position without toggling
+      dragProgressRef.current = 0;
       suppressClickUntilRef.current = performance.now() + 250;
       setDragPreview(null);
     }
@@ -361,12 +413,32 @@ export function AppShell({
     flexShrink: 0,
   };
 
-  const drawerHandlers = {
-    onPointerMove: drawerPointerMove,
-    onPointerUp: drawerPointerUp,
-    onPointerCancel: drawerPointerCancel,
-    onLostPointerCapture: drawerPointerCancel,
-  };
+  // move/up/cancel 挂在 window 上：capture 未接管前 touch 隐式捕获把事件发到
+  // 原始目标，元素级监听会漏掉指针滑出元素的流
+  const pointerHandlersRef = useRef({ move: drawerPointerMove, up: drawerPointerUp, cancel: drawerPointerCancel });
+  useEffect(() => {
+    pointerHandlersRef.current = { move: drawerPointerMove, up: drawerPointerUp, cancel: drawerPointerCancel };
+  });
+
+  useEffect(() => {
+    if (!isMobile) {
+      return;
+    }
+    const onMove = (e: PointerEvent) => pointerHandlersRef.current.move(e);
+    const onUp = (e: PointerEvent) => pointerHandlersRef.current.up(e);
+    const onCancel = (e: PointerEvent) => pointerHandlersRef.current.cancel(e);
+    window.addEventListener("pointermove", onMove, { passive: true });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    // lostpointercapture 不冒泡，必须用捕获阶段才能在 window 上收到
+    window.addEventListener("lostpointercapture", onCancel, true);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("lostpointercapture", onCancel, true);
+    };
+  }, [isMobile]);
 
   return (
     <div style={shellStyle} data-onboarding="shell">
@@ -383,20 +455,32 @@ export function AppShell({
         />
       ) : null}
 
-      {isMobile && physicalLeftContent ? (
+      {physicalLeftContent ? (
         <aside
           className="mindfs-font-scale-region"
           data-mindfs-font-scale-region="sidebar"
-          aria-hidden={drawerProgress("left") <= 0 ? true : undefined}
-          onPointerDown={drawerPointerDown("left", false)}
-          onClickCapture={(e) => {
-            if (performance.now() < suppressClickUntilRef.current) {
-              e.preventDefault();
-              e.stopPropagation();
-            }
-          }}
-          style={{ ...mobileSidebarStyle("left"), ...fontScaleStyle(physicalLeftFontScale) }}
-          {...drawerHandlers}
+          aria-hidden={isMobile && drawerProgress("left") <= 0 ? true : undefined}
+          onPointerDown={isMobile ? drawerPointerDown("left", false) : undefined}
+          onClickCapture={
+            isMobile
+              ? (e) => {
+                  if (performance.now() < suppressClickUntilRef.current) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }
+                }
+              : undefined
+          }
+          style={
+            isMobile
+              ? { ...mobileSidebarStyle("left"), ...fontScaleStyle(physicalLeftFontScale) }
+              : {
+                  ...sidebarStyle,
+                  ...fontScaleStyle(physicalLeftFontScale),
+                  overflow: physicalLeftOpen ? "auto" : "hidden",
+                  pointerEvents: physicalLeftOpen ? "auto" : "none",
+                }
+          }
         >
           {physicalLeftContent}
         </aside>
@@ -422,20 +506,32 @@ export function AppShell({
         {drawer}
       </main>
 
-      {isMobile && physicalRightContent ? (
+      {physicalRightContent ? (
         <aside
           className="mindfs-font-scale-region"
           data-mindfs-font-scale-region="sidebar"
-          aria-hidden={drawerProgress("right") <= 0 ? true : undefined}
-          onPointerDown={drawerPointerDown("right", false)}
-          onClickCapture={(e) => {
-            if (performance.now() < suppressClickUntilRef.current) {
-              e.preventDefault();
-              e.stopPropagation();
-            }
-          }}
-          style={{ ...mobileSidebarStyle("right"), ...fontScaleStyle(physicalRightFontScale) }}
-          {...drawerHandlers}
+          aria-hidden={isMobile && drawerProgress("right") <= 0 ? true : undefined}
+          onPointerDown={isMobile ? drawerPointerDown("right", false) : undefined}
+          onClickCapture={
+            isMobile
+              ? (e) => {
+                  if (performance.now() < suppressClickUntilRef.current) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }
+                }
+              : undefined
+          }
+          style={
+            isMobile
+              ? { ...mobileSidebarStyle("right"), ...fontScaleStyle(physicalRightFontScale) }
+              : {
+                  ...rightStyle,
+                  ...fontScaleStyle(physicalRightFontScale),
+                  overflow: physicalRightOpen ? "auto" : "hidden",
+                  pointerEvents: physicalRightOpen ? "auto" : "none",
+                }
+          }
         >
           {physicalRightContent}
         </aside>
@@ -447,13 +543,11 @@ export function AppShell({
             aria-hidden
             style={edgeHotZoneStyle("left")}
             onPointerDown={drawerPointerDown("left", true)}
-            {...drawerHandlers}
           />
           <div
             aria-hidden
             style={edgeHotZoneStyle("right")}
             onPointerDown={drawerPointerDown("right", true)}
-            {...drawerHandlers}
           />
         </>
       ) : null}

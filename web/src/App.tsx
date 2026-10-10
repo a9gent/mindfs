@@ -2520,6 +2520,7 @@ export function App({ onGoHome }: AppProps) {
   const [editDraftRequest, setEditDraftRequest] = useState<{
     id: number;
     content: string;
+    mode?: "replace" | "append";
   } | null>(null);
   const [sessionFilter, setSessionFilter] = useState<SessionFilterState>(() => loadSessionFilter());
   const handleSessionFilterChange = useCallback((next: SessionFilterState) => {
@@ -2530,6 +2531,18 @@ export function App({ onGoHome }: AppProps) {
   const handleHandoffPack = useCallback((session: SessionItem) => {
     setHandoffPackSession(session);
   }, []);
+  const handleHandoffPackInsert = useCallback((pack: string) => {
+    // append：输入框已有草稿时由 ActionBar 拼接，避免静默覆盖
+    setEditDraftRequest((prev) => ({
+      id: (prev?.id || 0) + 1,
+      content: pack,
+      mode: "append",
+    }));
+    // 手机上会话列表在右侧抽屉里，填入后收起让用户看到输入框
+    if (isMobile) {
+      setIsRightOpen(false);
+    }
+  }, [isMobile]);
   const [entriesByPath, setEntriesByPath] = useState<
     Record<string, FileEntry[]>
   >({});
@@ -14789,7 +14802,7 @@ export function App({ onGoHome }: AppProps) {
       <HandoffPackDialog
         session={handoffPackSession}
         onClose={() => setHandoffPackSession(null)}
-        onInsert={(pack) => handleEditUserMessage(pack)}
+        onInsert={handleHandoffPackInsert}
       />
       {!isMobile ? <OnboardingTour
         open={onboardingOpen}

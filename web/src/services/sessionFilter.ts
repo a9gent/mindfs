@@ -95,10 +95,9 @@ export function applySessionFilters<T extends { pending?: boolean; updated_at?: 
     if (filter.runningOnly && !session.pending) {
       continue;
     }
+    // 运行中会话豁免时间窗：长时间无更新的运行中会话不应「消失」
     if (session.pending) {
-      if (sessionWithinTimeWindow(session.updated_at, filter.timeWindow, now)) {
-        running.push(session);
-      }
+      running.push(session);
       continue;
     }
     if (sessionWithinTimeWindow(session.updated_at, filter.timeWindow, now)) {
