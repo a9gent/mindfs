@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -749,6 +752,7 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 	if strings.TrimSpace(defaults.Model) != "" {
 		currentModelID = strings.TrimSpace(defaults.Model)
 	}
+	models = supplementCodexProviderModels(ctx, models)
 	return types.ModelList{
 		CurrentModelID: currentModelID,
 		Models:         models,
@@ -775,6 +779,188 @@ func codexModelEfforts(options []codexsdk.ReasoningEffortOption) []string {
 		efforts = append(efforts, effort)
 	}
 	return efforts
+}
+
+// supplementCodexProviderModels merges the custom provider's /v1/models into
+// the codex app-server catalog. The app-server model/list only returns
+// Codex-known models (GPT etc.), so custom relay models (glm/deepseek/qwen)
+// would otherwise never show up in the frontend.
+func supplementCodexProviderModels(ctx context.Context, models []types.ModelInfo) []types.ModelInfo {
+	baseURL, apiKey := codexProviderCredentials()
+	if strings.TrimSpace(baseURL) == "" || strings.TrimSpace(apiKey) == "" {
+		return models
+	}
+	remote, err := fetchOpenAIModelIDs(ctx, baseURL, apiKey)
+	if err != nil {
+		log.Printf("[codex/models] supplement.error err=%v", err)
+		return models
+	}
+	seen := make(map[string]struct{}, len(models))
+	for _, m := range models {
+		seen[strings.TrimSpace(m.ID)] = struct{}{}
+	}
+	for _, id := range remote {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		models = append(models, types.ModelInfo{
+			ID:            id,
+			Name:          id,
+			SupportEffort: true,
+			Efforts:       []string{"low", "medium", "high"},
+		})
+	}
+	return models
+}
+
+func codexProviderCredentials() (string, string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", ""
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		return "", ""
+	}
+	provider := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "[") {
+			break
+		}
+		if strings.HasPrefix(t, "model_provider") {
+			_, v, ok := strings.Cut(t, "=")
+			if !ok {
+				continue
+			}
+			provider = strings.Trim(strings.TrimSpace(v), `"'`)
+		}
+	}
+	if provider == "" {
+		return "", ""
+	}
+	// Prefer credentials straight from the provider block in config.toml so a
+	// renamed provider (e.g. key "cpa" with name "CPA0") still resolves.
+	if base, key := codexProviderBlockCredentials(string(raw), provider); base != "" && key != "" {
+		return base, key
+	}
+	cfgBase, err := os.UserConfigDir()
+	if err != nil {
+		return "", ""
+	}
+	payload, err := os.ReadFile(filepath.Join(cfgBase, "mindfs", "api-providers.json"))
+	if err != nil {
+		return "", ""
+	}
+	var providers []struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		BaseURL string `json:"baseUrl"`
+		BaseURL2 string `json:"baseURL"`
+		APIKey  string `json:"apiKey"`
+	}
+	if err := json.Unmarshal(payload, &providers); err != nil {
+		return "", ""
+	}
+	for _, p := range providers {
+		base := strings.TrimSpace(p.BaseURL)
+		if base == "" {
+			base = strings.TrimSpace(p.BaseURL2)
+		}
+		if strings.EqualFold(strings.TrimSpace(p.Name), provider) || strings.TrimSpace(p.ID) == provider || strings.TrimSpace(p.ID) == "api-"+provider {
+			return base, strings.TrimSpace(p.APIKey)
+		}
+	}
+	return "", ""
+}
+
+// codexProviderBlockCredentials parses base_url + bearer token from the
+// [model_providers.<key>] block in ~/.codex/config.toml.
+func codexProviderBlockCredentials(configText, providerKey string) (string, string) {
+	inBlock := false
+	base, key := "", ""
+	flush := func() (string, string) {
+		b, k := strings.TrimSpace(base), strings.TrimSpace(key)
+		base, key = "", ""
+		return b, k
+	}
+	for _, line := range strings.Split(configText, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "[") {
+			if inBlock {
+				if b, k := flush(); b != "" && k != "" {
+					return b, k
+				}
+			}
+			header := strings.ToLower(strings.TrimSpace(t))
+			inBlock = header == "[model_providers."+strings.ToLower(strings.TrimSpace(providerKey))+"]" ||
+				header == "[model_providers."+strings.ToLower(strconv.Quote(strings.TrimSpace(providerKey)))+"]"
+			continue
+		}
+		if !inBlock {
+			continue
+		}
+		code := t
+		if i := strings.Index(code, "#"); i >= 0 {
+			code = strings.TrimSpace(code[:i])
+		}
+		k, v, ok := strings.Cut(code, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(k) {
+		case "base_url":
+			base = strings.Trim(strings.TrimSpace(v), `"'`)
+		case "experimental_bearer_token", "bearer_token", "api_key":
+			key = strings.Trim(strings.TrimSpace(v), `"'`)
+		}
+	}
+	if inBlock {
+		return flush()
+	}
+	return "", ""
+}
+
+func fetchOpenAIModelIDs(ctx context.Context, baseURL, apiKey string) ([]string, error) {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	var endpoint string
+	if strings.HasSuffix(base, "/v1") {
+		endpoint = base + "/models"
+	} else {
+		endpoint = base + "/v1/models"
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, errors.New("model list status " + strconv.Itoa(resp.StatusCode))
+	}
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(payload.Data))
+	for _, item := range payload.Data {
+		if id := strings.TrimSpace(item.ID); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 func (s *session) RuntimeDefaults(ctx context.Context) (types.RuntimeDefaults, error) {
