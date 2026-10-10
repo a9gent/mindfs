@@ -6,6 +6,12 @@ import { useI18n, type Locale } from "../i18n";
 import { copyText } from "../services/clipboard";
 import { reportError } from "../services/error";
 import { sessionService } from "../services/session";
+import {
+  applySessionFilters,
+  isSessionFilterActive,
+  type SessionFilterState,
+} from "../services/sessionFilter";
+import { SessionFilterBar } from "./SessionFilterBar";
 
 export type SessionType = "chat" | "plugin" | "command";
 
@@ -53,6 +59,7 @@ type SessionListProps = {
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onScheduledTask?: (session: SessionItem) => void;
   onDelete?: (session: SessionItem) => void;
+  onHandoffPack?: (session: SessionItem) => void;
   onLoadChildren?: (
     session: SessionItem,
     options?: { beforeTime?: string },
@@ -60,6 +67,8 @@ type SessionListProps = {
   onLoadOlder?: () => void;
   loadingOlder?: boolean;
   hasMore?: boolean;
+  filter?: SessionFilterState;
+  onFilterChange?: (filter: SessionFilterState) => void;
 };
 
 const COLLAPSED_CHILD_SESSION_LIMIT = 3;
@@ -101,12 +110,15 @@ type ProjectSessionListProps = {
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onScheduledTask?: (session: SessionItem) => void;
   onDelete?: (session: SessionItem) => void;
+  onHandoffPack?: (session: SessionItem) => void;
   onProjectClick?: (rootId: string) => void;
   onLoadMoreProject?: (group: ProjectSessionGroup) => Promise<void> | void;
   onLoadChildren?: (
     session: SessionItem,
     options?: { beforeTime?: string },
   ) => Promise<{ hasMore?: boolean } | void> | { hasMore?: boolean } | void;
+  filter?: SessionFilterState;
+  onFilterChange?: (filter: SessionFilterState) => void;
 };
 
 function ToggleRowButton({
@@ -318,10 +330,13 @@ export function SessionList({
   onRename,
   onScheduledTask,
   onDelete,
+  onHandoffPack,
   onLoadChildren,
   onLoadOlder,
   loadingOlder = false,
   hasMore = false,
+  filter,
+  onFilterChange,
 }: SessionListProps) {
   const { t } = useI18n();
   const effectiveEmptyText = emptyText || t("sessionList.empty");
@@ -330,15 +345,26 @@ export function SessionList({
   const [expandedChildren, setExpandedChildren] = useState<Record<string, boolean>>({});
   const [loadingChildren, setLoadingChildren] = useState<Record<string, boolean>>({});
   const [childrenHasMore, setChildrenHasMore] = useState<Record<string, boolean>>({});
+  const filterActive = !!filter && !!onFilterChange && !searchResultsMode && isSessionFilterActive(filter);
+  const filteredSessions = useMemo(() => {
+    if (!filter || !filterActive) {
+      return null;
+    }
+    return applySessionFilters(sessions, filter);
+  }, [filter, filterActive, sessions]);
+  const effectiveSessions = useMemo(
+    () => (filteredSessions ? [...filteredSessions.running, ...filteredSessions.rest] : sessions),
+    [filteredSessions, sessions],
+  );
   const visibleSessions = useMemo(() => {
     if (searchResultsMode) {
       return sessions.map((session): VisibleSessionRow => ({ type: "session", session }));
     }
     const childrenByParent = new Map<string, SessionItem[]>();
     const topLevel: SessionItem[] = [];
-    const keys = new Set(sessions.map((item) => item.key));
+    const keys = new Set(effectiveSessions.map((item) => item.key));
     const parentByKey = new Map<string, string>();
-    for (const item of sessions) {
+    for (const item of effectiveSessions) {
       const parentKey = String(item.parent_session_key || "").trim();
       if (parentKey && keys.has(parentKey)) {
         const children = childrenByParent.get(parentKey) || [];
@@ -385,7 +411,7 @@ export function SessionList({
     };
     topLevel.forEach((item) => append(item));
     return out;
-  }, [childrenHasMore, expandedChildren, searchResultsMode, selectedKey, sessions]);
+  }, [childrenHasMore, effectiveSessions, expandedChildren, searchResultsMode, selectedKey, sessions]);
   const childCountByParent = useMemo(() => {
     const counts = new Map<string, number>();
     const keys = new Set(sessions.map((item) => item.key));
@@ -631,9 +657,29 @@ export function SessionList({
         </div>
       ) : null}
 
+      {filter && onFilterChange && !searchResultsMode ? (
+        <SessionFilterBar filter={filter} onChange={onFilterChange} />
+      ) : null}
+
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "8px" }}>
-        {!sessions.length ? (
-          emptyText ? (
+        {!effectiveSessions.length ? (
+          filterActive && sessions.length ? (
+            <div
+              style={{
+                fontSize: "12px",
+                color: "var(--text-secondary)",
+                minHeight: "100%",
+                padding: "12px 18px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                textAlign: "center",
+                lineHeight: 1.6,
+              }}
+            >
+              {t("sessionList.noFilterMatch")}
+            </div>
+          ) : emptyText ? (
             <div
               style={{
                 fontSize: "12px",
@@ -652,6 +698,31 @@ export function SessionList({
           ) : null
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+            {filterActive && filteredSessions && filteredSessions.running.length > 0 ? (
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "4px 6px 6px",
+                  fontSize: "11px",
+                  color: "var(--text-secondary)",
+                  letterSpacing: "0.02em",
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: "6px",
+                    height: "6px",
+                    borderRadius: "50%",
+                    background: "#ef4444",
+                    flexShrink: 0,
+                  }}
+                />
+                {t("sessionList.runningSection", { count: filteredSessions.running.length })}
+              </div>
+            ) : null}
             {visibleSessions.map((row) => {
               if (row.type === "child-toggle") {
                 const loading = !!loadingChildren[row.parent.key];
@@ -700,6 +771,7 @@ export function SessionList({
                   onRename={onRename}
                   onScheduledTask={onScheduledTask}
                   onDelete={onDelete}
+                  onHandoffPack={onHandoffPack}
                 />
               );
             })}
@@ -757,6 +829,9 @@ export function MultiProjectSessionList({
   onProjectClick,
   onLoadMoreProject,
   onLoadChildren,
+  onHandoffPack,
+  filter,
+  onFilterChange,
 }: ProjectSessionListProps) {
   const { t } = useI18n();
   const effectiveEmptyText = emptyText || t("sessionList.empty");
@@ -792,9 +867,28 @@ export function MultiProjectSessionList({
     }
     window.localStorage.setItem(PINNED_PROJECTS_STORAGE_KEY, JSON.stringify(pinnedProjects));
   }, [pinnedProjects]);
+  const filterActive = !!filter && !!onFilterChange && isSessionFilterActive(filter);
+  const filteredGroups = useMemo(() => {
+    if (!filter || !filterActive) {
+      return null;
+    }
+    const now = Date.now();
+    return groups.map((group) => {
+      const result = applySessionFilters(group.sessions, filter, now);
+      const matchCount = result.running.length + result.rest.length;
+      const unloaded = Math.max(0, group.totalCount - group.sessions.length);
+      return {
+        ...group,
+        sessions: [...result.running, ...result.rest],
+        // 剩余计数基于「未加载 + 命中筛选」，避免被移到置顶区的运行中会话被重复计入
+        totalCount: unloaded + matchCount,
+      };
+    });
+  }, [filter, filterActive, groups]);
+  const effectiveGroups = filteredGroups ?? groups;
   const orderedGroups = useMemo(
     () =>
-      groups.slice().sort((left, right) => {
+      effectiveGroups.slice().sort((left, right) => {
         const leftPinnedAt = pinnedProjects[left.rootId] || 0;
         const rightPinnedAt = pinnedProjects[right.rootId] || 0;
         if (leftPinnedAt || rightPinnedAt) {
@@ -804,7 +898,7 @@ export function MultiProjectSessionList({
         }
         return 0;
       }),
-    [groups, pinnedProjects],
+    [effectiveGroups, pinnedProjects],
   );
   const togglePinnedProject = (rootId: string) => {
     setPinnedProjects((prev) => {
@@ -819,7 +913,7 @@ export function MultiProjectSessionList({
   };
   const sessionByKey = useMemo(() => {
     const byKey = new Map<string, SessionItem>();
-    for (const group of groups) {
+    for (const group of effectiveGroups) {
       for (const item of group.sessions) {
         const sessionRoot = item.root_id || group.rootId;
         byKey.set(`${sessionRoot}:${item.key}`, item);
@@ -827,7 +921,7 @@ export function MultiProjectSessionList({
       }
     }
     return byKey;
-  }, [groups]);
+  }, [effectiveGroups]);
   const childStateKey = (session: SessionItem, fallbackRootId = "") => `${session.root_id || fallbackRootId}:${session.key}`;
 
   const loadChildren = async (parent: SessionItem, beforeTime?: string) => {
@@ -1014,12 +1108,15 @@ export function MultiProjectSessionList({
         </div>
         {headerAction ? <div style={{ display: "inline-flex", alignItems: "center" }}>{headerAction}</div> : null}
       </div>
+      {filter && onFilterChange ? (
+        <SessionFilterBar filter={filter} onChange={onFilterChange} />
+      ) : null}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "8px" }}>
         {loading && groups.length === 0 ? (
           <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "18px", textAlign: "center" }}>{t("sessionList.loading")}</div>
-        ) : groups.length === 0 ? (
+        ) : effectiveGroups.length === 0 ? (
           <div style={{ fontSize: "12px", color: "var(--text-secondary)", minHeight: "100%", padding: "12px 18px", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", lineHeight: 1.6 }}>
-            {effectiveEmptyText}
+            {groups.length === 0 ? effectiveEmptyText : t("sessionList.noFilterMatch")}
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "9px" }}>
@@ -1176,6 +1273,7 @@ export function MultiProjectSessionList({
                           onRename={onRename}
                           onScheduledTask={onScheduledTask}
                           onDelete={onDelete}
+                          onHandoffPack={onHandoffPack}
                         />
                       );
                     })}
@@ -1233,6 +1331,7 @@ function SessionCard({
   onRename,
   onScheduledTask,
   onDelete,
+  onHandoffPack,
 }: {
   session: SessionItem;
   sessionByKey: Map<string, SessionItem>;
@@ -1247,6 +1346,7 @@ function SessionCard({
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onScheduledTask?: (session: SessionItem) => void;
   onDelete?: (session: SessionItem) => void;
+  onHandoffPack?: (session: SessionItem) => void;
 }) {
   const { locale, t } = useI18n();
   const isClosed = !!session.closed_at;
@@ -1946,7 +2046,7 @@ function SessionCard({
                 if (!session.root_id || copyingPath) return;
                 setCopyingPath(true);
                 void sessionService.getSessionLogPath(session.root_id, session.session_key || session.key)
-                  .then(copySessionValue)
+                  .then(({ path }) => copySessionValue(path))
                   .catch((err) => {
                     reportError("clipboard.write_failed", String((err as Error)?.message || t("session.copyFailed")));
                   })
@@ -1960,6 +2060,25 @@ function SessionCard({
               </svg>
               {copyingPath ? t("common.loading") : t("sessionList.copyPath")}
             </button>
+            {onHandoffPack ? (
+              <button
+                type="button"
+                disabled={!session.root_id || session.pending}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpen(false);
+                  onHandoffPack(session);
+                }}
+                style={{ ...menuItemStyle, color: "var(--text-primary)", whiteSpace: "nowrap", opacity: !session.root_id || session.pending ? 0.55 : 1 }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+                  <path d="M10 17l5-5-5-5" />
+                  <path d="M15 12H3" />
+                </svg>
+                {t("sessionList.handoffPack")}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={(e) => {

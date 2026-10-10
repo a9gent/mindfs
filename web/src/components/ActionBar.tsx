@@ -825,7 +825,10 @@ export function ActionBar({
     setActiveToken(null);
     setCandidates([]);
     setActiveCandidateIndex(0);
-    requestAnimationFrame(syncEditorHeight);
+    requestAnimationFrame(() => {
+      syncEditorHeight();
+      editorRef.current?.focus();
+    });
   }, [editDraftRequest, syncEditorHeight]);
 
   const appendPendingAttachments = useCallback((files: File[]) => {

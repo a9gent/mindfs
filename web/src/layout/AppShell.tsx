@@ -1,5 +1,13 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";
+import {
+  classifySwipeIntent,
+  clamp01,
+  swipeProgress,
+  swipeRelease,
+  type SidebarSide,
+  type SwipeDragMode,
+} from "../services/edgeSwipe";
 
 type AppShellProps = {
   sidebar: React.ReactNode;
@@ -21,6 +29,8 @@ type AppShellProps = {
 
 const MOBILE_BREAKPOINT = 768;
 const TABLET_BREAKPOINT = 1024;
+const MOBILE_SIDEBAR_WIDTH = "min(85vw, 360px)";
+const EDGE_HOT_ZONE_PX = 16;
 
 function useResponsive() {
   const [isMobile, setIsMobile] = useState(false);
@@ -87,6 +97,25 @@ const footerStyle: React.CSSProperties = {
   minWidth: 0,
 };
 
+type DrawerDrag = {
+  side: SidebarSide;
+  mode: SwipeDragMode;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastT: number;
+  velocity: number;
+  active: boolean;
+};
+
+function mobileSidebarPixelWidth(): number {
+  if (typeof window === "undefined") {
+    return 360;
+  }
+  return Math.min(window.innerWidth * 0.85, 360);
+}
+
 export function AppShell({
   sidebar,
   main,
@@ -106,6 +135,9 @@ export function AppShell({
 }: AppShellProps) {
   const { t } = useI18n();
   const { isMobile, isTablet } = useResponsive();
+  const dragRef = useRef<DrawerDrag | null>(null);
+  const suppressClickUntilRef = useRef(0);
+  const [dragPreview, setDragPreview] = useState<{ side: SidebarSide; progress: number } | null>(null);
 
   const sidebarWidth = isMobile ? "0px" : (isTablet ? "200px" : "260px");
   const rightWidth = isMobile ? "0px" : (rightSidebar ? (isTablet ? "240px" : "280px") : "0px");
@@ -127,6 +159,19 @@ export function AppShell({
   const fontScaleStyle = (scale: number): React.CSSProperties => ({
     "--mindfs-font-scale": scale,
   } as React.CSSProperties);
+
+  const drawerProgress = (side: SidebarSide): number => {
+    if (dragPreview && dragPreview.side === side) {
+      return dragPreview.progress;
+    }
+    return (side === "left" ? physicalLeftOpen : physicalRightOpen) ? 1 : 0;
+  };
+
+  const drawerTransform = (side: SidebarSide): string => {
+    const progress = drawerProgress(side);
+    const offset = side === "left" ? (progress - 1) * 100 : (1 - progress) * 100;
+    return `translateX(${offset.toFixed(2)}%) translateZ(0)`;
+  };
 
   const shellStyle: React.CSSProperties & {
     "--mindfs-actionbar-bottom-padding"?: string;
@@ -155,64 +200,203 @@ export function AppShell({
     "--mindfs-file-menu-width": isMobile ? "min(240px, calc(100vw - 16px))" : "220px",
   };
 
-  const mobileSidebarStyle = (side: 'left' | 'right'): React.CSSProperties => ({
-    position: "fixed",
-    top: "var(--mindfs-safe-area-top, env(safe-area-inset-top, 0px))",
-    bottom: 0,
-    [side]: 0,
-    width: "75vw",
-    zIndex: 2000,
-    background: "var(--mindfs-topbar-bg, var(--mobile-sidebar-bg, var(--sidebar-bg)))",
-    boxShadow: side === 'left' ? "4px 0 24px rgba(0,0,0,0.15)" : "-4px 0 24px rgba(0,0,0,0.15)",
-    transition: "transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1)",
-    display: "flex",
-    flexDirection: "column",
-    overflow: "hidden",
-    borderTopRightRadius: side === 'left' ? "14px" : undefined,
-    borderBottomRightRadius: side === 'left' ? "14px" : undefined,
-    borderTopLeftRadius: side === 'right' ? "14px" : undefined,
-    borderBottomLeftRadius: side === 'right' ? "14px" : undefined,
-    willChange: "transform",
-    backfaceVisibility: "hidden",
-    transform: "translateX(0) translateZ(0)",
-  });
+  const mobileSidebarStyle = (side: SidebarSide): React.CSSProperties => {
+    const progress = drawerProgress(side);
+    const dragging = !!dragPreview && dragPreview.side === side;
+    return {
+      position: "fixed",
+      top: "var(--mindfs-safe-area-top, env(safe-area-inset-top, 0px))",
+      bottom: 0,
+      [side]: 0,
+      width: MOBILE_SIDEBAR_WIDTH,
+      zIndex: 2000,
+      background: "var(--mindfs-topbar-bg, var(--mobile-sidebar-bg, var(--sidebar-bg)))",
+      boxShadow: side === "left" ? "4px 0 24px rgba(0,0,0,0.15)" : "-4px 0 24px rgba(0,0,0,0.15)",
+      transition: dragging ? "none" : "transform 0.28s cubic-bezier(0.32, 0.72, 0, 1)",
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",
+      borderTopRightRadius: side === "left" ? "14px" : undefined,
+      borderBottomRightRadius: side === "left" ? "14px" : undefined,
+      borderTopLeftRadius: side === "right" ? "14px" : undefined,
+      borderBottomLeftRadius: side === "right" ? "14px" : undefined,
+      willChange: "transform",
+      backfaceVisibility: "hidden",
+      transform: drawerTransform(side),
+      touchAction: "pan-y",
+      pointerEvents: progress <= 0 && !dragging ? "none" : "auto",
+    };
+  };
 
+  const overlayProgress = Math.max(drawerProgress("left"), drawerProgress("right"));
+  const overlayDragging = !!dragPreview;
   const overlayStyle: React.CSSProperties = {
     position: "fixed",
     inset: 0,
     background: "rgba(0,0,0,0.3)",
     zIndex: 1500,
-    opacity: (isMobile && (leftOpen || rightOpen)) ? 1 : 0,
-    pointerEvents: (isMobile && (leftOpen || rightOpen)) ? "auto" : "none",
-    transition: "opacity 0.18s ease",
+    opacity: clamp01(overlayProgress),
+    pointerEvents: !overlayDragging && overlayProgress > 0.02 ? "auto" : "none",
+    transition: overlayDragging ? "none" : "opacity 0.18s ease",
     willChange: "opacity",
     backfaceVisibility: "hidden",
     transform: "translateZ(0)",
   };
+
+  const endDrag = (decision: SwipeDragMode | null, side: SidebarSide) => {
+    setDragPreview(null);
+    suppressClickUntilRef.current = performance.now() + 250;
+    if (decision === "open") {
+      (side === "left" ? physicalLeftOpenHandler : physicalRightOpenHandler)?.();
+    } else if (decision === "close") {
+      (side === "left" ? physicalLeftClose : physicalRightClose)?.();
+    }
+  };
+
+  const drawerPointerDown = (side: SidebarSide, fromEdge: boolean) => (e: React.PointerEvent<HTMLElement>) => {
+    if (e.pointerType === "mouse" && e.button !== 0) {
+      return;
+    }
+    const open = side === "left" ? physicalLeftOpen : physicalRightOpen;
+    // Edge zones only open a closed drawer; the drawer body only closes an open one.
+    if (fromEdge ? open : !open) {
+      return;
+    }
+    if (dragRef.current) {
+      return;
+    }
+    dragRef.current = {
+      side,
+      mode: fromEdge ? "open" : "close",
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      lastX: e.clientX,
+      lastT: performance.now(),
+      velocity: 0,
+      active: false,
+    };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // capture unsupported; move/up still fire on the element for touch
+    }
+  };
+
+  const drawerPointerMove = (e: React.PointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag || e.pointerId !== drag.pointerId) {
+      return;
+    }
+    const dx = e.clientX - drag.startX;
+    const dy = e.clientY - drag.startY;
+    if (!drag.active) {
+      const intent = classifySwipeIntent(dx, dy);
+      if (intent === "vertical") {
+        dragRef.current = null;
+        return;
+      }
+      if (intent !== "horizontal") {
+        return;
+      }
+      drag.active = true;
+    }
+    const now = performance.now();
+    const dt = now - drag.lastT;
+    if (dt > 0) {
+      const instant = (e.clientX - drag.lastX) / dt;
+      drag.velocity = drag.velocity * 0.7 + instant * 0.3;
+      drag.lastT = now;
+      drag.lastX = e.clientX;
+    }
+    const progress = swipeProgress(drag.side, drag.mode, dx, mobileSidebarPixelWidth());
+    setDragPreview({ side: drag.side, progress });
+  };
+
+  const drawerPointerUp = (e: React.PointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag || e.pointerId !== drag.pointerId) {
+      return;
+    }
+    dragRef.current = null;
+    if (!drag.active) {
+      return;
+    }
+    const progress = dragPreview && dragPreview.side === drag.side
+      ? dragPreview.progress
+      : (drag.mode === "open" ? 0 : 1);
+    const openDirection = drag.side === "left" ? 1 : -1;
+    const velocity = drag.velocity * openDirection;
+    endDrag(swipeRelease(progress, velocity, mobileSidebarPixelWidth()), drag.side);
+  };
+
+  const drawerPointerCancel = (e: React.PointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag || e.pointerId !== drag.pointerId) {
+      return;
+    }
+    dragRef.current = null;
+    if (drag.active) {
+      // snap back to the state-derived position without toggling
+      suppressClickUntilRef.current = performance.now() + 250;
+      setDragPreview(null);
+    }
+  };
+
+  const edgeHotZoneStyle = (side: SidebarSide): React.CSSProperties => ({
+    position: "fixed",
+    top: 0,
+    bottom: 0,
+    [side]: 0,
+    width: EDGE_HOT_ZONE_PX,
+    zIndex: 1900,
+    touchAction: "none",
+    background: "transparent",
+    border: "none",
+    padding: 0,
+  });
 
   const mobileFooterStyle: React.CSSProperties = {
     ...footerStyle,
     flexShrink: 0,
   };
 
+  const drawerHandlers = {
+    onPointerMove: drawerPointerMove,
+    onPointerUp: drawerPointerUp,
+    onPointerCancel: drawerPointerCancel,
+    onLostPointerCapture: drawerPointerCancel,
+  };
+
   return (
     <div style={shellStyle} data-onboarding="shell">
-      {isMobile && <div style={overlayStyle} onClick={() => { onCloseLeft?.(); onCloseRight?.(); }} />}
+      {isMobile ? (
+        <div
+          style={overlayStyle}
+          onClick={() => {
+            if (dragRef.current) {
+              return;
+            }
+            onCloseLeft?.();
+            onCloseRight?.();
+          }}
+        />
+      ) : null}
 
-      {(!isMobile || physicalLeftOpen) && physicalLeftContent ? (
+      {isMobile && physicalLeftContent ? (
         <aside
           className="mindfs-font-scale-region"
           data-mindfs-font-scale-region="sidebar"
-          style={
-            isMobile
-              ? { ...mobileSidebarStyle('left'), ...fontScaleStyle(physicalLeftFontScale) }
-              : {
-                  ...sidebarStyle,
-                  ...fontScaleStyle(physicalLeftFontScale),
-                  overflow: physicalLeftOpen ? "auto" : "hidden",
-                  pointerEvents: physicalLeftOpen ? "auto" : "none",
-                }
-          }
+          aria-hidden={drawerProgress("left") <= 0 ? true : undefined}
+          onPointerDown={drawerPointerDown("left", false)}
+          onClickCapture={(e) => {
+            if (performance.now() < suppressClickUntilRef.current) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }}
+          style={{ ...mobileSidebarStyle("left"), ...fontScaleStyle(physicalLeftFontScale) }}
+          {...drawerHandlers}
         >
           {physicalLeftContent}
         </aside>
@@ -238,23 +422,40 @@ export function AppShell({
         {drawer}
       </main>
 
-      {(!isMobile || physicalRightOpen) && physicalRightContent ? (
+      {isMobile && physicalRightContent ? (
         <aside
           className="mindfs-font-scale-region"
           data-mindfs-font-scale-region="sidebar"
-          style={
-            isMobile
-              ? { ...mobileSidebarStyle('right'), ...fontScaleStyle(physicalRightFontScale) }
-              : {
-                  ...rightStyle,
-                  ...fontScaleStyle(physicalRightFontScale),
-                  overflow: physicalRightOpen ? "auto" : "hidden",
-                  pointerEvents: physicalRightOpen ? "auto" : "none",
-                }
-          }
+          aria-hidden={drawerProgress("right") <= 0 ? true : undefined}
+          onPointerDown={drawerPointerDown("right", false)}
+          onClickCapture={(e) => {
+            if (performance.now() < suppressClickUntilRef.current) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }}
+          style={{ ...mobileSidebarStyle("right"), ...fontScaleStyle(physicalRightFontScale) }}
+          {...drawerHandlers}
         >
           {physicalRightContent}
         </aside>
+      ) : null}
+
+      {isMobile ? (
+        <>
+          <div
+            aria-hidden
+            style={edgeHotZoneStyle("left")}
+            onPointerDown={drawerPointerDown("left", true)}
+            {...drawerHandlers}
+          />
+          <div
+            aria-hidden
+            style={edgeHotZoneStyle("right")}
+            onPointerDown={drawerPointerDown("right", true)}
+            {...drawerHandlers}
+          />
+        </>
       ) : null}
 
       {!isMobile ? (

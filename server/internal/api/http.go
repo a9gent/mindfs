@@ -887,7 +887,7 @@ func (h *HTTPHandler) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) handleSessionLogPathGet(w http.ResponseWriter, r *http.Request) {
-	path, err := h.service().GetSessionLogPath(r.Context(), usecase.GetSessionInput{
+	out, err := h.service().GetSessionLogPath(r.Context(), usecase.GetSessionInput{
 		RootID: r.URL.Query().Get("root"),
 		Key:    chi.URLParam(r, "key"),
 	})
@@ -895,7 +895,10 @@ func (h *HTTPHandler) handleSessionLogPathGet(w http.ResponseWriter, r *http.Req
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, map[string]string{"path": path})
+	respondJSON(w, http.StatusOK, map[string]string{
+		"path":             out.Path,
+		"agent_session_id": out.AgentSessionID,
+	})
 }
 
 func (h *HTTPHandler) handleSessionSync(w http.ResponseWriter, r *http.Request) {
