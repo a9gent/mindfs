@@ -253,8 +253,10 @@ export function AppShell({
       transform: drawerTransform(side),
       // 关闭后移出命中测试与无障碍树；visibility 过渡保证展开瞬间恢复可见
       visibility: progress <= 0 && !dragging ? "hidden" : "visible",
-      // 保持默认 touch-action：抽屉内的横向滚动区（筛选 chips 等）交给
-      // 原生滚动，浏览器接管时会发 pointercancel，拖拽自行复位
+      // touch-action 保持默认：竖向滚动与抽屉内横向滚动区（筛选 chips 等）继续
+      // 走原生；横向手势由 touch 事件通道锁定意图后 preventDefault 接管，
+      // 不依赖 touch-action——实测 auto/pan-y 在嵌套滚动结构下都会被浏览器抢发
+      // pointercancel，touch 流才是抢不走的
       touchAction: "auto",
       pointerEvents: progress <= 0 && !dragging ? "none" : "auto",
     };
@@ -287,6 +289,13 @@ export function AppShell({
   };
 
   const drawerPointerDown = (side: SidebarSide, fromEdge: boolean) => (e: React.PointerEvent<HTMLElement>) => {
+    if (e.pointerType === "touch") {
+      // 触屏走 touch 事件通道（下方 drawerTouch* 系列）：pointer 流会被浏览器的
+      // 滚动接管以 pointercancel 杀死（touch-action 只能救部分 DOM 结构，
+      // 实测 pan-y 抽屉嵌滚动列表照样被杀），而 pointercancel 后 touch 流仍完整，
+      // 锁定横向后 preventDefault 即可让浏览器永远抢不走手势。
+      return;
+    }
     if (e.pointerType === "mouse" && e.button !== 0) {
       return;
     }
@@ -312,10 +321,30 @@ export function AppShell({
       active: false,
       el: e.currentTarget,
     };
+    // 接管预备态时若原武装来自 touch 通道（pointerId=-1），同步清掉它的
+    // identifier，否则笔/鼠标先抬指后 touch 通道被悬空 id 永久锁死（审查 P1）
+    if (touchDragIdRef.current !== null) {
+      touchDragIdRef.current = null;
+    }
     // 0 是合法进度（拖满关闭），不能用兜底值区分「没拖过」
     dragProgressRef.current = fromEdge ? 0 : 1;
     // 这里不能抢 setPointerCapture：capture 会把后续 compat click 重定向到
     // 容器，抽屉内按钮的点击与热区下的轻点都会失灵；等手势激活后再接管
+  };
+
+  // 拖拽推进：指针/触摸两条通道共用的速度估计与进度回写
+  const updateDragFromPoint = (drag: DrawerDrag, x: number, y: number) => {
+    const now = performance.now();
+    const dt = now - drag.lastT;
+    if (dt > 0) {
+      const instant = (x - drag.lastX) / dt;
+      drag.velocity = drag.velocity * 0.7 + instant * 0.3;
+      drag.lastT = now;
+      drag.lastX = x;
+    }
+    const progress = swipeProgress(drag.side, drag.mode, x - drag.startX, mobileSidebarPixelWidth());
+    dragProgressRef.current = progress;
+    setDragPreview({ side: drag.side, progress });
   };
 
   const drawerPointerMove = (e: { pointerId: number; clientX: number; clientY: number }) => {
@@ -351,17 +380,7 @@ export function AppShell({
         // capture unsupported; window listeners still receive the stream
       }
     }
-    const now = performance.now();
-    const dt = now - drag.lastT;
-    if (dt > 0) {
-      const instant = (e.clientX - drag.lastX) / dt;
-      drag.velocity = drag.velocity * 0.7 + instant * 0.3;
-      drag.lastT = now;
-      drag.lastX = e.clientX;
-    }
-    const progress = swipeProgress(drag.side, drag.mode, dx, mobileSidebarPixelWidth());
-    dragProgressRef.current = progress;
-    setDragPreview({ side: drag.side, progress });
+    updateDragFromPoint(drag, e.clientX, e.clientY);
   };
 
   const drawerPointerUp = (e: { pointerId: number; clientX: number; clientY: number }) => {
@@ -399,6 +418,123 @@ export function AppShell({
       suppressClickUntilRef.current = performance.now() + 250;
       setDragPreview(null);
     }
+  };
+
+  // ---------- 触屏通道（touch events） ----------
+  // pointer 流会被浏览器滚动接管 pointercancel 杀死；pointercancel 之后 touch 流
+  // 依然完整送达，所以触屏拖拽从 touchmove 驱动：意图锁定横向后 preventDefault，
+  // 浏览器既不敢滚也不敢 cancel。竖向意图立刻放手（不 preventDefault），原生滚动照旧。
+  const touchDragIdRef = useRef<number | null>(null);
+
+  // 起点落在可横向滚动的元素里（筛选 chips、代码块）：横滑是它自己的原生滚动，
+  // 抽屉引擎不抢
+  const touchStartInHorizontalScroller = (target: EventTarget | null, stop: HTMLElement): boolean => {
+    let el = target instanceof Element ? target : null;
+    while (el && el !== stop && el !== document.body) {
+      const styles = window.getComputedStyle(el);
+      if ((styles.overflowX === "auto" || styles.overflowX === "scroll") && el.scrollWidth > el.clientWidth + 1) {
+        return true;
+      }
+      el = el.parentElement;
+    }
+    return false;
+  };
+
+  const drawerTouchStart = (side: SidebarSide, fromEdge: boolean, e: TouchEvent, host: HTMLElement) => {
+    // 自愈：任何路径留下的悬空 identifier（如混合设备上 pointer 通道接管过）
+    // 只要 dragRef 已空，就不该挡住下一次触屏手势
+    if (touchDragIdRef.current !== null && !dragRef.current) {
+      touchDragIdRef.current = null;
+    }
+    if (touchDragIdRef.current !== null || dragRef.current) {
+      return;
+    }
+    const open = side === "left" ? physicalLeftOpen : physicalRightOpen;
+    // 边缘热区只在关闭态拉开；抽屉本体只在展开态收起
+    if (fromEdge ? open : !open) {
+      return;
+    }
+    const touch = e.changedTouches[0];
+    if (!touch) {
+      return;
+    }
+    if (touchStartInHorizontalScroller(e.target, host)) {
+      return;
+    }
+    touchDragIdRef.current = touch.identifier;
+    dragRef.current = {
+      side,
+      mode: fromEdge ? "open" : "close",
+      pointerId: -1,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      lastX: touch.clientX,
+      lastT: performance.now(),
+      velocity: 0,
+      active: false,
+      el: host,
+    };
+    // 0 是合法进度（拖满关闭），不能用兜底值区分「没拖过」
+    dragProgressRef.current = fromEdge ? 0 : 1;
+  };
+
+  const drawerTouchMove = (e: TouchEvent) => {
+    const drag = dragRef.current;
+    const touchId = touchDragIdRef.current;
+    if (!drag || touchId === null) {
+      return;
+    }
+    const touch = Array.from(e.changedTouches).find((t) => t.identifier === touchId);
+    if (!touch) {
+      return;
+    }
+    if (!drag.active) {
+      const intent = classifySwipeIntent(touch.clientX - drag.startX, touch.clientY - drag.startY);
+      if (intent === "vertical") {
+        // 竖向：还给原生滚动，浏览器会发 pointercancel——touch 流不受影响，
+        // 这里先自行清场即可
+        dragRef.current = null;
+        touchDragIdRef.current = null;
+        return;
+      }
+      if (intent !== "horizontal") {
+        return; // 8px 内未定意图，先不表态
+      }
+      drag.active = true;
+    }
+    // 意图已锁定横向：吃掉整条手势，浏览器不许滚动、不许接管
+    if (e.cancelable) {
+      e.preventDefault();
+    }
+    updateDragFromPoint(drag, touch.clientX, touch.clientY);
+  };
+
+  const drawerTouchEnd = (e: TouchEvent, canceled: boolean) => {
+    const drag = dragRef.current;
+    const touchId = touchDragIdRef.current;
+    if (!drag || touchId === null) {
+      return;
+    }
+    const touch = Array.from(e.changedTouches).find((t) => t.identifier === touchId);
+    if (!touch) {
+      return;
+    }
+    dragRef.current = null;
+    touchDragIdRef.current = null;
+    if (!drag.active) {
+      // 未成手势的轻点：一切交给原生 click（抽屉内按钮、热区下控件都不受伤）
+      return;
+    }
+    if (canceled) {
+      dragProgressRef.current = 0;
+      suppressClickUntilRef.current = performance.now() + 250;
+      setDragPreview(null);
+      return;
+    }
+    const progress = dragProgressRef.current;
+    const openDirection = drag.side === "left" ? 1 : -1;
+    const velocity = drag.velocity * openDirection;
+    endDrag(swipeRelease(progress, velocity, mobileSidebarPixelWidth()), drag.side);
   };
 
   const edgeHotZoneStyle = (side: SidebarSide): React.CSSProperties => ({
@@ -446,6 +582,55 @@ export function AppShell({
     };
   }, [isMobile]);
 
+  // 触屏通道挂 document：touchstart/touchend 冒泡可达，touchmove 必须 non-passive
+  // 才能 preventDefault（React 合成事件对 touchmove 是 passive 的，拦不住滚动）。
+  // 处理器经 ref 间接调用，保证每次渲染用的都是最新 state（开合前提判定）。
+  const touchHandlersRef = useRef({
+    start: drawerTouchStart,
+    move: drawerTouchMove,
+    end: drawerTouchEnd,
+  });
+  useEffect(() => {
+    touchHandlersRef.current = { start: drawerTouchStart, move: drawerTouchMove, end: drawerTouchEnd };
+  });
+
+  useEffect(() => {
+    if (!isMobile) {
+      return;
+    }
+    const touchDragIdReset = () => {
+      touchDragIdRef.current = null;
+    };
+    const onStart = (e: TouchEvent) => {
+      const host = (e.target instanceof Element ? e.target : null)?.closest<HTMLElement>("[data-drawer-touch]");
+      if (!host) {
+        return;
+      }
+      const side = host.getAttribute("data-drawer-touch") as SidebarSide | null;
+      if (side !== "left" && side !== "right") {
+        return;
+      }
+      touchHandlersRef.current.start(side, host.hasAttribute("data-drawer-edge"), e, host);
+    };
+    const onMove = (e: TouchEvent) => touchHandlersRef.current.move(e);
+    const onEnd = (e: TouchEvent) => touchHandlersRef.current.end(e, false);
+    const onCancel = (e: TouchEvent) => touchHandlersRef.current.end(e, true);
+    document.addEventListener("touchstart", onStart, { passive: true });
+    document.addEventListener("touchmove", onMove, { passive: false });
+    document.addEventListener("touchend", onEnd);
+    document.addEventListener("touchcancel", onCancel);
+    // 断点切换/卸载时清掉挂起的手势，防止 touchDragId 卡死
+    window.addEventListener("pagehide", touchDragIdReset);
+    return () => {
+      document.removeEventListener("touchstart", onStart);
+      document.removeEventListener("touchmove", onMove);
+      document.removeEventListener("touchend", onEnd);
+      document.removeEventListener("touchcancel", onCancel);
+      window.removeEventListener("pagehide", touchDragIdReset);
+      touchDragIdReset();
+    };
+  }, [isMobile]);
+
   return (
     <div style={shellStyle} data-onboarding="shell">
       {isMobile ? (
@@ -466,6 +651,7 @@ export function AppShell({
           className="mindfs-font-scale-region"
           data-mindfs-font-scale-region="sidebar"
           aria-hidden={isMobile && drawerProgress("left") <= 0 ? true : undefined}
+          data-drawer-touch={isMobile ? "left" : undefined}
           onPointerDown={isMobile ? drawerPointerDown("left", false) : undefined}
           onClickCapture={
             isMobile
@@ -517,6 +703,7 @@ export function AppShell({
           className="mindfs-font-scale-region"
           data-mindfs-font-scale-region="sidebar"
           aria-hidden={isMobile && drawerProgress("right") <= 0 ? true : undefined}
+          data-drawer-touch={isMobile ? "right" : undefined}
           onPointerDown={isMobile ? drawerPointerDown("right", false) : undefined}
           onClickCapture={
             isMobile
@@ -548,11 +735,15 @@ export function AppShell({
           <div
             aria-hidden
             style={edgeHotZoneStyle("left")}
+            data-drawer-touch="left"
+            data-drawer-edge=""
             onPointerDown={drawerPointerDown("left", true)}
           />
           <div
             aria-hidden
             style={edgeHotZoneStyle("right")}
+            data-drawer-touch="right"
+            data-drawer-edge=""
             onPointerDown={drawerPointerDown("right", true)}
           />
         </>
