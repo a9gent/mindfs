@@ -790,10 +790,16 @@ func supplementCodexProviderModels(ctx context.Context, models []types.ModelInfo
 	if strings.TrimSpace(baseURL) == "" || strings.TrimSpace(apiKey) == "" {
 		return models
 	}
-	remote, err := fetchOpenAIModelIDs(ctx, baseURL, apiKey)
-	if err != nil {
-		log.Printf("[codex/models] supplement.error err=%v", err)
-		return models
+	// 精选清单优先：provider 配了 pinnedModels 时跳过远程拉取，只并入精选子集；
+	// 未筛选（空）保持旧行为（/v1/models 全量并入）。
+	remote := codexProviderPinnedModels(baseURL)
+	if len(remote) == 0 {
+		fetched, err := fetchOpenAIModelIDs(ctx, baseURL, apiKey)
+		if err != nil {
+			log.Printf("[codex/models] supplement.error err=%v", err)
+			return models
+		}
+		remote = fetched
 	}
 	seen := make(map[string]struct{}, len(models))
 	for _, m := range models {
@@ -812,6 +818,71 @@ func supplementCodexProviderModels(ctx context.Context, models []types.ModelInfo
 		})
 	}
 	return models
+}
+
+// codexProviderPinnedModels returns the pinned subset recorded for the provider
+// whose baseUrl matches the codex config.toml entry (pinned ∩ Models, pinned
+// order). Empty when the provider was never curated.
+func codexProviderPinnedModels(baseURL string) []string {
+	cfgBase, err := os.UserConfigDir()
+	if err != nil {
+		return nil
+	}
+	payload, err := os.ReadFile(filepath.Join(cfgBase, "mindfs", "api-providers.json"))
+	if err != nil {
+		return nil
+	}
+	var providers []struct {
+		ID           string   `json:"id"`
+		Name         string   `json:"name"`
+		BaseURL      string   `json:"baseUrl"`
+		BaseURL2     string   `json:"baseURL"`
+		Models       []string `json:"models"`
+		PinnedModels []string `json:"pinnedModels"`
+	}
+	if err := json.Unmarshal(payload, &providers); err != nil {
+		return nil
+	}
+	want := normalizeProviderBaseForMatch(baseURL)
+	for _, p := range providers {
+		base := strings.TrimSpace(p.BaseURL)
+		if base == "" {
+			base = strings.TrimSpace(p.BaseURL2)
+		}
+		if base == "" || normalizeProviderBaseForMatch(base) != want {
+			continue
+		}
+		if len(p.PinnedModels) == 0 {
+			return nil
+		}
+		available := make(map[string]struct{}, len(p.Models))
+		for _, model := range p.Models {
+			available[strings.TrimSpace(model)] = struct{}{}
+		}
+		out := make([]string, 0, len(p.PinnedModels))
+		seen := make(map[string]struct{}, len(p.PinnedModels))
+		for _, model := range p.PinnedModels {
+			model = strings.TrimSpace(model)
+			if model == "" {
+				continue
+			}
+			if _, ok := seen[model]; ok {
+				continue
+			}
+			if _, ok := available[model]; !ok {
+				continue
+			}
+			seen[model] = struct{}{}
+			out = append(out, model)
+		}
+		return out
+	}
+	return nil
+}
+
+func normalizeProviderBaseForMatch(baseURL string) string {
+	base := strings.TrimRight(strings.ToLower(strings.TrimSpace(baseURL)), "/")
+	return strings.TrimSuffix(base, "/v1")
 }
 
 func codexProviderCredentials() (string, string) {
@@ -854,11 +925,11 @@ func codexProviderCredentials() (string, string) {
 		return "", ""
 	}
 	var providers []struct {
-		ID      string `json:"id"`
-		Name    string `json:"name"`
-		BaseURL string `json:"baseUrl"`
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		BaseURL  string `json:"baseUrl"`
 		BaseURL2 string `json:"baseURL"`
-		APIKey  string `json:"apiKey"`
+		APIKey   string `json:"apiKey"`
 	}
 	if err := json.Unmarshal(payload, &providers); err != nil {
 		return "", ""

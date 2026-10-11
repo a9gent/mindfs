@@ -22,6 +22,7 @@ import (
 	configpkg "mindfs/server/internal/config"
 	"mindfs/server/internal/preferences"
 
+	"github.com/go-chi/chi/v5"
 	"gopkg.in/yaml.v3"
 )
 
@@ -32,13 +33,16 @@ const (
 )
 
 type agentAPIProvider struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	BaseURL        string   `json:"baseUrl"`
-	APIKey         string   `json:"apiKey,omitempty"`
-	Protocols      []string `json:"protocols,omitempty"`
-	ModelFamilies  []string `json:"modelFamilies"`
-	Models         []string `json:"models"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	BaseURL       string   `json:"baseUrl"`
+	APIKey        string   `json:"apiKey,omitempty"`
+	Protocols     []string `json:"protocols,omitempty"`
+	ModelFamilies []string `json:"modelFamilies"`
+	Models        []string `json:"models"`
+	// PinnedModels is the user-curated subset (pinned order) projected into
+	// CLI configs on apply. Empty = not curated, full Models list applies.
+	PinnedModels   []string `json:"pinnedModels,omitempty"`
 	CreatedAt      string   `json:"createdAt"`
 	UpdatedAt      string   `json:"updatedAt"`
 	activeProtocol string
@@ -51,6 +55,7 @@ type agentAPIProviderPublic struct {
 	Protocols     []string `json:"protocols,omitempty"`
 	ModelFamilies []string `json:"modelFamilies"`
 	Models        []string `json:"models,omitempty"`
+	PinnedModels  []string `json:"pinnedModels,omitempty"`
 	CreatedAt     string   `json:"createdAt"`
 	UpdatedAt     string   `json:"updatedAt"`
 }
@@ -217,6 +222,158 @@ func (h *HTTPHandler) handleAgentAPIProviderSwitch(w http.ResponseWriter, r *htt
 	}
 	respondJSON(w, http.StatusOK, map[string]any{
 		"provider": publicAgentAPIProvider(provider),
+	})
+}
+
+type agentAPIProviderPinnedRequest struct {
+	PinnedModels []string `json:"pinnedModels"`
+}
+
+// handleAgentAPIProviderPinnedPut stores the user-curated model subset for a
+// provider. The list must be a subset of the probed Models; order is kept as
+// sent so the curated sequence survives into every CLI projection.
+func (h *HTTPHandler) handleAgentAPIProviderPinnedPut(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if id == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("provider id required"))
+		return
+	}
+	var req agentAPIProviderPinnedRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
+		return
+	}
+	providers, err := readAgentAPIProviders()
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	index := -1
+	for i := range providers {
+		if providers[i].ID == id {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		respondError(w, http.StatusNotFound, errInvalidRequest("provider not found"))
+		return
+	}
+	pinned := make([]string, 0, len(req.PinnedModels))
+	seen := make(map[string]bool, len(req.PinnedModels))
+	for _, model := range req.PinnedModels {
+		model = strings.TrimSpace(model)
+		if model == "" || seen[model] {
+			continue
+		}
+		seen[model] = true
+		pinned = append(pinned, model)
+	}
+	available := make(map[string]bool, len(providers[index].Models))
+	for _, model := range providers[index].Models {
+		available[strings.TrimSpace(model)] = true
+	}
+	for _, model := range pinned {
+		if !available[model] {
+			respondError(w, http.StatusBadRequest, errInvalidRequest(fmt.Sprintf("model %q is not in the provider's model list; re-sync the provider first", model)))
+			return
+		}
+	}
+	providers[index].PinnedModels = pinned
+	providers[index].UpdatedAt = time.Now().Format(time.RFC3339)
+	if err := writeAgentAPIProviders(providers); err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"provider": publicAgentAPIProvider(providers[index]),
+	})
+}
+
+type agentAPIProviderApplyRequest struct {
+	Agents []string `json:"agents"`
+}
+
+// handleAgentAPIProviderApply binds a provider to the given agents: the CLI
+// projection is written and the selection is recorded so sync-all keeps the
+// projection fresh on later key rotation.
+func (h *HTTPHandler) handleAgentAPIProviderApply(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if id == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("provider id required"))
+		return
+	}
+	var req agentAPIProviderApplyRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
+		return
+	}
+	providers, err := readAgentAPIProviders()
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	var provider agentAPIProvider
+	for _, item := range providers {
+		if item.ID == id {
+			provider = item
+			break
+		}
+	}
+	if provider.ID == "" {
+		respondError(w, http.StatusNotFound, errInvalidRequest("provider not found"))
+		return
+	}
+	cfg, err := agent.LoadConfig("")
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	results := make([]agentAPIProviderSyncAgentResult, 0, len(req.Agents))
+	for _, name := range req.Agents {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		result := agentAPIProviderSyncAgentResult{Agent: name}
+		if _, ok := cfg.GetAgent(name); !ok {
+			result.Error = fmt.Sprintf("agent not configured: %s", name)
+			results = append(results, result)
+			continue
+		}
+		if protocol, ok := selectAPIProviderProtocolForAgent(provider, name); ok {
+			provider.activeProtocol = protocol
+		} else {
+			result.Error = fmt.Sprintf("provider protocols %s are not compatible with agent %s", strings.Join(agentAPIProviderProtocols(provider), ", "), name)
+			results = append(results, result)
+			continue
+		}
+		if err := applyAgentAPIProvider(name, provider, h.AppContext); err != nil {
+			result.Error = sanitizeAPIProviderError(err.Error(), provider.APIKey)
+			results = append(results, result)
+			continue
+		}
+		if prefs := h.AppContext.GetPreferences(); prefs != nil {
+			if err := prefs.UpdateAgentLastConfigSelection(name, preferences.LastConfigSelection{
+				Type: "api_provider",
+				ID:   provider.ID,
+				Name: provider.Name,
+			}); err != nil {
+				result.Error = sanitizeAPIProviderError(err.Error(), provider.APIKey)
+				results = append(results, result)
+				continue
+			}
+		}
+		if pool := h.AppContext.GetAgentPool(); pool != nil {
+			pool.KillAgentProcess(name, 0)
+		}
+		triggerAgentConfigSwitchProbe(h.AppContext, name)
+		result.Success = true
+		results = append(results, result)
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"provider": publicAgentAPIProvider(provider),
+		"results":  results,
 	})
 }
 
@@ -805,7 +962,47 @@ func switchAgentAPIProvider(req agentAPIProviderSwitchRequest, app *AppContext) 
 	return provider, nil
 }
 
+// providerProjection returns the model list projected into CLI configs:
+// pinned ∩ Models in pinned order when curated, else the full Models list.
+func providerProjection(provider agentAPIProvider) []string {
+	if len(provider.PinnedModels) == 0 {
+		return provider.Models
+	}
+	available := make(map[string]bool, len(provider.Models))
+	for _, model := range provider.Models {
+		available[strings.TrimSpace(model)] = true
+	}
+	out := make([]string, 0, len(provider.PinnedModels))
+	seen := make(map[string]bool, len(provider.PinnedModels))
+	for _, model := range provider.PinnedModels {
+		model = strings.TrimSpace(model)
+		if model == "" || seen[model] || !available[model] {
+			continue
+		}
+		seen[model] = true
+		out = append(out, model)
+	}
+	return out
+}
+
+// backupAgentConfigFile copies a config file to <path>.bak-<ts> before an
+// apply overwrite. The copies hold API keys, so they must stay 0600.
+func backupAgentConfigFile(path string) error {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return apperr.Wrap("read", path, err)
+	}
+	backup := path + ".bak-" + time.Now().Format("20060102-150405")
+	return apperr.Wrap("backup", backup, os.WriteFile(backup, payload, 0o600))
+}
+
 func applyAgentAPIProvider(agentName string, provider agentAPIProvider, app *AppContext) error {
+	// Projection first: every writer below consumes provider.Models, so the
+	// curated subset replaces the full catalog in one place.
+	provider.Models = providerProjection(provider)
 	switch normalizedAPIProviderAgent(agentName) {
 	case "codex":
 		if err := applyCodexAPIProvider(provider); err != nil {
@@ -864,6 +1061,19 @@ func applyAgentAPIProvider(agentName string, provider agentAPIProvider, app *App
 	case "hermes":
 		if err := applyHermesAPIProvider(provider); err != nil {
 			return err
+		}
+	case "zcode":
+		if err := applyZcodeAPIProvider(agentName, provider); err != nil {
+			if !errors.Is(err, errZcodeBridgeHomeMissing) {
+				return err
+			}
+			// 裸 zcode（无 BRIDGE_ZCODE_HOME 的桥环境变量）退回 env 注入。
+			if err := applyAgentProviderEnv(agentName, map[string]string{
+				"OPENAI_BASE_URL": provider.BaseURL,
+				"OPENAI_API_KEY":  provider.APIKey,
+			}, app); err != nil {
+				return err
+			}
 		}
 	default:
 		if err := applyAgentProviderEnv(agentName, map[string]string{
@@ -1773,6 +1983,7 @@ func publicAgentAPIProvider(provider agentAPIProvider) agentAPIProviderPublic {
 		Protocols:     agentAPIProviderProtocols(provider),
 		ModelFamilies: append([]string(nil), provider.ModelFamilies...),
 		Models:        append([]string(nil), provider.Models...),
+		PinnedModels:  append([]string(nil), provider.PinnedModels...),
 		CreatedAt:     provider.CreatedAt,
 		UpdatedAt:     provider.UpdatedAt,
 	}
@@ -1870,7 +2081,57 @@ func applyAgentAPIProviderCapabilities(statuses []agent.Status) []agent.Status {
 	return out
 }
 
+// agentDefinitionForName resolves an agent's merged definition. AppContext
+// swaps this for a prober-backed resolver at startup (SetAgentDefinitionResolver);
+// the disk fallback keeps standalone callers working.
+var agentDefinitionForName = func(name string) (agent.Definition, bool) {
+	cfg, err := agent.LoadConfig("")
+	if err != nil {
+		return agent.Definition{}, false
+	}
+	return cfg.GetAgent(strings.TrimSpace(name))
+}
+
+// SetAgentDefinitionResolver wires the prober-backed definition lookup.
+func SetAgentDefinitionResolver(resolver func(string) (agent.Definition, bool)) {
+	if resolver != nil {
+		agentDefinitionForName = resolver
+	}
+}
+
+func normalizeAPIProviderProtocolList(values []string) []string {
+	aliases := map[string]string{
+		"openai":               apiProviderProtocolOpenAICompatible,
+		"anthropic":            apiProviderProtocolAnthropicCompatible,
+		"gemini":               apiProviderProtocolGeminiCompatible,
+		"google":               apiProviderProtocolGeminiCompatible,
+		"google-generative-ai": apiProviderProtocolGeminiCompatible,
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.ToLower(strings.TrimSpace(value))
+		if trimmed == "" {
+			continue
+		}
+		if mapped, ok := aliases[trimmed]; ok {
+			trimmed = mapped
+		}
+		if seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		out = append(out, trimmed)
+	}
+	return out
+}
+
 func agentSupportedAPIProtocols(agentName string) []string {
+	// User-declared protocols (agents.json apiProviderProtocols) win over the
+	// built-in table — this is how zcode instances gain provider switching.
+	if def, ok := agentDefinitionForName(agentName); ok && len(def.APIProviderProtocols) > 0 {
+		return normalizeAPIProviderProtocolList(def.APIProviderProtocols)
+	}
 	switch normalizedAPIProviderAgent(agentName) {
 	case "codex":
 		return []string{apiProviderProtocolOpenAICompatible}
@@ -1957,6 +2218,10 @@ func isTOMLBareKey(key string) bool {
 	return true
 }
 
+// zcodeInstancePattern matches bridge instances (zcode-1/zcode-2/…) without
+// swallowing unrelated names like "zcodefoo".
+var zcodeInstancePattern = regexp.MustCompile(`^zcode-\d+$`)
+
 func normalizedAPIProviderAgent(agentName string) string {
 	name := strings.ToLower(strings.TrimSpace(agentName))
 	switch name {
@@ -1971,6 +2236,9 @@ func normalizedAPIProviderAgent(agentName string) string {
 	case "kimi-code":
 		return "kimi"
 	default:
+		if name == "zcode" || zcodeInstancePattern.MatchString(name) {
+			return "zcode"
+		}
 		return name
 	}
 }
