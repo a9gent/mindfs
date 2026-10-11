@@ -1547,6 +1547,9 @@ export function App({ onGoHome }: AppProps) {
   const managedRootIdsRef = useRef<Set<string>>(new Set());
   const expandedRef = useRef<string[]>([]);
   const selectedDirRef = useRef<string | null>(null);
+  // selectedDir 属于哪个 root 的凭证：open_dir 换 root 时 setSelectedDir 要等 /api/tree
+  // 返回才更新，这段窗口里 selectedDirRef 还是旧 root 的目录；保存 ?dir= 前先对 key。
+  const selectedDirKeyRef = useRef<string | null>(null);
   const fileRef = useRef<FilePayload | null>(null);
   const selectedSessionRef = useRef<SessionItem | null>(null);
   const lastMainSessionSnapshotRef = useRef<Session | null>(null);
@@ -2828,6 +2831,9 @@ export function App({ onGoHome }: AppProps) {
     selectedDirRef.current = selectedDir;
   }, [selectedDir]);
   useEffect(() => {
+    selectedDirKeyRef.current = selectedDirKey;
+  }, [selectedDirKey]);
+  useEffect(() => {
     entriesByPathRef.current = entriesByPath;
   }, [entriesByPath]);
   useEffect(() => {
@@ -3057,11 +3063,22 @@ export function App({ onGoHome }: AppProps) {
     setMainContentViewForRoot(rootID, current === "task-kanban" ? "file-browser" : "task-kanban");
   }, [onboardingMainContentViewRoot, mainContentViewByRoot, defaultMainContentView, setMainContentViewForRoot]);
   const cycleKanbanTemplate = useCallback(() => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID) return;
+    // 主视图不在看板时先切过去，否则手势改了过滤器用户却看不到任何反应。
+    if (onboardingMainContentViewRoot === rootID) {
+      setOnboardingMainContentViewRoot(null);
+      // 引导态清掉后露出的是该 root 记住的上次视图，可能不是看板——一并固化成看板，
+      // 与 toggleMainContentView 的持久化语义一致，避免过滤器在背后盲转。
+      setMainContentViewForRoot(rootID, "task-kanban");
+    } else if ((mainContentViewByRoot[rootID] || defaultMainContentView) !== "task-kanban") {
+      setMainContentViewForRoot(rootID, "task-kanban");
+    }
     const order = [TASK_TEMPLATE_ALL_FILTER, ...taskTemplates.map((template) => template.id || "").filter(Boolean)];
     if (order.length < 2) return;
     const index = order.indexOf(taskTemplateFilter);
     setTaskTemplateFilter(order[(index + 1) % order.length]);
-  }, [taskTemplateFilter, taskTemplates]);
+  }, [onboardingMainContentViewRoot, mainContentViewByRoot, defaultMainContentView, setMainContentViewForRoot, taskTemplateFilter, taskTemplates]);
   const createTaskFromQuickAction = useCallback((templateId?: string) => {
     const template = (templateId && taskTemplates.find((item) => item.id === templateId))
       || (taskTemplateFilter && taskTemplateFilter !== TASK_TEMPLATE_ALL_FILTER
@@ -14735,7 +14752,16 @@ export function App({ onGoHome }: AppProps) {
                 setFile(null);
                 setGitDiff(null);
                 setRelatedSelectedFileKey("");
-                replaceURLState({ root, file: "", session: "", cursor: 0, pluginQuery: {} });
+                // 目录视图保留 ?dir=：界面还停在原目录，URL 抹掉 dir 会让 F5 跳回根目录。
+                // key 对不上说明 selectedDirRef 还挂着旧 root 的目录（open_dir 拉树未返回），
+                // 此时宁可不带 dir，也不能把旧 root 的绝对路径塞进新 root 的 URL。
+                const dirCandidate = selectedDirRef.current && selectedDirRef.current !== root && selectedDirRef.current !== "."
+                  ? selectedDirRef.current
+                  : "";
+                const dir = dirCandidate && selectedDirKeyRef.current === buildDirectorySelectionKey(root, dirCandidate, false)
+                  ? dirCandidate
+                  : "";
+                replaceURLState({ root, file: "", session: "", cursor: 0, pluginQuery: {}, dir });
                 setDrawerSessionForRoot(root, null);
                 interactionModeRef.current = "main";
                 setInteractionMode("main");
