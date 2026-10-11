@@ -5,6 +5,7 @@ import { ImageViewer } from "./ImageViewer";
 import { BinaryViewer } from "./BinaryViewer";
 import { DocumentViewer } from "./DocumentViewer";
 import { getDocumentPreviewKind } from "../services/documentPreview";
+import { isMarkdownOutlineEnabled, subscribeMarkdownOutline } from "./markdownOutline";
 import { rootBadgeStyle } from "./rootBadgeStyle";
 import { downloadFile } from "../services/download";
 import { isNativeShellRuntime } from "../services/runtime";
@@ -146,6 +147,7 @@ function Breadcrumbs({ root, path, onPathClick }: { root?: string; path: string;
 
 export function FileViewer({ rootPath, onFileOperationComplete, editStore, onFileUpdated, onFileSaved, file, onSessionClick, onPathClick, onFileClick, onSelectionChange, initialScrollTop = 0, onScrollTopChange, isVisible = true }: FileViewerProps) {
   const { t } = useI18n();
+  const showOutline = useSyncExternalStore(subscribeMarkdownOutline, isMarkdownOutlineEnabled, () => true);
   const editKey = fileEditKey(file?.root || "", file?.path || "");
   const editSession = useSyncExternalStore(editStore.subscribe, () => editStore.get(editKey));
   const canEdit = !!file?.root && file.encoding === "utf-8" && file.size <= MAX_EDITABLE_FILE_BYTES
@@ -481,7 +483,7 @@ export function FileViewer({ rootPath, onFileOperationComplete, editStore, onFil
                 scrollContainerRef={scrollRef}
                 isVisible={isVisible}
                 compactOutline={isMobile}
-                showOutline
+                showOutline={showOutline}
               />
             </div>
           ) : (
