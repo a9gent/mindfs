@@ -75,3 +75,41 @@ export function extractMarkdownOutline(content: string): MarkdownOutlineItem[] {
 
   return items;
 }
+
+// Outline visibility preference (shared by the file preview and the
+// blue-ring "outlineToggle" quick action). Defaults to on, like before.
+const OUTLINE_PREFERENCE_KEY = "mindfs-markdown-outline-enabled";
+export const MARKDOWN_OUTLINE_CHANGE_EVENT = "mindfs:markdown-outline-changed";
+
+function loadOutlinePreference(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return window.localStorage.getItem(OUTLINE_PREFERENCE_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+let outlinePreference = loadOutlinePreference();
+
+export function isMarkdownOutlineEnabled(): boolean {
+  return outlinePreference;
+}
+
+export function setMarkdownOutlineEnabled(value: boolean): void {
+  outlinePreference = value;
+  try {
+    window.localStorage.setItem(OUTLINE_PREFERENCE_KEY, value ? "1" : "0");
+  } catch {
+    // Ignore storage failures; the preference still applies for this session.
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(MARKDOWN_OUTLINE_CHANGE_EVENT));
+  }
+}
+
+export function subscribeMarkdownOutline(listener: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(MARKDOWN_OUTLINE_CHANGE_EVENT, listener);
+  return () => window.removeEventListener(MARKDOWN_OUTLINE_CHANGE_EVENT, listener);
+}
