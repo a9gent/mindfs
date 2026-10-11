@@ -227,3 +227,34 @@ test("templateFromRenderedPack restores placeholders from fallback literals", ()
   assert.ok(!restored.includes("（无）"));
   assert.equal(renderHandoffPack(restored, context), rendered);
 });
+
+// ---------- 批v62 回归：时间窗边界与空态口径 ----------
+test("sessionWithinTimeWindow: window boundary is inclusive", () => {
+  const now = Date.now();
+  const edge = new Date(now - 3600_000).toISOString();
+  assert.equal(sessionWithinTimeWindow(edge, "1h", now), true);
+  assert.equal(sessionWithinTimeWindow(new Date(now - 3600_001).toISOString(), "1h", now), false);
+});
+
+test("sessionWithinTimeWindow: sessions without updated_at fall out of windows", () => {
+  assert.equal(sessionWithinTimeWindow(undefined, "3h"), false);
+  assert.equal(sessionWithinTimeWindow("not-a-date", "3h"), false);
+  assert.equal(sessionWithinTimeWindow(undefined, "all"), true);
+});
+
+test("applySessionFilters: pending sessions bypass the time window", () => {
+  const now = Date.now();
+  const stale = { key: "stale", pending: true, updated_at: new Date(now - 48 * 3600_000).toISOString() };
+  const result = applySessionFilters([stale], { runningOnly: false, timeWindow: "1h", sortAsc: false }, now);
+  assert.equal(result.running.length, 1);
+  assert.equal(result.rest.length, 0);
+});
+
+test("applySessionFilters: runningOnly keeps only pending sessions", () => {
+  const now = Date.now();
+  const fresh = { key: "fresh", updated_at: new Date(now - 60_000).toISOString() };
+  const stale = { key: "stale", pending: true, updated_at: new Date(now - 48 * 3600_000).toISOString() };
+  const result = applySessionFilters([fresh, stale], { runningOnly: true, timeWindow: "all", sortAsc: false }, now);
+  assert.deepEqual(result.running.map((s) => s.key), ["stale"]);
+  assert.equal(result.rest.length, 0);
+});

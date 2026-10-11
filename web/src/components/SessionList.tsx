@@ -338,7 +338,7 @@ export function SessionList({
   filter,
   onFilterChange,
 }: SessionListProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const effectiveEmptyText = emptyText || t("sessionList.empty");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const searchBlurTimerRef = useRef<number | null>(null);
@@ -352,6 +352,8 @@ export function SessionList({
     }
     return applySessionFilters(sessions, filter);
   }, [filter, filterActive, sessions]);
+  // 筛空提示的数据源用未过滤列表：空态里告诉用户"最近的一条其实在多久之前"
+  const nearestSession = useMemo(() => latestSessionOf(sessions), [sessions]);
   const effectiveSessions = useMemo(
     () => (filteredSessions ? [...filteredSessions.running, ...filteredSessions.rest] : sessions),
     [filteredSessions, sessions],
@@ -671,13 +673,27 @@ export function SessionList({
                 minHeight: "100%",
                 padding: "12px 18px",
                 display: "flex",
+                flexDirection: "column",
                 alignItems: "center",
                 justifyContent: "center",
                 textAlign: "center",
                 lineHeight: 1.6,
               }}
             >
-              {t("sessionList.noFilterMatch")}
+              <div>{t("sessionList.noFilterMatch")}</div>
+              {nearestSession ? (
+                <div style={{ marginTop: "8px" }}>
+                  {t("sessionList.filterNearestHint", {
+                    name: nearestSession.name || `Session ${nearestSession.session_key.slice(0, 8)}`,
+                    time: formatTime(
+                      nearestSession.updated_at || nearestSession.created_at || "",
+                      locale,
+                      t("time.justNow"),
+                    ),
+                  })}
+                </div>
+              ) : null}
+              <div style={{ marginTop: "6px", opacity: 0.75 }}>{t("sessionList.filterEmptyGuide")}</div>
             </div>
           ) : emptyText ? (
             <div
@@ -833,7 +849,7 @@ export function MultiProjectSessionList({
   filter,
   onFilterChange,
 }: ProjectSessionListProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const effectiveEmptyText = emptyText || t("sessionList.empty");
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const [loadingProjects, setLoadingProjects] = useState<Record<string, boolean>>({});
@@ -888,6 +904,11 @@ export function MultiProjectSessionList({
       .filter((group) => group.sessions.length > 0 || group.totalCount > group.sessions.length);
   }, [filter, filterActive, groups]);
   const effectiveGroups = filteredGroups ?? groups;
+  // 筛空提示：跨所有已加载分组找最近一条（与过滤无关，专供空态展示）
+  const nearestSession = useMemo(
+    () => latestSessionOf(groups.flatMap((group) => group.sessions)),
+    [groups],
+  );
   // 筛选态下「加载更多/剩余计数」必须用未过滤的原始分组，否则分页游标错位
   const originalGroupByRootId = useMemo(() => {
     const byRoot = new Map<string, ProjectSessionGroup>();
@@ -1130,8 +1151,23 @@ export function MultiProjectSessionList({
         {loading && groups.length === 0 ? (
           <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "18px", textAlign: "center" }}>{t("sessionList.loading")}</div>
         ) : effectiveGroups.length === 0 ? (
-          <div style={{ fontSize: "12px", color: "var(--text-secondary)", minHeight: "100%", padding: "12px 18px", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", lineHeight: 1.6 }}>
-            {groups.length === 0 ? effectiveEmptyText : t("sessionList.noFilterMatch")}
+          <div style={{ fontSize: "12px", color: "var(--text-secondary)", minHeight: "100%", padding: "12px 18px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", lineHeight: 1.6 }}>
+            <div>{groups.length === 0 ? effectiveEmptyText : t("sessionList.noFilterMatch")}</div>
+            {groups.length > 0 && nearestSession ? (
+              <div style={{ marginTop: "8px" }}>
+                {t("sessionList.filterNearestHint", {
+                  name: nearestSession.name || `Session ${nearestSession.session_key.slice(0, 8)}`,
+                  time: formatTime(
+                    nearestSession.updated_at || nearestSession.created_at || "",
+                    locale,
+                    t("time.justNow"),
+                  ),
+                })}
+              </div>
+            ) : null}
+            {groups.length > 0 ? (
+              <div style={{ marginTop: "6px", opacity: 0.75 }}>{t("sessionList.filterEmptyGuide")}</div>
+            ) : null}
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "9px" }}>
@@ -2158,6 +2194,20 @@ function formatTime(isoString: string, locale: Locale, justNow: string): string 
     return new Intl.DateTimeFormat(locale, { month: "numeric", day: "numeric" }).format(date);
   }
   return new Intl.DateTimeFormat(locale, { year: "2-digit", month: "numeric" }).format(date);
+}
+
+// 时间窗筛空时给用户指路：从（未过滤的）列表里找最近一条，告诉用户"差多少"
+function latestSessionOf(items: readonly SessionItem[]): SessionItem | null {
+  let latest: SessionItem | null = null;
+  let latestTs = 0;
+  for (const item of items) {
+    const ts = Date.parse(item.updated_at || item.created_at || "") || 0;
+    if (ts > latestTs) {
+      latestTs = ts;
+      latest = item;
+    }
+  }
+  return latest;
 }
 
 function renderHighlightedText(

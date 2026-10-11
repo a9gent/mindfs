@@ -409,6 +409,8 @@ export const enUS = {
   "sessionList.runningSection": "Running · {count}",
   "sessionList.filterGroup": "Session filters",
   "sessionList.noFilterMatch": "No matching sessions",
+  "sessionList.filterNearestHint": "Nearest session: {name} ({time})",
+  "sessionList.filterEmptyGuide": "Nothing in this window — pick a wider one, or tap Reset on the filter bar",
   "sessionList.handoffPack": "Handoff pack",
   "session.handoff.title": "Session handoff pack",
   "session.handoff.loading": "Fetching session path...",
