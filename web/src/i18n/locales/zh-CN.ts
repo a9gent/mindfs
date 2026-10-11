@@ -407,6 +407,8 @@ export const zhCN = {
   "sessionList.runningSection": "运行中 · {count} 条",
   "sessionList.filterGroup": "会话筛选",
   "sessionList.noFilterMatch": "没有匹配的会话",
+  "sessionList.filterNearestHint": "最近一条会话：{name}（{time}）",
+  "sessionList.filterEmptyGuide": "该时间窗内没有会话——可换更大的时间窗，或点筛选条上的「重置」",
   "sessionList.handoffPack": "会话接力包",
   "session.handoff.title": "会话接力包",
   "session.handoff.loading": "正在获取会话路径...",

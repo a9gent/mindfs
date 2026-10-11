@@ -295,7 +295,9 @@ export function AppShell({
     if (fromEdge ? open : !open) {
       return;
     }
-    if (dragRef.current) {
+    if (dragRef.current && dragRef.current.active) {
+      // 已成手势的拖拽只认一根手指；未激活的"预备态"允许新手指接管，
+      // 防止触屏极少数吞事件场景把引擎卡死在武装态
       return;
     }
     dragRef.current = {
@@ -324,9 +326,13 @@ export function AppShell({
     const dx = e.clientX - drag.startX;
     const dy = e.clientY - drag.startY;
     if (!drag.active) {
-      // 僵尸守卫：pointerup 被系统吞掉（如窗口失焦）后按钮已松开，
-      // 继续留着会让下一次鼠标移动幽灵激活拖拽
-      if ((e as { buttons?: number }).buttons === 0) {
+      // 僵尸守卫（仅鼠标）：pointerup 被系统吞掉（如窗口失焦）后按钮已松开，
+      // 继续留着会让下一次鼠标移动幽灵激活拖拽。
+      // 触屏不能按 buttons 清场——不少安卓浏览器/WebView 的 touch move 不按规范
+      // 上报 buttons（恒为 0），会把正常滑动误杀成"只能点不能滑"；
+      // 触屏由 pointercancel 和 lostpointercapture 兜底，足够了。
+      const pointerType = (e as { pointerType?: string }).pointerType;
+      if (pointerType === "mouse" && (e as { buttons?: number }).buttons === 0) {
         dragRef.current = null;
         return;
       }
