@@ -55,6 +55,7 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^8.3.1",
+    "@playwright/test": "^1.64.0",
     "@tailwindcss/vite": "^4.2.1",
     "@types/prismjs": "^1.26.6",
     "@types/react": "^19.0.0",
