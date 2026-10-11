@@ -10,6 +10,7 @@ import {
   nextAppearanceMode,
   BLUE_RING_ACTION_LABEL_KEYS,
   BLUE_RING_GESTURE_LABEL_KEYS,
+  BLUE_RING_PATH_GESTURES,
   recentQuickSwitchGroups,
   ringPathGesture,
   type BlueRingAction,
@@ -159,11 +160,10 @@ export function SessionQuickActions({
         break;
       }
       case "recentDirSwitch": {
-        // selectedDir 只在目录加载完成后才更新，连发手势若直接读 prop 会卡在同一项；
-        // 用上次目标做基准让每次触发都推进一轮（换 root 后回退到 prop）。
-        const base = lastRecentDirRef.current && lastRecentDirRef.current.rootId === (currentRootId || null)
-          ? lastRecentDirRef.current.path
-          : currentDirPath;
+        // selectedDir/currentRootId 都是异步更新的，连发手势若读 prop 会卡在同一项；
+        // 用上次目标做基准让每次触发都推进一轮，ref 的失效完全交给
+        // currentDirPath 变化的 effect（手动导航/换 root 后自动回正）。
+        const base = lastRecentDirRef.current?.path || currentDirPath;
         const next = nextRecentDir(currentRootId || null, base || null);
         if (!next) break;
         lastRecentDirRef.current = { rootId: next.rootId, path: next.path };
@@ -209,18 +209,26 @@ export function SessionQuickActions({
   const last = path.length ? path[path.length - 1] : null;
   const offset = start && last ? { x: last.x - start.x, y: last.y - start.y } : { x: 0, y: 0 };
   const hint = ringPathGesture(path, false);
-  const hintAction: BlueRingAction | null = hint ? actions[hint.gesture] : null;
-  const hintText = hint && hintAction && hintAction !== "none"
+  // 两段式进行中若该两段手势未绑定，回退显示第一段（上滑）的绑定，拖动中提示条不消失。
+  // 两段式家族以 BLUE_RING_PATH_GESTURES 为准（upDown/upThen*/up*Then*），转向腿一超过
+  // 10px 分类器就会切到两段式名字，漏一个名字提示条就会中途闪没。
+  const hintGesture: BlueRingGesture | null = hint && !hint.ready && actions[hint.gesture] === "none"
+    && BLUE_RING_PATH_GESTURES.includes(hint.gesture)
+    ? "up"
+    : hint?.gesture ?? null;
+  const hintReady = hint?.ready ?? false;
+  const hintAction: BlueRingAction | null = hintGesture ? actions[hintGesture] : null;
+  const hintText = hintGesture && hintAction && hintAction !== "none"
     ? (gesturesEnabled
       ? (() => {
         const actionLabel = t(BLUE_RING_ACTION_LABEL_KEYS[hintAction]);
-        return hint.ready
+        return hintReady
           ? t("action.gestureReady", { action: actionLabel })
-          : t("action.gesturePending", { gesture: t(BLUE_RING_GESTURE_LABEL_KEYS[hint.gesture]), action: actionLabel });
+          : t("action.gesturePending", { gesture: t(BLUE_RING_GESTURE_LABEL_KEYS[hintGesture]), action: actionLabel });
       })()
-      : t(hint.gesture === "left"
-        ? hint.ready ? "action.releaseNewSession" : "action.swipeNewSession"
-        : hint.ready ? "action.releaseQuickSwitch" : "action.swipeQuickSwitch"))
+      : t(hintGesture === "left"
+        ? hintReady ? "action.releaseNewSession" : "action.swipeNewSession"
+        : hintReady ? "action.releaseQuickSwitch" : "action.swipeQuickSwitch"))
     : "";
   const rowStyle: React.CSSProperties = { display: "block", width: "100%", border: 0, background: "transparent", color: "var(--text-primary)", textAlign: "left", padding: "4px 6px", borderRadius: 6, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, lineHeight: "18px" };
   return <>
@@ -248,6 +256,12 @@ export function SessionQuickActions({
       onPointerUp={(event) => {
         if (drag.current?.id !== event.pointerId) return;
         const points = [...drag.current.points, { x: event.clientX, y: event.clientY }];
+        // 极快甩动可能一次 move 事件都没派发，这里补一次位移判定，
+        // 防止同一次甩动既命中路径手势又被 onClick 当成 tap 连发。
+        const origin = points[0];
+        if (origin && (Math.abs(event.clientX - origin.x) >= TAP_MOVE_PX || Math.abs(event.clientY - origin.y) >= TAP_MOVE_PX)) {
+          tapState.current.moved = true;
+        }
         reset();
         const match = ringPathGesture(points, true);
         if (match) runAction(actions[match.gesture], match.gesture);
