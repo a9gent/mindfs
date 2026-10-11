@@ -7,6 +7,8 @@ export type AgentStatus = {
   name: string;
   protocol?: string;
   brief?: string;
+  label?: string;
+  url?: string;
   installed: boolean;
   available: boolean;
   version?: string;

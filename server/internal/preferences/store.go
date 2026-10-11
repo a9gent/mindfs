@@ -30,6 +30,8 @@ type UserPreferences struct {
 	SessionNaming                   SessionNamingDefaults    `json:"session_naming,omitempty"`
 	IdleSessionResourceReleaseHours int                      `json:"idle_session_resource_release_hours,omitempty"`
 	NewProjectMetaLocation          string                   `json:"new_project_meta_location,omitempty"`
+	AgentHidden                     []string                 `json:"agent_hidden,omitempty"`
+	AgentVisibilityCustomized       bool                     `json:"agent_visibility_customized,omitempty"`
 }
 
 type LauncherNode struct {
@@ -269,6 +271,42 @@ func (s *Store) AgentLastConfigSelections() map[string]LastConfigSelection {
 		}
 	}
 	return out
+}
+
+// AgentVisibility returns the hidden-agent list and whether the user has ever
+// customized visibility. customized=false means "never touched": the web layer
+// applies its default folding rule instead of the (empty) list.
+func (s *Store) AgentVisibility() ([]string, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string{}, s.data.AgentHidden...), s.data.AgentVisibilityCustomized
+}
+
+func (s *Store) UpdateAgentVisibility(hidden []string, customized bool) error {
+	if s == nil {
+		return nil
+	}
+	if len(hidden) > 1000 {
+		return errors.New("too many hidden agents")
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(hidden))
+	for _, name := range hidden {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data.AgentHidden = out
+	s.data.AgentVisibilityCustomized = customized
+	return s.saveLocked()
 }
 
 func (s *Store) SessionNamingDefaults() SessionNamingDefaults {

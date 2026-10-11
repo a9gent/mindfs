@@ -66,6 +66,18 @@ type Definition struct {
 	// Brief describes the agent's strengths for UI lists.
 	Brief string `json:"brief,omitempty"`
 
+	// Label is an optional display name shown in the UI (empty = Name).
+	Label string `json:"label,omitempty"`
+
+	// URL is an optional external link (e.g. a web console quota page)
+	// surfaced as a jump button next to the agent.
+	URL string `json:"url,omitempty"`
+
+	// APIProviderProtocols declares which API provider protocols this agent
+	// accepts ("openai-compatible"/"anthropic-compatible"/"gemini-compatible").
+	// Empty = infer from the built-in table by agent name.
+	APIProviderProtocols []string `json:"apiProviderProtocols,omitempty"`
+
 	// Command is the executable name or path.
 	Command string `json:"command"`
 
@@ -233,6 +245,9 @@ func normalizeConfig(cfg Config) (Config, error) {
 		}
 		cfg.Agents[i].Name = name
 		cfg.Agents[i].Brief = strings.TrimSpace(cfg.Agents[i].Brief)
+		cfg.Agents[i].Label = strings.TrimSpace(cfg.Agents[i].Label)
+		cfg.Agents[i].URL = strings.TrimSpace(cfg.Agents[i].URL)
+		cfg.Agents[i].APIProviderProtocols = normalizeProtocolAliases(cfg.Agents[i].APIProviderProtocols)
 		if cfg.Agents[i].Protocol == "" {
 			cfg.Agents[i].Protocol = DefaultProtocol(name)
 		}
@@ -240,6 +255,41 @@ func normalizeConfig(cfg Config) (Config, error) {
 		cfg.Agents[i].UpdateCommands = normalizeCommandList(cfg.Agents[i].UpdateCommands)
 	}
 	return cfg, nil
+}
+
+// normalizeProtocolAliases trims/dedupes a declared protocol list and maps
+// common shorthand ("openai"/"anthropic"/"gemini") onto the canonical
+// *-compatible values used by the API provider layer.
+func normalizeProtocolAliases(values []string) []string {
+	aliases := map[string]string{
+		"openai":               "openai-compatible",
+		"openaicompatible":     "openai-compatible",
+		"anthropic":            "anthropic-compatible",
+		"anthropiccompatible":  "anthropic-compatible",
+		"gemini":               "gemini-compatible",
+		"google":               "gemini-compatible",
+		"google-generative-ai": "gemini-compatible",
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.ToLower(strings.TrimSpace(value))
+		if trimmed == "" {
+			continue
+		}
+		if mapped, ok := aliases[trimmed]; ok {
+			trimmed = mapped
+		}
+		if seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func normalizeCommandList(commands LifecycleCommands) LifecycleCommands {
@@ -291,6 +341,15 @@ func mergeAgentDefinition(base Definition, override Definition) Definition {
 	merged := override
 	if merged.Brief == "" {
 		merged.Brief = base.Brief
+	}
+	if merged.Label == "" {
+		merged.Label = base.Label
+	}
+	if merged.URL == "" {
+		merged.URL = base.URL
+	}
+	if len(merged.APIProviderProtocols) == 0 {
+		merged.APIProviderProtocols = append([]string(nil), base.APIProviderProtocols...)
 	}
 	if len(merged.InstallCommands) == 0 {
 		merged.InstallCommands = append(LifecycleCommands(nil), base.InstallCommands...)

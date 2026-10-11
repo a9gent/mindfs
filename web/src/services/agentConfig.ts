@@ -23,6 +23,7 @@ export type AgentAPIProvider = {
   protocols: string[];
   modelFamilies: string[];
   models?: string[];
+  pinnedModels?: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -197,5 +198,62 @@ export async function switchAgentAPIProvider(input: {
       agent: input.agent,
       provider_id: input.providerID,
     }),
+  });
+}
+
+export async function saveProviderPinnedModels(input: {
+  providerID: string;
+  pinnedModels: string[];
+}): Promise<{ provider: AgentAPIProvider }> {
+  return protectedJSON(appPath(`/api/agent-api-providers/${encodeURIComponent(input.providerID)}/pinned`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pinnedModels: input.pinnedModels }),
+  });
+}
+
+export type AgentAPIProviderApplyResult = {
+  agent: string;
+  success: boolean;
+  error?: string;
+};
+
+export async function applyProviderToAgents(input: {
+  providerID: string;
+  agents: string[];
+}): Promise<{ provider: AgentAPIProvider; results: AgentAPIProviderApplyResult[] }> {
+  return protectedJSON(appPath(`/api/agent-api-providers/${encodeURIComponent(input.providerID)}/apply`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agents: input.agents }),
+  });
+}
+
+export async function updateAgentMetadata(input: {
+  agent: string;
+  label?: string;
+  url?: string;
+}): Promise<{ agent: { name: string; label?: string; url?: string } }> {
+  return protectedJSON(appPath(`/api/agents/${encodeURIComponent(input.agent)}/metadata`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label: input.label ?? "", url: input.url ?? "" }),
+  });
+}
+
+export type AgentVisibility = {
+  hidden: string[];
+  customized: boolean;
+};
+
+export async function fetchAgentVisibility(): Promise<AgentVisibility> {
+  return protectedJSON<AgentVisibility>(appPath("/api/preferences/agent-visibility"));
+}
+
+export async function updateAgentVisibility(input: { hidden: string[]; customized: boolean }): Promise<AgentVisibility> {
+  return protectedJSON<AgentVisibility>(appPath("/api/preferences/agent-visibility"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hidden: input.hidden, customized: input.customized }),
   });
 }
