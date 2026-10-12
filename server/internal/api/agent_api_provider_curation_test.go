@@ -176,6 +176,37 @@ func TestRemoveZcodeAPIProviderRulesIteratesBridgeHomes(t *testing.T) {
 	}
 }
 
+func TestRemoveZcodeAPIProviderRulesCoversHostedLayerAgents(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".zcode", "v2")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"config":{"providerOrder":["mfs-api-cpa"],"providerConfigRules":{"providerRules":[{"providerId":"mfs-api-cpa"}]}}}`
+	if err := os.WriteFile(filepath.Join(dir, "provider_config.json"), []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// hosted extra 层的 agent 不在 agents.json 里，LoadConfig("") 枚举不到；
+	// 清理必须走 prober 合并配置，否则它的 mfs- 规则（带 API key）会残留。
+	previous := agentDefinitionsList
+	agentDefinitionsList = func() []agent.Definition {
+		return []agent.Definition{
+			{Name: "zcode-hosted", Command: "zcode-acp-bridge", Env: map[string]string{"BRIDGE_ZCODE_HOME": home}},
+		}
+	}
+	t.Cleanup(func() { agentDefinitionsList = previous })
+
+	removeZcodeAPIProviderRules("api-cpa")
+
+	raw, err := os.ReadFile(filepath.Join(dir, "provider_config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "mfs-api-cpa") {
+		t.Fatalf("hosted-layer agent still carries the deleted provider rule: %s", raw)
+	}
+}
+
 func TestBackupAgentConfigFilePrunesOldCopies(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(target, []byte("current"), 0o600); err != nil {

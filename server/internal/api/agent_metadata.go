@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"mindfs/server/internal/agent"
 	"mindfs/server/internal/apperr"
@@ -20,6 +21,12 @@ type agentMetadataPatchRequest struct {
 	Label *string `json:"label"`
 	URL   *string `json:"url"`
 }
+
+// agentConfigMu serializes whole-file read-modify-write cycles on agents.json
+// (this PATCH vs the provider env writers in writeAgentEnvConfig). Both load
+// the full file, mutate one aspect and write the whole snapshot back; run
+// concurrently the later write silently drops the earlier one's change.
+var agentConfigMu sync.Mutex
 
 // handleAgentMetadataPatch stores an agent's display label and external URL.
 // Only these two keys are accepted. The whole merged definition is written
@@ -64,6 +71,8 @@ func (h *HTTPHandler) handleAgentMetadataPatch(w http.ResponseWriter, r *http.Re
 		respondError(w, http.StatusServiceUnavailable, err)
 		return
 	}
+	agentConfigMu.Lock()
+	defer agentConfigMu.Unlock()
 	cfg, err := agent.LoadConfig("")
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err)
@@ -77,6 +86,15 @@ func (h *HTTPHandler) handleAgentMetadataPatch(w http.ResponseWriter, r *http.Re
 		}
 	}
 	if index < 0 {
+		// hosted extra 层的 agent 不在 agents.json 里：整文件快照写不进去，
+		// 也不能凭空物化一个只有 {name,label} 的残缺条目（会丢继承的
+		// command/args/env），所以必须明确拒绝而不是默默 404。
+		if prober := h.AppContext.GetProber(); prober != nil {
+			if _, ok := prober.DefinitionForAgent(name); ok {
+				respondError(w, http.StatusNotFound, errInvalidRequest(fmt.Sprintf("agent %s is managed by the hosted config layer and cannot be edited here", name)))
+				return
+			}
+		}
 		respondError(w, http.StatusNotFound, errInvalidRequest(fmt.Sprintf("agent not configured: %s", name)))
 		return
 	}

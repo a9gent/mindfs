@@ -169,12 +169,10 @@ func removeZcodeAPIProviderRules(providerID string) {
 	if ruleID == "" || ruleID == "mfs-" {
 		return
 	}
-	cfg, err := agent.LoadConfig("")
-	if err != nil {
-		log.Printf("[agent-api-provider] zcode rule cleanup skipped: load config: %v", err)
-		return
-	}
-	for _, def := range cfg.Agents {
+	// 枚举必须走 prober 合并配置（agentDefinitionsList，含 hosted extra 层）：
+	// 只读 agents.json 会漏掉仅存在于 extra 层的 zcode agent，其 mfs- 规则
+	// （带 API key）就会在供应商删除后残留。
+	for _, def := range agentDefinitionsList() {
 		home := strings.TrimSpace(def.Env["BRIDGE_ZCODE_HOME"])
 		if home == "" {
 			continue

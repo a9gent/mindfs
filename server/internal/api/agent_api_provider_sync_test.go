@@ -166,6 +166,66 @@ func TestSyncAllAgentAPIProvidersKeepsModelsOnFailure(t *testing.T) {
 	}
 }
 
+func TestSyncAgentAPIProvidersPrunesStalePins(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{"id": "model-a"}, {"id": "model-b"}},
+		})
+	}))
+	defer upstream.Close()
+
+	writeAPIProvidersFile(t, []agentAPIProvider{
+		{ID: "api-cpa", Name: "CPA", BaseURL: upstream.URL, APIKey: "k1", Models: []string{"model-a", "gone-model"}, PinnedModels: []string{"model-a", "gone-model"}},
+	})
+
+	providers, err := syncAgentAPIProviders(context.Background(), []agentAPIProviderCreateRequest{
+		{Name: "CPA", BaseURL: upstream.URL, APIKey: "k1"},
+	})
+	if err != nil {
+		t.Fatalf("syncAgentAPIProviders: %v", err)
+	}
+	if len(providers) != 1 {
+		t.Fatalf("expected 1 provider, got %d", len(providers))
+	}
+	pinned := providers[0].PinnedModels
+	if len(pinned) != 1 || pinned[0] != "model-a" {
+		t.Fatalf("stale pin must be pruned when the catalog shrinks, got %v", pinned)
+	}
+	if got := providers[0].Models; len(got) != 2 {
+		t.Fatalf("models should refresh from the probe, got %v", got)
+	}
+}
+
+func TestSyncAllAgentAPIProvidersPrunesStalePins(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{"id": "model-a"}, {"id": "model-b"}},
+		})
+	}))
+	defer upstream.Close()
+
+	writeAPIProvidersFile(t, []agentAPIProvider{
+		{ID: "api-cpa", Name: "CPA", BaseURL: upstream.URL, APIKey: "k1", Models: []string{"model-a", "gone-model"}, PinnedModels: []string{"model-a", "gone-model"}},
+	})
+
+	providers, results, err := syncAllAgentAPIProviders(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("syncAllAgentAPIProviders: %v", err)
+	}
+	if len(results) != 1 || !results[0].Success {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if len(providers) != 1 {
+		t.Fatalf("expected 1 provider, got %d", len(providers))
+	}
+	pinned := providers[0].PinnedModels
+	if len(pinned) != 1 || pinned[0] != "model-a" {
+		t.Fatalf("stale pin must be pruned when the catalog shrinks, got %v", pinned)
+	}
+}
+
 func TestAPIProviderTestURLHelpers(t *testing.T) {
 	if got := openAIChatURL("https://api.example.com/v1"); got != "https://api.example.com/v1/chat/completions" {
 		t.Fatalf("openAIChatURL: %s", got)
