@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"mindfs/server/internal/agent"
 	"mindfs/server/internal/apperr"
 )
 
@@ -151,23 +153,97 @@ func zcodeAPIBaseURL(baseURL string) string {
 }
 
 // mfsProviderRuleID derives the managed provider rule id (mfs-<slug>). The
-// agent package's acpProviderRuleID must stay in sync: supplement ids are
-// encoded as <ruleID>␟<model> and must match this projection.
+// single implementation lives in agent.MFSProviderRuleID — the ACP supplement
+// encodes ids as <ruleID>␟<model> and must match this projection exactly.
 func mfsProviderRuleID(providerID string) string {
-	var b strings.Builder
-	b.WriteString("mfs-")
-	lastDash := false
-	for _, r := range strings.ToLower(strings.TrimSpace(providerID)) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-			lastDash = false
-		case r == '.' || r == '_' || r == '-' || r == ' ':
-			if !lastDash && b.Len() > 4 {
-				b.WriteByte('-')
-				lastDash = true
-			}
+	return agent.MFSProviderRuleID(providerID)
+}
+
+// removeZcodeAPIProviderRules strips the mfs-managed rule (and its
+// providerOrder entry) for a deleted provider from every configured zcode
+// bridge home. Best-effort: homes that are missing or whose config can't be
+// parsed are skipped with a log line — deleting the provider in MindFS must
+// never fail, but the rule holding its API key should not outlive it.
+func removeZcodeAPIProviderRules(providerID string) {
+	ruleID := mfsProviderRuleID(providerID)
+	if ruleID == "" || ruleID == "mfs-" {
+		return
+	}
+	cfg, err := agent.LoadConfig("")
+	if err != nil {
+		log.Printf("[agent-api-provider] zcode rule cleanup skipped: load config: %v", err)
+		return
+	}
+	for _, def := range cfg.Agents {
+		home := strings.TrimSpace(def.Env["BRIDGE_ZCODE_HOME"])
+		if home == "" {
+			continue
+		}
+		removed, err := removeZcodeProviderRule(home, ruleID)
+		if err != nil {
+			log.Printf("[agent-api-provider] zcode rule cleanup %s (%s): %v", def.Name, home, err)
+			continue
+		}
+		if removed {
+			log.Printf("[agent-api-provider] zcode rule cleanup removed %s from %s (%s)", ruleID, def.Name, home)
 		}
 	}
-	return strings.Trim(b.String(), "-")
+}
+
+// removeZcodeProviderRule removes one mfs-managed rule and its providerOrder
+// entry from the given bridge home's provider_config.json. Returns whether
+// anything was rewritten.
+func removeZcodeProviderRule(home, ruleID string) (bool, error) {
+	path := filepath.Join(home, ".zcode", "v2", "provider_config.json")
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, apperr.Wrap("read", path, err)
+	}
+	var doc map[string]any
+	if len(strings.TrimSpace(string(payload))) > 0 {
+		// 与写入侧同样的严格 JSON：解析不了就不动，绝不截断 zcode 的配置。
+		if err := json.Unmarshal(payload, &doc); err != nil {
+			return false, fmt.Errorf("parse %s: %w (refusing to modify unreadable config)", path, err)
+		}
+	}
+	config, _ := doc["config"].(map[string]any)
+	if config == nil {
+		return false, nil
+	}
+	rules := zcodeProviderRules(config)
+	nextRules := make([]map[string]any, 0, len(rules))
+	removedRule := false
+	for _, rule := range rules {
+		if id, _ := rule["providerId"].(string); id == ruleID {
+			removedRule = true
+			continue
+		}
+		nextRules = append(nextRules, rule)
+	}
+	order := zcodeStringSlice(config, "providerOrder")
+	nextOrder := make([]string, 0, len(order))
+	removedOrder := false
+	for _, id := range order {
+		if id == ruleID {
+			removedOrder = true
+			continue
+		}
+		nextOrder = append(nextOrder, id)
+	}
+	if !removedRule && !removedOrder {
+		return false, nil
+	}
+	if removedRule {
+		ensureJSONObject(config, "providerConfigRules")["providerRules"] = nextRules
+	}
+	if removedOrder {
+		config["providerOrder"] = nextOrder
+	}
+	if err := backupAgentConfigFile(path); err != nil {
+		return false, err
+	}
+	return true, writeJSONObject(path, doc, 0o600)
 }

@@ -100,11 +100,15 @@ func (h *HTTPHandler) handleAgentMetadataPatch(w http.ResponseWriter, r *http.Re
 		return
 	}
 	// Prober 缓存立即生效：读时覆盖 + 推送监听者，无需重启或等下一轮探测。
+	// Prober 可能未装配（单测/独立进程），GetStatus 也要走同一个 nil 闸。
+	var status agent.Status
 	if prober := h.AppContext.GetProber(); prober != nil {
 		prober.SetAgentMetadata(name, cfg.Agents[index].Label, cfg.Agents[index].URL)
+		if cached, ok := prober.GetStatus(name); ok {
+			status = cached
+		}
 	}
-	status, ok := h.AppContext.GetProber().GetStatus(name)
-	if !ok {
+	if status.Name == "" {
 		status = agent.Status{Name: name, Label: cfg.Agents[index].Label, URL: cfg.Agents[index].URL}
 	}
 	respondJSON(w, http.StatusOK, map[string]any{
