@@ -1110,6 +1110,14 @@ func (p *Prober) configuredDefinitions() []Definition {
 	return defs
 }
 
+// Definitions returns every configured agent definition the prober runs with
+// (base + user + hosted extra layers merged). Enumeration that must cover all
+// agents — not just lookups by name — goes through here instead of
+// agent.LoadConfig(""), which cannot see the hosted extra layer.
+func (p *Prober) Definitions() []Definition {
+	return p.configuredDefinitions()
+}
+
 func (p *Prober) probeConfiguredAgents(ctx context.Context, defs []Definition) {
 	if len(defs) == 0 {
 		return
