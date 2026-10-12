@@ -912,11 +912,14 @@ function AgentConfigPopover({
 
   const setMetaDraft = (agentName: string, field: "label" | "url", value: string) => {
     setMetaSavedAgent("");
+    // 没碰过的字段要用目录里的现值兜底，不能用空串：updateAgentMetadata 两个
+    // 字段都会整体提交，空串会把已保存的 label/url 静默清掉。
+    const current = catalogAgents.find((item) => item.name === agentName);
     setMetaDrafts((previous) => ({
       ...previous,
       [agentName]: {
-        label: previous[agentName]?.label ?? "",
-        url: previous[agentName]?.url ?? "",
+        label: previous[agentName]?.label ?? current?.label ?? "",
+        url: previous[agentName]?.url ?? current?.url ?? "",
         [field]: value,
       },
     }));
@@ -1102,9 +1105,9 @@ function AgentConfigPopover({
                         ) : null}
                         <button
                           type="button"
-                          disabled={metaBusyAgent !== ""}
+                          disabled={metaBusyAgent !== "" || providerSyncBusy}
                           onClick={() => void saveMetadata(catalogAgent.name)}
-                          style={agentConfigMiniButtonStyle(metaBusyAgent !== "")}
+                          style={agentConfigMiniButtonStyle(metaBusyAgent !== "" || providerSyncBusy)}
                         >
                           {metaBusyAgent === catalogAgent.name ? "…" : t("common.save")}
                         </button>
@@ -1474,9 +1477,9 @@ function AgentConfigPopover({
                           </button>
                           <button
                             type="button"
-                            disabled={pinnedBusyID === item.id}
+                            disabled={pinnedBusyID === item.id || providerSyncBusy}
                             onClick={() => void savePinned(item.id)}
-                            style={{ ...agentConfigMiniButtonStyle(pinnedBusyID === item.id), color: "var(--accent-color)" }}
+                            style={{ ...agentConfigMiniButtonStyle(pinnedBusyID === item.id || providerSyncBusy), color: "var(--accent-color)" }}
                           >
                             {pinnedBusyID === item.id ? "…" : t("agentConfig.pinnedSave")}
                           </button>
@@ -1553,9 +1556,9 @@ function AgentConfigPopover({
                         </div>
                         <button
                           type="button"
-                          disabled={applyBusy || applySelection.length === 0}
+                          disabled={applyBusy || providerSyncBusy || applySelection.length === 0}
                           onClick={() => void runApply(item.id)}
-                          style={agentConfigPrimaryButtonStyle(applyBusy || applySelection.length === 0)}
+                          style={agentConfigPrimaryButtonStyle(applyBusy || providerSyncBusy || applySelection.length === 0)}
                         >
                           {applyBusy ? "…" : t("agentConfig.applyRun")}
                         </button>

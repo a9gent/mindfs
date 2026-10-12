@@ -47,7 +47,7 @@ func supplementACPProviderModels(status *Status) {
 	if len(models) == 0 {
 		return
 	}
-	ruleID := acpProviderRuleID(provider.ID)
+	ruleID := MFSProviderRuleID(provider.ID)
 	providerName := strings.TrimSpace(provider.Name)
 	if providerName == "" {
 		providerName = ruleID
@@ -73,19 +73,23 @@ func supplementACPProviderModels(status *Status) {
 	}
 }
 
-// acpProviderRuleID mirrors the api package's mfs-<slug> rule naming; the two
-// must stay in sync or the emitted ids will not match the projected rule.
-func acpProviderRuleID(providerID string) string {
+// MFSProviderRuleID derives the mfs-managed provider rule id (mfs-<slug>)
+// used by BOTH writers: the api package projects rules into zcode's
+// provider_config.json with this id, and the ACP supplement emits
+// `<ruleID>␟<model>` model ids that must match it. One implementation,
+// not two "kept in sync" copies — ids with leading separators/spaces would
+// otherwise slug differently and silently break model selection round-trips.
+func MFSProviderRuleID(providerID string) string {
 	var b strings.Builder
 	b.WriteString("mfs-")
 	lastDash := false
-	for _, r := range strings.ToLower(providerID) {
+	for _, r := range strings.ToLower(strings.TrimSpace(providerID)) {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
 			b.WriteRune(r)
 			lastDash = false
 		case r == '.' || r == '_' || r == '-' || r == ' ':
-			if !lastDash && b.Len() > 3 {
+			if !lastDash && b.Len() > 4 {
 				b.WriteByte('-')
 				lastDash = true
 			}
