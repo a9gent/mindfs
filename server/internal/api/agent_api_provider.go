@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"mindfs/server/internal/agent"
@@ -232,6 +234,13 @@ type agentAPIProviderPinnedRequest struct {
 // handleAgentAPIProviderPinnedPut stores the user-curated model subset for a
 // provider. The list must be a subset of the probed Models; order is kept as
 // sent so the curated sequence survives into every CLI projection.
+// agentAPIProviderFileMu serializes every read-modify-write cycle on
+// api-providers.json (create / sync / sync-all / pinned / delete). Handlers
+// run concurrently in chi; without the lock a pinned save racing sync-all
+// would either resurrect a stale catalog or silently drop the just-saved
+// pins, depending on which whole-file snapshot lands last.
+var agentAPIProviderFileMu sync.Mutex
+
 func (h *HTTPHandler) handleAgentAPIProviderPinnedPut(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 	if id == "" {
@@ -243,6 +252,8 @@ func (h *HTTPHandler) handleAgentAPIProviderPinnedPut(w http.ResponseWriter, r *
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
 		return
 	}
+	agentAPIProviderFileMu.Lock()
+	defer agentAPIProviderFileMu.Unlock()
 	providers, err := readAgentAPIProviders()
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err)
@@ -378,6 +389,8 @@ func (h *HTTPHandler) handleAgentAPIProviderApply(w http.ResponseWriter, r *http
 }
 
 func createAgentAPIProvider(ctx context.Context, req agentAPIProviderCreateRequest) (agentAPIProvider, error) {
+	agentAPIProviderFileMu.Lock()
+	defer agentAPIProviderFileMu.Unlock()
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		return agentAPIProvider{}, errors.New("provider name required")
@@ -430,6 +443,8 @@ func createAgentAPIProvider(ctx context.Context, req agentAPIProviderCreateReque
 }
 
 func syncAgentAPIProviders(ctx context.Context, requests []agentAPIProviderCreateRequest) ([]agentAPIProvider, error) {
+	agentAPIProviderFileMu.Lock()
+	defer agentAPIProviderFileMu.Unlock()
 	if len(requests) == 0 {
 		return nil, errors.New("providers required")
 	}
@@ -524,6 +539,8 @@ func providerIDExists(providers []agentAPIProvider, id string) bool {
 // syncAllAgentAPIProviders 一键同步：使用已保存的 API Key 逐个重新拉取模型目录。
 // 单个供应商同步失败时保留旧模型列表并记录错误，不影响其他供应商。
 func syncAllAgentAPIProviders(ctx context.Context, prefs *preferences.Store) ([]agentAPIProvider, []agentAPIProviderSyncAllResult, error) {
+	agentAPIProviderFileMu.Lock()
+	defer agentAPIProviderFileMu.Unlock()
 	providers, err := readAgentAPIProviders()
 	if err != nil {
 		return nil, nil, err
@@ -550,6 +567,9 @@ func syncAllAgentAPIProviders(ctx context.Context, prefs *preferences.Store) ([]
 		provider.Protocols = probe.Protocols
 		provider.ModelFamilies = probe.ModelFamilies
 		provider.Models = probe.Models
+		// 目录收缩时同步清掉已下架的精选项，否则投影会变成空集，
+		// kimi/qwen 等写手会把 `default_model = ""` 写进 CLI 配置。
+		provider.PinnedModels = prunePinnedModels(provider.PinnedModels, probe.Models)
 		provider.UpdatedAt = now
 		providers[index] = provider
 		changed = true
@@ -886,6 +906,8 @@ func postAPIProviderJSON(ctx context.Context, endpoint string, body map[string]a
 }
 
 func deleteAgentAPIProvider(id string) ([]agentAPIProvider, error) {
+	agentAPIProviderFileMu.Lock()
+	defer agentAPIProviderFileMu.Unlock()
 	providers, err := readAgentAPIProviders()
 	if err != nil {
 		return nil, err
@@ -905,6 +927,9 @@ func deleteAgentAPIProvider(id string) ([]agentAPIProvider, error) {
 	if err := writeAgentAPIProviders(next); err != nil {
 		return nil, err
 	}
+	// 精选删除后，投影进 zcode bridge home 的 mfs-<slug> 规则还带着 API key，
+	// 必须一并清掉；清不动的（home 缺失/配置损坏）只记日志不拦删除。
+	removeZcodeAPIProviderRules(id)
 	return next, nil
 }
 
@@ -962,10 +987,31 @@ func switchAgentAPIProvider(req agentAPIProviderSwitchRequest, app *AppContext) 
 	return provider, nil
 }
 
+// prunePinnedModels drops pinned entries that no longer exist in the fresh
+// catalog (order preserved). Sync-all uses it so a shrunk catalog can never
+// project an empty model list into CLI configs.
+func prunePinnedModels(pinned, models []string) []string {
+	if len(pinned) == 0 {
+		return pinned
+	}
+	available := make(map[string]bool, len(models))
+	for _, model := range models {
+		available[strings.TrimSpace(model)] = true
+	}
+	out := make([]string, 0, len(pinned))
+	for _, model := range pinned {
+		model = strings.TrimSpace(model)
+		if model == "" || !available[model] {
+			continue
+		}
+		out = append(out, model)
+	}
+	return out
+}
+
 // providerProjection returns the model list projected into CLI configs:
 // pinned ∩ Models in pinned order when curated, else the full Models list.
-func providerProjection(provider agentAPIProvider) []string {
-	if len(provider.PinnedModels) == 0 {
+func providerProjection(provider agentAPIProvider) []string {	if len(provider.PinnedModels) == 0 {
 		return provider.Models
 	}
 	available := make(map[string]bool, len(provider.Models))
@@ -985,6 +1031,11 @@ func providerProjection(provider agentAPIProvider) []string {
 	return out
 }
 
+// agentConfigBackupKeep caps how many <path>.bak-<ts> copies survive per
+// config file: each copy holds API keys, so unbounded accumulation in
+// long-lived homes is both clutter and secret sprawl.
+const agentConfigBackupKeep = 5
+
 // backupAgentConfigFile copies a config file to <path>.bak-<ts> before an
 // apply overwrite. The copies hold API keys, so they must stay 0600.
 func backupAgentConfigFile(path string) error {
@@ -996,7 +1047,26 @@ func backupAgentConfigFile(path string) error {
 		return apperr.Wrap("read", path, err)
 	}
 	backup := path + ".bak-" + time.Now().Format("20060102-150405")
-	return apperr.Wrap("backup", backup, os.WriteFile(backup, payload, 0o600))
+	if err := os.WriteFile(backup, payload, 0o600); err != nil {
+		return apperr.Wrap("backup", backup, err)
+	}
+	pruneAgentConfigBackups(path, agentConfigBackupKeep)
+	return nil
+}
+
+// pruneAgentConfigBackups removes the oldest <path>.bak-* copies beyond keep.
+// The timestamp suffix is fixed-width, so lexicographic order = age order.
+func pruneAgentConfigBackups(path string, keep int) {
+	matches, err := filepath.Glob(path + ".bak-*")
+	if err != nil || len(matches) <= keep {
+		return
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
+	for _, stale := range matches[keep:] {
+		if err := os.Remove(stale); err != nil && !os.IsNotExist(err) {
+			log.Printf("[agent-api-provider] prune backup %s: %v", stale, err)
+		}
+	}
 }
 
 func applyAgentAPIProvider(agentName string, provider agentAPIProvider, app *AppContext) error {
@@ -1489,8 +1559,11 @@ func applyQwenAPIProvider(provider agentAPIProvider) error {
 		"protocol": protocol,
 		"models":   qwenModelEntries(provider, envKey, baseURL),
 	}
-	model := ensureJSONObject(settings, "model")
-	model["name"] = firstModelOrDefault(provider.Models, "")
+	// 投影为空时不覆盖 model.name：写空串会让 qwen 启动即选不到模型，
+	// 保留旧值与 codex 写手的守卫语义一致。
+	if model := firstModelOrDefault(provider.Models, ""); model != "" {
+		ensureJSONObject(settings, "model")["name"] = model
+	}
 	return writeJSONObject(path, settings, 0o600)
 }
 
@@ -1508,7 +1581,11 @@ func applyKimiAPIProvider(provider agentAPIProvider) error {
 		providerType = "anthropic"
 		baseURL = anthropicBaseURL(provider.BaseURL)
 	}
-	block := fmt.Sprintf(`# BEGIN MINDFS API PROVIDER
+	// 投影为空时不写 default_model/model 选择行：`model = ""` 是坏配置，
+	// 只保留供应商定义与端点，用户保留手动选择权。
+	var block string
+	if model != "" {
+		block = fmt.Sprintf(`# BEGIN MINDFS API PROVIDER
 default_model = %q
 
 %s
@@ -1521,6 +1598,19 @@ provider = %q
 model = %q
 # END MINDFS API PROVIDER
 `, providerName, tomlDottedTable("providers", providerName), providerType, baseURL, provider.APIKey, tomlDottedTable("models", providerName), providerName, model)
+	} else {
+		block = fmt.Sprintf(`# BEGIN MINDFS API PROVIDER
+
+%s
+type = %q
+base_url = %q
+api_key = %q
+
+%s
+provider = %q
+# END MINDFS API PROVIDER
+`, tomlDottedTable("providers", providerName), providerType, baseURL, provider.APIKey, tomlDottedTable("models", providerName), providerName)
+	}
 	return writeTextFile(path, replaceManagedBlock(string(existing), block, "# BEGIN MINDFS API PROVIDER", "# END MINDFS API PROVIDER"), 0o600)
 }
 

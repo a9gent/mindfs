@@ -659,7 +659,10 @@ export function AgentSelector({
               const isExpanded = submenuAgent === a.name;
               const isShowingError = errorAgent === a.name;
               const agentDisplayName = a.label || a.name;
-              const consoleURL = a.url || "";
+              // 只放行 http(s)：agents.json 是可手编/外部合并的文件，服务端只在
+              // PATCH 通道校验，这里再闸一道，防止 javascript: 之类 scheme 流入
+              // 原生桥的打开路径。
+              const consoleURL = /^https?:\/\//i.test(a.url || "") ? (a.url as string) : "";
               return (
                 <div
                   key={a.name}
