@@ -54,7 +54,8 @@ export type BlueRingAction =
   | "toggleMainView"
   | "kanbanTemplateCycle"
   | "newTask"
-  | "openScheduledTasks";
+  | "openScheduledTasks"
+  | "quickSaveFile";
 
 export type BlueRingGestureConfig = {
   enabled: boolean;
@@ -127,6 +128,7 @@ export const BLUE_RING_ACTION_OPTIONS: readonly BlueRingAction[] = [
   "kanbanTemplateCycle",
   "newTask",
   "openScheduledTasks",
+  "quickSaveFile",
 ];
 
 export const BLUE_RING_GESTURE_LABEL_KEYS: Record<BlueRingGesture, MessageKey> = {
@@ -166,6 +168,7 @@ export const BLUE_RING_ACTION_LABEL_KEYS: Record<BlueRingAction, MessageKey> = {
   kanbanTemplateCycle: "blueRing.action.kanbanTemplateCycle",
   newTask: "blueRing.action.newTask",
   openScheduledTasks: "blueRing.action.openScheduledTasks",
+  quickSaveFile: "blueRing.action.quickSaveFile",
 };
 
 const BLUE_RING_ACTION_SET = new Set<string>(BLUE_RING_ACTION_OPTIONS);

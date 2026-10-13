@@ -42,6 +42,7 @@ export type SessionQuickActionsProps = {
   onCycleKanbanTemplate?: () => void;
   onCreateTask?: (templateId?: string) => void;
   onOpenScheduledTasks?: () => void;
+  onQuickSaveFile?: () => void;
 };
 
 const DOUBLE_TAP_MS = 280;
@@ -69,6 +70,7 @@ export function SessionQuickActions({
   onCycleKanbanTemplate,
   onCreateTask,
   onOpenScheduledTasks,
+  onQuickSaveFile,
 }: SessionQuickActionsProps) {
   const { t } = useI18n();
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -185,6 +187,7 @@ export function SessionQuickActions({
         break;
       }
       case "openScheduledTasks": setOpen(false); onOpenScheduledTasks?.(); break;
+      case "quickSaveFile": setOpen(false); onQuickSaveFile?.(); break;
       case "recentSession": {
         void sessionService.fetchMultiRootSessions(5).then((items) => {
           for (const group of recentQuickSwitchGroups(items)) {

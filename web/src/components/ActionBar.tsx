@@ -94,6 +94,7 @@ type ActionBarProps = {
   onCycleKanbanTemplate?: SessionQuickActionsProps["onCycleKanbanTemplate"];
   onCreateTask?: SessionQuickActionsProps["onCreateTask"];
   onOpenScheduledTasks?: SessionQuickActionsProps["onOpenScheduledTasks"];
+  onQuickSaveFile?: SessionQuickActionsProps["onQuickSaveFile"];
   taskGroupBadge?: React.ReactNode;
   status?: WSStatus;
   agentsVersion?: number;
@@ -448,6 +449,7 @@ export function ActionBar({
   onCycleKanbanTemplate,
   onCreateTask,
   onOpenScheduledTasks,
+  onQuickSaveFile,
 }: ActionBarProps) {
   const { t } = useI18n();
   const [modelSelectorSignal, setModelSelectorSignal] = useState(0);
