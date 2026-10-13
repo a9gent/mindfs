@@ -1,0 +1,171 @@
+.composer-modern .composer-surface {
+  border-radius: 16px !important;
+  box-sizing: border-box;
+  box-shadow: var(--panel-shadow);
+}
+
+.composer-modern .token-editor-input {
+  min-height: 120px !important;
+}
+
+.composer-modern .composer-surface[data-resizable] {
+  transition: border-color 0.2s, box-shadow 0.2s !important;
+}
+
+.composer-modern .composer-surface[data-resized] .token-editor-input {
+  position: absolute !important;
+  top: 16px;
+  height: calc(100% - 80px) !important;
+  min-height: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.composer-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 64px;
+  height: 14px;
+  z-index: 6;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+  border-radius: 6px;
+}
+
+.composer-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  left: 18px;
+  width: 28px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--text-secondary);
+  opacity: 0.3;
+}
+
+.composer-resize-handle:hover::after,
+.composer-resize-handle:focus-visible::after {
+  background: var(--accent-color);
+  opacity: 1;
+}
+
+.composer-resize-handle:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.composer-modern .composer-toolbar {
+  left: 12px;
+  right: 12px !important;
+  bottom: 12px !important;
+  transform: none !important;
+  gap: 10px !important;
+  min-width: 0;
+  transition: none !important;
+}
+
+.composer-toolbar-spacer { flex: 1; min-width: 0; }
+.composer-modern .session-entry { height: 34px; }
+.composer-modern .session-entry-main { font-size: calc(13px * var(--mindfs-font-scale, 1)); }
+.composer-mode-popover.composer-popover--desktop { width: 210px; padding: 6px; }
+
+.composer-mode-trigger, .composer-more-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  flex-shrink: 0;
+  height: 34px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: calc(14px * var(--mindfs-font-scale, 1));
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.composer-mode-trigger:disabled { cursor: default; }
+.composer-mode-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.composer-mode-trigger > svg { flex-shrink: 0; }
+.composer-mode-trigger > svg:first-child { color: var(--accent-color); }
+.composer-mode-trigger:hover:not(:disabled), .composer-more-trigger:hover { background: var(--menu-active-bg); }
+.composer-mode-trigger:focus-visible, .composer-more-trigger:focus-visible, .composer-menu-action:focus-visible,
+.composer-modern .composer-send:focus-visible, .composer-modern .composer-attachment:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.composer-modern .composer-attachment {
+  flex-shrink: 0;
+  margin-left: 0 !important;
+  width: 34px !important;
+  height: 34px !important;
+}
+.composer-modern .composer-attachment[hidden] { display: none !important; }
+
+.composer-modern .composer-send {
+  flex-shrink: 0;
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 10px !important;
+}
+.composer-modern .composer-send[data-action="send"]:disabled {
+  background: var(--accent-color) !important;
+  color: white !important;
+  opacity: 0.45 !important;
+}
+.composer-modern .composer-send svg { width: 22px; height: 22px; }
+
+.composer-popover .composer-menu-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  font: inherit;
+  font-size: calc(14px * var(--mindfs-font-scale, 1));
+  cursor: pointer;
+}
+.composer-menu-action:hover:not(:disabled), .composer-menu-action[aria-pressed="true"] { background: var(--menu-active-bg); }
+.composer-menu-action:disabled { opacity: 0.6; cursor: default; }
+.composer-menu-check { margin-left: auto; color: var(--accent-color); }
+.composer-menu-symbol { width: 20px; font-size: 22px; text-align: center; }
+.composer-menu-divider { border-top: 1px solid var(--menu-border); margin: 10px 0; }
+.composer-menu-label { padding: 4px 12px; color: var(--text-secondary); font-size: calc(12px * var(--mindfs-font-scale, 1)); }
+
+@media (max-width: 767px) {
+  .composer-modern { padding-left: 12px !important; padding-right: 12px !important; }
+  .composer-more-trigger { width: 32px; height: 38px; padding: 0; position: relative; }
+  .composer-more-trigger[data-has-attachments]::after { content: ""; position: absolute; right: 2px; top: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent-color); }
+  .composer-modern .composer-send { width: 38px !important; height: 38px !important; border-radius: 8px !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-modern .composer-surface, .composer-modern .composer-surface[data-resizable],
+  .composer-modern .composer-send { transition: none !important; }
+}
+
+.composer-modern--compact .token-editor-input { min-height: 128px !important; }
+.composer-modern--compact .composer-toolbar { left: 10px; right: 10px !important; bottom: 10px !important; gap: 5px !important; }
+.composer-modern--compact .composer-toolbar-spacer { display: none; }
+.composer-modern--compact .composer-mode-trigger { min-width: 0; flex-shrink: 1; }
+.composer-modern--compact .composer-more-trigger { width: 32px; height: 38px; padding: 0; position: relative; }
+.composer-modern--compact .composer-send { width: 38px !important; height: 38px !important; border-radius: 8px !important; }
+
+.composer-modern .session-ring-trigger > span:first-child { width: 18px !important; height: 18px !important; border-color: var(--accent-color) !important; box-shadow: none !important; }
+.composer-modern .composer-status-row { flex-wrap: wrap; }
+.composer-modern .composer-status-row > div { max-width: 100%; flex-wrap: wrap; }
+.composer-modern .composer-status-row > div:last-child { margin-left: auto; justify-content: flex-end; }

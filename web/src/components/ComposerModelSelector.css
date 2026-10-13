@@ -1,0 +1,235 @@
+.composer-model-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.composer-selector-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  height: 32px;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.composer-selector-trigger-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-model-trigger {
+  max-width: 200px;
+}
+
+.composer-selector-trigger > svg {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.composer-selector-trigger:hover,
+.composer-selector-trigger[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--accent-color) 9%, transparent);
+  color: var(--accent-color);
+}
+
+.composer-effort-selector { flex-shrink: 0; }
+.composer-effort-trigger {
+  border-color: var(--border-color);
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+.composer-effort-trigger-caption { color: var(--text-secondary); }
+
+.composer-selector-trigger:focus-visible,
+.composer-selector-panel button:focus-visible,
+.composer-selector-panel select:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.composer-selector-panel {
+  position: fixed;
+  z-index: 10100;
+  box-sizing: border-box;
+  border: 1px solid var(--menu-border);
+  border-radius: 15px;
+  background: var(--menu-bg);
+  color: var(--text-primary);
+  box-shadow: 0 12px 40px color-mix(in srgb, var(--text-primary) 14%, transparent);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  outline: none;
+  font-size: 13px;
+}
+
+.composer-model-panel { width: min(470px, calc(100vw - 16px)); }
+.composer-selector-columns { display: flex; min-height: 240px; }
+.composer-selector-agents {
+  flex: 0 0 138px;
+  min-width: 0;
+  border-right: 1px solid var(--menu-divider);
+  padding: 12px 7px;
+  box-sizing: border-box;
+}
+.composer-selector-caption {
+  display: flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.composer-selector-agent-list { display: flex; flex-direction: column; gap: 3px; }
+.composer-selector-agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 40px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.composer-selector-agent > span:not(.composer-selector-unavailable) { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.composer-selector-agent > svg { flex-shrink: 0; color: var(--text-secondary); }
+.composer-selector-warning, .composer-selector-unavailable {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.composer-selector-options { flex: 1; min-width: 0; padding: 12px 11px; }
+.composer-selector-model-heading { justify-content: space-between; gap: 12px; padding-inline: 3px; }
+.composer-selector-model-heading > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 58%; font-size: 11px; }
+.composer-selector-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  margin: 3px 0 6px;
+  border: 1px solid var(--panel-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--text-primary) 2%, transparent);
+  color: var(--text-secondary);
+}
+.composer-selector-search:focus-within { border-color: var(--accent-color); }
+.composer-selector-search > svg { flex-shrink: 0; }
+.composer-selector-search input {
+  width: 100%;
+  min-width: 0;
+  border: none;
+  padding: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+}
+.composer-selector-search input::placeholder { color: var(--text-secondary); opacity: .8; }
+.composer-selector-model-list { max-height: 260px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.composer-selector-model {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 34px;
+  padding: 8px 9px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.composer-selector-model > span:first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.composer-selector-check { flex-shrink: 0; }
+.composer-selector-agent:hover,
+.composer-selector-model:hover { background: color-mix(in srgb, var(--accent-color) 6%, transparent); }
+.composer-selector-agent.is-selected,
+.composer-selector-model.is-selected,
+.composer-selector-effort-segments .is-selected {
+  background: color-mix(in srgb, var(--accent-color) 11%, transparent);
+  color: var(--accent-color);
+}
+.composer-selector-model.is-hidden-model { opacity: .66; }
+.composer-selector-empty { padding: 8px; color: var(--text-secondary); }
+.composer-selector-fast,
+.composer-selector-mode {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px 2px 0;
+  border-top: 1px solid var(--menu-divider);
+  color: var(--text-secondary);
+}
+.composer-selector-mode select { max-width: 68%; border: 1px solid var(--menu-border); border-radius: 6px; background: var(--menu-bg); color: var(--text-primary); padding: 4px; font: inherit; }
+.composer-selector-fast-control { display: flex; align-items: center; gap: 8px; padding: 0; border: none; background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
+.composer-selector-switch { display: inline-flex; align-items: center; width: 28px; height: 16px; padding: 3px; box-sizing: border-box; border-radius: 99px; background: color-mix(in srgb, var(--text-secondary) 30%, var(--menu-bg)); }
+.composer-selector-switch > span { width: 10px; height: 10px; border-radius: 50%; background: var(--menu-bg); transition: transform .15s; }
+.composer-selector-switch.is-on { background: var(--accent-color); }
+.composer-selector-switch.is-on > span { transform: translateX(12px); background: var(--panel-bg); }
+.composer-selector-error { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; padding: 8px; border-radius: 6px; background: color-mix(in srgb, var(--text-secondary) 8%, transparent); font-size: 11px; color: var(--text-secondary); }
+.composer-selector-error > span { flex: 1; min-width: 0; max-height: 90px; overflow: auto; overflow-wrap: anywhere; }
+.composer-selector-error button { flex-shrink: 0; padding: 2px; border: none; background: transparent; color: var(--accent-color); cursor: pointer; font: inherit; }
+.composer-effort-panel { width: min(275px, calc(100vw - 16px)); padding: 12px 10px 10px; }
+.composer-effort-options .composer-selector-model { min-height: 41px; }
+.composer-selector-backdrop { position: fixed; inset: 0; z-index: 10099; background: color-mix(in srgb, var(--text-primary) 35%, transparent); }
+.composer-selector-handle { flex-shrink: 0; width: 34px; height: 4px; margin: 9px auto 3px; border-radius: 9px; background: color-mix(in srgb, var(--text-secondary) 30%, transparent); }
+.composer-selector-sheet-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px 15px; font-size: 16px; }
+.composer-selector-close { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: none; border-radius: 7px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+
+.composer-model-selector.is-mobile { flex: 1; min-width: 0; }
+.composer-model-selector.is-mobile .composer-agent-trigger { justify-content: flex-start; max-width: 100%; padding-inline: 2px; gap: 6px; }
+.composer-effort-selector.is-mobile .composer-effort-trigger { padding-inline: 3px; border: none; background: transparent; gap: 6px; }
+.composer-selector-panel.is-mobile { border-radius: 17px 17px 0 0; padding: 0 0 max(16px, env(safe-area-inset-bottom)); }
+.composer-model-panel.is-mobile .composer-selector-columns { display: block; min-height: 0; }
+.composer-model-panel.is-mobile .composer-selector-agents { border: none; padding: 0 16px; }
+.composer-model-panel.is-mobile .composer-selector-agent-list { flex-direction: row; overflow-x: auto; gap: 2px; padding: 0 0 12px; border-bottom: 1px solid var(--menu-divider); scrollbar-width: none; }
+.composer-model-panel.is-mobile .composer-selector-agent { flex-shrink: 0; width: auto; gap: 5px; padding: 7px 6px; min-height: 36px; white-space: nowrap; }
+.composer-model-panel.is-mobile .composer-selector-agent > span:not(.composer-selector-unavailable) { flex: initial; }
+.composer-model-panel.is-mobile .composer-selector-options { padding: 10px 16px 0; }
+.composer-model-panel.is-mobile .composer-selector-search { height: 36px; margin-bottom: 10px; }
+.composer-model-panel.is-mobile .composer-selector-search input { font-size: 16px; }
+.composer-model-panel.is-mobile .composer-selector-model-list { max-height: min(30dvh, 280px); }
+.composer-model-panel.is-mobile .composer-selector-model { min-height: 38px; padding-inline: 12px; }
+.composer-selector-effort-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--menu-divider); }
+.composer-selector-effort-section .composer-selector-caption { padding-inline: 0; color: var(--text-primary); }
+.composer-selector-effort-segments { display: flex; gap: 4px; flex-wrap: wrap; }
+.composer-selector-effort-segments button { flex: 1 0 45px; min-height: 35px; padding: 8px 4px; border: none; border-radius: 7px; background: transparent; color: var(--text-primary); font: inherit; cursor: pointer; }
+.composer-model-panel.is-mobile .composer-selector-fast { margin-top: 12px; padding-top: 14px; color: var(--text-primary); }
+.composer-model-panel.is-mobile .composer-selector-switch { width: 44px; height: 26px; padding: 3px; }
+.composer-model-panel.is-mobile .composer-selector-switch > span { width: 20px; height: 20px; }
+.composer-model-panel.is-mobile .composer-selector-switch.is-on > span { transform: translateX(18px); }
+.composer-effort-panel.is-mobile .composer-effort-options { padding: 0 16px; }
+.composer-effort-panel.is-mobile .composer-selector-model { min-height: 44px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-selector-switch > span { transition: none; }
+}

@@ -57,6 +57,7 @@ import {
   updateIdleSessionResourceReleasePreference,
   updateNewProjectMetaLocationPreference,
   updateSessionNamingPreference,
+  type ComposerStyle,
   type NewProjectMetaLocation,
 } from "../services/preferences";
 import {
@@ -203,10 +204,14 @@ type FileTreeProps = {
   showSendShortcutOption?: boolean;
   sendShortcut?: SendShortcut | null;
   onSendShortcutChange?: (shortcut: SendShortcut | null) => void;
+  composerStyle?: ComposerStyle;
+  onComposerStyleChange?: (style: ComposerStyle) => void;
   sidebarsSwapped?: boolean;
   onSidebarsSwappedChange?: (enabled: boolean) => void;
   blueRingGestures?: BlueRingGestureConfig;
   onBlueRingGesturesChange?: (config: BlueRingGestureConfig) => void;
+  blueRingSettingsSignal?: number;
+  onBlueRingSettingsOpened?: () => void;
   gitDiffSideBySide?: boolean;
   onGitDiffSideBySideChange?: (enabled: boolean) => void;
   multiProjectSessionsEnabled?: boolean;
@@ -1496,10 +1501,14 @@ export function FileTree({
   showSendShortcutOption = false,
   sendShortcut = null,
   onSendShortcutChange,
+  composerStyle = "classic",
+  onComposerStyleChange,
   sidebarsSwapped = false,
   onSidebarsSwappedChange,
   blueRingGestures,
   onBlueRingGesturesChange,
+  blueRingSettingsSignal = 0,
+  onBlueRingSettingsOpened,
   gitDiffSideBySide = false,
   onGitDiffSideBySideChange,
   multiProjectSessionsEnabled = false,
@@ -2205,6 +2214,13 @@ export function FileTree({
     setIsMenuOpen(false);
     setBlueRingMenuOpen(true);
   }, []);
+
+  React.useEffect(() => {
+    if (blueRingSettingsSignal > 0) {
+      openBlueRingSettings();
+      onBlueRingSettingsOpened?.();
+    }
+  }, [blueRingSettingsSignal, openBlueRingSettings, onBlueRingSettingsOpened]);
 
   const updateBlueRingAction = React.useCallback((gesture: BlueRingGesture, action: BlueRingAction) => {
     const nextActions = { ...gestureConfig.actions };
@@ -3276,40 +3292,72 @@ export function FileTree({
                   </span>
                   <ChevronRight isOpen={isAppearanceMenuOpen} />
                 </button>
-                {isAppearanceMenuOpen ? APPEARANCE_OPTIONS.map((option) => {
-                  const active = option.value === appearanceMode;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => {
-                        setAppearanceMode(option.value);
-                        setAppearanceModeState(option.value);
-                        setIsMenuOpen(false);
-                        setIsAppearanceMenuOpen(false);
-                        setIsLocaleMenuOpen(false);
-                        setIsSortMenuOpen(false);
-                      }}
-                      style={{
-                        width: "100%",
-                        border: "none",
-                        background: active ? "var(--selection-bg)" : "transparent",
-                        color: active ? "var(--accent-color)" : "var(--text-primary)",
-                        borderRadius: "8px",
-                        padding: "8px 10px",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        textAlign: "left",
-                        cursor: "pointer",
-                        fontSize: "12px",
-                      }}
-                    >
-                      <span>{t(option.labelKey)}</span>
-                      <span style={{ fontSize: "11px", opacity: active ? 1 : 0 }}>✓</span>
-                    </button>
-                  );
-                }) : null}
+                {isAppearanceMenuOpen ? (
+                  <>
+                    {APPEARANCE_OPTIONS.map((option) => {
+                      const active = option.value === appearanceMode;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => {
+                            setAppearanceMode(option.value);
+                            setAppearanceModeState(option.value);
+                            setIsMenuOpen(false);
+                            setIsAppearanceMenuOpen(false);
+                            setIsLocaleMenuOpen(false);
+                            setIsSortMenuOpen(false);
+                          }}
+                          style={{
+                            width: "100%",
+                            border: "none",
+                            background: active ? "var(--selection-bg)" : "transparent",
+                            color: active ? "var(--accent-color)" : "var(--text-primary)",
+                            borderRadius: "8px",
+                            padding: "8px 10px",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            textAlign: "left",
+                            cursor: "pointer",
+                            fontSize: "12px",
+                          }}
+                        >
+                          <span>{t(option.labelKey)}</span>
+                          <span style={{ fontSize: "11px", opacity: active ? 1 : 0 }}>✓</span>
+                        </button>
+                      );
+                    })}
+                    <div style={{ ...fileTreeMenuButtonStyle, cursor: "default" }}>
+                      <span style={{ flex: 1 }}>{t("fileTree.composerStyle")}</span>
+                      <div
+                        role="group"
+                        aria-label={t("fileTree.composerStyle")}
+                        style={{ display: "flex", gap: "2px", padding: "2px", borderRadius: "7px", background: "var(--menu-active-bg)" }}
+                      >
+                        {(["classic", "modern"] as const).map((style) => (
+                          <button
+                            key={style}
+                            type="button"
+                            aria-pressed={composerStyle === style}
+                            onClick={() => onComposerStyleChange?.(style)}
+                            style={{
+                              border: "none",
+                              borderRadius: "5px",
+                              padding: "4px 8px",
+                              background: composerStyle === style ? "var(--selection-bg)" : "transparent",
+                              color: composerStyle === style ? "var(--accent-color)" : "var(--text-secondary)",
+                              fontSize: "11px",
+                              cursor: "pointer",
+                            }}
+                          >
+                            {t(style === "classic" ? "composerStyle.classic" : "composerStyle.modern")}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {

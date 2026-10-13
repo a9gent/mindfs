@@ -1,0 +1,80 @@
+.composer-selectors, .composer-agent-controls { display: flex; align-items: center; min-width: 0; gap: 5px; }
+.composer-selectors { flex: 0 1 auto; }
+.composer-agent-controls { flex: 0 1 auto; }
+.composer-selector-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 32px; padding: 5px 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text-primary); font: inherit; font-size: calc(13px * var(--mindfs-font-scale, 1)); white-space: nowrap; cursor: pointer; }
+.composer-selector-trigger:hover, .composer-selector-trigger.is-active { background: var(--menu-active-bg); color: var(--accent-color); }
+.composer-selector-trigger:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
+.composer-selector-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-agent-trigger { flex: 0 1 auto; max-width: 160px; }
+.composer-model-trigger { flex: 0 1 auto; max-width: 200px; }
+.composer-selector-chevron { flex: 0 0 auto; color: var(--text-secondary); transition: transform 140ms ease; }
+.composer-selector-chevron.is-open { transform: rotate(180deg); }
+.composer-agent-icon { position: relative; display: flex; flex: 0 0 auto; }
+.composer-agent-warning { position: absolute; top: -4px; right: -5px; display: grid; place-items: center; width: 11px; height: 11px; border-radius: 50%; background: var(--text-secondary); color: var(--menu-bg); font-size: 9px; font-weight: 700; }
+.composer-effort-trigger { flex: 0 0 auto; }
+.composer-selectors--mobile { flex: 1 1 auto; gap: 4px; }
+.composer-selectors--mobile .composer-agent-controls { flex: 1 1 auto; overflow: hidden; }
+.composer-selectors--mobile .composer-agent-trigger { justify-content: flex-start; max-width: none; width: 100%; padding: 6px 2px; }
+.composer-selectors--mobile .composer-effort-trigger { padding: 6px 4px; }
+
+.composer-agent-popover.composer-popover--desktop { width: 440px; }
+.composer-agent-menu { display: grid; grid-template-columns: 132px minmax(0, 1fr); min-height: 270px; }
+.composer-agent-list { min-width: 0; padding: 10px 6px; border-right: 1px solid var(--menu-divider); }
+.composer-menu-caption { display: block; padding: 6px 8px 9px; color: var(--text-secondary); font-size: calc(11px * var(--mindfs-font-scale, 1)); }
+.composer-agent-option { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 39px; padding: 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text-primary); text-align: left; }
+.composer-agent-option > svg, .composer-agent-option > img { flex: 0 0 auto; }
+.composer-agent-option .composer-selector-chevron { width: 10px; margin-left: auto; transform: rotate(-90deg); }
+.composer-agent-option .composer-selector-chevron.is-open { transform: rotate(0); }
+.composer-agent-status { display: grid; place-items: center; width: 14px; height: 14px; flex: 0 0 auto; margin-left: auto; border: 1px solid var(--menu-border); border-radius: 50%; color: var(--text-secondary); font-size: 10px; }
+.composer-agent-option:hover, .composer-model-option:hover, .composer-effort-option:hover, .composer-mode-option:hover, .composer-inline-effort:hover { background: var(--menu-active-bg); }
+.composer-agent-option.is-selected, .composer-model-option.is-selected, .composer-effort-option.is-selected, .composer-mode-option.is-selected, .composer-inline-effort.is-selected { background: var(--menu-active-bg); color: var(--accent-color); }
+.composer-model-panel { min-width: 0; padding: 10px; }
+.composer-model-heading, .composer-effort-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.composer-model-heading > span:last-child, .composer-effort-heading > span:last-child { min-width: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(10px * var(--mindfs-font-scale, 1)); }
+.composer-model-search { display: flex; align-items: center; gap: 8px; min-width: 0; height: 31px; margin: 0 2px 6px; padding: 0 9px; border: 1px solid var(--menu-border); border-radius: 7px; color: var(--text-secondary); background: color-mix(in srgb, var(--text-secondary) 3%, transparent); }
+.composer-model-search svg { flex: 0 0 auto; }
+.composer-model-search input { width: 100%; min-width: 0; border: 0; background: transparent; outline: none; color: var(--text-primary); font-size: calc(12px * var(--mindfs-font-scale, 1)); }
+.composer-model-search:focus-within { border-color: var(--accent-color); }
+.composer-model-search input::placeholder { color: var(--text-secondary); opacity: 0.75; }
+.composer-model-list { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
+.composer-model-option, .composer-effort-option { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-primary); text-align: left; }
+.composer-model-option.is-hidden-model { opacity: 0.65; }
+.composer-selector-check { flex: 0 0 auto; margin-left: auto; color: var(--accent-color); }
+.composer-model-empty { margin: 14px 8px; color: var(--text-secondary); font-size: calc(12px * var(--mindfs-font-scale, 1)); }
+.composer-agent-settings { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--menu-divider); }
+.composer-agent-settings .composer-menu-caption { padding: 0 2px 8px; }
+.composer-inline-effort-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--text-secondary); }
+.composer-inline-effort-heading > span:last-child { font-size: calc(11px * var(--mindfs-font-scale, 1)); }
+.composer-mode-options, .composer-inline-efforts { display: flex; flex-wrap: wrap; gap: 4px; }
+.composer-mode-option, .composer-inline-effort { flex: 1 0 auto; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text-primary); }
+.composer-fast-setting { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; color: var(--text-secondary); }
+.composer-fast-control { display: inline-flex; align-items: center; gap: 8px; border: 0; padding: 2px; background: transparent; color: var(--text-secondary); }
+.composer-fast-control > span:first-child { font-size: calc(11px * var(--mindfs-font-scale, 1)); }
+.composer-toggle-track { display: block; flex: 0 0 auto; width: 28px; height: 16px; padding: 3px; box-sizing: border-box; border-radius: 99px; background: color-mix(in srgb, var(--text-secondary) 25%, transparent); }
+.composer-toggle-track > span { display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--menu-bg); transition: transform 140ms ease; }
+.composer-toggle-track.is-on { background: var(--accent-color); }
+.composer-toggle-track.is-on > span { transform: translateX(12px); }
+.composer-agent-error { margin: 8px 2px; padding: 8px; border: 1px solid var(--menu-border); border-radius: 8px; color: var(--text-secondary); font-size: calc(11px * var(--mindfs-font-scale, 1)); overflow-wrap: anywhere; }
+.composer-agent-error-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.composer-agent-error-heading button { border: 0; padding: 4px 6px; border-radius: 5px; color: var(--accent-color); background: var(--menu-active-bg); }
+.composer-agent-error pre { margin: 8px 0 0; max-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.composer-effort-popover.composer-popover--desktop { width: 270px; padding: 10px; }
+.composer-effort-heading { padding-bottom: 12px; }
+.composer-effort-option { min-height: 41px; }
+.composer-effort-description { color: var(--text-secondary); font-size: calc(12px * var(--mindfs-font-scale, 1)); }
+
+.composer-agent-popover.composer-popover--sheet .composer-agent-menu { display: flex; flex-direction: column; min-height: 0; }
+.composer-agent-popover.composer-popover--sheet .composer-agent-list { display: flex; flex: 0 0 auto; gap: 2px; overflow-x: auto; padding: 0 0 12px; border-right: 0; border-bottom: 1px solid var(--menu-divider); }
+.composer-agent-popover.composer-popover--sheet .composer-agent-option { flex: 0 0 auto; width: auto; padding: 7px; gap: 5px; }
+.composer-agent-popover.composer-popover--sheet .composer-model-panel { padding: 14px 0 0; }
+.composer-agent-popover.composer-popover--sheet .composer-model-search { height: 36px; margin: 0 0 10px; }
+.composer-agent-popover.composer-popover--sheet .composer-model-search input { font-size: calc(16px * var(--mindfs-font-scale, 1)); }
+.composer-agent-popover.composer-popover--sheet .composer-model-list { max-height: min(32dvh, 260px); }
+.composer-agent-popover.composer-popover--sheet .composer-model-option { min-height: 40px; padding: 9px 12px; font-size: calc(15px * var(--mindfs-font-scale, 1)); }
+.composer-agent-popover.composer-popover--sheet .composer-agent-settings { margin-top: 13px; padding-top: 13px; }
+.composer-agent-popover.composer-popover--sheet .composer-fast-setting { min-height: 36px; }
+.composer-agent-popover.composer-popover--sheet .composer-toggle-track { width: 40px; height: 24px; padding: 3px; }
+.composer-agent-popover.composer-popover--sheet .composer-toggle-track > span { width: 18px; height: 18px; }
+.composer-agent-popover.composer-popover--sheet .composer-toggle-track.is-on > span { transform: translateX(16px); }
+.composer-effort-popover.composer-popover--sheet .composer-effort-option { min-height: 44px; font-size: calc(15px * var(--mindfs-font-scale, 1)); }
+@media (prefers-reduced-motion: reduce) { .composer-selector-chevron, .composer-toggle-track > span { transition: none; } }

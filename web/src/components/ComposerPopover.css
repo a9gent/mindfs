@@ -1,0 +1,56 @@
+.composer-popover {
+  position: fixed;
+  z-index: 10110;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--menu-border);
+  background: var(--menu-bg);
+  color: var(--text-primary);
+  box-shadow: none;
+  outline: none;
+  font-size: calc(13px * var(--mindfs-font-scale, 1));
+}
+
+.composer-popover--desktop { border-radius: 14px; }
+.composer-popover-content { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.composer-popover button, .composer-popover input { font: inherit; }
+.composer-popover button { cursor: pointer; }
+.composer-popover button:disabled { cursor: default; opacity: 0.55; }
+.composer-popover button:focus-visible, .composer-popover input:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+
+.composer-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10109;
+  background: rgba(0, 0, 0, 0.38);
+  touch-action: none;
+}
+
+.composer-popover--sheet {
+  border-radius: 20px 20px 0 0;
+  padding: 0 16px max(20px, env(safe-area-inset-bottom), var(--mindfs-safe-area-bottom, 0px));
+  animation: composer-sheet-enter 160ms ease-out;
+}
+
+.composer-sheet-handle {
+  align-self: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 4px;
+  border-radius: 10px;
+  margin: 9px 0 8px;
+  background: color-mix(in srgb, var(--text-secondary) 35%, transparent);
+}
+
+.composer-sheet-heading { display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto; gap: 12px; margin-bottom: 12px; }
+.composer-sheet-heading h2 { margin: 0; font-size: calc(17px * var(--mindfs-font-scale, 1)); font-weight: 600; }
+.composer-sheet-close { display: grid; place-items: center; flex: 0 0 auto; width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary); }
+.composer-sheet-close:hover { background: var(--menu-active-bg); }
+
+@keyframes composer-sheet-enter { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .composer-popover--sheet { animation: none; } }

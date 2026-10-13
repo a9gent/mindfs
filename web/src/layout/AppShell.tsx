@@ -4,6 +4,7 @@ import { useI18n } from "../i18n";
 type AppShellProps = {
   sidebar: React.ReactNode;
   main: React.ReactNode;
+  mobileHeader?: React.ReactNode;
   rightSidebar?: React.ReactNode;
   footer: React.ReactNode;
   drawer?: React.ReactNode;
@@ -90,6 +91,7 @@ const footerStyle: React.CSSProperties = {
 export function AppShell({
   sidebar,
   main,
+  mobileHeader,
   rightSidebar,
   footer,
   drawer,
@@ -216,6 +218,16 @@ export function AppShell({
         >
           {physicalLeftContent}
         </aside>
+      ) : null}
+
+      {isMobile && mobileHeader ? (
+        <div
+          className="mindfs-font-scale-region"
+          data-mindfs-font-scale-region="main"
+          style={{ ...fontScaleStyle(mainFontScale), flexShrink: 0, minWidth: 0 }}
+        >
+          {mobileHeader}
+        </div>
       ) : null}
 
       <main

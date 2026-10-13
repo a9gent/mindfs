@@ -1,0 +1,155 @@
+.session-entry {
+  display: inline-flex;
+  align-items: stretch;
+  height: 32px;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 28%, var(--border-color));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-color) 5%, transparent);
+  color: var(--accent-color);
+}
+
+.session-entry-main,
+.session-entry-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: calc(12px * var(--mindfs-font-scale, 1));
+  cursor: pointer;
+}
+
+.session-entry-main {
+  position: relative;
+  padding: 0 9px;
+  border-radius: 7px 0 0 7px;
+  white-space: nowrap;
+  touch-action: none;
+}
+
+.session-entry-toggle {
+  width: 27px;
+  padding: 0;
+  border-left: 1px solid color-mix(in srgb, var(--accent-color) 20%, var(--border-color));
+  border-radius: 0 7px 7px 0;
+}
+
+.session-entry-main:hover,
+.session-entry-toggle:hover,
+.session-entry[data-open="true"] .session-entry-toggle {
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+}
+
+.session-entry[data-open="true"] .session-entry-toggle svg {
+  transform: rotate(180deg);
+}
+
+.session-entry-main:focus-visible,
+.session-entry-toggle:focus-visible,
+.session-entry-panel button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+
+.session-entry-panel {
+  color: var(--text-primary);
+}
+
+.session-entry-heading {
+  padding: 7px 10px 10px;
+  color: var(--text-secondary);
+  font-size: calc(11px * var(--mindfs-font-scale, 1));
+}
+
+.session-entry-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 43px;
+  padding: 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  font: inherit;
+  font-size: calc(13px * var(--mindfs-font-scale, 1));
+  cursor: pointer;
+}
+
+.session-entry-action:hover,
+.session-entry-back:hover {
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+}
+
+.session-entry-action > svg,
+.session-entry-next,
+.session-entry-shortcut {
+  flex-shrink: 0;
+}
+
+.session-entry-action-label {
+  flex: 1;
+  color: var(--text-primary);
+}
+
+.session-entry-action-label small,
+.session-entry-recent small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: calc(11px * var(--mindfs-font-scale, 1));
+}
+
+.session-entry-shortcut {
+  font-size: calc(10px * var(--mindfs-font-scale, 1));
+}
+
+.session-entry-next {
+  display: flex;
+  transform: rotate(-90deg);
+}
+
+.session-entry-separator {
+  margin: 5px 8px;
+  border-top: 1px solid var(--menu-border);
+}
+
+.session-entry-list-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+  color: var(--text-secondary);
+  font-size: calc(11px * var(--mindfs-font-scale, 1));
+}
+
+.session-entry-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.session-entry-back svg {
+  transform: rotate(90deg);
+}
+
+.session-entry-recent > span,
+.session-entry-recent small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -1,5 +1,18 @@
 import { protectedJSON } from "./api";
 import { appPath } from "./base";
+import { getStoredString, setStoredString } from "./storage";
+
+export type ComposerStyle = "classic" | "modern";
+
+const COMPOSER_STYLE_STORAGE_KEY = "mindfs-composer-style";
+
+export function loadComposerStyle(): ComposerStyle {
+  return getStoredString(COMPOSER_STYLE_STORAGE_KEY) === "modern" ? "modern" : "classic";
+}
+
+export function persistComposerStyle(style: ComposerStyle): void {
+  setStoredString(COMPOSER_STYLE_STORAGE_KEY, style);
+}
 
 export type SessionNamingPreference = {
   agent: string;

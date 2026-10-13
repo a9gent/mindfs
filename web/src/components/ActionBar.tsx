@@ -2,6 +2,11 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { type SessionMode } from "./ModeSelector";
 import { ModeSelector } from "./ModeSelector";
 import { AgentSelector } from "./AgentSelector";
+import { ComposerAgentSelector } from "./ComposerAgentSelector";
+import { ComposerModeSelector, ComposerMoreMenu } from "./ComposerActions";
+import type { ComposerStyle } from "../services/preferences";
+import "./Composer.css";
+import { useComposerResize } from "../hooks/useComposerResize";
 import { fetchAgents, fetchShells, restartAgent, type AgentStatus, type ShellStatus } from "../services/agents";
 import { fetchCandidates, type CandidateItem } from "../services/candidates";
 import { reportError } from "../services/error";
@@ -125,6 +130,8 @@ type ActionBarProps = {
   onToggleRightSidebar?: () => void;
   sidebarsSwapped?: boolean;
   blueRingGestures?: BlueRingGestureConfig;
+  composerStyle?: ComposerStyle;
+  onOpenGestureSettings?: () => void;
 };
 
 function wsStatusMeta(status: WSStatus, t: (key: MessageKey) => string): {
@@ -421,8 +428,11 @@ export function ActionBar({
   sendShortcut = null,
   sidebarsSwapped = false,
   blueRingGestures,
+  composerStyle = "classic",
+  onOpenGestureSettings,
 }: ActionBarProps) {
   const { t } = useI18n();
+  const isModern = composerStyle === "modern";
   const [modelSelectorSignal, setModelSelectorSignal] = useState(0);
   const [mode, setMode] = useState<SessionMode>("chat");
   const [agent, setAgent] = useState("");
@@ -472,6 +482,19 @@ export function ActionBar({
   const inputHistoryDraftRef = useRef("");
   const applyingInputHistoryRef = useRef(false);
   const { isMobile } = useResponsive();
+  const actionBarRef = useRef<HTMLDivElement>(null);
+  const [composerWidth, setComposerWidth] = useState(() => window.innerWidth);
+  const compactComposer = isMobile || composerWidth < 660;
+  const editorMinHeight = isModern ? (compactComposer ? 128 : 120) : 44;
+  const canResizeComposer = isModern && !isMobile;
+  const composerResize = useComposerResize(canResizeComposer, editorMinHeight);
+
+  useEffect(() => {
+    if (!isModern || !actionBarRef.current) return;
+    const observer = new ResizeObserver(([entry]) => setComposerWidth(entry.contentRect.width));
+    observer.observe(actionBarRef.current);
+    return () => observer.disconnect();
+  }, [isModern]);
   const isConnected = status === "connected";
   const [displayStatus, setDisplayStatus] = useState<WSStatus>(status);
   const reconnectDisplayTimerRef = useRef<number | null>(null);
@@ -810,9 +833,17 @@ export function ActionBar({
   }, [candidates, activeCandidateIndex]);
 
   const syncEditorHeight = useCallback(() => {
+    if (isModern) return;
     const height = editorRef.current?.getHeight() || 44;
     setIsMultiLine(height > 50);
-  }, []);
+  }, [isModern]);
+
+  useEffect(() => {
+    if (isModern) return;
+    setIsMultiLine(false);
+    const frame = requestAnimationFrame(syncEditorHeight);
+    return () => cancelAnimationFrame(frame);
+  }, [isModern, syncEditorHeight]);
 
   useEffect(() => {
     if (!editDraftRequest) {
@@ -1246,14 +1277,15 @@ export function ActionBar({
     return () => window.removeEventListener("keydown", cancelOnEscape);
   }, [handleCancel, isCompositionActive, isMobile, showCancel]);
 
-  const inputPlaceholder = mode === "chat"
+  const inputPlaceholder = isModern && mode === "chat"
+    ? t(currentSession ? "composer.continueSession" : "composer.newMessage")
+    : mode === "chat"
     ? !isFocused && placeholderVariant !== 0
       ? t(placeholderVariant === 1 ? "action.placeholder.tip" : "action.placeholder.quickSwitch")
       : t(currentSession ? "action.placeholder.continueSession" : "action.placeholder.newSession")
     : t(mode === "command" ? "action.placeholder.command" : "action.placeholder.plugin");
-  const editorRightInset = isMultiLine ? 14 : mode === "command" ? (isMobile ? 84 : 108) : isMobile ? 116 : 140;
-  const editorBottomInset = isMultiLine ? 44 : 12;
-  const editorMinHeight = 44;
+  const editorRightInset = isModern ? 16 : isMultiLine ? 14 : mode === "command" ? (isMobile ? 84 : 108) : isMobile ? 116 : 140;
+  const editorBottomInset = isModern ? 64 : isMultiLine ? 44 : 12;
   const mobileFileSidebarButton = isMobile ? (
     <button
       type="button"
@@ -1284,9 +1316,10 @@ export function ActionBar({
   ) : null;
 
   return (
-    <div data-onboarding="action-bar" style={{ width: "100%", minWidth: 0, padding: isMobile ? "0 0 var(--mindfs-actionbar-bottom-padding, calc(env(safe-area-inset-bottom, 0px) + 2px))" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
+    <div ref={actionBarRef} data-onboarding="action-bar" data-composer-style={composerStyle} className={isModern ? `composer-modern${compactComposer ? " composer-modern--compact" : ""}` : undefined} style={{ width: "100%", minWidth: 0, padding: isMobile ? "0 0 var(--mindfs-actionbar-bottom-padding, calc(env(safe-area-inset-bottom, 0px) + 2px))" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
       <div style={{ position: "relative", width: "100%", minWidth: 0, display: "flex", flexDirection: "column", gap: 0 }}>
         <div
+            className={isModern ? "composer-status-row" : undefined}
             style={{
               position: "absolute",
               left: "2px",
@@ -1493,8 +1526,8 @@ export function ActionBar({
             ))}
           </div>
         ) : null}
-        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "30px minmax(0, 1fr) 30px" : "1fr", alignItems: isMobile ? "end" : "center", gap: isMobile ? "1px" : 0, padding: isMobile ? "0 1px" : 0, minWidth: 0, maxWidth: "100%" }}>
-          {sidebarsSwapped ? mobileSessionSidebarButton : mobileFileSidebarButton}
+        <div style={{ display: "grid", gridTemplateColumns: isMobile && !isModern ? "30px minmax(0, 1fr) 30px" : "1fr", alignItems: isMobile ? "end" : "center", gap: isMobile ? "1px" : 0, padding: isMobile ? "0 1px" : 0, minWidth: 0, maxWidth: "100%" }}>
+          {!isModern && (sidebarsSwapped ? mobileSessionSidebarButton : mobileFileSidebarButton)}
 
           <div
             style={{
@@ -1506,8 +1539,12 @@ export function ActionBar({
             }}
           >
             <div
+              ref={composerResize.surfaceRef}
+              data-resizable={canResizeComposer || undefined}
+              data-resized={composerResize.height !== undefined || undefined}
               data-mindfs-command-input-width="1"
               data-onboarding="message-input"
+              className={isModern ? "composer-surface" : undefined}
               style={{
                 background: "var(--panel-bg)",
                 border: isFocused
@@ -1521,20 +1558,36 @@ export function ActionBar({
                 alignItems: "center",
                 position: "relative",
                 transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
-                minHeight: `${editorMinHeight}px`,
+                height: composerResize.height,
+                minHeight: `${composerResize.height !== undefined ? composerResize.minHeight : editorMinHeight}px`,
                 minWidth: 0,
                 width: "100%",
                 overflow: "visible",
               }}
             >
+              {canResizeComposer ? (
+                <div
+                  className="composer-resize-handle"
+                  role="separator"
+                  tabIndex={0}
+                  aria-orientation="horizontal"
+                  aria-label={t("composer.resizeHeight")}
+                  aria-valuemin={composerResize.minHeight}
+                  aria-valuemax={composerResize.maxHeight}
+                  aria-valuenow={composerResize.currentHeight}
+                  title={t("composer.resizeHeightHint")}
+                  {...composerResize.handleProps}
+                />
+              ) : null}
 	            <TokenEditor
 	              ref={editorRef}
 	              placeholder={inputPlaceholder}
 	              disabled={sending}
 	              isDark={isDark}
 	              rightInset={editorRightInset}
-	              topInset={0}
+	              topInset={isModern ? 8 : 0}
 	              bottomInset={editorBottomInset}
+	              fillHeight={composerResize.height !== undefined}
               onChange={handleEditorChange}
               onFocusChange={(focused) => {
                 setIsFocused(focused);
@@ -1803,7 +1856,52 @@ export function ActionBar({
               }}
             />
 
-            <div data-onboarding="input-controls" style={{ position: "absolute", right: isMobile ? "4px" : "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: isMobile ? "0px" : "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
+            <div data-onboarding="input-controls" className={isModern ? "composer-toolbar" : undefined} style={{ position: "absolute", right: isMobile ? "4px" : "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: isMobile ? "0px" : "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
+              {isModern ? (
+                <>
+                  {!compactComposer ? <SessionQuickActions variant="button" currentRootId={currentRootId} currentSessionKey={currentSession?.key || currentSession?.session_key} gestureConfig={blueRingGestures} onNewSession={() => { resetForNewSession(); onNewSession(); }} onSelectProject={onSelectProject} onSelectSession={onSelectSession} onToggleFileSidebar={onToggleLeftSidebar} onToggleSessionSidebar={onToggleRightSidebar} onOpenModelSelector={() => setModelSelectorSignal((value) => value + 1)} onOpenGestureSettings={onOpenGestureSettings} /> : null}
+                  {!compactComposer || mode === "command" ? <ComposerModeSelector mode={mode} onModeChange={setMode} disabled={isModeLocked} isMobile={compactComposer} /> : null}
+                  {mode !== "command" ? (
+                    <ComposerAgentSelector
+                      agent={agent}
+                      model={model}
+                      mode={agentMode}
+                      effort={effort}
+                      fastService={fastService}
+                      agents={agents}
+                      isMobile={compactComposer}
+                      onAgentChange={(nextAgent, nextModel) => {
+                        if (nextAgent === agent) {
+                          setModel(nextModel || getAgentDefaults(selectedAgent).model);
+                          return;
+                        }
+                        const defaults = getAgentDefaults(agents.find((item) => item.name === nextAgent));
+                        setAgent(nextAgent);
+                        setModel(nextModel || defaults.model);
+                        setAgentMode("");
+                        setEffort(defaults.effort);
+                        setFastService(defaults.fastService);
+                      }}
+                      onModeChange={(nextMode) => setAgentMode(nextMode || "")}
+                      onEffortChange={(nextEffort) => setEffort(nextEffort || "")}
+                      onFastServiceChange={(nextFastService) => setFastService(nextFastService || "")}
+                      onAgentRestart={async (targetAgent) => {
+                        await restartAgent(targetAgent);
+                        setAgents(await fetchAgents(true));
+                      }}
+                      openSignal={modelSelectorSignal}
+                    />
+                  ) : <ShellSelector shell={shell} shells={shells} onShellChange={setShell} compact />}
+                  <span className="composer-toolbar-spacer" />
+                  {compactComposer ? (
+                    <>
+                      <SessionQuickActions currentRootId={currentRootId} currentSessionKey={currentSession?.key || currentSession?.session_key} gestureConfig={blueRingGestures} onNewSession={() => { resetForNewSession(); onNewSession(); }} onSelectProject={onSelectProject} onSelectSession={onSelectSession} onToggleFileSidebar={onToggleLeftSidebar} onToggleSessionSidebar={onToggleRightSidebar} onOpenModelSelector={() => setModelSelectorSignal((value) => value + 1)} />
+                      <ComposerMoreMenu mode={mode} onModeChange={setMode} modeLocked={isModeLocked} attachmentDisabled={!currentRootId || sending} hasAttachments={pendingAttachments.length > 0} onAddAttachment={() => attachmentInputRef.current?.click()} onNewSession={() => { resetForNewSession(); onNewSession(); }} onToggleFileSidebar={isMobile ? undefined : onToggleLeftSidebar} onToggleSessionSidebar={isMobile ? undefined : onToggleRightSidebar} onOpenGestureSettings={onOpenGestureSettings} />
+                    </>
+                  ) : null}
+                </>
+              ) : (
+                <>
               <SessionQuickActions currentRootId={currentRootId} currentSessionKey={currentSession?.key || currentSession?.session_key} gestureConfig={blueRingGestures} onNewSession={() => { resetForNewSession(); onNewSession(); }} onSelectProject={onSelectProject} onSelectSession={onSelectSession} onToggleFileSidebar={onToggleLeftSidebar} onToggleSessionSidebar={onToggleRightSidebar} onOpenModelSelector={() => setModelSelectorSignal((value) => value + 1)} />
               <>
                 <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} onboardingId="mode-selector" viewportMenu />
@@ -1851,9 +1949,14 @@ export function ActionBar({
                 )}
               </>
 
+                </>
+              )}
+
               <>
                 <button
                 data-onboarding="attachment-action"
+                className={isModern ? "composer-attachment" : undefined}
+                hidden={isModern && compactComposer}
                 type="button"
                 onClick={() => attachmentInputRef.current?.click()}
                 disabled={!currentRootId || sending}
@@ -1885,6 +1988,10 @@ export function ActionBar({
                 </button>
                 <button
                 data-onboarding="send-action"
+                className={isModern ? "composer-send" : undefined}
+                data-action={showCancel ? "stop" : "send"}
+                aria-label={t(showCancel ? "composer.stop" : "composer.send")}
+                title={t(showCancel ? "composer.stop" : "composer.send")}
                 type="button"
                 onClick={showCancel ? handleCancel : handleSend}
                 disabled={showCancel ? cancelling : !canSend}
@@ -1916,7 +2023,7 @@ export function ActionBar({
           </div>
           </div>
 
-          {sidebarsSwapped ? mobileFileSidebarButton : mobileSessionSidebarButton}
+          {!isModern && (sidebarsSwapped ? mobileFileSidebarButton : mobileSessionSidebarButton)}
         </div>
         {attachedFileContext ? (
           <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", padding: isMobile ? "6px 4px 0" : "0 4px" }}>

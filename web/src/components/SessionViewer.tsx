@@ -80,6 +80,7 @@ type SessionViewerProps = {
   rootId?: string | null;
   rootPath?: string | null;
   interactionMode?: "main" | "drawer";
+  hideHeader?: boolean;
   targetSeq?: number;
   gitFileStatsByPath?: Record<
     string,
@@ -1059,6 +1060,7 @@ function SessionViewerInner({
   rootId,
   rootPath,
   interactionMode = "main",
+  hideHeader = false,
   targetSeq = 0,
   targetSeqRequestKey = "",
   gitFileStatsByPath = {},
@@ -2659,7 +2661,7 @@ function SessionViewerInner({
         background: "transparent",
       }}
     >
-      {interactionMode === "drawer" ? null : (
+      {interactionMode === "drawer" || hideHeader ? null : (
         <header
           style={{
             height: "36px",
@@ -3316,6 +3318,7 @@ export const SessionViewer = memo(
     prev.rootId === next.rootId &&
     prev.rootPath === next.rootPath &&
     prev.interactionMode === next.interactionMode &&
+    prev.hideHeader === next.hideHeader &&
     prev.targetSeq === next.targetSeq &&
     prev.targetSeqRequestKey === next.targetSeqRequestKey &&
     prev.composerOverlayInset === next.composerOverlayInset &&
