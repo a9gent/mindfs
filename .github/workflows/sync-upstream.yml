@@ -1,0 +1,29 @@
+name: Sync upstream a9gent/mindfs
+
+on:
+  schedule:
+    - cron: '23 2 * * 1'   # 每周一 02:23 UTC（≈10:23 北京）
+  workflow_dispatch: {}     # 允许手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Merge upstream
+        run: |
+          git remote add upstream https://github.com/a9gent/mindfs.git
+          git fetch upstream main
+          git config user.name  "unixcs"
+          git config user.email "unixcs@users.noreply.github.com"
+          git merge --no-edit upstream/main || {
+            echo "::error::upstream merge conflict — 需要人工处理，本 workflow 失败即信号"
+            exit 1
+          }
+          git push origin main
