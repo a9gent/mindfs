@@ -170,6 +170,9 @@ import {
   type SessionFilterState,
 } from "./services/sessionFilter";
 import { HandoffPackDialog } from "./components/HandoffPackDialog";
+import { GlobalSearchDialog } from "./components/GlobalSearchDialog";
+import { AddToKanbanDialog } from "./components/AddToKanbanDialog";
+import { ownNodePageURL } from "./services/nodePage";
 import { QuickSaveFilePanel } from "./components/QuickSaveFilePanel";
 import { ExternalSessionList } from "./components/ExternalSessionList";
 import { InlineTokenText } from "./components/InlineTokenText";
@@ -228,6 +231,7 @@ const CHILD_SESSION_PAGE_SIZE = 100;
 const MULTI_PROJECT_SESSION_LIMIT = 6;
 const SESSION_PAGE_SIZE = 50;
 const MULTI_PROJECT_SESSION_STORAGE_KEY = "mindfs-multi-project-session-list";
+const FLAT_SESSION_LIST_STORAGE_KEY = "mindfs-flat-session-list";
 const APP_DOCUMENT_TITLE = "MindFS";
 
 function formatDocumentTitle(relayStatus: RelayStatusPayload | null): string {
@@ -1610,6 +1614,10 @@ export function App({ onGoHome }: AppProps) {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem(MULTI_PROJECT_SESSION_STORAGE_KEY) === "1";
   });
+  const [flatSessionListEnabled, setFlatSessionListEnabled] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(FLAT_SESSION_LIST_STORAGE_KEY) === "1";
+  });
   const [multiProjectSessionGroups, setMultiProjectSessionGroups] = useState<MultiProjectSessionGroup[]>([]);
   const [multiProjectSessionsLoading, setMultiProjectSessionsLoading] = useState(false);
   const [multiProjectPendingByKey, setMultiProjectPendingByKey] = useState<Record<string, boolean>>({});
@@ -2985,6 +2993,12 @@ export function App({ onGoHome }: AppProps) {
     );
   }, [multiProjectSessionsEnabled]);
   useEffect(() => {
+    window.localStorage.setItem(
+      FLAT_SESSION_LIST_STORAGE_KEY,
+      flatSessionListEnabled ? "1" : "0",
+    );
+  }, [flatSessionListEnabled]);
+  useEffect(() => {
     sessionListModeRef.current = sessionListMode;
     if (sessionListMode !== "local") {
       setSessionSearchOpen(false);
@@ -3196,6 +3210,55 @@ export function App({ onGoHome }: AppProps) {
     if (!template) return;
     openTaskCreateDialog(template);
   }, [taskTemplates, taskTemplateFilter, openTaskCreateDialog]);
+  // ---- 蓝环新动作：全局搜索 / 节点页 / 手势设置 / 看板快捷操作 ----
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [addToKanbanSession, setAddToKanbanSession] = useState<SessionItem | null>(null);
+  const handleAddToKanban = useCallback((session: SessionItem) => {
+    setAddToKanbanSession(session);
+  }, []);
+  const handleOpenNodesPage = useCallback(() => {
+    window.location.assign(ownNodePageURL());
+  }, []);
+  const handleOpenGestureSettings = useCallback(() => {
+    setOpenBlueRingSettingsRequest(Date.now());
+  }, []);
+  const kanbanSelectedTaskRef = useRef<KanbanTask | null>(null);
+  const handleKanbanCreateTask = useCallback(() => {
+    const rootID = currentRootIdRef.current;
+    if (rootID) {
+      setMainContentViewForRoot(rootID, "task-kanban");
+    }
+    createTaskFromQuickAction();
+  }, [createTaskFromQuickAction, setMainContentViewForRoot]);
+  const handleKanbanEditTask = useCallback(() => {
+    const task = kanbanSelectedTaskRef.current;
+    const rootID = currentRootIdRef.current;
+    if (!task) {
+      reportError("file.write_failed", t("blueRing.noKanbanTaskSelected"));
+      return;
+    }
+    if (rootID) {
+      setMainContentViewForRoot(rootID, "task-kanban");
+    }
+    void openTaskEditDialog(task);
+  }, [openTaskEditDialog, setMainContentViewForRoot, t]);
+  const handleKanbanStartTask = useCallback(() => {
+    const task = kanbanSelectedTaskRef.current;
+    if (!task) {
+      reportError("file.write_failed", t("blueRing.noKanbanTaskSelected"));
+      return;
+    }
+    void handleMoveKanbanTask(task, "run-now");
+  }, [handleMoveKanbanTask, t]);
+  const handleKanbanCompleteTask = useCallback(() => {
+    const task = kanbanSelectedTaskRef.current;
+    if (!task) {
+      reportError("file.write_failed", t("blueRing.noKanbanTaskSelected"));
+      return;
+    }
+    void handleMoveKanbanTask(task, "complete");
+  }, [handleMoveKanbanTask, t]);
+
   const openScheduledTasksFromQuickAction = useCallback(() => {
     setScheduledAgentSession(null);
     setScheduledAgentDialogOpen(true);
@@ -3319,6 +3382,39 @@ export function App({ onGoHome }: AppProps) {
     [],
   );
   const bumpCacheVersion = useCallback(() => setCacheVersion((v) => v + 1), []);
+  const handleKanbanAttached = useCallback(
+    (updated: SessionItem) => {
+      const rootId = updated.root_id || currentRootIdRef.current || "";
+      const key = updated.key || updated.session_key;
+      const cacheKey = rootSessionKey(rootId, key);
+      const cached = sessionCacheRef.current[cacheKey];
+      if (cached) {
+        sessionCacheRef.current[cacheKey] = { ...cached, name: updated.name || cached.name, task_id: updated.task_id || cached.task_id };
+      }
+      bumpCacheVersion();
+      setMultiProjectSessionGroups((prev) =>
+        prev.map((group) =>
+          group.rootId === rootId
+            ? {
+                ...group,
+                sessions: group.sessions.map((item) =>
+                  item.key === key ? { ...item, name: updated.name || item.name, task_id: updated.task_id || item.task_id } : item,
+                ),
+              }
+            : group,
+        ),
+      );
+    },
+    [bumpCacheVersion, rootSessionKey],
+  );
+  const [openBlueRingSettingsRequest, setOpenBlueRingSettingsRequest] = useState(0);
+  const handleGlobalSearchOpen = useCallback(() => {
+    setGlobalSearchOpen(true);
+  }, []);
+  const handleGlobalSearchOpenHit = useCallback((rootId: string, sessionKey: string) => {
+    if (!rootId || !sessionKey) return;
+    void handleSelectSessionRef.current?.({ root_id: rootId, key: sessionKey });
+  }, []);
   const clearRootScopedClientState = useCallback((rootID: string, options?: { removeLastRoot?: boolean }) => {
     const root = String(rootID || "").trim();
     if (!root) {
@@ -5297,67 +5393,72 @@ export function App({ onGoHome }: AppProps) {
 
   const executeSessionSearch = useCallback(() => {
     const trimmed = sessionSearchQuery.trim();
-    if (trimmed.length < 2) {
+    if (!trimmed) {
       return;
     }
     setSessionSearchResultsMode(true);
     setSessionSearchAppliedQuery(trimmed);
   }, [sessionSearchQuery]);
 
+  const sessionSearchCancelRef = useRef<(() => void) | null>(null);
   useEffect(() => {
-    if (
-      sessionListMode !== "local" ||
-      !sessionSearchOpen ||
-      !currentRootId ||
-      !sessionSearchAppliedQuery
-    ) {
+    if (!sessionSearchOpen || !currentRootId || !sessionSearchAppliedQuery) {
       setSessionSearchLoading(false);
       return;
     }
-
-    let cancelled = false;
-    const searchAcrossRoots = multiProjectSessionsEnabled;
-    setSessionSearchLoading(true);
-    void sessionService
-      .searchSessions(currentRootId, sessionSearchAppliedQuery, 20, {
-        multiRoot: searchAcrossRoots,
-      })
-      .then((hits) => {
-        if (cancelled) return;
-        const mapped = hits
-          .map((hit) => {
-            const hitRootId = String(hit.root_id || currentRootId || "");
-            const item = toSessionItem(hitRootId, {
-              ...hit,
-              root_id: hitRootId,
-              search_seq: hit.seq,
-              search_snippet: hit.snippet,
-              search_match_type: hit.match_type,
-            });
-            return item;
-          })
-          .filter((item): item is SessionItem => !!item);
-        setSessionSearchResults(mapped);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        console.error("[session.search] failed", {
-          rootId: currentRootId,
-          query: sessionSearchAppliedQuery,
-          err,
+    // 300ms debounce，避免每键一发请求（多根搜索后端是逐项目串行扫描）
+    const timer = window.setTimeout(() => {
+      let cancelled = false;
+      const searchAcrossRoots = multiProjectSessionsEnabled;
+      setSessionSearchLoading(true);
+      void sessionService
+        .searchSessions(currentRootId, sessionSearchAppliedQuery, 20, {
+          multiRoot: searchAcrossRoots,
+          rethrow: true,
+        })
+        .then((hits) => {
+          if (cancelled) return;
+          const mapped = hits
+            .map((hit) => {
+              const hitRootId = String(hit.root_id || currentRootId || "");
+              const item = toSessionItem(hitRootId, {
+                ...hit,
+                root_id: hitRootId,
+                search_seq: hit.seq,
+                search_snippet: hit.snippet,
+                search_match_type: hit.match_type,
+              });
+              return item;
+            })
+            .filter((item): item is SessionItem => !!item);
+          setSessionSearchResults(mapped);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          console.error("[session.search] failed", {
+            rootId: currentRootId,
+            query: sessionSearchAppliedQuery,
+            err,
+          });
+          setSessionSearchResults([]);
+          reportError("session.search_failed", err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setSessionSearchLoading(false);
+          }
         });
-        setSessionSearchResults([]);
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setSessionSearchLoading(false);
-        }
-      });
+      sessionSearchCancelRef.current = () => {
+        cancelled = true;
+      };
+    }, 300);
 
     return () => {
-      cancelled = true;
+      window.clearTimeout(timer);
+      sessionSearchCancelRef.current?.();
+      sessionSearchCancelRef.current = null;
     };
-  }, [currentRootId, multiProjectSessionsEnabled, sessionListMode, sessionSearchAppliedQuery, sessionSearchOpen]);
+  }, [currentRootId, multiProjectSessionsEnabled, sessionSearchAppliedQuery, sessionSearchOpen]);
 
   const openGitDiff = useCallback(
     async (rootID: string, item: GitStatusItem, options?: { preserveRelatedSelection?: boolean; repoPath?: string }) => {
@@ -5977,6 +6078,28 @@ export function App({ onGoHome }: AppProps) {
       setDrawerSessionForRoot,
       setMultiProjectSessionPending,
     ],
+  );
+
+  const handleBatchDeleteSessions = useCallback(
+    async (targets: SessionItem[]) => {
+      const total = targets.length;
+      let failed = 0;
+      for (const target of targets) {
+        try {
+          await handleDeleteSession(target);
+        } catch {
+          failed += 1;
+        }
+      }
+      const deleted = total - failed;
+      if (deleted > 0) {
+        reportError("session.delete_failed", t("sessionList.cleanupDone", { count: deleted }), { severity: "info" });
+      }
+      if (failed > 0) {
+        reportError("session.delete_failed", t("sessionList.cleanupFailed", { count: failed }));
+      }
+    },
+    [handleDeleteSession, t],
   );
 
   const handleRenameSession = useCallback(
@@ -11323,6 +11446,8 @@ export function App({ onGoHome }: AppProps) {
 	    () => kanbanTasks.find((task) => task.id === selectedKanbanTaskId) || null,
 	    [kanbanTasks, selectedKanbanTaskId],
 	  );
+	  // 蓝环手势 ref：手势回调可能发生在看板视图卸载后，state 闭包拿不到选中任务
+	  kanbanSelectedTaskRef.current = selectedKanbanTask;
 	  const selectedKanbanTaskSessionKey = useMemo(() => {
 	    if (!selectedKanbanTask) return "";
 	    const keys = taskSessionKeysById[selectedKanbanTask.id] || [];
@@ -14469,8 +14594,12 @@ export function App({ onGoHome }: AppProps) {
         onLoadMoreProject={loadMoreMultiProjectSessions}
         onLoadChildren={loadChildSessionsForParent}
         onHandoffPack={handleHandoffPack}
+        onAddToKanban={handleAddToKanban}
         filter={sessionFilter}
         onFilterChange={handleSessionFilterChange}
+        flatMode={multiProjectSessionsEnabled && flatSessionListEnabled}
+        onBatchDelete={handleBatchDeleteSessions}
+        currentSessionKey={selectedSession?.key || ""}
       />
     ) : (
       <SessionList
@@ -14568,6 +14697,7 @@ export function App({ onGoHome }: AppProps) {
             : hasMoreSessions
         }
         onHandoffPack={handleHandoffPack}
+        onAddToKanban={handleAddToKanban}
         filter={sessionFilter}
         onFilterChange={handleSessionFilterChange}
       />
@@ -14833,11 +14963,14 @@ export function App({ onGoHome }: AppProps) {
             onSidebarsSwappedChange={setSidebarsSwapped}
             blueRingGestures={blueRingGestures}
             onBlueRingGesturesChange={setBlueRingGestures}
+            openBlueRingSettingsRequest={openBlueRingSettingsRequest}
             taskTemplates={taskTemplates.map((template) => ({ id: template.id || "", name: template.name || "" }))}
             gitDiffSideBySide={gitDiffSideBySide}
             onGitDiffSideBySideChange={setGitDiffSideBySide}
             multiProjectSessionsEnabled={multiProjectSessionsEnabled}
             onMultiProjectSessionsChange={setMultiProjectSessionsEnabled}
+            flatSessionListEnabled={flatSessionListEnabled}
+            onFlatSessionListChange={setFlatSessionListEnabled}
             fontSizePreferences={fontSizePreferences}
             onFontSizePreferencesChange={setFontSizePreferences}
             onRunAgentLifecycleCommand={handleRunAgentLifecycleCommand}
@@ -14972,6 +15105,13 @@ export function App({ onGoHome }: AppProps) {
               onRenameCurrentFile={handleRenameCurrentFile}
               onCopyCurrentFilePath={handleCopyCurrentFilePath}
               onCopySessionHandoff={handleCopySessionHandoff}
+              onGlobalSearch={handleGlobalSearchOpen}
+              onOpenNodesPage={handleOpenNodesPage}
+              onOpenGestureSettings={handleOpenGestureSettings}
+              onKanbanCreateTask={handleKanbanCreateTask}
+              onKanbanEditTask={handleKanbanEditTask}
+              onKanbanStartTask={handleKanbanStartTask}
+              onKanbanCompleteTask={handleKanbanCompleteTask}
               recentFiles={recentQuickFiles}
               onOpenFileFromQuickSwitch={(path) => { void actionHandlers.open({ path, root: currentRootIdRef.current || "" }); }}
               taskGroupBadge={actionBarSessionKey ? <TaskGroupPanel key={`${actionBarSession?.root_id || currentRootId}:${actionBarSessionKey}`} rootId={actionBarSession?.root_id || currentRootId || ""} sessionKey={actionBarSessionKey} renderTask={(detail, close) => renderKanbanTaskCard(detail.task, isTerminalKanbanTask(detail.task) ? t("task.column.done") : t("task.column.running"), detail, true, close)} /> : null}
@@ -15085,6 +15225,17 @@ export function App({ onGoHome }: AppProps) {
             )}
           </BottomSheet>
         }
+      />
+      <GlobalSearchDialog
+        open={globalSearchOpen}
+        onClose={() => setGlobalSearchOpen(false)}
+        onOpenHit={handleGlobalSearchOpenHit}
+      />
+      <AddToKanbanDialog
+        open={!!addToKanbanSession}
+        session={addToKanbanSession}
+        onClose={() => setAddToKanbanSession(null)}
+        onAttached={handleKanbanAttached}
       />
       <HandoffPackDialog
         session={handoffPackSession}

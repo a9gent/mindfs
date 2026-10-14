@@ -359,6 +359,14 @@ export async function updateTaskInput(
   });
 }
 
+export async function attachSessionToTask(rootId: string, taskId: string, sessionKey: string): Promise<TaskDetail> {
+  return protectedJSON<TaskDetail>(appURL(`/api/tasks/${encodeURIComponent(taskId)}/attach-session`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ root_id: rootId, session_key: sessionKey }),
+  });
+}
+
 export async function moveTask(rootId: string, taskId: string, action: "next" | "run-now" | "prev" | "pause" | "resume" | "complete" | "cancel" | "fail", reason = ""): Promise<TaskDetail> {
   return protectedJSON<TaskDetail>(appURL(`/api/tasks/${encodeURIComponent(taskId)}/${action}`), {
     method: "POST",

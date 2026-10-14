@@ -131,6 +131,18 @@ func (s *AppContext) GetSessionManager(rootID string) (*session.Manager, error) 
 	return mgr, nil
 }
 
+// BindSessionTask stamps task_id onto a chat session; the kanban AttachSession
+// flow calls it so a manually created session can serve as a task's main
+// session. Refuses when the session is already bound to another task.
+func (s *AppContext) BindSessionTask(ctx context.Context, rootID, sessionKey, taskID string) error {
+	manager, err := s.GetSessionManager(rootID)
+	if err != nil {
+		return err
+	}
+	_, err = manager.SetTaskID(ctx, sessionKey, taskID)
+	return err
+}
+
 func (s *AppContext) GetKanbanService() (*kanban.Service, error) {
 	if s == nil {
 		return nil, errors.New("app context required")

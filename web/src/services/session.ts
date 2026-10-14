@@ -1265,7 +1265,7 @@ class SessionService {
     rootId: string,
     query: string,
     limit?: number,
-    options?: { multiRoot?: boolean },
+    options?: { multiRoot?: boolean; rethrow?: boolean },
   ): Promise<SessionSearchHit[]> {
     try {
       const trimmed = query.trim();
@@ -1287,6 +1287,9 @@ class SessionService {
         : [];
     } catch (err) {
       console.error("[Session] Failed to search sessions:", err);
+      if (options?.rethrow) {
+        throw err;
+      }
       return [];
     }
   }

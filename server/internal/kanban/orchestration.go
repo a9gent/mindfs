@@ -134,9 +134,15 @@ func (s *Service) PatchTask(ctx context.Context, root, id string, p TaskPatch) (
 	if isTerminalStatus(t.Status) && !preparationFailed {
 		return TaskDetail{}, errors.New("completed or cancelled task configuration cannot be edited; send execution instructions with -to-task for completed tasks")
 	}
-	config := p.Input != nil || p.Agent != nil || p.Model != nil || p.CreateWorktree != nil || p.WorktreeBranch != nil || p.WorktreeBranchMode != nil || p.DependsOn != nil
-	if config && (t.MainSessionKey != "" || t.SchedulerAdmitted || t.CurrentStageIndex != 0 || (isTerminalStatus(t.Status) && !preparationFailed)) {
+	inputOnly := p.Input != nil && p.Agent == nil && p.Model == nil && p.CreateWorktree == nil && p.WorktreeBranch == nil && p.WorktreeBranchMode == nil && p.DependsOn == nil
+	config := inputOnly || p.Agent != nil || p.Model != nil || p.CreateWorktree != nil || p.WorktreeBranch != nil || p.WorktreeBranchMode != nil || p.DependsOn != nil
+	// An attached main session only pre-binds the stage-0 conversation; it does
+	// not admit the task to the scheduler, so editing the input stays allowed.
+	if config && !inputOnly && (t.MainSessionKey != "" || t.SchedulerAdmitted || t.CurrentStageIndex != 0 || (isTerminalStatus(t.Status) && !preparationFailed)) {
 		return TaskDetail{}, errors.New("execution configuration can only change before first execution")
+	}
+	if inputOnly && (t.SchedulerAdmitted || t.CurrentStageIndex != 0 || (isTerminalStatus(t.Status) && !preparationFailed)) {
+		return TaskDetail{}, errors.New("input can only change before first execution")
 	}
 	if p.PlanVersion != nil {
 		g, err := store.getGroup(ctx, t.GroupID)
@@ -246,6 +252,86 @@ func (s *Service) PatchTask(ctx context.Context, root, id string, p TaskPatch) (
 	s.taskGroupChanged(ctx, store, t.GroupID)
 	return s.changed(ctx, store, id)
 }
+// AttachSession binds an existing chat session as a task's main session.
+// Kept separate from PatchTask: the terminal-status and config guards there
+// protect execution configuration, while attach is a plain 1:1 binding that
+// must stay available on an untouched task and must never overwrite either
+// side of an existing binding. Attach is refused once the task has started
+// executing (scheduler admission, worktree creation or a terminal state), so
+// the bound session always becomes the task_main session at stage 0.
+//
+// Ordering: the task record is committed first, then the session side is
+// bound. If binding fails the task binding is reverted, leaving both sides
+// untouched instead of a task pointing at an unbound session.
+func (s *Service) AttachSession(ctx context.Context, root, id, sessionKey string) (TaskDetail, error) {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return TaskDetail{}, errors.New("session_key required")
+	}
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	store, err := s.taskStore(root)
+	if err != nil {
+		return TaskDetail{}, err
+	}
+	t, err := store.GetTask(ctx, id)
+	if err != nil {
+		return TaskDetail{}, err
+	}
+	if t.RootID != root {
+		return TaskDetail{}, errors.New("task does not belong to this project")
+	}
+	if t.MainSessionKey != "" {
+		return TaskDetail{}, errors.New("task already has a main session")
+	}
+	if isTerminalStatus(t.Status) {
+		return TaskDetail{}, errors.New("cannot attach a session to a completed or cancelled task")
+	}
+	if t.SchedulerAdmitted || t.WorktreePath != "" || t.CreateWorktree || t.CurrentStageIndex != 0 {
+		return TaskDetail{}, errors.New("task has already started; attach is only available before first execution")
+	}
+	if s.sessionBinder == nil {
+		return TaskDetail{}, errors.New("session binder unavailable")
+	}
+	t.MainSessionKey = sessionKey
+	t.UpdatedAt = time.Now().UTC()
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return TaskDetail{}, err
+	}
+	defer tx.Rollback()
+	if err = updateTaskCore(ctx, tx, t); err != nil {
+		return TaskDetail{}, err
+	}
+	if err = bumpGroup(ctx, tx, t.GroupID); err != nil {
+		return TaskDetail{}, err
+	}
+	if err = insertTaskEvent(ctx, tx, TaskEvent{ID: newID("event"), TaskID: id, Type: "attached", Payload: eventPayload(map[string]any{"session_key": sessionKey}), CreatedAt: time.Now().UTC()}); err != nil {
+		return TaskDetail{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return TaskDetail{}, err
+	}
+	if err := s.sessionBinder.BindSessionTask(ctx, root, sessionKey, id); err != nil {
+		// Compensate: drop the task-side binding so neither record claims a link.
+		if rt, gerr := store.GetTask(ctx, id); gerr == nil && rt.MainSessionKey == sessionKey {
+			rt.MainSessionKey = ""
+			rt.UpdatedAt = time.Now().UTC()
+			if rtx, rerr := store.db.BeginTx(ctx, nil); rerr == nil {
+				if uerr := updateTaskCore(ctx, rtx, rt); uerr == nil {
+					if cerr := rtx.Commit(); cerr != nil {
+						rtx.Rollback()
+					}
+				} else {
+					rtx.Rollback()
+				}
+			}
+		}
+		return TaskDetail{}, err
+	}
+	return s.changed(ctx, store, id)
+}
+
 func (s *Service) changed(ctx context.Context, store *TaskStore, id string) (TaskDetail, error) {
 	d, e := store.GetDetail(ctx, id)
 	if e == nil && s.Runner != nil {
