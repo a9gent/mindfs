@@ -1,9 +1,15 @@
 import React, { useState, useEffect } from "react";
 import { useI18n } from "../i18n";
+import { rootBadgeButtonStyle } from "../components/rootBadgeStyle";
 
 type AppShellProps = {
   sidebar: React.ReactNode;
   main: React.ReactNode;
+  mobileHeader?: {
+    projectLabel: string | null;
+    title: string;
+    onProjectClick?: () => void;
+  };
   rightSidebar?: React.ReactNode;
   footer: React.ReactNode;
   drawer?: React.ReactNode;
@@ -87,9 +93,17 @@ const footerStyle: React.CSSProperties = {
   minWidth: 0,
 };
 
+const mobileHeaderButtonStyle: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  width: 44, height: 44, padding: 0, border: 0, borderRadius: 6,
+  background: "transparent", color: "var(--text-secondary)", cursor: "pointer",
+  WebkitTapHighlightColor: "transparent",
+};
+
 export function AppShell({
   sidebar,
   main,
+  mobileHeader,
   rightSidebar,
   footer,
   drawer,
@@ -195,6 +209,27 @@ export function AppShell({
     flexShrink: 0,
   };
 
+  const mobileSidebarButton = (file: boolean) => (
+    <button type="button" data-mobile-sidebar={file ? "file" : "session"} style={mobileHeaderButtonStyle}
+      aria-label={t(file ? "sidebar.openFile" : "sidebar.openSession")}
+      title={t(file ? "sidebar.openFile" : "sidebar.openSession")}
+      onClick={() => { (file ? onCloseRight : onCloseLeft)?.(); (file ? onOpenLeft : onOpenRight)?.(); }}>
+      {file ? (
+        <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <path fill="currentColor" d="M3 3h6v4H3zm12 7h6v4h-6zm0 7h6v4h-6zm-2-4H7v5h6v2H5V9h2v2h6z"
+            style={{ transform: "scale(1.28)", transformOrigin: "12px 12px" }} />
+        </svg>
+      ) : (
+        <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.8" strokeLinecap="round">
+          <line x1="6" y1="4" x2="18" y2="4" />
+          <line x1="6" y1="12" x2="18" y2="12" />
+          <line x1="6" y1="20" x2="18" y2="20" />
+        </svg>
+      )}
+    </button>
+  );
+  const ellipsis: React.CSSProperties = { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+
   return (
     <div style={shellStyle} data-onboarding="shell">
       {isMobile && <div style={overlayStyle} onClick={() => { onCloseLeft?.(); onCloseRight?.(); }} />}
@@ -216,6 +251,31 @@ export function AppShell({
         >
           {physicalLeftContent}
         </aside>
+      ) : null}
+
+      {isMobile && mobileHeader ? (
+        <header className="mobile-workspace-header mindfs-font-scale-region" data-mindfs-font-scale-region="main" style={{
+          ...fontScaleStyle(mainFontScale), flexShrink: 0,
+          display: "grid", gridTemplateColumns: "44px minmax(0, 1fr) 44px", alignItems: "center",
+          gap: 4, width: "100%", height: 52, minWidth: 0, boxSizing: "border-box", padding: "3px 6px",
+          borderBottom: "1px solid var(--border-color)", background: "var(--mindfs-topbar-bg, var(--content-bg))", color: "var(--text-primary)",
+        }}>
+          {mobileSidebarButton(!sidebarsSwapped)}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+            {mobileHeader.projectLabel ? (
+              <button type="button" onClick={mobileHeader.onProjectClick} disabled={!mobileHeader.onProjectClick} title={mobileHeader.projectLabel}
+                style={{ ...mobileHeaderButtonStyle, flexShrink: 1, width: "auto", minWidth: 44, maxWidth: mobileHeader.title ? "44%" : "100%", cursor: mobileHeader.onProjectClick ? "pointer" : "default" }}>
+                <span style={{ ...rootBadgeButtonStyle, ...ellipsis, padding: "6px 8px" }}>{mobileHeader.projectLabel}</span>
+              </button>
+            ) : null}
+            {mobileHeader.title ? <h1 title={mobileHeader.title} style={{ ...ellipsis, flex: 1, margin: 0, fontSize: 16, fontWeight: 600, lineHeight: 1.3 }}>{mobileHeader.title}</h1> : null}
+          </div>
+          {mobileSidebarButton(sidebarsSwapped)}
+          <style>{`
+            .mobile-workspace-header button:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
+            .mobile-workspace-header button:active { background: var(--root-badge-bg); }
+          `}</style>
+        </header>
       ) : null}
 
       <main

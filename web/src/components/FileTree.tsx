@@ -57,6 +57,7 @@ import {
   updateIdleSessionResourceReleasePreference,
   updateNewProjectMetaLocationPreference,
   updateSessionNamingPreference,
+  type ComposerStyle,
   type NewProjectMetaLocation,
 } from "../services/preferences";
 import {
@@ -203,9 +204,13 @@ type FileTreeProps = {
   showSendShortcutOption?: boolean;
   sendShortcut?: SendShortcut | null;
   onSendShortcutChange?: (shortcut: SendShortcut | null) => void;
+  composerStyle?: ComposerStyle;
+  onComposerStyleChange?: (style: ComposerStyle) => void;
   sidebarsSwapped?: boolean;
   onSidebarsSwappedChange?: (enabled: boolean) => void;
   blueRingGestures?: BlueRingGestureConfig;
+  blueRingSettingsSignal?: number;
+  onBlueRingSettingsOpened?: () => void;
   onBlueRingGesturesChange?: (config: BlueRingGestureConfig) => void;
   gitDiffSideBySide?: boolean;
   onGitDiffSideBySideChange?: (enabled: boolean) => void;
@@ -1496,9 +1501,13 @@ export function FileTree({
   showSendShortcutOption = false,
   sendShortcut = null,
   onSendShortcutChange,
+  composerStyle = "classic",
+  onComposerStyleChange,
   sidebarsSwapped = false,
   onSidebarsSwappedChange,
   blueRingGestures,
+  blueRingSettingsSignal = 0,
+  onBlueRingSettingsOpened,
   onBlueRingGesturesChange,
   gitDiffSideBySide = false,
   onGitDiffSideBySideChange,
@@ -2205,6 +2214,13 @@ export function FileTree({
     setIsMenuOpen(false);
     setBlueRingMenuOpen(true);
   }, []);
+
+  React.useEffect(() => {
+    if (blueRingSettingsSignal > 0) {
+      openBlueRingSettings();
+      onBlueRingSettingsOpened?.();
+    }
+  }, [blueRingSettingsSignal, openBlueRingSettings, onBlueRingSettingsOpened]);
 
   const updateBlueRingAction = React.useCallback((gesture: BlueRingGesture, action: BlueRingAction) => {
     const nextActions = { ...gestureConfig.actions };
@@ -3310,6 +3326,36 @@ export function FileTree({
                     </button>
                   );
                 }) : null}
+                {isAppearanceMenuOpen ? (
+                  <div style={{ ...fileTreeMenuButtonStyle, cursor: "default" }}>
+                    <span style={{ flex: 1 }}>{t("fileTree.composerStyle")}</span>
+                    <div
+                      role="group"
+                      aria-label={t("fileTree.composerStyle")}
+                      style={{ display: "flex", gap: "2px", padding: "2px", borderRadius: "7px", background: "var(--menu-active-bg)" }}
+                    >
+                      {(["classic", "modern"] as const).map((style) => (
+                        <button
+                          key={style}
+                          type="button"
+                          aria-pressed={composerStyle === style}
+                          onClick={() => onComposerStyleChange?.(style)}
+                          style={{
+                            border: "none",
+                            borderRadius: "5px",
+                            padding: "4px 8px",
+                            background: composerStyle === style ? "var(--selection-bg)" : "transparent",
+                            color: composerStyle === style ? "var(--accent-color)" : "var(--text-secondary)",
+                            fontSize: "11px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {t(style === "classic" ? "composerStyle.classic" : "composerStyle.modern")}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {
