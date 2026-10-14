@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"mindfs/server/internal/agent"
@@ -22,6 +24,7 @@ import (
 	configpkg "mindfs/server/internal/config"
 	"mindfs/server/internal/preferences"
 
+	"github.com/go-chi/chi/v5"
 	"gopkg.in/yaml.v3"
 )
 
@@ -32,13 +35,16 @@ const (
 )
 
 type agentAPIProvider struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	BaseURL        string   `json:"baseUrl"`
-	APIKey         string   `json:"apiKey,omitempty"`
-	Protocols      []string `json:"protocols,omitempty"`
-	ModelFamilies  []string `json:"modelFamilies"`
-	Models         []string `json:"models"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	BaseURL       string   `json:"baseUrl"`
+	APIKey        string   `json:"apiKey,omitempty"`
+	Protocols     []string `json:"protocols,omitempty"`
+	ModelFamilies []string `json:"modelFamilies"`
+	Models        []string `json:"models"`
+	// PinnedModels is the user-curated subset (pinned order) projected into
+	// CLI configs on apply. Empty = not curated, full Models list applies.
+	PinnedModels   []string `json:"pinnedModels,omitempty"`
 	CreatedAt      string   `json:"createdAt"`
 	UpdatedAt      string   `json:"updatedAt"`
 	activeProtocol string
@@ -51,6 +57,7 @@ type agentAPIProviderPublic struct {
 	Protocols     []string `json:"protocols,omitempty"`
 	ModelFamilies []string `json:"modelFamilies"`
 	Models        []string `json:"models,omitempty"`
+	PinnedModels  []string `json:"pinnedModels,omitempty"`
 	CreatedAt     string   `json:"createdAt"`
 	UpdatedAt     string   `json:"updatedAt"`
 }
@@ -220,7 +227,174 @@ func (h *HTTPHandler) handleAgentAPIProviderSwitch(w http.ResponseWriter, r *htt
 	})
 }
 
+type agentAPIProviderPinnedRequest struct {
+	PinnedModels []string `json:"pinnedModels"`
+}
+
+// handleAgentAPIProviderPinnedPut stores the user-curated model subset for a
+// provider. The list must be a subset of the probed Models; order is kept as
+// sent so the curated sequence survives into every CLI projection.
+// agentAPIProviderFileMu serializes every read-modify-write cycle on
+// api-providers.json (create / sync / sync-all / pinned / delete). Handlers
+// run concurrently in chi; without the lock a pinned save racing sync-all
+// would either resurrect a stale catalog or silently drop the just-saved
+// pins, depending on which whole-file snapshot lands last.
+var agentAPIProviderFileMu sync.Mutex
+
+func (h *HTTPHandler) handleAgentAPIProviderPinnedPut(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if id == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("provider id required"))
+		return
+	}
+	var req agentAPIProviderPinnedRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
+		return
+	}
+	agentAPIProviderFileMu.Lock()
+	defer agentAPIProviderFileMu.Unlock()
+	providers, err := readAgentAPIProviders()
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	index := -1
+	for i := range providers {
+		if providers[i].ID == id {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		respondError(w, http.StatusNotFound, errInvalidRequest("provider not found"))
+		return
+	}
+	pinned := make([]string, 0, len(req.PinnedModels))
+	seen := make(map[string]bool, len(req.PinnedModels))
+	for _, model := range req.PinnedModels {
+		model = strings.TrimSpace(model)
+		if model == "" || seen[model] {
+			continue
+		}
+		seen[model] = true
+		pinned = append(pinned, model)
+	}
+	available := make(map[string]bool, len(providers[index].Models))
+	for _, model := range providers[index].Models {
+		available[strings.TrimSpace(model)] = true
+	}
+	for _, model := range pinned {
+		if !available[model] {
+			respondError(w, http.StatusBadRequest, errInvalidRequest(fmt.Sprintf("model %q is not in the provider's model list; re-sync the provider first", model)))
+			return
+		}
+	}
+	providers[index].PinnedModels = pinned
+	providers[index].UpdatedAt = time.Now().Format(time.RFC3339)
+	if err := writeAgentAPIProviders(providers); err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"provider": publicAgentAPIProvider(providers[index]),
+	})
+}
+
+type agentAPIProviderApplyRequest struct {
+	Agents []string `json:"agents"`
+}
+
+// handleAgentAPIProviderApply binds a provider to the given agents: the CLI
+// projection is written and the selection is recorded so sync-all keeps the
+// projection fresh on later key rotation.
+func (h *HTTPHandler) handleAgentAPIProviderApply(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if id == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("provider id required"))
+		return
+	}
+	var req agentAPIProviderApplyRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
+		return
+	}
+	// 文件锁覆盖「读供应商 → 投影写入」全程：否则与 DELETE 并发时，删除先
+	// 清掉 mfs-<slug> 规则，apply 随后又把它（连同 API key）写回 bridge 配置。
+	agentAPIProviderFileMu.Lock()
+	defer agentAPIProviderFileMu.Unlock()
+	providers, err := readAgentAPIProviders()
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	var provider agentAPIProvider
+	for _, item := range providers {
+		if item.ID == id {
+			provider = item
+			break
+		}
+	}
+	if provider.ID == "" {
+		respondError(w, http.StatusNotFound, errInvalidRequest("provider not found"))
+		return
+	}
+	cfg, err := agent.LoadConfig("")
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	results := make([]agentAPIProviderSyncAgentResult, 0, len(req.Agents))
+	for _, name := range req.Agents {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		result := agentAPIProviderSyncAgentResult{Agent: name}
+		if _, ok := cfg.GetAgent(name); !ok {
+			result.Error = fmt.Sprintf("agent not configured: %s", name)
+			results = append(results, result)
+			continue
+		}
+		if protocol, ok := selectAPIProviderProtocolForAgent(provider, name); ok {
+			provider.activeProtocol = protocol
+		} else {
+			result.Error = fmt.Sprintf("provider protocols %s are not compatible with agent %s", strings.Join(agentAPIProviderProtocols(provider), ", "), name)
+			results = append(results, result)
+			continue
+		}
+		if err := applyAgentAPIProvider(name, provider, h.AppContext); err != nil {
+			result.Error = sanitizeAPIProviderError(err.Error(), provider.APIKey)
+			results = append(results, result)
+			continue
+		}
+		if prefs := h.AppContext.GetPreferences(); prefs != nil {
+			if err := prefs.UpdateAgentLastConfigSelection(name, preferences.LastConfigSelection{
+				Type: "api_provider",
+				ID:   provider.ID,
+				Name: provider.Name,
+			}); err != nil {
+				result.Error = sanitizeAPIProviderError(err.Error(), provider.APIKey)
+				results = append(results, result)
+				continue
+			}
+		}
+		if pool := h.AppContext.GetAgentPool(); pool != nil {
+			pool.KillAgentProcess(name, 0)
+		}
+		triggerAgentConfigSwitchProbe(h.AppContext, name)
+		result.Success = true
+		results = append(results, result)
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"provider": publicAgentAPIProvider(provider),
+		"results":  results,
+	})
+}
+
 func createAgentAPIProvider(ctx context.Context, req agentAPIProviderCreateRequest) (agentAPIProvider, error) {
+	agentAPIProviderFileMu.Lock()
+	defer agentAPIProviderFileMu.Unlock()
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		return agentAPIProvider{}, errors.New("provider name required")
@@ -276,16 +450,15 @@ func syncAgentAPIProviders(ctx context.Context, requests []agentAPIProviderCreat
 	if len(requests) == 0 {
 		return nil, errors.New("providers required")
 	}
-	providers, err := readAgentAPIProviders()
-	if err != nil {
-		return nil, err
+	// 校验 + 探测在文件锁外做：探测是网络 I/O（单个最长 8s），不能占着
+	// api-providers.json 的锁，否则其它写请求会全部挂起。
+	type syncProbe struct {
+		name    string
+		baseURL string
+		apiKey  string
+		probe   agentAPIProviderProbeResult
 	}
-	byName := make(map[string]int, len(providers))
-	for i, provider := range providers {
-		byName[strings.TrimSpace(provider.Name)] = i
-	}
-	now := time.Now().Format(time.RFC3339)
-	changed := make([]agentAPIProvider, 0, len(requests))
+	probed := make([]syncProbe, 0, len(requests))
 	seenNames := map[string]struct{}{}
 	for _, req := range requests {
 		name := strings.TrimSpace(req.Name)
@@ -311,20 +484,41 @@ func syncAgentAPIProviders(ctx context.Context, requests []agentAPIProviderCreat
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
-		if index, ok := byName[name]; ok {
+		probed = append(probed, syncProbe{name: name, baseURL: baseURL, apiKey: apiKey, probe: probe})
+	}
+	if len(probed) == 0 {
+		return nil, errors.New("no valid providers")
+	}
+	agentAPIProviderFileMu.Lock()
+	defer agentAPIProviderFileMu.Unlock()
+	providers, err := readAgentAPIProviders()
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]int, len(providers))
+	for i, provider := range providers {
+		byName[strings.TrimSpace(provider.Name)] = i
+	}
+	now := time.Now().Format(time.RFC3339)
+	changed := make([]agentAPIProvider, 0, len(probed))
+	for _, item := range probed {
+		if index, ok := byName[item.name]; ok {
 			provider := providers[index]
-			provider.Name = name
-			provider.BaseURL = baseURL
-			provider.APIKey = apiKey
-			provider.Protocols = probe.Protocols
-			provider.ModelFamilies = probe.ModelFamilies
-			provider.Models = probe.Models
+			provider.Name = item.name
+			provider.BaseURL = item.baseURL
+			provider.APIKey = item.apiKey
+			provider.Protocols = item.probe.Protocols
+			provider.ModelFamilies = item.probe.ModelFamilies
+			provider.Models = item.probe.Models
+			// 精选列表同步修剪：中转站下架的模型不能留在 pins 里，否则
+			// 精选编辑器会显示失效勾选、保存时还会报 400。
+			provider.PinnedModels = prunePinnedModels(provider.PinnedModels, item.probe.Models)
 			provider.UpdatedAt = now
 			providers[index] = provider
 			changed = append(changed, provider)
 			continue
 		}
-		id := "api-" + slugifyAPIProviderName(name)
+		id := "api-" + slugifyAPIProviderName(item.name)
 		if id == "api-" {
 			id = fmt.Sprintf("api-%d", time.Now().UnixNano())
 		}
@@ -333,17 +527,17 @@ func syncAgentAPIProviders(ctx context.Context, requests []agentAPIProviderCreat
 		}
 		provider := agentAPIProvider{
 			ID:            id,
-			Name:          name,
-			BaseURL:       baseURL,
-			APIKey:        apiKey,
-			Protocols:     probe.Protocols,
-			ModelFamilies: probe.ModelFamilies,
-			Models:        probe.Models,
+			Name:          item.name,
+			BaseURL:       item.baseURL,
+			APIKey:        item.apiKey,
+			Protocols:     item.probe.Protocols,
+			ModelFamilies: item.probe.ModelFamilies,
+			Models:        item.probe.Models,
 			CreatedAt:     now,
 			UpdatedAt:     now,
 		}
 		providers = append(providers, provider)
-		byName[name] = len(providers) - 1
+		byName[item.name] = len(providers) - 1
 		changed = append(changed, provider)
 	}
 	if len(changed) == 0 {
@@ -367,49 +561,91 @@ func providerIDExists(providers []agentAPIProvider, id string) bool {
 // syncAllAgentAPIProviders 一键同步：使用已保存的 API Key 逐个重新拉取模型目录。
 // 单个供应商同步失败时保留旧模型列表并记录错误，不影响其他供应商。
 func syncAllAgentAPIProviders(ctx context.Context, prefs *preferences.Store) ([]agentAPIProvider, []agentAPIProviderSyncAllResult, error) {
+	agentAPIProviderFileMu.Lock()
 	providers, err := readAgentAPIProviders()
+	agentAPIProviderFileMu.Unlock()
 	if err != nil {
 		return nil, nil, err
 	}
 	if len(providers) == 0 {
 		return providers, nil, nil
 	}
-	results := make([]agentAPIProviderSyncAllResult, 0, len(providers))
-	changed := false
-	now := time.Now().Format(time.RFC3339)
-	for index := range providers {
-		provider := providers[index]
+	// 探测在文件锁外做：每个供应商最长 8s，串行 N 个时锁会被占 ~8s×N，
+	// 其它标签页的 create/pinned/delete 请求会全部挂起。探测完重新拿锁，
+	// 基于最新文件合并（探测期间用户可能新建/删除/改过精选）。
+	probes := make([]agentAPIProviderProbeResult, len(providers))
+	probeErrs := make([]error, len(providers))
+	for index, provider := range providers {
 		probe, err := probeAgentAPIProvider(ctx, provider.BaseURL, provider.APIKey)
 		if err != nil {
+			probeErrs[index] = err
+			continue
+		}
+		probes[index] = probe
+	}
+	now := time.Now().Format(time.RFC3339)
+	agentAPIProviderFileMu.Lock()
+	fresh, err := readAgentAPIProviders()
+	if err != nil {
+		agentAPIProviderFileMu.Unlock()
+		return nil, nil, err
+	}
+	byID := make(map[string]int, len(fresh))
+	for i, provider := range fresh {
+		byID[provider.ID] = i
+	}
+	changed := false
+	applied := make([][]agentAPIProviderSyncAgentResult, len(providers))
+	for index, provider := range providers {
+		if probeErrs[index] != nil {
+			continue
+		}
+		pos, ok := byID[provider.ID]
+		if !ok {
+			// 探测期间被删除：按失败记录，绝不把探测结果复活进旧快照。
+			probeErrs[index] = errors.New("provider removed during sync")
+			continue
+		}
+		entry := fresh[pos]
+		entry.Protocols = probes[index].Protocols
+		entry.ModelFamilies = probes[index].ModelFamilies
+		entry.Models = probes[index].Models
+		// 目录收缩时同步清掉已下架的精选项，否则投影会变成空集，
+		// kimi/qwen 等写手会把 `default_model = ""` 写进 CLI 配置。
+		entry.PinnedModels = prunePinnedModels(entry.PinnedModels, probes[index].Models)
+		entry.UpdatedAt = now
+		fresh[pos] = entry
+		changed = true
+		applied[index] = reapplySyncedProvider(prefs, entry)
+	}
+	if changed {
+		if err := writeAgentAPIProviders(fresh); err != nil {
+			agentAPIProviderFileMu.Unlock()
+			return nil, nil, err
+		}
+	}
+	agentAPIProviderFileMu.Unlock()
+	results := make([]agentAPIProviderSyncAllResult, 0, len(providers))
+	for index, provider := range providers {
+		if probeErrs[index] != nil {
 			results = append(results, agentAPIProviderSyncAllResult{
 				ID:         provider.ID,
 				Name:       provider.Name,
 				Success:    false,
-				Error:      sanitizeAPIProviderError(err.Error(), provider.APIKey),
+				Error:      sanitizeAPIProviderError(probeErrs[index].Error(), provider.APIKey),
 				ModelCount: len(provider.Models),
 			})
 			continue
 		}
-		provider.Protocols = probe.Protocols
-		provider.ModelFamilies = probe.ModelFamilies
-		provider.Models = probe.Models
-		provider.UpdatedAt = now
-		providers[index] = provider
-		changed = true
 		results = append(results, agentAPIProviderSyncAllResult{
 			ID:         provider.ID,
 			Name:       provider.Name,
 			Success:    true,
-			ModelCount: len(provider.Models),
-			Applied:    reapplySyncedProvider(prefs, provider),
+			ModelCount: len(probes[index].Models),
+			Applied:    applied[index],
 		})
 	}
-	if changed {
-		if err := writeAgentAPIProviders(providers); err != nil {
-			return nil, nil, err
-		}
-	}
-	return providers, results, nil
+	return fresh, results, nil
 }
 
 // reapplySyncedProvider 在一键同步成功后，把最新模型列表静默写入所有上次
@@ -729,6 +965,8 @@ func postAPIProviderJSON(ctx context.Context, endpoint string, body map[string]a
 }
 
 func deleteAgentAPIProvider(id string) ([]agentAPIProvider, error) {
+	agentAPIProviderFileMu.Lock()
+	defer agentAPIProviderFileMu.Unlock()
 	providers, err := readAgentAPIProviders()
 	if err != nil {
 		return nil, err
@@ -748,10 +986,17 @@ func deleteAgentAPIProvider(id string) ([]agentAPIProvider, error) {
 	if err := writeAgentAPIProviders(next); err != nil {
 		return nil, err
 	}
+	// 精选删除后，投影进 zcode bridge home 的 mfs-<slug> 规则还带着 API key，
+	// 必须一并清掉；清不动的（home 缺失/配置损坏）只记日志不拦删除。
+	removeZcodeAPIProviderRules(id)
 	return next, nil
 }
 
 func switchAgentAPIProvider(req agentAPIProviderSwitchRequest, app *AppContext) (agentAPIProvider, error) {
+	// 与 apply handler 同一把文件锁：读供应商到投影写入全程持锁，
+	// 防止与 DELETE 并发时把刚清掉的 mfs-<slug> 规则（含 API key）写回去。
+	agentAPIProviderFileMu.Lock()
+	defer agentAPIProviderFileMu.Unlock()
 	agentName := strings.TrimSpace(req.Agent)
 	if agentName == "" {
 		return agentAPIProvider{}, errors.New("agent required")
@@ -805,7 +1050,93 @@ func switchAgentAPIProvider(req agentAPIProviderSwitchRequest, app *AppContext) 
 	return provider, nil
 }
 
+// prunePinnedModels drops pinned entries that no longer exist in the fresh
+// catalog (order preserved). Sync-all uses it so a shrunk catalog can never
+// project an empty model list into CLI configs.
+func prunePinnedModels(pinned, models []string) []string {
+	if len(pinned) == 0 {
+		return pinned
+	}
+	available := make(map[string]bool, len(models))
+	for _, model := range models {
+		available[strings.TrimSpace(model)] = true
+	}
+	out := make([]string, 0, len(pinned))
+	for _, model := range pinned {
+		model = strings.TrimSpace(model)
+		if model == "" || !available[model] {
+			continue
+		}
+		out = append(out, model)
+	}
+	return out
+}
+
+// providerProjection returns the model list projected into CLI configs:
+// pinned ∩ Models in pinned order when curated, else the full Models list.
+func providerProjection(provider agentAPIProvider) []string {
+	if len(provider.PinnedModels) == 0 {
+		return provider.Models
+	}
+	available := make(map[string]bool, len(provider.Models))
+	for _, model := range provider.Models {
+		available[strings.TrimSpace(model)] = true
+	}
+	out := make([]string, 0, len(provider.PinnedModels))
+	seen := make(map[string]bool, len(provider.PinnedModels))
+	for _, model := range provider.PinnedModels {
+		model = strings.TrimSpace(model)
+		if model == "" || seen[model] || !available[model] {
+			continue
+		}
+		seen[model] = true
+		out = append(out, model)
+	}
+	return out
+}
+
+// agentConfigBackupKeep caps how many <path>.bak-<ts> copies survive per
+// config file: each copy holds API keys, so unbounded accumulation in
+// long-lived homes is both clutter and secret sprawl.
+const agentConfigBackupKeep = 5
+
+// backupAgentConfigFile copies a config file to <path>.bak-<ts> before an
+// apply overwrite. The copies hold API keys, so they must stay 0600.
+func backupAgentConfigFile(path string) error {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return apperr.Wrap("read", path, err)
+	}
+	backup := path + ".bak-" + time.Now().Format("20060102-150405")
+	if err := os.WriteFile(backup, payload, 0o600); err != nil {
+		return apperr.Wrap("backup", backup, err)
+	}
+	pruneAgentConfigBackups(path, agentConfigBackupKeep)
+	return nil
+}
+
+// pruneAgentConfigBackups removes the oldest <path>.bak-* copies beyond keep.
+// The timestamp suffix is fixed-width, so lexicographic order = age order.
+func pruneAgentConfigBackups(path string, keep int) {
+	matches, err := filepath.Glob(path + ".bak-*")
+	if err != nil || len(matches) <= keep {
+		return
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
+	for _, stale := range matches[keep:] {
+		if err := os.Remove(stale); err != nil && !os.IsNotExist(err) {
+			log.Printf("[agent-api-provider] prune backup %s: %v", stale, err)
+		}
+	}
+}
+
 func applyAgentAPIProvider(agentName string, provider agentAPIProvider, app *AppContext) error {
+	// Projection first: every writer below consumes provider.Models, so the
+	// curated subset replaces the full catalog in one place.
+	provider.Models = providerProjection(provider)
 	switch normalizedAPIProviderAgent(agentName) {
 	case "codex":
 		if err := applyCodexAPIProvider(provider); err != nil {
@@ -864,6 +1195,19 @@ func applyAgentAPIProvider(agentName string, provider agentAPIProvider, app *App
 	case "hermes":
 		if err := applyHermesAPIProvider(provider); err != nil {
 			return err
+		}
+	case "zcode":
+		if err := applyZcodeAPIProvider(agentName, provider); err != nil {
+			if !errors.Is(err, errZcodeBridgeHomeMissing) {
+				return err
+			}
+			// 裸 zcode（无 BRIDGE_ZCODE_HOME 的桥环境变量）退回 env 注入。
+			if err := applyAgentProviderEnv(agentName, map[string]string{
+				"OPENAI_BASE_URL": provider.BaseURL,
+				"OPENAI_API_KEY":  provider.APIKey,
+			}, app); err != nil {
+				return err
+			}
 		}
 	default:
 		if err := applyAgentProviderEnv(agentName, map[string]string{
@@ -1279,8 +1623,11 @@ func applyQwenAPIProvider(provider agentAPIProvider) error {
 		"protocol": protocol,
 		"models":   qwenModelEntries(provider, envKey, baseURL),
 	}
-	model := ensureJSONObject(settings, "model")
-	model["name"] = firstModelOrDefault(provider.Models, "")
+	// 投影为空时不覆盖 model.name：写空串会让 qwen 启动即选不到模型，
+	// 保留旧值与 codex 写手的守卫语义一致。
+	if model := firstModelOrDefault(provider.Models, ""); model != "" {
+		ensureJSONObject(settings, "model")["name"] = model
+	}
 	return writeJSONObject(path, settings, 0o600)
 }
 
@@ -1298,7 +1645,11 @@ func applyKimiAPIProvider(provider agentAPIProvider) error {
 		providerType = "anthropic"
 		baseURL = anthropicBaseURL(provider.BaseURL)
 	}
-	block := fmt.Sprintf(`# BEGIN MINDFS API PROVIDER
+	// 投影为空时不写 default_model/model 选择行：`model = ""` 是坏配置，
+	// 只保留供应商定义与端点，用户保留手动选择权。
+	var block string
+	if model != "" {
+		block = fmt.Sprintf(`# BEGIN MINDFS API PROVIDER
 default_model = %q
 
 %s
@@ -1311,6 +1662,19 @@ provider = %q
 model = %q
 # END MINDFS API PROVIDER
 `, providerName, tomlDottedTable("providers", providerName), providerType, baseURL, provider.APIKey, tomlDottedTable("models", providerName), providerName, model)
+	} else {
+		block = fmt.Sprintf(`# BEGIN MINDFS API PROVIDER
+
+%s
+type = %q
+base_url = %q
+api_key = %q
+
+%s
+provider = %q
+# END MINDFS API PROVIDER
+`, tomlDottedTable("providers", providerName), providerType, baseURL, provider.APIKey, tomlDottedTable("models", providerName), providerName)
+	}
 	return writeTextFile(path, replaceManagedBlock(string(existing), block, "# BEGIN MINDFS API PROVIDER", "# END MINDFS API PROVIDER"), 0o600)
 }
 
@@ -1506,6 +1870,10 @@ func replaceAgentConfiguredEnv(agentName string, updates map[string]string) (map
 }
 
 func writeAgentEnvConfig(agentName string, updates map[string]string, clearConfigured bool) (map[string]string, error) {
+	// agents.json 是整文件读改写：env 写入与 metadata PATCH 并发时，后落盘
+	// 的快照会静默吞掉先落盘的改动，必须与 handleAgentMetadataPatch 同锁。
+	agentConfigMu.Lock()
+	defer agentConfigMu.Unlock()
 	path, err := agent.ResolveConfigPath()
 	if err != nil {
 		return nil, err
@@ -1773,6 +2141,7 @@ func publicAgentAPIProvider(provider agentAPIProvider) agentAPIProviderPublic {
 		Protocols:     agentAPIProviderProtocols(provider),
 		ModelFamilies: append([]string(nil), provider.ModelFamilies...),
 		Models:        append([]string(nil), provider.Models...),
+		PinnedModels:  append([]string(nil), provider.PinnedModels...),
 		CreatedAt:     provider.CreatedAt,
 		UpdatedAt:     provider.UpdatedAt,
 	}
@@ -1870,7 +2239,79 @@ func applyAgentAPIProviderCapabilities(statuses []agent.Status) []agent.Status {
 	return out
 }
 
+// agentDefinitionForName resolves an agent's merged definition. AppContext
+// swaps this for a prober-backed resolver at startup (SetAgentDefinitionResolver);
+// the disk fallback keeps standalone callers working.
+var agentDefinitionForName = func(name string) (agent.Definition, bool) {
+	cfg, err := agent.LoadConfig("")
+	if err != nil {
+		return agent.Definition{}, false
+	}
+	return cfg.GetAgent(strings.TrimSpace(name))
+}
+
+// SetAgentDefinitionResolver wires the prober-backed definition lookup.
+func SetAgentDefinitionResolver(resolver func(string) (agent.Definition, bool)) {
+	if resolver != nil {
+		agentDefinitionForName = resolver
+	}
+}
+
+// agentDefinitionsList enumerates every configured agent definition, including
+// the hosted extra-config layer that LoadConfig("") cannot see. Callers that
+// must sweep ALL agents (zcode rule cleanup) use this instead of LoadConfig(""),
+// or hosted-only zcode agents silently keep their mfs-<slug> rule — together
+// with the API key it projects — after a provider delete. AppContext swaps
+// this at startup (SetAgentDefinitionsLister); the disk fallback keeps
+// standalone callers and tests working.
+var agentDefinitionsList = func() []agent.Definition {
+	cfg, err := agent.LoadConfig("")
+	if err != nil {
+		return nil
+	}
+	return append([]agent.Definition(nil), cfg.Agents...)
+}
+
+// SetAgentDefinitionsLister wires the prober-backed definition enumeration.
+func SetAgentDefinitionsLister(lister func() []agent.Definition) {
+	if lister != nil {
+		agentDefinitionsList = lister
+	}
+}
+
+func normalizeAPIProviderProtocolList(values []string) []string {
+	aliases := map[string]string{
+		"openai":               apiProviderProtocolOpenAICompatible,
+		"anthropic":            apiProviderProtocolAnthropicCompatible,
+		"gemini":               apiProviderProtocolGeminiCompatible,
+		"google":               apiProviderProtocolGeminiCompatible,
+		"google-generative-ai": apiProviderProtocolGeminiCompatible,
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.ToLower(strings.TrimSpace(value))
+		if trimmed == "" {
+			continue
+		}
+		if mapped, ok := aliases[trimmed]; ok {
+			trimmed = mapped
+		}
+		if seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		out = append(out, trimmed)
+	}
+	return out
+}
+
 func agentSupportedAPIProtocols(agentName string) []string {
+	// User-declared protocols (agents.json apiProviderProtocols) win over the
+	// built-in table — this is how zcode instances gain provider switching.
+	if def, ok := agentDefinitionForName(agentName); ok && len(def.APIProviderProtocols) > 0 {
+		return normalizeAPIProviderProtocolList(def.APIProviderProtocols)
+	}
 	switch normalizedAPIProviderAgent(agentName) {
 	case "codex":
 		return []string{apiProviderProtocolOpenAICompatible}
@@ -1957,6 +2398,10 @@ func isTOMLBareKey(key string) bool {
 	return true
 }
 
+// zcodeInstancePattern matches bridge instances (zcode-1/zcode-2/…) without
+// swallowing unrelated names like "zcodefoo".
+var zcodeInstancePattern = regexp.MustCompile(`^zcode-\d+$`)
+
 func normalizedAPIProviderAgent(agentName string) string {
 	name := strings.ToLower(strings.TrimSpace(agentName))
 	switch name {
@@ -1971,6 +2416,9 @@ func normalizedAPIProviderAgent(agentName string) string {
 	case "kimi-code":
 		return "kimi"
 	default:
+		if name == "zcode" || zcodeInstancePattern.MatchString(name) {
+			return "zcode"
+		}
 		return name
 	}
 }

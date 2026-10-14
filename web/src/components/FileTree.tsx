@@ -27,6 +27,7 @@ import { SymlinkBadge } from "./SymlinkBadge";
 import { RelayLocalServicesDialog } from "./RelayLocalServicesDialog";
 import { fetchAgentCatalog, fetchAgents, type AgentStatus } from "../services/agents";
 import {
+  applyProviderToAgents,
   createAgentAPIProvider,
   createAgentConfigBackup,
   deleteAgentAPIProvider,
@@ -34,14 +35,23 @@ import {
   fetchAgentAPIProviders,
   fetchAgentConfigBackups,
   fetchAgentConfigDefaults,
+  saveProviderPinnedModels,
   switchAgentAPIProvider,
   switchAgentConfig,
   syncAllAgentAPIProviders,
   testAgentAPIProviderModel,
+  updateAgentMetadata,
   type AgentAPIProvider,
+  type AgentAPIProviderApplyResult,
   type AgentAPIProviderTestResult,
   type AgentConfigBackup,
+  type AgentVisibility,
 } from "../services/agentConfig";
+import {
+  refreshAgentVisibility,
+  saveAgentVisibility,
+  foldInstanceGroups,
+} from "../services/agentVisibility";
 import {
   getWebPushStatus,
   sendWebPushTest,
@@ -694,7 +704,13 @@ function AgentConfigPopover({
   providerSyncBusy,
   providerTestBusyID,
   providerTestResults,
+  catalogAgents,
+  agentVisibility,
   onSyncAllProviders,
+  onPinProviderModels,
+  onApplyProviderToAgents,
+  onSaveAgentMetadata,
+  onSaveAgentVisibility,
   onTestProviderModel,
   onProviderTestModelChange,
   providerTestModels,
@@ -741,7 +757,13 @@ function AgentConfigPopover({
   providerSyncBusy: boolean;
   providerTestBusyID: string;
   providerTestResults: Record<string, string>;
+  catalogAgents: AgentStatus[];
+  agentVisibility: AgentVisibility | null;
   onSyncAllProviders: () => void;
+  onPinProviderModels: (providerID: string, pinnedModels: string[]) => Promise<void>;
+  onApplyProviderToAgents: (providerID: string, agentNames: string[]) => Promise<AgentAPIProviderApplyResult[]>;
+  onSaveAgentMetadata: (agent: string, label: string, url: string) => Promise<void>;
+  onSaveAgentVisibility: (hidden: string[], customized: boolean) => Promise<void>;
   onTestProviderModel: (providerID: string, model: string) => void;
   onProviderTestModelChange: (providerID: string, model: string) => void;
   providerTestModels: Record<string, string>;
@@ -775,6 +797,178 @@ function AgentConfigPopover({
   const switchTabs: AgentConfigSwitchTab[] = supportsAPIProvider ? ["backup", "api_provider"] : ["backup"];
   const effectiveAddTab: AgentConfigAddTab = supportsAPIProvider ? addTab : "backup";
   const effectiveSwitchTab: AgentConfigSwitchTab = supportsAPIProvider ? switchTab : "backup";
+
+  const [pinnedExpandedID, setPinnedExpandedID] = React.useState("");
+  const [pinnedSearch, setPinnedSearch] = React.useState("");
+  const [pinnedDrafts, setPinnedDrafts] = React.useState<Record<string, string[]>>({});
+  const [pinnedBusyID, setPinnedBusyID] = React.useState("");
+  const [pinnedSavedID, setPinnedSavedID] = React.useState("");
+  const [applyExpandedID, setApplyExpandedID] = React.useState("");
+  const [applySelection, setApplySelection] = React.useState<string[]>([]);
+  const [applyBusy, setApplyBusy] = React.useState(false);
+  const [applyResults, setApplyResults] = React.useState<Record<string, AgentAPIProviderApplyResult[]>>({});
+  const [manageExpanded, setManageExpanded] = React.useState(false);
+  const [metaDrafts, setMetaDrafts] = React.useState<Record<string, { label: string; url: string }>>({});
+  const [metaBusyAgent, setMetaBusyAgent] = React.useState("");
+  const [metaSavedAgent, setMetaSavedAgent] = React.useState("");
+  const [visibilitySaving, setVisibilitySaving] = React.useState(false);
+
+  const applyCandidates = React.useMemo(
+    () => agents.filter((item) => item.name && item.supports_api_provider_switch),
+    [agents],
+  );
+
+  const effectiveHiddenNames = React.useMemo(() => {
+    const names = catalogAgents.map((item) => item.name).filter(Boolean);
+    if (agentVisibility?.customized) {
+      return new Set(agentVisibility.hidden);
+    }
+    // 从未设置过显隐时，checkbox 按默认折叠策略回显：同名实例组只亮 base。
+    const folded = new Set(foldInstanceGroups(names));
+    return new Set(names.filter((name) => !folded.has(name)));
+  }, [catalogAgents, agentVisibility]);
+
+  const expandPinned = (provider: AgentAPIProvider) => {
+    setPinnedSavedID("");
+    setPinnedSearch("");
+    setPinnedDrafts((previous) => ({
+      ...previous,
+      [provider.id]: provider.pinnedModels ? [...provider.pinnedModels] : [],
+    }));
+    setPinnedExpandedID((previous) => (previous === provider.id ? "" : provider.id));
+  };
+
+  const togglePinnedModel = (providerID: string, model: string) => {
+    setPinnedSavedID("");
+    setPinnedDrafts((previous) => {
+      const current = previous[providerID] || [];
+      const next = current.includes(model)
+        ? current.filter((item) => item !== model)
+        : [...current, model];
+      return { ...previous, [providerID]: next };
+    });
+  };
+
+  const togglePinnedFiltered = (provider: AgentAPIProvider) => {
+    const search = pinnedSearch.trim().toLowerCase();
+    const matched = (provider.models || []).filter((model) => !search || model.toLowerCase().includes(search));
+    if (matched.length === 0) {
+      return;
+    }
+    setPinnedSavedID("");
+    setPinnedDrafts((previous) => {
+      const current = previous[provider.id] || [];
+      const currentSet = new Set(current);
+      const allSelected = matched.every((model) => currentSet.has(model));
+      const next = allSelected
+        ? current.filter((model) => !matched.includes(model))
+        : [...current, ...matched.filter((model) => !currentSet.has(model))];
+      return { ...previous, [provider.id]: next };
+    });
+  };
+
+  const savePinned = async (providerID: string) => {
+    setPinnedBusyID(providerID);
+    try {
+      await onPinProviderModels(providerID, pinnedDrafts[providerID] || []);
+      setPinnedSavedID(providerID);
+    } catch {
+      // 失败原因已由父级写入弹层底部错误区。
+    } finally {
+      setPinnedBusyID("");
+    }
+  };
+
+  const expandApply = (providerID: string) => {
+    if (applyExpandedID === providerID) {
+      setApplyExpandedID("");
+      setApplySelection([]);
+      return;
+    }
+    setApplySelection(applyCandidates.some((item) => item.name === selectedAgent) ? [selectedAgent] : []);
+    setApplyExpandedID(providerID);
+  };
+
+  const toggleApplyAgent = (agentName: string) => {
+    setApplySelection((previous) => (
+      previous.includes(agentName)
+        ? previous.filter((item) => item !== agentName)
+        : [...previous, agentName]
+    ));
+  };
+
+  const runApply = async (providerID: string) => {
+    if (applySelection.length === 0) {
+      return;
+    }
+    setApplyBusy(true);
+    try {
+      const results = await onApplyProviderToAgents(providerID, applySelection);
+      setApplyResults((previous) => ({ ...previous, [providerID]: results }));
+    } catch {
+      // 失败原因已由父级写入弹层底部错误区。
+    } finally {
+      setApplyBusy(false);
+    }
+  };
+
+  const setMetaDraft = (agentName: string, field: "label" | "url", value: string) => {
+    setMetaSavedAgent("");
+    // 没碰过的字段要用目录里的现值兜底，不能用空串：updateAgentMetadata 两个
+    // 字段都会整体提交，空串会把已保存的 label/url 静默清掉。
+    const current = catalogAgents.find((item) => item.name === agentName);
+    setMetaDrafts((previous) => ({
+      ...previous,
+      [agentName]: {
+        label: previous[agentName]?.label ?? current?.label ?? "",
+        url: previous[agentName]?.url ?? current?.url ?? "",
+        [field]: value,
+      },
+    }));
+  };
+
+  const saveMetadata = async (agentName: string) => {
+    const draft = metaDrafts[agentName];
+    if (!draft) {
+      return;
+    }
+    setMetaBusyAgent(agentName);
+    setMetaSavedAgent("");
+    try {
+      await onSaveAgentMetadata(agentName, draft.label.trim(), draft.url.trim());
+      setMetaSavedAgent(agentName);
+    } catch {
+      // 失败原因已由父级写入弹层底部错误区。
+    } finally {
+      setMetaBusyAgent("");
+    }
+  };
+
+  const toggleAgentEntry = async (agentName: string, visible: boolean) => {
+    const nextHidden = catalogAgents
+      .map((item) => item.name)
+      .filter((name) => (name === agentName ? !visible : effectiveHiddenNames.has(name)));
+    setVisibilitySaving(true);
+    try {
+      await onSaveAgentVisibility(nextHidden, true);
+    } catch {
+      // 保存失败时 prop 未变，checkbox 随之回滚。
+    } finally {
+      setVisibilitySaving(false);
+    }
+  };
+
+  const resetAgentVisibility = async () => {
+    setVisibilitySaving(true);
+    try {
+      await onSaveAgentVisibility([], false);
+    } catch {
+      // 失败原因已由父级写入弹层底部错误区。
+    } finally {
+      setVisibilitySaving(false);
+    }
+  };
+
   return (
     <div
       style={{
@@ -875,6 +1069,94 @@ function AgentConfigPopover({
               onSelect={onChooseAgent}
             />
           )}
+          <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: "8px", display: "flex", flexDirection: "column", gap: "8px" }}>
+            <button
+              type="button"
+              onClick={() => setManageExpanded((previous) => !previous)}
+              style={{
+                ...agentConfigMiniButtonStyle(false),
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "6px 8px",
+                color: "var(--text-primary)",
+              }}
+            >
+              <span style={{ flex: 1, textAlign: "left" }}>{t("agentConfig.manageSection")}</span>
+              <span aria-hidden="true">{manageExpanded ? "▾" : "▸"}</span>
+            </button>
+            {manageExpanded ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+                  {t("agentConfig.manageMetaHint")}
+                </div>
+                {catalogAgents.length === 0 ? (
+                  <div style={agentConfigHintStyle}>{t("agentConfig.loading")}</div>
+                ) : catalogAgents.map((catalogAgent) => {
+                  const draft = metaDrafts[catalogAgent.name] || { label: catalogAgent.label || "", url: catalogAgent.url || "" };
+                  const visible = !effectiveHiddenNames.has(catalogAgent.name);
+                  return (
+                    <div key={catalogAgent.name} style={{ border: "1px solid var(--border-color)", borderRadius: "8px", padding: "6px 8px", display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <AgentIcon agentName={catalogAgent.name} size={14} />
+                        <span style={{ minWidth: 0, flex: 1, fontSize: "11px", fontWeight: 700, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {catalogAgent.label || catalogAgent.name}
+                        </span>
+                        {metaSavedAgent === catalogAgent.name ? (
+                          <span style={{ fontSize: "11px", color: "var(--accent-color)" }}>{t("agentConfig.metadataSaved")}</span>
+                        ) : null}
+                        <button
+                          type="button"
+                          disabled={metaBusyAgent !== "" || providerSyncBusy}
+                          onClick={() => void saveMetadata(catalogAgent.name)}
+                          style={agentConfigMiniButtonStyle(metaBusyAgent !== "" || providerSyncBusy)}
+                        >
+                          {metaBusyAgent === catalogAgent.name ? "…" : t("common.save")}
+                        </button>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px" }}>
+                        <input
+                          value={draft.label}
+                          onChange={(event) => setMetaDraft(catalogAgent.name, "label", event.target.value)}
+                          placeholder={t("agentConfig.metadataLabelPlaceholder")}
+                          style={{ ...agentConfigInputStyle, fontSize: "11px", padding: "5px 8px" }}
+                        />
+                        <input
+                          value={draft.url}
+                          onChange={(event) => setMetaDraft(catalogAgent.name, "url", event.target.value)}
+                          placeholder={t("agentConfig.metadataURLPlaceholder")}
+                          style={{ ...agentConfigInputStyle, fontSize: "11px", padding: "5px 8px" }}
+                        />
+                      </div>
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--text-primary)", cursor: visibilitySaving ? "default" : "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={visible}
+                          disabled={visibilitySaving}
+                          onChange={(event) => void toggleAgentEntry(catalogAgent.name, event.target.checked)}
+                          style={{ width: "12px", height: "12px", flexShrink: 0 }}
+                        />
+                        <span>{t("agentConfig.visibilityRow")}</span>
+                      </label>
+                    </div>
+                  );
+                })}
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "6px" }}>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+                    {t("agentConfig.visibilityHint")}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={visibilitySaving}
+                    onClick={() => void resetAgentVisibility()}
+                    style={agentConfigMiniButtonStyle(visibilitySaving)}
+                  >
+                    {t("agentConfig.visibilityReset")}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
         </>
       ) : step === "confirm" ? (
         <>
@@ -1123,7 +1405,7 @@ function AgentConfigPopover({
                     {models.length > 0 ? (
                       <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "4px", minWidth: 0 }}>
                         <ProviderModelSelect
-                          models={models}
+                          models={orderModelsPinnedFirst(models, item.pinnedModels)}
                           value={providerTestModels[item.id] || models[0] || ""}
                           label={t("agentConfig.testModel", { name: item.name })}
                           onChange={(model) => onProviderTestModelChange(item.id, model)}
@@ -1141,6 +1423,158 @@ function AgentConfigPopover({
                         >
                           {testBusy ? "…" : t("agentConfig.testModelShort")}
                         </button>
+                      </div>
+                    ) : null}
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "6px" }}>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          expandPinned(item);
+                        }}
+                        style={{ ...agentConfigMiniButtonStyle(busy), color: pinnedExpandedID === item.id ? "var(--accent-color)" : "var(--text-secondary)" }}
+                      >
+                        {t("agentConfig.pinnedEdit")} · {(item.pinnedModels || []).length}/{models.length}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy || applyCandidates.length === 0}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          expandApply(item.id);
+                        }}
+                        style={{ ...agentConfigMiniButtonStyle(busy || applyCandidates.length === 0), color: applyExpandedID === item.id ? "var(--accent-color)" : "var(--text-secondary)" }}
+                      >
+                        {t("agentConfig.applyToAgents")}
+                      </button>
+                    </div>
+                    {pinnedExpandedID === item.id ? (
+                      <div
+                        onClick={(event) => event.stopPropagation()}
+                        style={{ marginTop: "6px", borderTop: "1px solid var(--border-color)", paddingTop: "6px", display: "flex", flexDirection: "column", gap: "5px" }}
+                      >
+                        <input
+                          value={pinnedSearch}
+                          onChange={(event) => setPinnedSearch(event.target.value)}
+                          placeholder={t("agentConfig.pinnedSearch")}
+                          style={{ ...agentConfigInputStyle, fontSize: "11px", padding: "4px 8px" }}
+                        />
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <span style={{ flex: 1, minWidth: 0, fontSize: "11px", color: "var(--text-secondary)" }}>
+                            {t("agentConfig.pinnedCount", { pinned: (pinnedDrafts[item.id] || []).length, total: models.length })}
+                          </span>
+                          <button type="button" onClick={() => togglePinnedFiltered(item)} style={agentConfigMiniButtonStyle(false)}>
+                            {t("agentConfig.pinnedSelectAll")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPinnedSavedID("");
+                              setPinnedDrafts((previous) => ({ ...previous, [item.id]: [] }));
+                            }}
+                            style={agentConfigMiniButtonStyle(false)}
+                          >
+                            {t("agentConfig.pinnedClear")}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={pinnedBusyID === item.id || providerSyncBusy}
+                            onClick={() => void savePinned(item.id)}
+                            style={{ ...agentConfigMiniButtonStyle(pinnedBusyID === item.id || providerSyncBusy), color: "var(--accent-color)" }}
+                          >
+                            {pinnedBusyID === item.id ? "…" : t("agentConfig.pinnedSave")}
+                          </button>
+                        </div>
+                        {pinnedSavedID === item.id ? (
+                          <div style={{ fontSize: "11px", color: "var(--accent-color)" }}>{t("agentConfig.pinnedSaved")}</div>
+                        ) : null}
+                        {(() => {
+                          const draft = pinnedDrafts[item.id] || [];
+                          const draftSet = new Set(draft);
+                          const search = pinnedSearch.trim().toLowerCase();
+                          const matches = (model: string) => !search || model.toLowerCase().includes(search);
+                          const pinnedGroup = draft.filter(matches);
+                          const restGroup = models.filter((model) => !draftSet.has(model) && matches(model));
+                          return (
+                            <div style={{ maxHeight: "170px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "3px" }}>
+                              {pinnedGroup.length > 0 ? (
+                                <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-secondary)" }}>{t("agentConfig.pinnedGroupActive")}</div>
+                              ) : null}
+                              {pinnedGroup.map((model) => (
+                                <label key={model} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--accent-color)", cursor: "pointer", minWidth: 0 }}>
+                                  <input
+                                    type="checkbox"
+                                    checked
+                                    onChange={() => togglePinnedModel(item.id, model)}
+                                    style={{ width: "12px", height: "12px", flexShrink: 0 }}
+                                  />
+                                  <span title={model} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{model}</span>
+                                </label>
+                              ))}
+                              {restGroup.length > 0 ? (
+                                <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-secondary)" }}>{t("agentConfig.pinnedGroupAll")}</div>
+                              ) : null}
+                              {restGroup.map((model) => (
+                                <label key={model} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--text-primary)", cursor: "pointer", minWidth: 0 }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={false}
+                                    onChange={() => togglePinnedModel(item.id, model)}
+                                    style={{ width: "12px", height: "12px", flexShrink: 0 }}
+                                  />
+                                  <span title={model} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{model}</span>
+                                </label>
+                              ))}
+                              {pinnedGroup.length === 0 && restGroup.length === 0 ? (
+                                <div style={{ ...agentConfigHintStyle, fontSize: "11px" }}>{t("agentConfig.pinnedFilteredEmpty")}</div>
+                              ) : null}
+                            </div>
+                          );
+                        })()}
+                        <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{t("agentConfig.pinnedEmptyHint")}</div>
+                      </div>
+                    ) : null}
+                    {applyExpandedID === item.id ? (
+                      <div
+                        onClick={(event) => event.stopPropagation()}
+                        style={{ marginTop: "6px", borderTop: "1px solid var(--border-color)", paddingTop: "6px", display: "flex", flexDirection: "column", gap: "5px" }}
+                      >
+                        <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.45 }}>{t("agentConfig.applyHint")}</div>
+                        <div style={{ maxHeight: "120px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "3px" }}>
+                          {applyCandidates.map((candidate) => (
+                            <label key={candidate.name} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--text-primary)", cursor: "pointer", minWidth: 0 }}>
+                              <input
+                                type="checkbox"
+                                checked={applySelection.includes(candidate.name)}
+                                onChange={() => toggleApplyAgent(candidate.name)}
+                                style={{ width: "12px", height: "12px", flexShrink: 0 }}
+                              />
+                              <span title={candidate.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {candidate.label || candidate.name}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={applyBusy || providerSyncBusy || applySelection.length === 0}
+                          onClick={() => void runApply(item.id)}
+                          style={agentConfigPrimaryButtonStyle(applyBusy || providerSyncBusy || applySelection.length === 0)}
+                        >
+                          {applyBusy ? "…" : t("agentConfig.applyRun")}
+                        </button>
+                        {(applyResults[item.id] || []).map((resultItem) => (
+                          <div key={resultItem.agent} style={{ fontSize: "11px", color: resultItem.success ? "var(--accent-color)" : "#dc2626", whiteSpace: "normal", overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                            {resultItem.success ? `✓ ${resultItem.agent}` : `✗ ${resultItem.agent}: ${resultItem.error || ""}`}
+                          </div>
+                        ))}
+                        {(applyResults[item.id] || []).some((resultItem) => resultItem.success) ? (
+                          <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{t("agentConfig.applyDoneHint")}</div>
+                        ) : null}
+                        {(applyResults[item.id] || []).some((resultItem) => resultItem.success && resultItem.agent.startsWith("opencode")) ? (
+                          <div style={{ fontSize: "11px", color: "#b45309" }}>{t("agentConfig.applyOpencodeWarn")}</div>
+                        ) : null}
                       </div>
                     ) : null}
                     {testResult ? (
@@ -1443,6 +1877,32 @@ const agentConfigIconButtonStyle = (disabled: boolean): React.CSSProperties => (
   flexShrink: 0,
 });
 
+const agentConfigMiniButtonStyle = (disabled: boolean): React.CSSProperties => ({
+  border: "1px solid var(--border-color)",
+  background: "transparent",
+  color: "var(--text-secondary)",
+  borderRadius: "6px",
+  padding: "2px 8px",
+  fontSize: "11px",
+  fontWeight: 600,
+  lineHeight: "16px",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
+  cursor: disabled ? "not-allowed" : "pointer",
+  opacity: disabled ? 0.6 : 1,
+});
+
+// 测试模型下拉候选：已精选的模型按精选顺序置顶，其余保持原顺序。
+function orderModelsPinnedFirst(models: string[], pinnedModels?: string[]): string[] {
+  const pinned = pinnedModels || [];
+  if (pinned.length === 0) {
+    return models;
+  }
+  const available = new Set(models);
+  const pinnedSet = new Set(pinned);
+  return [...pinned.filter((model) => available.has(model)), ...models.filter((model) => !pinnedSet.has(model))];
+}
+
 export function FileTree({
   entries,
   childrenByPath,
@@ -1598,6 +2058,8 @@ export function FileTree({
   const [agentConfigRestartingAgent, setAgentConfigRestartingAgent] = React.useState("");
   const [agentConfigError, setAgentConfigError] = React.useState("");
   const [agentConfigNotice, setAgentConfigNotice] = React.useState("");
+  const [agentConfigCatalog, setAgentConfigCatalog] = React.useState<AgentStatus[]>([]);
+  const [agentConfigVisibility, setAgentConfigVisibility] = React.useState<AgentVisibility | null>(null);
   const agentConfigFlowVersion = React.useRef(0);
   const [providerSyncBusy, setProviderSyncBusy] = React.useState(false);
   const [providerTestBusyID, setProviderTestBusyID] = React.useState("");
@@ -2137,6 +2599,8 @@ export function FileTree({
     setAgentConfigConfirmMessage("");
     setAgentConfigError("");
     setAgentConfigRestartingAgent("");
+    setAgentConfigCatalog([]);
+    setAgentConfigVisibility(null);
     setIsMenuOpen(false);
     setAgentConfigBusy(true);
     fetchAgents(true)
@@ -2147,6 +2611,13 @@ export function FileTree({
         setAgentConfigError(error instanceof Error ? error.message : t("agentConfig.loadAgentFailed"));
       })
       .finally(() => setAgentConfigBusy(false));
+    // 设置区（备注/链接 + 入口显隐）需要全量目录：被隐藏的 agent 也必须能找回。
+    fetchAgentCatalog(true)
+      .then((items) => setAgentConfigCatalog(items))
+      .catch(() => {});
+    refreshAgentVisibility(true)
+      .then((next) => setAgentConfigVisibility(next))
+      .catch(() => {});
   }, [t]);
 
   const openSessionNaming = React.useCallback(() => {
@@ -2714,6 +3185,91 @@ export function FileTree({
       setProviderTestBusyID("");
     }
   }, [providerTestBusyID, t]);
+
+  const pinAgentAPIProviderModels = React.useCallback(async (providerID: string, pinnedModels: string[]) => {
+    const trimmedID = String(providerID || "").trim();
+    if (!trimmedID) {
+      return;
+    }
+    const flowVersion = agentConfigFlowVersion.current;
+    setAgentConfigError("");
+    try {
+      const result = await saveProviderPinnedModels({ providerID: trimmedID, pinnedModels });
+      if (flowVersion !== agentConfigFlowVersion.current) return;
+      const nextProvider = result.provider;
+      setAgentAPIProviders((previous) => previous.map((item) => (item.id === nextProvider.id ? nextProvider : item)));
+    } catch (error) {
+      if (flowVersion !== agentConfigFlowVersion.current) return;
+      setAgentConfigError(error instanceof Error ? error.message : t("agentConfig.pinnedSaveFailed"));
+      throw error;
+    }
+  }, [t]);
+
+  const applyAgentAPIProviderToAgents = React.useCallback(async (providerID: string, agentNames: string[]): Promise<AgentAPIProviderApplyResult[]> => {
+    const trimmedID = String(providerID || "").trim();
+    const names = agentNames.map((item) => String(item || "").trim()).filter(Boolean);
+    if (!trimmedID || names.length === 0) {
+      return [];
+    }
+    const flowVersion = agentConfigFlowVersion.current;
+    setAgentConfigError("");
+    setAgentConfigBusy(true);
+    try {
+      const result = await applyProviderToAgents({ providerID: trimmedID, agents: names });
+      if (flowVersion !== agentConfigFlowVersion.current) return result.results;
+      if (result.provider) {
+        setAgentAPIProviders((previous) => previous.map((item) => (item.id === result.provider?.id ? result.provider : item)));
+      }
+      return result.results;
+    } catch (error) {
+      if (flowVersion === agentConfigFlowVersion.current) {
+        setAgentConfigError(error instanceof Error ? error.message : t("agentConfig.applyFailed"));
+      }
+      throw error;
+    } finally {
+      setAgentConfigBusy(false);
+    }
+  }, [t]);
+
+  const saveAgentMetadata = React.useCallback(async (agentName: string, label: string, url: string) => {
+    const trimmedName = String(agentName || "").trim();
+    if (!trimmedName) {
+      return;
+    }
+    const flowVersion = agentConfigFlowVersion.current;
+    setAgentConfigError("");
+    try {
+      await updateAgentMetadata({ agent: trimmedName, label, url });
+      if (flowVersion !== agentConfigFlowVersion.current) return;
+      const patch = (items: AgentStatus[]) => items.map((item) => (
+        item.name === trimmedName
+          ? { ...item, label: label.trim() || undefined, url: url.trim() || undefined }
+          : item
+      ));
+      setAgentConfigCatalog(patch);
+      setAgentConfigAgents(patch);
+    } catch (error) {
+      if (flowVersion === agentConfigFlowVersion.current) {
+        setAgentConfigError(error instanceof Error ? error.message : t("agentConfig.metadataSaveFailed"));
+      }
+      throw error;
+    }
+  }, [t]);
+
+  const saveAgentEntryVisibility = React.useCallback(async (hidden: string[], customized: boolean) => {
+    const flowVersion = agentConfigFlowVersion.current;
+    setAgentConfigError("");
+    try {
+      const next = await saveAgentVisibility(hidden, customized);
+      if (flowVersion !== agentConfigFlowVersion.current) return;
+      setAgentConfigVisibility(next);
+    } catch (error) {
+      if (flowVersion === agentConfigFlowVersion.current) {
+        setAgentConfigError(error instanceof Error ? error.message : t("agentConfig.visibilitySaveFailed"));
+      }
+      throw error;
+    }
+  }, [t]);
 
   const selectAgentConfigBackup = React.useCallback((id: string) => {
     setSelectedAgentConfigID(id);
@@ -3846,9 +4402,15 @@ export function FileTree({
               providerSyncBusy={providerSyncBusy}
               providerTestBusyID={providerTestBusyID}
               providerTestResults={providerTestResults}
+              catalogAgents={agentConfigCatalog}
+              agentVisibility={agentConfigVisibility}
               onSyncAllProviders={() => {
                 void syncAllAgentAPIProviderModels();
               }}
+              onPinProviderModels={(providerID, pinnedModels) => pinAgentAPIProviderModels(providerID, pinnedModels)}
+              onApplyProviderToAgents={(providerID, agentNames) => applyAgentAPIProviderToAgents(providerID, agentNames)}
+              onSaveAgentMetadata={(agentName, label, url) => saveAgentMetadata(agentName, label, url)}
+              onSaveAgentVisibility={(hidden, customized) => saveAgentEntryVisibility(hidden, customized)}
               onTestProviderModel={(providerID, model) => {
                 void testAgentAPIProviderModelNow(providerID, model);
               }}
