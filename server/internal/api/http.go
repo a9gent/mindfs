@@ -436,6 +436,11 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/agent-api-providers/test", h.protectedEndpoint(h.handleAgentAPIProviderTest))
 	r.Delete("/api/agent-api-providers", h.protectedEndpoint(h.handleAgentAPIProviderDelete))
 	r.Post("/api/agent-api-providers/switch", h.protectedEndpoint(h.handleAgentAPIProviderSwitch))
+	r.Put("/api/agent-api-providers/{id}/pinned", h.protectedEndpoint(h.handleAgentAPIProviderPinnedPut))
+	r.Post("/api/agent-api-providers/{id}/apply", h.protectedEndpoint(h.handleAgentAPIProviderApply))
+	r.Patch("/api/agents/{name}/metadata", h.protectedEndpoint(h.handleAgentMetadataPatch))
+	r.Get("/api/preferences/agent-visibility", h.protectedEndpoint(h.handleAgentVisibilityGet))
+	r.Put("/api/preferences/agent-visibility", h.protectedEndpoint(h.handleAgentVisibilityPut))
 	r.NotFound(h.handleNotFound)
 
 	return r
