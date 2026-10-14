@@ -218,7 +218,9 @@ const CHILD_SESSION_PAGE_SIZE = 100;
 const MULTI_PROJECT_SESSION_LIMIT = 6;
 const SESSION_PAGE_SIZE = 50;
 const MULTI_PROJECT_SESSION_STORAGE_KEY = "mindfs-multi-project-session-list";
-const APP_DOCUMENT_TITLE = "MindFS";
+// Capture the server-rendered title before relay status updates add a node name.
+const APP_DOCUMENT_TITLE =
+  (typeof document !== "undefined" ? document.title.trim() : "") || "MindFS";
 
 function formatDocumentTitle(relayStatus: RelayStatusPayload | null): string {
   if (!isRelayNodePage()) {
