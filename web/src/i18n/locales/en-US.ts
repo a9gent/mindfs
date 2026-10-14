@@ -122,7 +122,6 @@ export const enUS = {
   "blueRing.action.kanbanTemplateCycle": "Cycle kanban templates (All→…)",
   "blueRing.action.newTask": "New task (template pick)",
   "blueRing.action.openScheduledTasks": "Open scheduled tasks",
-  "blueRing.action.quickSaveFile": "Quick save file",
   "blueRing.action.renameCurrentFile": "Rename current file",
   "blueRing.action.copyCurrentFilePath": "Copy current file path",
   "blueRing.action.copySessionHandoff": "Copy session handoff pack",

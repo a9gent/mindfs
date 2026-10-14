@@ -120,7 +120,6 @@ export const zhCN = {
   "blueRing.action.kanbanTemplateCycle": "看板模板循环 (全部→…)",
   "blueRing.action.newTask": "新建任务（可选模板）",
   "blueRing.action.openScheduledTasks": "打开定时任务",
-  "blueRing.action.quickSaveFile": "快速保存文件",
   "blueRing.action.renameCurrentFile": "重命名当前文件",
   "blueRing.action.copyCurrentFilePath": "复制当前文件路径",
   "blueRing.action.copySessionHandoff": "复制会话接力包",
