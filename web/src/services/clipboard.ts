@@ -93,3 +93,23 @@ export async function copyText(text: string): Promise<void> {
 
   throw new Error(translateNow("clipboard.unsupported"));
 }
+
+/** Read plain text from the clipboard, falling back across Capacitor and the async API. */
+export async function readClipboardText(): Promise<string> {
+  if (isCapacitorRuntime()) {
+    try {
+      const mod = await import("@capacitor/clipboard");
+      const result = await mod.Clipboard.read();
+      if (result?.value) {
+        return result.value;
+      }
+    } catch {
+      // Fall through to the browser clipboard API.
+    }
+  }
+  try {
+    return (await navigator.clipboard?.readText?.()) || "";
+  } catch {
+    return "";
+  }
+}
