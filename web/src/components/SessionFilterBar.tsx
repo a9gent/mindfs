@@ -106,21 +106,22 @@ export function SessionFilterBar({ filter, onChange }: SessionFilterBarProps) {
         <RunningDot />
         {t("sessionList.filterRunning")}
       </button>
-      {TIME_WINDOWS.map(({ value, labelKey }) => {
-        const isActive = filter.timeWindow === value;
-        return (
-          <button
-            key={value}
-            type="button"
-            aria-pressed={isActive}
-            title={t(labelKey)}
-            onClick={() => onChange({ ...filter, timeWindow: isActive ? "all" : value })}
-            style={isActive ? chipActiveStyle : chipBaseStyle}
-          >
-            {t(labelKey)}
-          </button>
-        );
-      })}
+      {/* 时间窗口合并为单个循环 chip：全部→1h→3h→1天→全部，减少横向拥挤 */}
+      <button
+        type="button"
+        aria-pressed={filter.timeWindow !== "all"}
+        title={t("sessionList.filterTimeCycle")}
+        onClick={() => {
+          const order: SessionTimeWindow[] = ["all", "1h", "3h", "day"];
+          const index = order.indexOf(filter.timeWindow);
+          onChange({ ...filter, timeWindow: order[(index + 1) % order.length] });
+        }}
+        style={filter.timeWindow !== "all" ? chipActiveStyle : chipBaseStyle}
+      >
+        {filter.timeWindow === "all"
+          ? t("sessionList.filterTimeAll")
+          : t(TIME_WINDOWS.find(({ value }) => value === filter.timeWindow)?.labelKey || "sessionList.filterTimeAll")}
+      </button>
       <button
         type="button"
         aria-pressed={filter.sortAsc}

@@ -1051,9 +1051,13 @@ export function MultiProjectSessionList({
 
   const handleProjectToggle = async (group: ProjectSessionGroup) => {
     const expanded = !!expandedProjects[group.rootId];
-    // 用原始分组算剩余（未加载）数：筛选副本的 sessions 是命中子集
+    // 用原始分组算剩余（未加载）数：筛选副本的 sessions 是命中子集；
+    // 置顶会话已在顶部专区展示但仍算已加载，不参与剩余数
     const source = loadTargetGroup(group);
-    const remaining = Math.max(0, source.totalCount - source.sessions.length);
+    const remaining = Math.max(
+      0,
+      source.totalCount - topLevelSessionsForGroup(source.sessions).length,
+    );
     if (!expanded) {
       setExpandedProjects((prev) => ({ ...prev, [group.rootId]: true }));
       if (remaining > 0 && onLoadMoreProject) {
@@ -1171,13 +1175,69 @@ export function MultiProjectSessionList({
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "9px" }}>
+            {orderedGroups.some((group) =>
+              topLevelSessionsForGroup(group.sessions).some((session) => !!session.pinned_at),
+            ) ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "2px", paddingBottom: "4px" }}>
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "4px 6px 6px",
+                    fontSize: "11px",
+                    color: "var(--text-secondary)",
+                    letterSpacing: "0.02em",
+                  }}
+                >
+                  <PinIcon pinned={true} />
+                  {t("sessionList.pinnedSection")}
+                </div>
+                {orderedGroups.flatMap((group) =>
+                  topLevelSessionsForGroup(group.sessions)
+                    .filter((session) => !!session.pinned_at)
+                    .map((session) => (
+                      <SessionCard
+                        key={`pinned:${group.rootId}:${session.key}`}
+                        session={{ ...session, root_id: session.root_id || group.rootId }}
+                        sessionByKey={sessionByKey}
+                        selected={session.key === selectedKey && (session.root_id || group.rootId) === selectedRootId}
+                        parentHighlighted={false}
+                        highlightQuery=""
+                        syncing={isSessionSyncing({ ...session, root_id: session.root_id || group.rootId }, syncingSessionKeys)}
+                        projectBadge={group.rootName || group.rootId}
+                        onSelect={onSelect}
+                        onSync={onSync}
+                        onPin={onPin}
+                        onRename={onRename}
+                        onScheduledTask={onScheduledTask}
+                        onDelete={onDelete}
+                        onHandoffPack={onHandoffPack}
+                      />
+                    )),
+                )}
+              </div>
+            ) : null}
             {orderedGroups.map((group) => {
               const expanded = !!expandedProjects[group.rootId];
               const pinned = !!pinnedProjects[group.rootId];
               const topLevelSessions = topLevelSessionsForGroup(group.sessions);
+              // 会话级置顶（pinned_at）：抽到顶部「已置顶」专区，组内不再重复显示；
+              // 置顶父会话的子会话保留在组内原位（跟随置顶父卡渲染在专区）
+              const pinnedInGroup = topLevelSessions.filter((session) => !!session.pinned_at);
+              const unpinnedSessions = pinnedInGroup.length > 0
+                ? [
+                    ...topLevelSessions.filter((session) => !session.pinned_at),
+                    ...group.sessions.filter((session) => {
+                      const parentKey = String(session.parent_session_key || "").trim();
+                      if (!parentKey) return false;
+                      return pinnedInGroup.some((pinnedSession) => pinnedSession.key === parentKey);
+                    }),
+                  ]
+                : group.sessions;
               const sessions = expanded
-                ? group.sessions
-                : sessionsForTopLevelLimit(group.sessions, MULTI_PROJECT_VISIBLE_LIMIT);
+                ? unpinnedSessions
+                : sessionsForTopLevelLimit(unpinnedSessions, MULTI_PROJECT_VISIBLE_LIMIT);
               const rows = buildRows(sessions, group.rootId);
               const childCountByParent = new Map<string, number>();
               const sessionKeys = new Set(group.sessions.map((item) => item.key));
@@ -1187,11 +1247,13 @@ export function MultiProjectSessionList({
                   childCountByParent.set(parentKey, (childCountByParent.get(parentKey) || 0) + 1);
                 }
               }
-              // 剩余数用原始分组的顶层会话数推：筛选副本会把子会话混进计数
+              // 剩余数用原始分组的顶层会话数推：筛选副本会把子会话混进计数。
+              // 置顶会话仍属于已加载会话（只是在顶部专区展示），不计入剩余
               const sourceGroup = loadTargetGroup(group);
               const remaining = Math.max(
                 0,
-                sourceGroup.totalCount - topLevelSessionsForGroup(sourceGroup.sessions).length,
+                sourceGroup.totalCount
+                  - topLevelSessionsForGroup(sourceGroup.sessions).length,
               );
               const projectLoading = !!loadingProjects[group.rootId];
               return (
@@ -1388,6 +1450,7 @@ function SessionCard({
   highlightQuery,
   syncing = false,
   childCount = 0,
+  projectBadge,
   onSelect,
   onSync,
   onPin,
@@ -1403,6 +1466,7 @@ function SessionCard({
   highlightQuery?: string;
   syncing?: boolean;
   childCount?: number;
+  projectBadge?: string;
   onSelect?: (session: SessionItem) => void;
   onSync?: (session: SessionItem) => Promise<void> | void;
   onPin?: (session: SessionItem, pinned: boolean) => Promise<boolean> | boolean;
@@ -1749,6 +1813,27 @@ function SessionCard({
                 textOverflow: "ellipsis",
               }}
             >
+              {projectBadge ? (
+                <span
+                  style={{
+                    display: "inline-block",
+                    marginRight: "6px",
+                    padding: "1px 6px",
+                    borderRadius: "6px",
+                    fontSize: "10px",
+                    lineHeight: "16px",
+                    verticalAlign: "middle",
+                    color: "var(--accent-color)",
+                    background: "color-mix(in srgb, var(--accent-color) 12%, transparent)",
+                    whiteSpace: "nowrap",
+                    maxWidth: "88px",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {projectBadge}
+                </span>
+              ) : null}
               {renderHighlightedText(displayName, highlightQuery, {
                 color: selected ? "var(--accent-color)" : "var(--text-primary)",
               })}

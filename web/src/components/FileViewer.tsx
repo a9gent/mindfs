@@ -10,6 +10,10 @@ import { rootBadgeStyle } from "./rootBadgeStyle";
 import { downloadFile } from "../services/download";
 import { isNativeShellRuntime } from "../services/runtime";
 import { useI18n } from "../i18n";
+import { copyText } from "../services/clipboard";
+import { protectedJSON, ProtectedAPIError } from "../services/api";
+import { appURL } from "../services/base";
+import { reportError } from "../services/error";
 
 import type { FilePayload } from "../services/file";
 import { FileEditStore, fileEditKey, MAX_EDITABLE_FILE_BYTES } from "../services/fileEditing";
@@ -52,6 +56,10 @@ type RelatedSession = {
 type FileViewerProps = {
   rootPath?: string;
   onFileOperationComplete?: () => void | Promise<void>;
+  /** Called after an inline rename succeeds, with the new relative path. */
+  onRenamed?: (newPath: string) => void;
+  /** Bump to programmatically open the inline rename input (blue-ring binding). */
+  renameSignal?: number;
   editStore: FileEditStore;
   onFileUpdated: (file: FilePayload) => void;
   onFileSaved: (file: FilePayload) => void;
@@ -145,7 +153,7 @@ function Breadcrumbs({ root, path, onPathClick }: { root?: string; path: string;
   );
 }
 
-export function FileViewer({ rootPath, onFileOperationComplete, editStore, onFileUpdated, onFileSaved, file, onSessionClick, onPathClick, onFileClick, onSelectionChange, initialScrollTop = 0, onScrollTopChange, isVisible = true }: FileViewerProps) {
+export function FileViewer({ rootPath, onFileOperationComplete, onRenamed, renameSignal, editStore, onFileUpdated, onFileSaved, file, onSessionClick, onPathClick, onFileClick, onSelectionChange, initialScrollTop = 0, onScrollTopChange, isVisible = true }: FileViewerProps) {
   const { t } = useI18n();
   const showOutline = useSyncExternalStore(subscribeMarkdownOutline, isMarkdownOutlineEnabled, () => true);
   const editKey = fileEditKey(file?.root || "", file?.path || "");
@@ -164,6 +172,79 @@ export function FileViewer({ rootPath, onFileOperationComplete, editStore, onFil
   });
 
   const fileScrollKey = file ? `${file.root || ""}::${file.path}` : "";
+
+  const currentFileName = file ? (file.path.replace(/\\/g, "/").split("/").pop() || "") : "";
+  const canInlineRename = !!file?.root && !!file.path && !/^(?:\/|[A-Za-z]:)/.test(file.path) && !!onRenamed;
+  const [renaming, setRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [copiedPath, setCopiedPath] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const renameCommitRef = useRef(false);
+  useEffect(() => {
+    if (renaming) {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    }
+  }, [renaming]);
+  useEffect(() => {
+    if (!copiedPath) return;
+    const timer = window.setTimeout(() => setCopiedPath(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copiedPath]);
+  useEffect(() => {
+    if (!renameSignal || !canInlineRename || renaming) return;
+    renameCommitRef.current = false;
+    setRenameDraft(currentFileName);
+    setRenaming(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renameSignal]);
+  const cancelRename = useCallback(() => {
+    renameCommitRef.current = true;
+    setRenaming(false);
+    setRenameDraft("");
+  }, []);
+  const submitRename = useCallback(async () => {
+    if (!file?.root || renameBusy) return;
+    const nextName = renameDraft.trim();
+    if (!nextName || nextName === "." || nextName === ".." || /[/\\\x00]/.test(nextName)) {
+      reportError("file.write_failed", t("directory.invalidFileName"));
+      cancelRename();
+      return;
+    }
+    if (nextName === currentFileName) {
+      cancelRename();
+      return;
+    }
+    const parentPath = file.path.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+    const newPath = parentPath ? `${parentPath}/${nextName}` : nextName;
+    renameCommitRef.current = true;
+    setRenameBusy(true);
+    try {
+      await protectedJSON(appURL("/api/file/operation"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ root: file.root, path: file.path, action: "rename", name: nextName }),
+      });
+      setRenaming(false);
+      setRenameDraft("");
+      onRenamed?.(newPath);
+      await onFileOperationComplete?.();
+    } catch (err) {
+      reportError(
+        "file.write_failed",
+        err instanceof ProtectedAPIError && err.status === 409
+          ? t("directory.fileExists")
+          : (err instanceof Error ? err.message : t("fileOperation.rename")),
+      );
+      renameCommitRef.current = false;
+    } finally {
+      setRenameBusy(false);
+    }
+  }, [file, renameBusy, renameDraft, currentFileName, cancelRename, onRenamed, onFileOperationComplete, t]);
+  const absolutePath = file && rootPath
+    ? `${rootPath.replace(/[\\/]+$/, "")}/${file.path.replace(/\\/g, "/")}`
+    : "";
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -385,7 +466,109 @@ export function FileViewer({ rootPath, onFileOperationComplete, editStore, onFil
       )}
       <header style={{ height: "36px", padding: "0 3px 0 16px", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "10px", background: "var(--mindfs-topbar-bg, transparent)", boxSizing: "border-box", zIndex: 10, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", overflow: "hidden", flex: 1, minWidth: 0 }}>
-          <Breadcrumbs root={file.root} path={file.path} onPathClick={onPathClick} />
+          {renaming ? (
+            <input
+              ref={renameInputRef}
+              value={renameDraft}
+              disabled={renameBusy}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancelRename();
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  void submitRename();
+                }
+              }}
+              onBlur={() => {
+                if (!renameCommitRef.current) {
+                  void submitRename();
+                }
+              }}
+              spellCheck={false}
+              style={{
+                flex: 1,
+                minWidth: "120px",
+                maxWidth: "320px",
+                border: "1px solid var(--accent-color)",
+                borderRadius: "6px",
+                padding: "3px 8px",
+                background: "transparent",
+                color: "var(--text-primary)",
+                fontSize: "12px",
+                outline: "none",
+              }}
+            />
+          ) : (
+            <>
+              <Breadcrumbs root={file.root} path={file.path} onPathClick={onPathClick} />
+              {canInlineRename ? (
+                <button
+                  type="button"
+                  aria-label={t("fileOperation.rename")}
+                  title={t("fileOperation.rename")}
+                  onClick={() => {
+                    renameCommitRef.current = false;
+                    setRenameDraft(currentFileName);
+                    setRenaming(true);
+                  }}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: "var(--text-secondary)",
+                    cursor: "pointer",
+                    padding: "2px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    flexShrink: 0,
+                    opacity: 0.7,
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                  </svg>
+                </button>
+              ) : null}
+              {absolutePath ? (
+                <button
+                  type="button"
+                  aria-label={t("file.copyFullPath")}
+                  title={copiedPath ? t("file.copied") : t("file.copyFullPath")}
+                  onClick={() => {
+                    void copyText(absolutePath)
+                      .then(() => setCopiedPath(true))
+                      .catch((err) => {
+                        reportError("clipboard.write_failed", err instanceof Error ? err.message : String(err));
+                      });
+                  }}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: copiedPath ? "#16a34a" : "var(--text-secondary)",
+                    cursor: "pointer",
+                    padding: "2px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    flexShrink: 0,
+                    opacity: copiedPath ? 1 : 0.7,
+                  }}
+                >
+                  {copiedPath ? (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M20 6 9 17l-5-5" />
+                    </svg>
+                  ) : (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect width="14" height="14" x="8" y="8" rx="2" />
+                      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                    </svg>
+                  )}
+                </button>
+              ) : null}
+            </>
+          )}
 
           {relatedSessions.length > 0 && (
             <div style={{ 

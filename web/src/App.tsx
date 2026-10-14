@@ -67,6 +67,7 @@ import {
   type BlueRingGestureConfig,
 } from "./services/quickSwitch";
 import { recordRecentDir } from "./services/recentDirs";
+import { loadHandoffTemplate, renderHandoffPack } from "./services/handoff";
 import {
   loadFontSizePreferences,
   persistFontSizePreferences,
@@ -2549,6 +2550,49 @@ export function App({ onGoHome }: AppProps) {
   }, []);
   const [handoffPackSession, setHandoffPackSession] = useState<SessionItem | null>(null);
   const [quickSaveFileOpen, setQuickSaveFileOpen] = useState(false);
+  const [fileRenameRequestedAt, setFileRenameRequestedAt] = useState(0);
+  const handleRenameCurrentFile = useCallback(() => {
+    if (!fileRef.current) {
+      reportError("file.write_failed", t("blueRing.noOpenFile"));
+      return;
+    }
+    setFileRenameRequestedAt(Date.now());
+  }, [t]);
+  const handleCopyCurrentFilePath = useCallback(() => {
+    const current = fileRef.current;
+    const rootPath = current && current.root ? managedRootByIdRef.current[current.root]?.root_path : "";
+    if (!current || !rootPath) {
+      reportError("file.write_failed", t("blueRing.noOpenFile"));
+      return;
+    }
+    const absolutePath = `${String(rootPath).replace(/[\\/]+$/, "")}/${String(current.path).replace(/\\/g, "/")}`;
+    void copyText(absolutePath)
+      .then(() => reportError("clipboard.write_failed", t("file.copied"), { severity: "info" }))
+      .catch(() => reportError("clipboard.write_failed", t("session.copyFailed")));
+  }, [t]);
+  const handleCopySessionHandoff = useCallback(() => {
+    const snapshot = selectedSessionRef.current || drawerSessionByRootRef.current[currentRootIdRef.current || ""];
+    const rootId = (snapshot?.root_id as string | undefined) || currentRootIdRef.current;
+    const sessionKey = snapshot?.key || snapshot?.session_key;
+    if (!rootId || !sessionKey) {
+      reportError("clipboard.write_failed", t("session.copyFailed"));
+      return;
+    }
+    void sessionService.getSessionLogPath(rootId, sessionKey)
+      .then(({ path, agentSessionId }) => {
+        const pack = renderHandoffPack(loadHandoffTemplate(), {
+          sessionKey,
+          jsonlPath: path,
+          agentSessionId,
+        });
+        return copyText(pack);
+      })
+      .then(() => reportError("clipboard.write_failed", t("session.handoff.copied"), { severity: "info" }))
+      .catch((err) => {
+        console.warn("[blueRing/handoff] copy failed", err);
+        reportError("clipboard.write_failed", t("session.copyFailed"));
+      });
+  }, [t]);
   const handleHandoffPack = useCallback((session: SessionItem) => {
     setHandoffPackSession(session);
   }, []);
@@ -2564,6 +2608,59 @@ export function App({ onGoHome }: AppProps) {
       setIsRightOpen(false);
     }
   }, [isMobile]);
+  const handleHandoffPackNewSessionInProject = useCallback(
+    async (rootId: string, pack: string) => {
+      const sourceRoot = handoffPackSession?.root_id || currentRootIdRef.current;
+      try {
+        // 切到目标项目（open_dir 会清当前会话/文件预览态），再重置为空白新会话
+        if (rootId !== currentRootIdRef.current) {
+          await actionHandlers.open_dir({
+            path: rootId,
+            root: rootId,
+            isRoot: true,
+            suppressTreeExpand: true,
+          });
+        }
+        if (sourceRoot) {
+          setPendingPlanMode(false);
+          selectedSessionRef.current = null;
+          currentSessionRef.current = null;
+          selectedSessionByRootRef.current[rootId] = null;
+          setSelectedSession(null);
+          setSelectedSessionLoading(false);
+          setFile(null);
+          setGitDiff(null);
+          setRelatedSelectedFileKey("");
+          // 保留 open_dir 刚写入的 dir，否则 URL 与 selectedDir 失配，刷新会跳回根目录
+          replaceURLState({
+            root: rootId,
+            file: "",
+            session: "",
+            cursor: 0,
+            pluginQuery: {},
+          });
+          setDrawerSessionForRoot(rootId, null);
+          setDrawerOpenForRoot(rootId, false);
+        }
+        setInteractionMode("main");
+        // replace：新会话空白草稿直接放入，不自动发送，用户确认后手动发出
+        setEditDraftRequest((prev) => ({
+          id: (prev?.id || 0) + 1,
+          content: pack,
+          mode: "replace",
+        }));
+        if (isMobile) {
+          setIsRightOpen(false);
+        }
+      } catch (err) {
+        console.warn("[handoff] switch project failed", err);
+        reportError("file.write_failed", err instanceof Error ? err.message : String(err));
+      } finally {
+        setHandoffPackSession(null);
+      }
+    },
+    [handoffPackSession, isMobile],
+  );
   const [entriesByPath, setEntriesByPath] = useState<
     Record<string, FileEntry[]>
   >({});
@@ -11054,6 +11151,40 @@ export function App({ onGoHome }: AppProps) {
     return pluginManagerRef.current.match(currentRootId, input);
   }, [currentRootId, file, pluginVersion, pluginQuery]);
 
+  // 蓝环卡片「最近文件」：当前目录文本类文件按 mtime 取最近几篇，
+  // 命中当前会话关联文件或 git 修改时标记，全部由 App 侧现有 state 组装
+  const recentQuickFiles = useMemo(() => {
+    const rootId = currentRootId;
+    if (!rootId) return [];
+    const dirKey = treeCacheKey(rootId, selectedDir && selectedDir !== rootId ? selectedDir : "");
+    const entries = entriesByPath[dirKey] || [];
+    const rootPath = managedRootByIdRef.current[rootId]?.root_path || "";
+    const textExts = [".md", ".txt", ".html", ".htm", ".json", ".ts", ".tsx", ".js", ".jsx", ".css", ".py", ".go", ".rs", ".java", ".sh", ".yml", ".yaml", ".toml", ".xml", ".csv", ".log"];
+    const relatedPaths = new Set(
+      ((actionBarSession as any)?.related_files as RelatedFile[] | undefined || [])
+        .map((item) => normalizePathForRoot(String(item.path || ""), rootPath)),
+    );
+    const gitChangedPaths = new Set(
+      Object.keys(gitFileStatsByPath),
+    );
+    return entries
+      .filter((entry) =>
+        !entry.is_dir
+        && !entry.name.startsWith(".")
+        && textExts.some((ext) => entry.name.toLowerCase().endsWith(ext)))
+      .sort((a, b) => (Date.parse(String(b.mtime || "")) || 0) - (Date.parse(String(a.mtime || "")) || 0))
+      .slice(0, 4)
+      .map((entry) => {
+        const normalized = entry.path.replace(/\\/g, "/");
+        return {
+          root: rootId,
+          path: entry.path,
+          name: entry.name,
+          modifiedInSession: relatedPaths.has(normalized) || gitChangedPaths.has(normalized),
+        };
+      });
+  }, [entriesByPath, selectedDir, currentRootId, actionBarSession, gitFileStatsByPath, treeCacheKey]);
+
   useEffect(() => {
     if (!file || currentFileEditing || pluginBypass || !matchedPlugin) return;
     if (inferReadModeFromPlugin(matchedPlugin) !== "full") return;
@@ -13791,14 +13922,27 @@ export function App({ onGoHome }: AppProps) {
           <FileViewer
             file={file}
             rootPath={managedRootByIdRef.current[file?.root || ""]?.root_path}
+            renameSignal={fileRenameRequestedAt}
+            onRenamed={(newPath) => {
+              const current = fileRef.current;
+              if (!current?.root) return;
+              const nextName = newPath.replace(/\\/g, "/").split("/").pop() || current.name;
+              // 同步更新 file state，否则 onFileUpdated/onFileSaved 按 path 匹配会失联
+              setFile({ ...current, path: newPath, name: nextName });
+            }}
             onFileOperationComplete={async () => {
-              if (!file?.root) return;
+              const renamedRoot = file?.root;
+              if (!renamedRoot || !file?.path) return;
               const parent = file.path.split("/").slice(0, -1).join("/") || ".";
-              clearFileCacheForRoot(file.root);
-              setEntriesByPath({});
-              await refreshTreeDir(file.root, parent, false);
-              await actionHandlers.open_dir({ root: file.root, path: parent === "." ? file.root : parent, isRoot: parent === ".", forceDirectory: true });
-              void refreshGitStatus(file.root);
+              // 只失效/刷新当前目录，避免 open_dir 把正在预览的文件清掉
+              invalidTreeCacheKeysRef.current.add(treeCacheKey(renamedRoot, parent));
+              setEntriesByPath((prev) => {
+                const next = { ...prev };
+                delete next[treeCacheKey(renamedRoot, parent)];
+                return next;
+              });
+              await refreshTreeDir(renamedRoot, parent, selectedDirRef.current === parent);
+              void refreshGitStatus(renamedRoot);
             }}
             editStore={fileEditStore}
             onFileUpdated={(next) => {
@@ -14825,6 +14969,11 @@ export function App({ onGoHome }: AppProps) {
               onCreateTask={createTaskFromQuickAction}
               onOpenScheduledTasks={openScheduledTasksFromQuickAction}
               onQuickSaveFile={() => setQuickSaveFileOpen(true)}
+              onRenameCurrentFile={handleRenameCurrentFile}
+              onCopyCurrentFilePath={handleCopyCurrentFilePath}
+              onCopySessionHandoff={handleCopySessionHandoff}
+              recentFiles={recentQuickFiles}
+              onOpenFileFromQuickSwitch={(path) => { void actionHandlers.open({ path, root: currentRootIdRef.current || "" }); }}
               taskGroupBadge={actionBarSessionKey ? <TaskGroupPanel key={`${actionBarSession?.root_id || currentRootId}:${actionBarSessionKey}`} rootId={actionBarSession?.root_id || currentRootId || ""} sessionKey={actionBarSessionKey} renderTask={(detail, close) => renderKanbanTaskCard(detail.task, isTerminalKanbanTask(detail.task) ? t("task.column.done") : t("task.column.running"), detail, true, close)} /> : null}
               status={status}
               agentsVersion={agentsVersion}
@@ -14939,8 +15088,15 @@ export function App({ onGoHome }: AppProps) {
       />
       <HandoffPackDialog
         session={handoffPackSession}
+        currentRootId={currentRootId}
+        roots={managedRootIds
+          .filter((id) => id && id !== currentRootId)
+          .map((id) => ({ id, name: managedRootByIdRef.current[id]?.display_name || id }))}
         onClose={() => setHandoffPackSession(null)}
         onInsert={handleHandoffPackInsert}
+        onNewSessionInProject={(rootId, pack) => {
+          void handleHandoffPackNewSessionInProject(rootId, pack);
+        }}
       />
       <QuickSaveFilePanel
         open={quickSaveFileOpen}

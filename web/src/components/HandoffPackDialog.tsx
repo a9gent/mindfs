@@ -13,8 +13,12 @@ import {
 
 type HandoffPackDialogProps = {
   session: SessionItem | null;
+  currentRootId?: string | null;
+  /** Other projects the pack can seed a fresh session in (current root excluded by caller). */
+  roots?: Array<{ id: string; name: string }>;
   onClose: () => void;
   onInsert: (pack: string) => void;
+  onNewSessionInProject?: (rootId: string, pack: string) => void;
 };
 
 const overlayStyle: React.CSSProperties = {
@@ -75,7 +79,7 @@ const dialogScopedStyle = `
   }
 `;
 
-export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDialogProps) {
+export function HandoffPackDialog({ session, currentRootId, roots = [], onClose, onInsert, onNewSessionInProject }: HandoffPackDialogProps) {
   const { t } = useI18n();
   const [context, setContext] = useState<HandoffContext | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -83,6 +87,7 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
   const [copied, setCopied] = useState(false);
   const [templateSaved, setTemplateSaved] = useState(false);
   const [templateSaveBlocked, setTemplateSaveBlocked] = useState(false);
+  const [targetRootId, setTargetRootId] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const requestSeqRef = useRef(0);
 
@@ -98,6 +103,7 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
     setCopied(false);
     setTemplateSaved(false);
     setTemplateSaveBlocked(false);
+    setTargetRootId("");
     sessionService
       .getSessionLogPath(session.root_id, session.session_key || session.key)
       .then(({ path, agentSessionId }) => {
@@ -248,6 +254,51 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
         </div>
 
         <div style={{ flex: 1, minHeight: 0, padding: "12px 16px", display: "flex", flexDirection: "column" }}>
+          {roots.length > 0 ? (
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
+              <span style={{ fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>
+                {t("session.handoff.targetSession")}
+              </span>
+              <select
+                value={targetRootId}
+                onChange={(e) => setTargetRootId(e.target.value)}
+                style={{
+                  flex: 1,
+                  minWidth: "160px",
+                  maxWidth: "280px",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "6px 8px",
+                  background: "transparent",
+                  color: "var(--text-primary)",
+                  fontSize: "12px",
+                  outline: "none",
+                }}
+              >
+                <option value="">{t("session.handoff.targetCurrent")}</option>
+                {roots.map((root) => (
+                  <option key={root.id} value={root.id}>
+                    {t("session.handoff.targetOtherProject", { name: root.name })}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+          {targetRootId ? (
+            <div
+              style={{
+                fontSize: "11px",
+                background: "var(--accent-color, #2563eb)",
+                color: "#fff",
+                borderRadius: "8px",
+                padding: "7px 10px",
+                marginBottom: "10px",
+                lineHeight: 1.5,
+              }}
+            >
+              {t("session.handoff.openInNewSessionHint")}
+            </div>
+          ) : null}
           {!context ? (
             <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "18px 0" }}>
               {loadError ? t("session.handoff.pathFailed") : t("session.handoff.loading")}
@@ -324,12 +375,18 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
             type="button"
             disabled={!context}
             onClick={() => {
+              if (targetRootId && onNewSessionInProject) {
+                onNewSessionInProject(targetRootId, pack);
+                return;
+              }
               onInsert(pack);
               onClose();
             }}
             style={primaryButtonStyle}
           >
-            {t("session.handoff.insert")}
+            {targetRootId
+              ? t("session.handoff.startInProject")
+              : t("session.handoff.insert")}
           </button>
         </div>
       </div>

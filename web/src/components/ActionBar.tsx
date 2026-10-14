@@ -95,6 +95,11 @@ type ActionBarProps = {
   onCreateTask?: SessionQuickActionsProps["onCreateTask"];
   onOpenScheduledTasks?: SessionQuickActionsProps["onOpenScheduledTasks"];
   onQuickSaveFile?: SessionQuickActionsProps["onQuickSaveFile"];
+  onRenameCurrentFile?: SessionQuickActionsProps["onRenameCurrentFile"];
+  onCopyCurrentFilePath?: SessionQuickActionsProps["onCopyCurrentFilePath"];
+  onCopySessionHandoff?: SessionQuickActionsProps["onCopySessionHandoff"];
+  recentFiles?: SessionQuickActionsProps["recentFiles"];
+  onOpenFileFromQuickSwitch?: SessionQuickActionsProps["onOpenFile"];
   taskGroupBadge?: React.ReactNode;
   status?: WSStatus;
   agentsVersion?: number;
@@ -182,6 +187,18 @@ function wsStatusMeta(status: WSStatus, t: (key: MessageKey) => string): {
 const MOBILE_BREAKPOINT = 768;
 const IME_ENTER_GUARD_MS = 120;
 const CANDIDATE_FETCH_DEBOUNCE_MS = 512;
+const COMPOSER_MAX_HEIGHT_STORAGE_KEY = "mindfs-composer-max-height";
+const COMPOSER_MAX_HEIGHT_DEFAULT = 240;
+const COMPOSER_MAX_HEIGHT_MIN = 44;
+const COMPOSER_MAX_HEIGHT_CEILING = 560;
+
+function clampComposerMaxHeight(value: number): number {
+  const ceiling = Math.min(
+    COMPOSER_MAX_HEIGHT_CEILING,
+    Math.max(COMPOSER_MAX_HEIGHT_MIN, Math.round(window.innerHeight * 0.7)),
+  );
+  return Math.min(ceiling, Math.max(COMPOSER_MAX_HEIGHT_MIN, Math.round(value)));
+}
 
 function getAgentDefaults(agent?: AgentStatus | null) {
   return {
@@ -450,6 +467,11 @@ export function ActionBar({
   onCreateTask,
   onOpenScheduledTasks,
   onQuickSaveFile,
+  onRenameCurrentFile,
+  onCopyCurrentFilePath,
+  onCopySessionHandoff,
+  recentFiles,
+  onOpenFileFromQuickSwitch,
 }: ActionBarProps) {
   const { t } = useI18n();
   const [modelSelectorSignal, setModelSelectorSignal] = useState(0);
@@ -472,6 +494,13 @@ export function ActionBar({
   const [editingQueueText, setEditingQueueText] = useState("");
   const [isMultiLine, setIsMultiLine] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
+  const [composerMaxHeight, setComposerMaxHeight] = useState(() => {
+    const stored = Number(window.localStorage.getItem(COMPOSER_MAX_HEIGHT_STORAGE_KEY) || "");
+    const value = Number.isFinite(stored) && stored >= COMPOSER_MAX_HEIGHT_MIN ? stored : COMPOSER_MAX_HEIGHT_DEFAULT;
+    return clampComposerMaxHeight(value);
+  });
+  const composerResizeRef = useRef<{ startY: number; startMax: number; moved: boolean } | null>(null);
+  const composerResizeLastTapRef = useRef(0);
   const [placeholderVariant, setPlaceholderVariant] = useState(0);
   const [isDark, setIsDark] = useState(() => getEffectiveAppearanceMode() === "dark");
   const [candidates, setCandidates] = useState<CandidateItem[]>([]);
@@ -1598,21 +1627,99 @@ export function ActionBar({
                 display: "flex",
                 alignItems: "center",
                 position: "relative",
-                transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+                transition: composerResizeRef.current ? "none" : "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
                 minHeight: `${editorMinHeight}px`,
                 minWidth: 0,
                 width: "100%",
                 overflow: "visible",
               }}
             >
+              <div
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label={t("action.composerResizeHint")}
+                title={t("action.composerResizeHint")}
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  (event.target as HTMLElement).setPointerCapture(event.pointerId);
+                  composerResizeRef.current = {
+                    startY: event.clientY,
+                    startMax: composerMaxHeight,
+                    moved: false,
+                  };
+                }}
+                onPointerMove={(event) => {
+                  const state = composerResizeRef.current;
+                  if (!state) return;
+                  const delta = state.startY - event.clientY;
+                  if (Math.abs(delta) > 2) state.moved = true;
+                  setComposerMaxHeight(clampComposerMaxHeight(state.startMax + delta));
+                }}
+                onPointerCancel={(event) => {
+                  // 手势被系统中断（来电、触摸打断）时必须复位，
+                  // 否则 ref 残留会冻结 transition 并让后续 move 误触发调整
+                  composerResizeRef.current = null;
+                  (event.target as HTMLElement).releasePointerCapture?.(event.pointerId);
+                }}
+                onPointerUp={(event) => {
+                  const state = composerResizeRef.current;
+                  composerResizeRef.current = null;
+                  if (!state) return;
+                  (event.target as HTMLElement).releasePointerCapture?.(event.pointerId);
+                  if (state.moved) {
+                    setComposerMaxHeight((value) => {
+                      const clamped = clampComposerMaxHeight(value);
+                      window.localStorage.setItem(COMPOSER_MAX_HEIGHT_STORAGE_KEY, String(clamped));
+                      return clamped;
+                    });
+                    return;
+                  }
+                  // 无位移的点击/双击视为重置：300ms 内第二次点击恢复默认高度。
+                  const now = Date.now();
+                  const last = composerResizeLastTapRef.current;
+                  composerResizeLastTapRef.current = now;
+                  if (last && now - last < 300) {
+                    composerResizeLastTapRef.current = 0;
+                    setComposerMaxHeight(COMPOSER_MAX_HEIGHT_DEFAULT);
+                    window.localStorage.setItem(COMPOSER_MAX_HEIGHT_STORAGE_KEY, String(COMPOSER_MAX_HEIGHT_DEFAULT));
+                  }
+                }}
+                style={{
+                  position: "absolute",
+                  top: -4,
+                  left: 12,
+                  right: 12,
+                  height: 10,
+                  zIndex: 30,
+                  cursor: "ns-resize",
+                  touchAction: "none",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "transparent",
+                }}
+              >
+                <span
+                  style={{
+                    width: 34,
+                    height: 4,
+                    borderRadius: 2,
+                    background: "var(--panel-border)",
+                    opacity: 0.85,
+                    pointerEvents: "none",
+                  }}
+                />
+              </div>
 	            <TokenEditor
-	              ref={editorRef}
-	              placeholder={inputPlaceholder}
-	              disabled={sending}
-	              isDark={isDark}
-	              rightInset={editorRightInset}
-	              topInset={0}
-	              bottomInset={editorBottomInset}
+              ref={editorRef}
+              placeholder={inputPlaceholder}
+              disabled={sending}
+              isDark={isDark}
+              rightInset={editorRightInset}
+              topInset={0}
+              bottomInset={editorBottomInset}
+              maxHeightOverride={composerMaxHeight}
               onChange={handleEditorChange}
               onFocusChange={(focused) => {
                 setIsFocused(focused);
@@ -1882,7 +1989,7 @@ export function ActionBar({
             />
 
             <div data-onboarding="input-controls" style={{ position: "absolute", right: isMobile ? "4px" : "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: isMobile ? "0px" : "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
-              <SessionQuickActions currentRootId={currentRootId} currentSessionKey={currentSession?.key || currentSession?.session_key} currentDirPath={currentDirPath} gestureConfig={blueRingGestures} roots={roots} onNewSession={() => { resetForNewSession(); onNewSession(); }} onSelectProject={onSelectProject} onSelectSession={onSelectSession} onToggleFileSidebar={onToggleLeftSidebar} onToggleSessionSidebar={onToggleRightSidebar} onOpenModelSelector={() => setModelSelectorSignal((value) => value + 1)} onToggleRecentAgent={toggleRecentAgent} onPickAgent={pickAgent} onOpenRecentDirectory={onOpenRecentDirectory} onToggleMultiProjectSessions={onToggleMultiProjectSessions} onToggleEnterKeySends={onToggleEnterKeySends} onCycleMainFontScale={onCycleMainFontScale} onToggleMainContentView={onToggleMainContentView} onCycleKanbanTemplate={onCycleKanbanTemplate} onCreateTask={onCreateTask} onOpenScheduledTasks={onOpenScheduledTasks} onQuickSaveFile={onQuickSaveFile} />
+              <SessionQuickActions currentRootId={currentRootId} currentSessionKey={currentSession?.key || currentSession?.session_key} currentDirPath={currentDirPath} gestureConfig={blueRingGestures} roots={roots} onNewSession={() => { resetForNewSession(); onNewSession(); }} onSelectProject={onSelectProject} onSelectSession={onSelectSession} onToggleFileSidebar={onToggleLeftSidebar} onToggleSessionSidebar={onToggleRightSidebar} onOpenModelSelector={() => setModelSelectorSignal((value) => value + 1)} onToggleRecentAgent={toggleRecentAgent} onPickAgent={pickAgent} onOpenRecentDirectory={onOpenRecentDirectory} onToggleMultiProjectSessions={onToggleMultiProjectSessions} onToggleEnterKeySends={onToggleEnterKeySends} onCycleMainFontScale={onCycleMainFontScale} onToggleMainContentView={onToggleMainContentView} onCycleKanbanTemplate={onCycleKanbanTemplate} onCreateTask={onCreateTask} onOpenScheduledTasks={onOpenScheduledTasks} onQuickSaveFile={onQuickSaveFile} onRenameCurrentFile={onRenameCurrentFile} onCopyCurrentFilePath={onCopyCurrentFilePath} onCopySessionHandoff={onCopySessionHandoff} recentFiles={recentFiles} onOpenFile={onOpenFileFromQuickSwitch} />
               <>
                 <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} onboardingId="mode-selector" viewportMenu />
                 {mode !== "command" ? (
