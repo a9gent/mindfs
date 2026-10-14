@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties, type ReactNode, type RefObject } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { AgentIcon } from "./AgentIcon";
 import { ModeIcon } from "./ModeIcon";
@@ -1878,7 +1878,7 @@ export function ActionBar({
             <div data-onboarding="input-controls" style={isModern ? undefined : { position: "absolute", right: isMobile ? "4px" : "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: isMobile ? "0px" : "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
               {isModern && compactComposer ? null : quickActions}
               <>
-                {isModern ? (!compactComposer || mode === "command" ? <ComposerModeSelector mode={mode} onModeChange={setMode} disabled={isModeLocked} isMobile={isMobile} /> : null) : <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} onboardingId="mode-selector" viewportMenu />}
+                {isModern ? (!compactComposer || mode === "command" ? <ComposerActions mode={mode} onModeChange={setMode} disabled={isModeLocked} isMobile={isMobile} /> : null) : <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} onboardingId="mode-selector" viewportMenu />}
                 {mode !== "command" ? (
                   <div style={isModern ? { display: "flex", alignItems: "center", minWidth: 0, flex: compactComposer ? 1 : undefined } : undefined}>
                     <AgentControl
@@ -1927,8 +1927,8 @@ export function ActionBar({
               {isModern ? <span className="composer-toolbar-spacer" /> : null}
               {isModern && compactComposer ? quickActions : null}
               {isModern && compactComposer ? (
-                <ComposerMoreMenu
-                  mode={mode} onModeChange={setMode} modeLocked={isModeLocked}
+                <ComposerActions compact isMobile
+                  mode={mode} onModeChange={setMode} disabled={isModeLocked}
                   attachmentDisabled={!currentRootId || sending} hasAttachments={pendingAttachments.length > 0}
                   onAddAttachment={() => attachmentInputRef.current?.click()}
                   onQuickSwitch={() => setSessionMenuRequest((previous) => ({ id: (previous?.id || 0) + 1, view: "switch" }))}
@@ -1941,7 +1941,6 @@ export function ActionBar({
                 <button
                 data-onboarding="attachment-action"
                 className={isModern ? "composer-attachment" : undefined}
-                hidden={isModern && compactComposer}
                 type="button"
                 onClick={() => attachmentInputRef.current?.click()}
                 disabled={!currentRootId || sending}
@@ -2173,66 +2172,29 @@ export function ActionBar({
         ) : null}
       </div>
       <style>{`
-        .composer-popover {
-          position: fixed;
-          z-index: 10110;
-          box-sizing: border-box;
-          display: flex;
-          flex-direction: column;
-          overflow: hidden;
-          border: 1px solid var(--menu-border);
-          background: var(--menu-bg);
-          color: var(--text-primary);
-          box-shadow: none;
-          outline: none;
-          font-size: calc(13px * var(--mindfs-font-scale, 1));
-        }
-
+        .composer-popover :is(.composer-agent-option, .composer-model-option, .composer-effort-option, .composer-menu-action, .session-entry-action) { display: flex; align-items: center; width: 100%; border: 0; background: transparent; color: var(--text-primary); text-align: left; }
+        .composer-popover { margin: 0; padding: 0; position: fixed; z-index: 10110; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--menu-border); background: var(--menu-bg); color: var(--text-primary); box-shadow: none; outline: none; font-size: calc(13px * var(--mindfs-font-scale, 1)); }
         .composer-popover--desktop { border-radius: 14px; }
         .composer-popover-content { min-height: 0; overflow: auto; overscroll-behavior: contain; }
         .composer-popover button, .composer-popover input { font: inherit; }
         .composer-popover button { cursor: pointer; }
         .composer-popover button:disabled { cursor: default; opacity: 0.55; }
-        .composer-popover button:focus-visible, .composer-popover input:focus-visible {
-          outline: 2px solid var(--accent-color);
-          outline-offset: -2px;
-        }
-
-        .composer-popover-backdrop {
-          position: fixed;
-          inset: 0;
-          z-index: 10109;
-          background: rgba(0, 0, 0, 0.38);
-          touch-action: none;
-        }
-
-        .composer-popover--sheet {
-          border-radius: 20px 20px 0 0;
-          padding: 0 16px max(20px, env(safe-area-inset-bottom), var(--mindfs-safe-area-bottom, 0px));
-          animation: composer-sheet-enter 160ms ease-out;
-        }
-
-        .composer-sheet-handle {
-          align-self: center;
-          flex: 0 0 auto;
-          width: 36px;
-          height: 4px;
-          border-radius: 10px;
-          margin: 9px 0 8px;
-          background: color-mix(in srgb, var(--text-secondary) 35%, transparent);
-        }
-
+        .composer-popover button:focus-visible, .composer-popover input:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
+        .composer-popover--sheet::backdrop { background: rgba(0, 0, 0, 0.38); }
+        .composer-popover--sheet { border-radius: 20px 20px 0 0; padding: 0 16px max(20px, env(safe-area-inset-bottom), var(--mindfs-safe-area-bottom, 0px)); animation: composer-sheet-enter 160ms ease-out; }
+        .composer-sheet-handle { align-self: center; flex: 0 0 auto; width: 36px; height: 4px; border-radius: 10px; margin: 9px 0 8px; background: color-mix(in srgb, var(--text-secondary) 35%, transparent); }
         .composer-sheet-heading { display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto; gap: 12px; margin-bottom: 12px; }
         .composer-sheet-heading h2 { margin: 0; font-size: calc(17px * var(--mindfs-font-scale, 1)); font-weight: 600; }
         .composer-sheet-close { display: grid; place-items: center; flex: 0 0 auto; width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary); }
         .composer-sheet-close:hover { background: var(--menu-active-bg); }
-
-        @keyframes composer-sheet-enter { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-        @media (prefers-reduced-motion: reduce) { .composer-popover--sheet { animation: none; } }
-
+        @keyframes composer-sheet-enter {
+          from { transform: translateY(24px); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .composer-popover--sheet { animation: none; }
+        }
         .composer-selectors, .composer-agent-controls { display: flex; align-items: center; min-width: 0; gap: 5px; }
-        .composer-selectors { flex: 0 1 auto; }
-        .composer-agent-controls { flex: 0 1 auto; }
         .composer-selector-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 32px; padding: 5px 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text-primary); font: inherit; font-size: calc(13px * var(--mindfs-font-scale, 1)); white-space: nowrap; cursor: pointer; }
         .composer-selector-trigger:hover, .composer-selector-trigger.is-active { background: var(--menu-active-bg); color: var(--accent-color); }
         .composer-selector-trigger:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
@@ -2248,12 +2210,11 @@ export function ActionBar({
         .composer-selectors--mobile .composer-agent-controls { flex: 1 1 auto; overflow: hidden; }
         .composer-selectors--mobile .composer-agent-trigger { justify-content: flex-start; max-width: none; width: 100%; padding: 6px 2px; }
         .composer-selectors--mobile .composer-effort-trigger { padding: 6px 4px; }
-
         .composer-agent-popover.composer-popover--desktop { width: 440px; }
         .composer-agent-menu { display: grid; grid-template-columns: 132px minmax(0, 1fr); min-height: 270px; }
         .composer-agent-list { min-width: 0; padding: 10px 6px; border-right: 1px solid var(--menu-divider); }
         .composer-menu-caption { display: block; padding: 6px 8px 9px; color: var(--text-secondary); font-size: calc(11px * var(--mindfs-font-scale, 1)); }
-        .composer-agent-option { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 39px; padding: 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text-primary); text-align: left; }
+        .composer-agent-option { gap: 8px; min-height: 39px; padding: 8px; border-radius: 8px; }
         .composer-agent-option > svg, .composer-agent-option > img { flex: 0 0 auto; }
         .composer-agent-option .composer-selector-chevron { width: 10px; margin-left: auto; transform: rotate(-90deg); }
         .composer-agent-option .composer-selector-chevron.is-open { transform: rotate(0); }
@@ -2264,12 +2225,11 @@ export function ActionBar({
         .composer-model-heading, .composer-effort-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
         .composer-model-heading > span:last-child, .composer-effort-heading > span:last-child { min-width: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(10px * var(--mindfs-font-scale, 1)); }
         .composer-model-search { display: flex; align-items: center; gap: 8px; min-width: 0; height: 31px; margin: 0 2px 6px; padding: 0 9px; border: 1px solid var(--menu-border); border-radius: 7px; color: var(--text-secondary); background: color-mix(in srgb, var(--text-secondary) 3%, transparent); }
-        .composer-model-search svg { flex: 0 0 auto; }
         .composer-model-search input { width: 100%; min-width: 0; border: 0; background: transparent; outline: none; color: var(--text-primary); font-size: calc(12px * var(--mindfs-font-scale, 1)); }
         .composer-model-search:focus-within { border-color: var(--accent-color); }
         .composer-model-search input::placeholder { color: var(--text-secondary); opacity: 0.75; }
         .composer-model-list { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
-        .composer-model-option, .composer-effort-option { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-primary); text-align: left; }
+        .composer-model-option, .composer-effort-option { gap: 10px; min-height: 34px; padding: 8px; border-radius: 7px; }
         .composer-model-option.is-hidden-model { opacity: 0.65; }
         .composer-selector-check { flex: 0 0 auto; margin-left: auto; color: var(--accent-color); }
         .composer-model-empty { margin: 14px 8px; color: var(--text-secondary); font-size: calc(12px * var(--mindfs-font-scale, 1)); }
@@ -2294,7 +2254,6 @@ export function ActionBar({
         .composer-effort-heading { padding-bottom: 12px; }
         .composer-effort-option { min-height: 41px; }
         .composer-effort-description { color: var(--text-secondary); font-size: calc(12px * var(--mindfs-font-scale, 1)); }
-
         .composer-agent-popover.composer-popover--sheet .composer-agent-menu { display: flex; flex-direction: column; min-height: 0; }
         .composer-agent-popover.composer-popover--sheet .composer-agent-list { display: flex; flex: 0 0 auto; gap: 2px; overflow-x: auto; padding: 0 0 12px; border-right: 0; border-bottom: 1px solid var(--menu-divider); }
         .composer-agent-popover.composer-popover--sheet .composer-agent-option { flex: 0 0 auto; width: auto; padding: 7px; gap: 5px; }
@@ -2309,237 +2268,64 @@ export function ActionBar({
         .composer-agent-popover.composer-popover--sheet .composer-toggle-track > span { width: 18px; height: 18px; }
         .composer-agent-popover.composer-popover--sheet .composer-toggle-track.is-on > span { transform: translateX(16px); }
         .composer-effort-popover.composer-popover--sheet .composer-effort-option { min-height: 44px; font-size: calc(15px * var(--mindfs-font-scale, 1)); }
-        @media (prefers-reduced-motion: reduce) { .composer-selector-chevron, .composer-toggle-track > span { transition: none; } }
-
+        @media (prefers-reduced-motion: reduce) {
+          .composer-selector-chevron, .composer-toggle-track > span { transition: none; }
+        }
         .composer-inline-effort { color: var(--text-secondary); }
         :root[data-theme="dark"] .composer-agent-menu img:is([alt="Cursor"], [alt="Grok"]) { filter: invert(1); opacity: 0.75; }
         @media (prefers-color-scheme: dark) {
           :root:not([data-theme]) .composer-agent-menu img:is([alt="Cursor"], [alt="Grok"]) { filter: invert(1); opacity: 0.75; }
         }
-
         .composer-toolbar-spacer { flex: 1; min-width: 0; }
         .composer-modern .session-entry { height: 34px; }
         .composer-modern .session-entry-main { font-size: calc(13px * var(--mindfs-font-scale, 1)); }
         .composer-mode-popover.composer-popover--desktop { width: 210px; padding: 6px; }
-
-        .composer-mode-trigger, .composer-more-trigger {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 7px;
-          flex-shrink: 0;
-          height: 34px;
-          padding: 0 6px;
-          border: 0;
-          border-radius: 8px;
-          background: transparent;
-          color: var(--text-secondary);
-          font: inherit;
-          font-size: calc(14px * var(--mindfs-font-scale, 1));
-          white-space: nowrap;
-          cursor: pointer;
-        }
-
+        .composer-mode-trigger, .composer-more-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex-shrink: 0; height: 34px; padding: 0 6px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary); font: inherit; font-size: calc(14px * var(--mindfs-font-scale, 1)); white-space: nowrap; cursor: pointer; }
         .composer-mode-trigger:disabled { cursor: default; }
         .composer-mode-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
         .composer-mode-trigger > svg { flex-shrink: 0; }
         .composer-mode-trigger > svg:first-child { color: var(--accent-color); }
         .composer-mode-trigger:hover:not(:disabled), .composer-more-trigger:hover { background: var(--menu-active-bg); }
-        .composer-mode-trigger:focus-visible, .composer-more-trigger:focus-visible, .composer-menu-action:focus-visible,
-        .composer-modern .composer-send:focus-visible, .composer-popover .composer-menu-action {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          width: 100%;
-          min-height: 44px;
-          padding: 10px 12px;
-          border: 0;
-          border-radius: 9px;
-          background: transparent;
-          color: var(--text-primary);
-          text-align: left;
-          font: inherit;
-          font-size: calc(14px * var(--mindfs-font-scale, 1));
-          cursor: pointer;
-        }
+        .composer-popover .composer-menu-action { gap: 12px; min-height: 44px; padding: 10px 12px; border-radius: 9px; font-size: calc(14px * var(--mindfs-font-scale, 1)); }
         .composer-menu-action:hover:not(:disabled), .composer-menu-action[aria-pressed="true"] { background: var(--menu-active-bg); }
         .composer-menu-action:disabled { opacity: 0.6; cursor: default; }
         .composer-menu-check { margin-left: auto; color: var(--accent-color); }
         .composer-menu-symbol { width: 20px; font-size: 22px; text-align: center; }
         .composer-menu-divider { border-top: 1px solid var(--menu-border); margin: 10px 0; }
         .composer-menu-label { padding: 4px 12px; color: var(--text-secondary); font-size: calc(12px * var(--mindfs-font-scale, 1)); }
-
-
         .composer-new-icon { display: inline-flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; width: 28px; height: 34px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); cursor: pointer; touch-action: none; }
         .composer-new-icon:hover { background: var(--menu-active-bg); }
         .composer-modern--compact .composer-toolbar-spacer { display: none; }
         .composer-modern--compact .composer-more-trigger { width: 28px; height: 38px; padding: 0; position: relative; }
         .composer-more-trigger[data-has-attachments]::after { content: ""; position: absolute; right: 2px; top: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent-color); }
-        .composer-modern .composer-attachment[hidden] { display: none; }
         .composer-menu-next { margin-left: auto; color: var(--text-secondary); }
         .composer-popover--sheet .composer-mode-choices { flex-wrap: nowrap; gap: 4px; }
         .composer-popover--sheet .composer-mode-choices .composer-menu-action { justify-content: center; padding-inline: 6px; gap: 4px; font-size: calc(13px * var(--mindfs-font-scale, 1)); }
         .composer-popover--sheet .composer-mode-choices svg, .composer-popover--sheet .composer-mode-choices .composer-menu-check { display: none; }
-        .composer-modern--compact .composer-selectors { flex: 1; }
-        .composer-modern--compact .composer-agent-controls { flex: 1; }
+        .composer-modern--compact :is(.composer-selectors, .composer-agent-controls) { flex: 1; }
         .composer-modern--compact .composer-agent-trigger { max-width: 100%; }
         .composer-modern--compact .composer-mode-trigger { min-width: 0; flex-shrink: 1; }
-
-        .session-entry {
-          display: inline-flex;
-          align-items: stretch;
-          height: 32px;
-          flex-shrink: 0;
-          border: 1px solid color-mix(in srgb, var(--accent-color) 28%, var(--border-color));
-          border-radius: 8px;
-          background: color-mix(in srgb, var(--accent-color) 5%, transparent);
-          color: var(--accent-color);
-        }
-
-        .session-entry-main,
-        .session-entry-toggle {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 6px;
-          border: 0;
-          background: transparent;
-          color: inherit;
-          font: inherit;
-          font-size: calc(12px * var(--mindfs-font-scale, 1));
-          cursor: pointer;
-        }
-
-        .session-entry-main {
-          position: relative;
-          padding: 0 9px;
-          border-radius: 7px 0 0 7px;
-          white-space: nowrap;
-          touch-action: none;
-        }
-
-        .session-entry-toggle {
-          width: 27px;
-          padding: 0;
-          border-left: 1px solid color-mix(in srgb, var(--accent-color) 20%, var(--border-color));
-          border-radius: 0 7px 7px 0;
-        }
-
-        .session-entry-main:hover,
-        .session-entry-toggle:hover,
-        .session-entry[data-open="true"] .session-entry-toggle {
-          background: color-mix(in srgb, var(--accent-color) 10%, transparent);
-        }
-
-        .session-entry[data-open="true"] .session-entry-toggle svg {
-          transform: rotate(180deg);
-        }
-
-        .session-entry-main:focus-visible,
-        .session-entry-toggle:focus-visible,
-        .session-entry-panel button:focus-visible {
-          outline: 2px solid var(--accent-color);
-          outline-offset: -2px;
-        }
-
-        .session-entry-panel {
-          color: var(--text-primary);
-        }
-
-        .session-entry-heading {
-          padding: 7px 10px 10px;
-          color: var(--text-secondary);
-          font-size: calc(11px * var(--mindfs-font-scale, 1));
-        }
-
-        .session-entry-action {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          width: 100%;
-          min-height: 43px;
-          padding: 10px;
-          border: 0;
-          border-radius: 7px;
-          background: transparent;
-          color: var(--text-secondary);
-          text-align: left;
-          font: inherit;
-          font-size: calc(13px * var(--mindfs-font-scale, 1));
-          cursor: pointer;
-        }
-
-        .session-entry-action:hover,
-        .session-entry-back:hover {
-          background: color-mix(in srgb, var(--accent-color) 10%, transparent);
-        }
-
-        .session-entry-action > svg,
-        .session-entry-next,
-        .session-entry-shortcut {
-          flex-shrink: 0;
-        }
-
-        .session-entry-action-label {
-          flex: 1;
-          color: var(--text-primary);
-        }
-
-        .session-entry-action-label small,
-        .session-entry-recent small {
-          display: block;
-          margin-top: 3px;
-          color: var(--text-secondary);
-          font-size: calc(11px * var(--mindfs-font-scale, 1));
-        }
-
-        .session-entry-shortcut {
-          font-size: calc(10px * var(--mindfs-font-scale, 1));
-        }
-
-        .session-entry-next {
-          display: flex;
-          transform: rotate(-90deg);
-        }
-
-        .session-entry-separator {
-          margin: 5px 8px;
-          border-top: 1px solid var(--menu-border);
-        }
-
-        .session-entry-list-heading {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          margin-bottom: 5px;
-          color: var(--text-secondary);
-          font-size: calc(11px * var(--mindfs-font-scale, 1));
-        }
-
-        .session-entry-back {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 26px;
-          height: 26px;
-          padding: 0;
-          border: 0;
-          border-radius: 5px;
-          color: inherit;
-          background: transparent;
-          cursor: pointer;
-        }
-
-        .session-entry-back svg {
-          transform: rotate(90deg);
-        }
-
-        .session-entry-recent > span,
-        .session-entry-recent small {
-          display: block;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
+        .session-entry { display: inline-flex; align-items: stretch; height: 32px; flex-shrink: 0; border: 1px solid color-mix(in srgb, var(--accent-color) 28%, var(--border-color)); border-radius: 8px; background: color-mix(in srgb, var(--accent-color) 5%, transparent); color: var(--accent-color); }
+        .session-entry-main, .session-entry-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; background: transparent; color: inherit; font: inherit; font-size: calc(12px * var(--mindfs-font-scale, 1)); cursor: pointer; }
+        .session-entry-main { position: relative; padding: 0 9px; border-radius: 7px 0 0 7px; white-space: nowrap; touch-action: none; }
+        .session-entry-toggle { width: 27px; padding: 0; border-left: 1px solid color-mix(in srgb, var(--accent-color) 20%, var(--border-color)); border-radius: 0 7px 7px 0; }
+        .session-entry-main:hover, .session-entry-toggle:hover, .session-entry[data-open="true"] .session-entry-toggle { background: color-mix(in srgb, var(--accent-color) 10%, transparent); }
+        .session-entry[data-open="true"] .session-entry-toggle svg { transform: rotate(180deg); }
+        .session-entry-main:focus-visible, .session-entry-toggle:focus-visible, .session-entry-panel button:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
+        .session-entry-panel.composer-popover--desktop { width: 272px; padding: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.18); }
+        .session-entry-heading { padding: 7px 10px 10px; color: var(--text-secondary); font-size: calc(11px * var(--mindfs-font-scale, 1)); }
+        .composer-popover .session-entry-action { gap: 12px; min-height: 43px; padding: 10px; border-radius: 7px; color: var(--text-secondary); font-size: calc(13px * var(--mindfs-font-scale, 1)); }
+        .session-entry-action:hover, .session-entry-back:hover { background: color-mix(in srgb, var(--accent-color) 10%, transparent); }
+        .session-entry-action > svg, .session-entry-next, .session-entry-shortcut { flex-shrink: 0; }
+        .session-entry-action-label { flex: 1; color: var(--text-primary); }
+        .session-entry-action-label small, .session-entry-recent small { display: block; margin-top: 3px; color: var(--text-secondary); font-size: calc(11px * var(--mindfs-font-scale, 1)); }
+        .session-entry-shortcut { font-size: calc(10px * var(--mindfs-font-scale, 1)); }
+        .session-entry-next { display: flex; transform: rotate(-90deg); }
+        .session-entry-separator { margin: 5px 8px; border-top: 1px solid var(--menu-border); }
+        .session-entry-list-heading { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; color: var(--text-secondary); font-size: calc(11px * var(--mindfs-font-scale, 1)); }
+        .session-entry-back { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; color: inherit; background: transparent; cursor: pointer; }
+        .session-entry-back svg { transform: rotate(90deg); }
+        .session-entry-recent > span, .session-entry-recent small { display: block; overflow: hidden; text-overflow: ellipsis; }
         .composer-modern .composer-surface { transition: border-color 0.2s, box-shadow 0.2s; }
         .composer-modern [data-onboarding="input-controls"] { position: absolute; display: flex; align-items: center; z-index: 5; left: 12px; right: 12px; bottom: 12px; gap: 10px; min-width: 0; }
         .composer-modern--compact [data-onboarding="input-controls"] { left: 10px; right: 10px; bottom: 10px; gap: 3px; }
@@ -2679,150 +2465,86 @@ type ComposerPopoverProps = {
   isMobile: boolean;
   title: string;
   className?: string;
+  aboveInput?: boolean;
+  onKeyDown?: React.KeyboardEventHandler<HTMLDialogElement>;
   children: ReactNode;
 };
 
-/** Anchored on desktop and a keyboard-aware bottom sheet on mobile. */
-function ComposerPopover({ open, onClose, anchorRef, isMobile, title, className = "", children }: ComposerPopoverProps) {
+function ComposerPopover({ open, onClose, anchorRef, isMobile, title, className = "", aboveInput = false, onKeyDown, children }: ComposerPopoverProps) {
   const { t } = useI18n();
-  const titleId = useId();
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDialogElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const [position, setPosition] = useState<CSSProperties>({});
 
   useLayoutEffect(() => {
-    if (!open) return;
+    const panel = panelRef.current;
+    const anchor = anchorRef.current;
+    if (!open || !panel || !anchor) return;
     const update = () => {
-      const panel = panelRef.current;
-      const anchor = anchorRef.current;
-      if (!panel || !anchor) return;
       const viewport = window.visualViewport;
-      const width = viewport?.width ?? window.innerWidth;
-      const height = viewport?.height ?? window.innerHeight;
-      const left = viewport?.offsetLeft ?? 0;
-      const top = viewport?.offsetTop ?? 0;
-      const fontScaleStyle = {
-        "--mindfs-font-scale": getComputedStyle(anchor).getPropertyValue("--mindfs-font-scale").trim() || "1",
-      } as CSSProperties;
-      if (isMobile) {
-        setPosition({ ...fontScaleStyle, left, width, bottom: Math.max(0, window.innerHeight - top - height), maxHeight: Math.max(0, height - 16) });
-      } else {
-        const rect = anchor.getBoundingClientRect();
-        const panelRect = panel.getBoundingClientRect();
-        const spaceAbove = rect.top - top - 16;
-        const spaceBelow = top + height - rect.bottom - 16;
-        const above = spaceAbove >= Math.min(panelRect.height, 280) || spaceAbove >= spaceBelow;
-        const maxHeight = Math.max(80, above ? spaceAbove : spaceBelow);
-        setPosition({
-          ...fontScaleStyle,
-          left: Math.max(left + 8, Math.min(rect.left, left + width - panelRect.width - 8)),
-          top: above ? Math.max(top + 8, rect.top - Math.min(panelRect.height, maxHeight) - 8) : rect.bottom + 8,
-          maxWidth: Math.max(0, width - 16),
-          maxHeight,
-        });
-      }
+      const width = viewport?.width ?? window.innerWidth, height = viewport?.height ?? window.innerHeight;
+      const left = viewport?.offsetLeft ?? 0, top = viewport?.offsetTop ?? 0;
+      const fontScale = { "--mindfs-font-scale": getComputedStyle(anchor).getPropertyValue("--mindfs-font-scale").trim() || "1" } as CSSProperties;
+      const rect = (aboveInput ? anchor.closest('[data-onboarding="message-input"]') || anchor : anchor).getBoundingClientRect();
+      const above = rect.top - top - 16, below = top + height - rect.bottom - 16;
+      const placeAbove = above >= Math.min(panel.offsetHeight, 280) || above >= below;
+      const maxHeight = Math.min(aboveInput ? 440 : Infinity, Math.max(80, placeAbove ? above : below));
+      setPosition(isMobile
+        ? { ...fontScale, left, width, maxWidth: width, top: "auto", bottom: Math.max(0, window.innerHeight - top - height), maxHeight: Math.max(0, height - 16) }
+        : { ...fontScale, left: Math.max(left + 8, Math.min(anchor.getBoundingClientRect().left, left + width - panel.offsetWidth - 8)), top: placeAbove ? Math.max(top + 8, rect.top - Math.min(panel.offsetHeight, maxHeight) - 8) : rect.bottom + 8, maxWidth: width - 16, maxHeight });
     };
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    isMobile ? panel.showModal() : panel.show();
+    panel.focus({ preventScroll: true });
     update();
     const observer = new ResizeObserver(update);
-    if (panelRef.current) observer.observe(panelRef.current);
-    if (anchorRef.current) observer.observe(anchorRef.current);
-    const fontRegion = anchorRef.current?.closest(".mindfs-font-scale-region");
+    observer.observe(panel);
+    observer.observe(anchor);
     const fontObserver = new MutationObserver(update);
+    const fontRegion = anchor.closest(".mindfs-font-scale-region");
     if (fontRegion) fontObserver.observe(fontRegion, { attributes: true, attributeFilter: ["style"] });
-    window.addEventListener("resize", update);
-    window.addEventListener("scroll", update, true);
-    window.visualViewport?.addEventListener("resize", update);
-    window.visualViewport?.addEventListener("scroll", update);
-    return () => {
-      observer.disconnect();
-      fontObserver.disconnect();
-      window.removeEventListener("resize", update);
-      window.removeEventListener("scroll", update, true);
-      window.visualViewport?.removeEventListener("resize", update);
-      window.visualViewport?.removeEventListener("scroll", update);
-    };
-  }, [open, isMobile, anchorRef]);
-
-  useEffect(() => {
-    if (!open) return;
-    const panel = panelRef.current;
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    // Focusing the sheet itself avoids opening the phone keyboard immediately.
-    panel?.focus({ preventScroll: true });
     const outside = (event: PointerEvent) => {
-      if (!panel?.contains(event.target as Node) && !anchorRef.current?.contains(event.target as Node)) closeRef.current();
+      if (!panel.contains(event.target as Node) && !anchor.contains(event.target as Node)) closeRef.current();
     };
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        closeRef.current();
-      }
-      if (event.key !== "Tab" || !panel) return;
-      const focusable = Array.from(panel.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], [tabindex="0"]'))
-        .filter((element) => element.getClientRects().length > 0);
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (!first) {
-        event.preventDefault();
-        return;
-      }
-      if (event.shiftKey && (document.activeElement === first || document.activeElement === panel)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === panel)) {
-        event.preventDefault();
-        first.focus();
+    const keyboard = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeRef.current(); }
+      if (event.key !== "Tab" || isMobile) return;
+      const items = Array.from(panel.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], [tabindex="0"]')).filter(node => node.getClientRects().length);
+      if (!items.length) { event.preventDefault(); return; }
+      if (document.activeElement === panel || document.activeElement === items[event.shiftKey ? 0 : items.length - 1]) {
+        event.preventDefault(); items[event.shiftKey ? items.length - 1 : 0].focus();
       }
     };
-    // A mobile backdrop must stay mounted until the tap completes, otherwise
-    // the release or compatibility click can reach controls underneath it.
     if (!isMobile) document.addEventListener("pointerdown", outside);
-    document.addEventListener("keydown", keydown, true);
+    document.addEventListener("keydown", keyboard, true);
+    for (const target of [window, window.visualViewport]) {
+      target?.addEventListener("resize", update);
+      target?.addEventListener("scroll", update, true);
+    }
     return () => {
+      observer.disconnect(); fontObserver.disconnect(); panel.close();
+      // Unmounting a dialog can leave focus on the body before native restoration.
+      if (document.activeElement === document.body || panel.contains(document.activeElement)) {
+        const fallback = anchor.matches("button") ? anchor : anchor.querySelector<HTMLElement>("button");
+        (previousFocus?.isConnected && previousFocus !== document.body ? previousFocus : fallback)?.focus({ preventScroll: true });
+      }
       document.removeEventListener("pointerdown", outside);
-      document.removeEventListener("keydown", keydown, true);
-      if (document.activeElement === document.body || panel?.contains(document.activeElement)) {
-        const fallback = anchorRef.current?.matches("button") ? anchorRef.current : anchorRef.current?.querySelector<HTMLElement>("button");
-        (previouslyFocused?.isConnected && previouslyFocused !== document.body ? previouslyFocused : fallback)?.focus({ preventScroll: true });
+      document.removeEventListener("keydown", keyboard, true);
+      for (const target of [window, window.visualViewport]) {
+        target?.removeEventListener("resize", update);
+        target?.removeEventListener("scroll", update, true);
       }
     };
-  }, [open, isMobile, anchorRef]);
+  }, [open, isMobile, anchorRef, aboveInput]);
 
   if (!open) return null;
-  return createPortal(<>
-    {isMobile ? <div
-      className="composer-popover-backdrop"
-      aria-hidden="true"
-      onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
-      onPointerUp={(event) => event.stopPropagation()}
-      onClick={(event) => { event.preventDefault(); event.stopPropagation(); onClose(); }}
-    /> : null}
-    <div
-      ref={panelRef}
-      className={`composer-popover ${isMobile ? "composer-popover--sheet" : "composer-popover--desktop"} ${className}`}
-      style={position}
-      role="dialog"
-      aria-modal={isMobile || undefined}
-      aria-labelledby={isMobile ? titleId : undefined}
-      aria-label={isMobile ? undefined : title}
-      tabIndex={-1}
-      onPointerDown={(event) => event.stopPropagation()}
-      onClick={(event) => event.stopPropagation()}
-    >
-      {isMobile ? <>
-        <div className="composer-sheet-handle" aria-hidden="true" />
-        <div className="composer-sheet-heading">
-          <h2 id={titleId}>{title}</h2>
-          <button type="button" className="composer-sheet-close" onClick={onClose} aria-label={t("common.close")}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
-          </button>
-        </div>
-      </> : null}
-      <div className="composer-popover-content">{children}</div>
-    </div>
-  </>, document.body);
+  return createPortal(<dialog ref={panelRef} autoFocus tabIndex={-1} aria-label={title} className={`composer-popover ${isMobile ? "composer-popover--sheet" : "composer-popover--desktop"} ${className}`} style={position}
+    onPointerDown={event => event.stopPropagation()} onKeyDown={onKeyDown} onCancel={event => { event.preventDefault(); onClose(); }}
+    onClick={event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) onClose(); }}>
+    {isMobile ? <><div className="composer-sheet-handle" aria-hidden="true" /><div className="composer-sheet-heading"><h2>{title}</h2><button type="button" className="composer-sheet-close" onClick={onClose} aria-label={t("common.close")}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button></div></> : null}
+    <div className="composer-popover-content">{children}</div>
+  </dialog>, document.body);
 }
 
 type ComposerAgentSelectorProps = ComponentProps<typeof AgentSelector> & { isMobile?: boolean };
@@ -2977,74 +2699,64 @@ function ComposerAgentSelector({ agent, model = "", mode = "", effort = "", fast
   </div>;
 }
 
-const modes: SessionMode[] = ["chat", "plugin", "command"];
-
-function ModeOptions({ mode, onModeChange, disabled }: {
-  mode: SessionMode;
-  onModeChange: (mode: SessionMode) => void;
-  disabled?: boolean;
-}) {
-  const { t } = useI18n();
-  return <div className="composer-mode-options composer-mode-choices" role="group" aria-label={t("mode.title")}>
-    {modes.map((value) => <button key={value} type="button" className="composer-menu-action" aria-pressed={mode === value} disabled={disabled} onClick={() => onModeChange(value)}>
-      <ModeIcon type={value} size={19} /><span>{t(value === "chat" ? "composer.chatMode" : `mode.${value}`)}</span>
-      {mode === value ? <span className="composer-menu-check" aria-hidden="true">✓</span> : null}
-    </button>)}
-  </div>;
-}
-
-function ComposerModeSelector({ mode, onModeChange, disabled, isMobile }: {
+function ComposerActions({ mode, onModeChange, disabled, isMobile, compact = false, attachmentDisabled, hasAttachments, onAddAttachment, onQuickSwitch, onRecentSessions, onOpenGestureSettings }: {
   mode: SessionMode;
   onModeChange: (mode: SessionMode) => void;
   disabled?: boolean;
   isMobile: boolean;
-}) {
-  const { t } = useI18n();
-  const [open, setOpen] = useState(false);
-  const anchorRef = useRef<HTMLButtonElement>(null);
-  return <>
-    <button ref={anchorRef} type="button" className="composer-mode-trigger" data-onboarding="mode-selector" disabled={disabled} aria-label={t("mode.title")} title={t(`mode.${mode}`)} aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen(!open)}>
-      <ModeIcon type={mode} size={19} /><span>{t(mode === "chat" ? "composer.chatMode" : `mode.${mode}`)}</span>
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-    </button>
-    <ComposerPopover open={open && !disabled} onClose={() => setOpen(false)} anchorRef={anchorRef} isMobile={isMobile} title={t("mode.title")} className="composer-mode-popover">
-      <ModeOptions mode={mode} onModeChange={(value) => { onModeChange(value); setOpen(false); }} />
-    </ComposerPopover>
-  </>;
-}
-
-function ComposerMoreMenu({ mode, onModeChange, modeLocked, attachmentDisabled, hasAttachments, onAddAttachment, onQuickSwitch, onRecentSessions, onOpenGestureSettings }: {
-  mode: SessionMode;
-  onModeChange: (mode: SessionMode) => void;
-  modeLocked: boolean;
-  attachmentDisabled: boolean;
-  hasAttachments: boolean;
-  onAddAttachment: () => void;
-  onQuickSwitch: () => void;
-  onRecentSessions: () => void;
+  compact?: boolean;
+  attachmentDisabled?: boolean;
+  hasAttachments?: boolean;
+  onAddAttachment?: () => void;
+  onQuickSwitch?: () => void;
+  onRecentSessions?: () => void;
   onOpenGestureSettings?: () => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLButtonElement>(null);
-  const run = (action: () => void) => { setOpen(false); action(); };
+  const run = (action?: () => void) => { setOpen(false); action?.(); };
+  const title = t(compact ? "composer.more" : "mode.title");
   return <>
-    <button ref={anchorRef} type="button" className="composer-more-trigger" data-has-attachments={hasAttachments || undefined} aria-label={t("composer.more")} title={t("composer.more")} aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen(!open)}>
-      <svg width="23" height="23" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg>
+    <button ref={anchorRef} type="button" className={compact ? "composer-more-trigger" : "composer-mode-trigger"} disabled={!compact && disabled} data-onboarding={compact ? undefined : "mode-selector"} data-has-attachments={hasAttachments || undefined} aria-label={title} title={title} aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen(!open)}>
+      {compact ? <svg width="23" height="23" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg> : <><ModeIcon type={mode} size={19} /><span>{t(mode === "chat" ? "composer.chatMode" : `mode.${mode}`)}</span><Chevron /></>}
     </button>
-    <ComposerPopover open={open} onClose={() => setOpen(false)} anchorRef={anchorRef} isMobile title={t("composer.more")}>
-      <button type="button" className="composer-menu-action" disabled={attachmentDisabled} onClick={() => run(onAddAttachment)}>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m9 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l8-8" /></svg>{t("action.addAttachment")}
-      </button>
-      <div className="composer-menu-divider" />
-      <div className="composer-menu-label">{t("mode.title")}</div>
-      <ModeOptions mode={mode} disabled={modeLocked} onModeChange={(value) => run(() => onModeChange(value))} />
-      <div className="composer-menu-divider" />
-      <button type="button" className="composer-menu-action" onClick={() => run(onQuickSwitch)}><span className="composer-menu-symbol" aria-hidden="true">⇄</span>{t("action.sessionMenu.quickSwitch")}<span className="composer-menu-next" aria-hidden="true">›</span></button>
-      <button type="button" className="composer-menu-action" onClick={() => run(onRecentSessions)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6M12 7v5l3 2" /></svg>{t("action.sessionMenu.recent")}<span className="composer-menu-next" aria-hidden="true">›</span></button>
-      {onOpenGestureSettings ? <button type="button" className="composer-menu-action" onClick={() => run(onOpenGestureSettings)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 13V5a2 2 0 0 1 4 0v7-3a2 2 0 0 1 4 0v3-1a2 2 0 0 1 4 0v4c0 4-2 6-6 6h-1c-2 0-3-1-4-2l-5-6a2 2 0 0 1 3-2l1 2Z" /></svg>{t("action.sessionMenu.gestures")}<span className="composer-menu-next" aria-hidden="true">›</span></button> : null}
+    <ComposerPopover open={open && (compact || !disabled)} onClose={() => setOpen(false)} anchorRef={anchorRef} isMobile={compact || isMobile} title={title} className={compact ? undefined : "composer-mode-popover"}>
+      {compact ? <>
+        <button type="button" className="composer-menu-action" disabled={attachmentDisabled} onClick={() => run(onAddAttachment)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m9 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l8-8" /></svg>{t("action.addAttachment")}</button>
+        <div className="composer-menu-divider" /><div className="composer-menu-label">{t("mode.title")}</div>
+      </> : null}
+      <div className="composer-mode-options composer-mode-choices" role="group" aria-label={t("mode.title")}>
+        {(["chat", "plugin", "command"] as SessionMode[]).map(value => <button key={value} type="button" className="composer-menu-action" aria-pressed={mode === value} disabled={disabled} onClick={() => run(() => onModeChange(value))}>
+          <ModeIcon type={value} size={19} /><span>{t(value === "chat" ? "composer.chatMode" : `mode.${value}`)}</span>{mode === value ? <span className="composer-menu-check" aria-hidden="true">✓</span> : null}
+        </button>)}
+      </div>
+      {compact ? <><div className="composer-menu-divider" /><ComposerSessionItems compact onQuickSwitch={() => run(onQuickSwitch)} onRecentSessions={() => run(onRecentSessions)} onOpenGestureSettings={onOpenGestureSettings ? () => run(onOpenGestureSettings) : undefined} /></> : null}
     </ComposerPopover>
   </>;
+}
+
+function ComposerSessionItems({ compact = false, gestureHint, onQuickSwitch, onRecentSessions, onOpenGestureSettings }: {
+  compact?: boolean;
+  gestureHint?: string;
+  onQuickSwitch: () => void;
+  onRecentSessions: () => void;
+  onOpenGestureSettings?: () => void;
+}) {
+  const { t } = useI18n();
+  const entries = [
+    { label: "action.sessionMenu.quickSwitch" as const, action: onQuickSwitch, path: "M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4" },
+    { label: "action.sessionMenu.recent" as const, action: onRecentSessions, path: "M3 10a9 9 0 1 1 2 8M3 4v6h6M12 7v5l3 2" },
+    { label: "action.sessionMenu.gestures" as const, action: onOpenGestureSettings, path: "M8 13V5a2 2 0 0 1 4 0v7-3a2 2 0 0 1 4 0v3-1a2 2 0 0 1 4 0v4c0 4-2 6-6 6h-1c-2 0-3-1-4-2l-5-6a2 2 0 0 1 3-2l1 2Z" },
+  ];
+  return <>{entries.map((entry, index) => entry.action ? <React.Fragment key={entry.label}>
+    {!compact && index === 2 ? <div className="session-entry-separator" /> : null}
+    <button type="button" className={compact ? "composer-menu-action" : "session-entry-action"} onClick={entry.action}>
+      {compact && index === 0 ? <span className="composer-menu-symbol" aria-hidden="true">⇄</span> : <svg width={compact ? 20 : 19} height={compact ? 20 : 19} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d={entry.path} stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+      <span className={compact ? undefined : "session-entry-action-label"}>{t(entry.label)}{!compact && index === 0 ? <small>{t("action.quickSwitch")}</small> : null}</span>
+      {!compact && index === 0 && gestureHint ? <small className="session-entry-shortcut">{gestureHint}</small> : compact ? <span className="composer-menu-next" aria-hidden="true">›</span> : <span className="session-entry-next"><Chevron /></span>}
+    </button>
+  </React.Fragment> : null)}</>;
 }
 
 type ComposerSessionQuickActionsProps = SessionQuickActionsProps & {
@@ -3057,16 +2769,13 @@ type PanelView = "actions" | "switch" | "recent";
 
 function ComposerSessionQuickActions({ currentRootId, currentSessionKey, gestureConfig, variant, menuRequest, onNewSession, onSelectProject, onSelectSession, onToggleFileSidebar, onToggleSessionSidebar, onOpenModelSelector, onOpenGestureSettings }: ComposerSessionQuickActionsProps) {
   const { t } = useI18n();
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const anchorRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ id: number; points: RingPathPoint[] } | null>(null);
   const suppressClick = useRef(false);
   const [path, setPath] = useState<RingPathPoint[]>([]);
   const [open, setOpen] = useState<PanelView | null>(null);
   const [loading, setLoading] = useState(false);
   const [groups, setGroups] = useState<ReturnType<typeof recentQuickSwitchGroups>>([]);
-  const [position, setPosition] = useState<React.CSSProperties>({ left: 8, bottom: 64, width: 272, maxHeight: 400 });
   const isIcon = variant === "icon";
 
   useEffect(() => {
@@ -3083,49 +2792,6 @@ function ComposerSessionQuickActions({ currentRootId, currentSessionKey, gesture
     });
     return () => { active = false; };
   }, [open]);
-  useEffect(() => {
-    if (!open || isIcon) return;
-    const place = () => {
-      const inputRect = buttonRef.current?.closest('[data-onboarding="message-input"]')?.getBoundingClientRect();
-      const buttonRect = buttonRef.current?.getBoundingClientRect();
-      const rect = inputRect || buttonRect;
-      if (!rect) return;
-      const width = Math.min(272, window.innerWidth - 16);
-      const left = buttonRect ? buttonRect.left : rect.right - width;
-      const fontScaleStyle = {
-        "--mindfs-font-scale": getComputedStyle(buttonRef.current!).getPropertyValue("--mindfs-font-scale").trim() || "1",
-      } as React.CSSProperties;
-      setPosition({ ...fontScaleStyle, left: Math.max(8, Math.min(left, window.innerWidth - width - 8)), bottom: window.innerHeight - rect.top + 8, width, maxHeight: Math.max(0, Math.min(440, rect.top - 16)) });
-    };
-    const outside = (event: PointerEvent) => {
-      if (!panelRef.current?.contains(event.target as Node) && !buttonRef.current?.contains(event.target as Node) && !menuButtonRef.current?.contains(event.target as Node)) setOpen(null);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        setOpen(null);
-        menuButtonRef.current?.focus();
-      }
-    };
-    place();
-    const fontRegion = buttonRef.current?.closest(".mindfs-font-scale-region");
-    const fontObserver = new MutationObserver(place);
-    if (fontRegion) fontObserver.observe(fontRegion, { attributes: true, attributeFilter: ["style"] });
-    panelRef.current?.focus();
-    window.addEventListener("resize", place);
-    window.addEventListener("scroll", place, true);
-    document.addEventListener("pointerdown", outside);
-    window.addEventListener("keydown", escape, true);
-    return () => {
-      fontObserver.disconnect();
-      window.removeEventListener("resize", place);
-      window.removeEventListener("scroll", place, true);
-      document.removeEventListener("pointerdown", outside);
-      window.removeEventListener("keydown", escape, true);
-    };
-  }, [open, isIcon]);
-
   const actions = effectiveBlueRingActions(gestureConfig);
   const gesturesEnabled = gestureConfig?.enabled === true;
 
@@ -3176,7 +2842,7 @@ function ComposerSessionQuickActions({ currentRootId, currentSessionKey, gesture
   const recentSessions = open === "recent" ? groups.flatMap((group) => group.items.map((session) => ({ session, group })))
     .sort((a, b) => (Date.parse(b.session.updated_at || b.session.created_at) || 0) - (Date.parse(a.session.updated_at || a.session.created_at) || 0)) : [];
   const chevron = <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>;
-  const trigger = <button ref={buttonRef} type="button" className={isIcon ? "composer-new-icon" : "session-entry-main"} aria-label={t("blueRing.action.newSession")} title={`${t("blueRing.action.newSession")} · ${gestureLabel}`}
+  const trigger = <button type="button" className={isIcon ? "composer-new-icon" : "session-entry-main"} aria-label={t("blueRing.action.newSession")} title={`${t("blueRing.action.newSession")} · ${gestureLabel}`}
     onPointerDown={(event) => {
       if (!event.isPrimary || event.button !== 0) return;
       suppressClick.current = false;
@@ -3214,32 +2880,10 @@ function ComposerSessionQuickActions({ currentRootId, currentSessionKey, gesture
     {!isIcon ? <><svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3v14M3 10h14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg><span>{t("blueRing.action.newSession")}</span></> : <span aria-hidden="true" style={{ width: 18, height: 18, border: "2px solid #2563eb", borderRadius: "50%", boxShadow: "0 0 0 1px rgba(37,99,235,0.08)", pointerEvents: "none" }} />}
     {hintText ? <span style={{ position: "absolute", left: 0, bottom: "calc(100% + 8px)", fontSize: 10, fontWeight: 600, color: hint?.ready ? "var(--accent-color)" : "var(--text-secondary)", background: "var(--panel-bg)", borderRadius: 4, padding: "2px 4px", whiteSpace: "nowrap", pointerEvents: "none", zIndex: 10 }}>{hintText}</span> : null}
   </button>;
-  const panel = <div ref={panelRef} role={isIcon ? undefined : "dialog"} aria-label={t(open === "actions" ? "action.sessionMenu.title" : open === "recent" ? "action.sessionMenu.recent" : "action.quickSwitch")} tabIndex={-1} className="session-entry-panel mindfs-font-scale-region"
-      onKeyDown={(event) => {
-        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-        const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
-        if (!buttons.length) return;
-        event.preventDefault();
-        const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
-        const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : event.key === "ArrowDown" ? (index + 1) % buttons.length : (index <= 0 ? buttons.length : index) - 1;
-        buttons[next].focus();
-      }}
-      style={isIcon ? undefined : { position: "fixed", ...position, boxSizing: "border-box", zIndex: 1200, overflowY: "auto", padding: "8px", background: "var(--menu-bg)", border: "1px solid var(--menu-border)", borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}>
+  const panel = <>
       {open === "actions" ? <>
         <div className="session-entry-heading">{t("action.sessionMenu.title")}</div>
-        <button className="session-entry-action" type="button" onClick={() => setOpen("switch")}>
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
-          <span className="session-entry-action-label">{t("action.sessionMenu.quickSwitch")}<small>{t("action.quickSwitch")}</small></span>
-          {actions.up === "quickSwitch" ? <small className="session-entry-shortcut">{t("blueRing.gesture.up")}</small> : <span className="session-entry-next">{chevron}</span>}
-        </button>
-        <button className="session-entry-action" type="button" onClick={() => setOpen("recent")}>
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6M12 7v5l3 2" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
-          <span className="session-entry-action-label">{t("action.sessionMenu.recent")}</span><span className="session-entry-next">{chevron}</span>
-        </button>
-        {onOpenGestureSettings && <><div className="session-entry-separator" /><button className="session-entry-action" type="button" onClick={() => { setOpen(null); onOpenGestureSettings(); }}>
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 13V5a2 2 0 0 1 4 0v7-3a2 2 0 0 1 4 0v3-1a2 2 0 0 1 4 0v4c0 4-2 6-6 6h-1c-2 0-3-1-4-2l-5-6a2 2 0 0 1 3-2l1 2Z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
-          <span className="session-entry-action-label">{t("action.sessionMenu.gestures")}</span><span className="session-entry-next">{chevron}</span>
-        </button></>}
+        <ComposerSessionItems gestureHint={actions.up === "quickSwitch" ? t("blueRing.gesture.up") : undefined} onQuickSwitch={() => setOpen("switch")} onRecentSessions={() => setOpen("recent")} onOpenGestureSettings={onOpenGestureSettings ? () => { setOpen(null); onOpenGestureSettings(); } : undefined} />
       </> : <>
         <div className="session-entry-list-heading"><button type="button" className="session-entry-back" aria-label={t("action.sessionMenu.title")} onClick={() => setOpen("actions")}>{chevron}</button><span>{t(open === "recent" ? "action.sessionMenu.recent" : "action.sessionMenu.quickSwitch")}</span></div>
         {loading ? <div role="status" style={{ padding: "8px 6px" }}>{t("common.loading")}</div> : (open === "recent" ? recentSessions.length === 0 : groups.length === 0) ? <div style={{ padding: "8px 6px", color: "var(--text-secondary)" }}>{t("action.quickSwitchEmpty")}</div> : open === "recent" ? recentSessions.map(({ session, group }) => <button className="quick-switch-row session-entry-recent" type="button" key={`${group.rootId}:${session.key || session.session_key}`} title={session.name || session.key || session.session_key} aria-current={group.rootId === currentRootId && (session.key || session.session_key) === currentSessionKey ? "true" : undefined} style={rowStyle} onClick={() => { setOpen(null); onSelectSession({ ...session, root_id: group.rootId }); }}><span>{session.name || session.key || session.session_key}</span><small>{group.rootName || group.rootId}</small></button>) : groups.map((group, index) => <div key={group.rootId} style={{ padding: "2px 0", borderTop: index === 0 ? 0 : "1px solid var(--menu-border)" }}>
@@ -3248,14 +2892,23 @@ function ComposerSessionQuickActions({ currentRootId, currentSessionKey, gesture
         </div>)}
       </>}
       <style>{`.quick-switch-row:hover, .quick-switch-row:focus-visible, .quick-switch-row[aria-current="true"] { background: color-mix(in srgb, var(--accent-color) 10%, transparent) !important; }`}</style>
-    </div>;
+    </>;
   return <>
-    {!isIcon ? <div className="session-entry" data-open={!!open}>
+    <div ref={anchorRef} className={isIcon ? undefined : "session-entry"} style={isIcon ? { flexShrink: 0 } : undefined} data-open={!!open}>
       {trigger}
-      <button ref={menuButtonRef} type="button" className="session-entry-toggle" aria-label={t("action.sessionMenu.title")} title={t("action.sessionMenu.title")} aria-haspopup="dialog" aria-expanded={!!open} onClick={() => setOpen((value) => value ? null : "actions")} onKeyDown={(event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setOpen("actions"); } }}>{chevron}</button>
-    </div> : trigger}
-    {isIcon ? <ComposerPopover open={!!open} onClose={() => setOpen(null)} anchorRef={buttonRef} isMobile title={t(open === "recent" ? "action.sessionMenu.recent" : open === "actions" ? "action.sessionMenu.title" : "action.quickSwitch")}>
+      {!isIcon ? <button type="button" className="session-entry-toggle" aria-label={t("action.sessionMenu.title")} title={t("action.sessionMenu.title")} aria-haspopup="dialog" aria-expanded={!!open} onClick={() => setOpen(value => value ? null : "actions")} onKeyDown={event => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setOpen("actions"); } }}>{chevron}</button> : null}
+    </div>
+    <ComposerPopover open={!!open} onClose={() => setOpen(null)} anchorRef={anchorRef} isMobile={isIcon} aboveInput className="session-entry-panel mindfs-font-scale-region" title={t(open === "recent" ? "action.sessionMenu.recent" : open === "actions" ? "action.sessionMenu.title" : "action.quickSwitch")}
+      onKeyDown={(event) => {
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+        const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+        if (!buttons.length) return;
+        event.preventDefault();
+        const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : event.key === "ArrowDown" ? (index + 1) % buttons.length : (index <= 0 ? buttons.length : index) - 1;
+        buttons[next].focus();
+      }}>
       {panel}
-    </ComposerPopover> : open && createPortal(panel, document.body)}
+    </ComposerPopover>
   </>;
 }
