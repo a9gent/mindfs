@@ -6,6 +6,12 @@ import { useI18n, type Locale } from "../i18n";
 import { copyText } from "../services/clipboard";
 import { reportError } from "../services/error";
 import { sessionService } from "../services/session";
+import {
+  applySessionFilters,
+  isSessionFilterActive,
+  type SessionFilterState,
+} from "../services/sessionFilter";
+import { SessionFilterBar } from "./SessionFilterBar";
 
 export type SessionType = "chat" | "plugin" | "command";
 
@@ -61,6 +67,8 @@ type SessionListProps = {
   onLoadOlder?: () => void;
   loadingOlder?: boolean;
   hasMore?: boolean;
+  filter?: SessionFilterState;
+  onFilterChange?: (filter: SessionFilterState) => void;
 };
 
 const COLLAPSED_CHILD_SESSION_LIMIT = 3;
@@ -109,6 +117,8 @@ type ProjectSessionListProps = {
     session: SessionItem,
     options?: { beforeTime?: string },
   ) => Promise<{ hasMore?: boolean } | void> | { hasMore?: boolean } | void;
+  filter?: SessionFilterState;
+  onFilterChange?: (filter: SessionFilterState) => void;
 };
 
 function ToggleRowButton({
@@ -325,23 +335,38 @@ export function SessionList({
   onLoadOlder,
   loadingOlder = false,
   hasMore = false,
+  filter,
+  onFilterChange,
 }: SessionListProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const effectiveEmptyText = emptyText || t("sessionList.empty");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const searchBlurTimerRef = useRef<number | null>(null);
   const [expandedChildren, setExpandedChildren] = useState<Record<string, boolean>>({});
   const [loadingChildren, setLoadingChildren] = useState<Record<string, boolean>>({});
   const [childrenHasMore, setChildrenHasMore] = useState<Record<string, boolean>>({});
+  const filterActive = !!filter && !!onFilterChange && !searchResultsMode && isSessionFilterActive(filter);
+  const filteredSessions = useMemo(() => {
+    if (!filter || !filterActive) {
+      return null;
+    }
+    return applySessionFilters(sessions, filter);
+  }, [filter, filterActive, sessions]);
+  // 筛空提示的数据源用未过滤列表：空态里告诉用户"最近的一条其实在多久之前"
+  const nearestSession = useMemo(() => latestSessionOf(sessions), [sessions]);
+  const effectiveSessions = useMemo(
+    () => (filteredSessions ? [...filteredSessions.running, ...filteredSessions.rest] : sessions),
+    [filteredSessions, sessions],
+  );
   const visibleSessions = useMemo(() => {
     if (searchResultsMode) {
       return sessions.map((session): VisibleSessionRow => ({ type: "session", session }));
     }
     const childrenByParent = new Map<string, SessionItem[]>();
     const topLevel: SessionItem[] = [];
-    const keys = new Set(sessions.map((item) => item.key));
+    const keys = new Set(effectiveSessions.map((item) => item.key));
     const parentByKey = new Map<string, string>();
-    for (const item of sessions) {
+    for (const item of effectiveSessions) {
       const parentKey = String(item.parent_session_key || "").trim();
       if (parentKey && keys.has(parentKey)) {
         const children = childrenByParent.get(parentKey) || [];
@@ -388,22 +413,22 @@ export function SessionList({
     };
     topLevel.forEach((item) => append(item));
     return out;
-  }, [childrenHasMore, expandedChildren, searchResultsMode, selectedKey, sessions]);
+  }, [childrenHasMore, effectiveSessions, expandedChildren, searchResultsMode, selectedKey, sessions]);
   const childCountByParent = useMemo(() => {
     const counts = new Map<string, number>();
-    const keys = new Set(sessions.map((item) => item.key));
-    for (const item of sessions) {
+    const keys = new Set(effectiveSessions.map((item) => item.key));
+    for (const item of effectiveSessions) {
       const parentKey = String(item.parent_session_key || "").trim();
       if (parentKey && keys.has(parentKey)) {
         counts.set(parentKey, (counts.get(parentKey) || 0) + 1);
       }
     }
     return counts;
-  }, [sessions]);
+  }, [effectiveSessions]);
   const selectedParentKey = useMemo(() => {
     if (!selectedKey) return "";
-    return sessions.find((item) => item.key === selectedKey)?.parent_session_key || "";
-  }, [selectedKey, sessions]);
+    return effectiveSessions.find((item) => item.key === selectedKey)?.parent_session_key || "";
+  }, [selectedKey, effectiveSessions]);
   const sessionByKey = useMemo(() => {
     const byKey = new Map<string, SessionItem>();
     for (const item of sessions) {
@@ -634,9 +659,43 @@ export function SessionList({
         </div>
       ) : null}
 
+      {filter && onFilterChange && !searchResultsMode ? (
+        <SessionFilterBar filter={filter} onChange={onFilterChange} />
+      ) : null}
+
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "8px" }}>
-        {!sessions.length ? (
-          emptyText ? (
+        {!effectiveSessions.length ? (
+          filterActive && sessions.length ? (
+            <div
+              style={{
+                fontSize: "12px",
+                color: "var(--text-secondary)",
+                minHeight: "100%",
+                padding: "12px 18px",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                textAlign: "center",
+                lineHeight: 1.6,
+              }}
+            >
+              <div>{t("sessionList.noFilterMatch")}</div>
+              {nearestSession ? (
+                <div style={{ marginTop: "8px" }}>
+                  {t("sessionList.filterNearestHint", {
+                    name: nearestSession.name || `Session ${nearestSession.session_key.slice(0, 8)}`,
+                    time: formatTime(
+                      nearestSession.updated_at || nearestSession.created_at || "",
+                      locale,
+                      t("time.justNow"),
+                    ),
+                  })}
+                </div>
+              ) : null}
+              <div style={{ marginTop: "6px", opacity: 0.75 }}>{t("sessionList.filterEmptyGuide")}</div>
+            </div>
+          ) : emptyText ? (
             <div
               style={{
                 fontSize: "12px",
@@ -655,6 +714,31 @@ export function SessionList({
           ) : null
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+            {filterActive && filteredSessions && filteredSessions.running.length > 0 ? (
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "4px 6px 6px",
+                  fontSize: "11px",
+                  color: "var(--text-secondary)",
+                  letterSpacing: "0.02em",
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: "6px",
+                    height: "6px",
+                    borderRadius: "50%",
+                    background: "#ef4444",
+                    flexShrink: 0,
+                  }}
+                />
+                {t("sessionList.runningSection", { count: filteredSessions.running.length })}
+              </div>
+            ) : null}
             {visibleSessions.map((row) => {
               if (row.type === "child-toggle") {
                 const loading = !!loadingChildren[row.parent.key];
@@ -758,12 +842,14 @@ export function MultiProjectSessionList({
   onRename,
   onScheduledTask,
   onDelete,
-  onHandoffPack,
   onProjectClick,
   onLoadMoreProject,
   onLoadChildren,
+  onHandoffPack,
+  filter,
+  onFilterChange,
 }: ProjectSessionListProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const effectiveEmptyText = emptyText || t("sessionList.empty");
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const [loadingProjects, setLoadingProjects] = useState<Record<string, boolean>>({});
@@ -797,9 +883,45 @@ export function MultiProjectSessionList({
     }
     window.localStorage.setItem(PINNED_PROJECTS_STORAGE_KEY, JSON.stringify(pinnedProjects));
   }, [pinnedProjects]);
+  const filterActive = !!filter && !!onFilterChange && isSessionFilterActive(filter);
+  const filteredGroups = useMemo(() => {
+    if (!filter || !filterActive) {
+      return null;
+    }
+    const now = Date.now();
+    return groups
+      .map((group) => {
+        const result = applySessionFilters(group.sessions, filter, now);
+        const matchCount = result.running.length + result.rest.length;
+        const unloaded = Math.max(0, group.totalCount - group.sessions.length);
+        return {
+          ...group,
+          sessions: [...result.running, ...result.rest],
+          // 剩余计数基于「未加载 + 命中」，避免被移到置顶区的运行中会话被重复计入
+          totalCount: unloaded + matchCount,
+        };
+      })
+      .filter((group) => group.sessions.length > 0 || group.totalCount > group.sessions.length);
+  }, [filter, filterActive, groups]);
+  const effectiveGroups = filteredGroups ?? groups;
+  // 筛空提示：跨所有已加载分组找最近一条（与过滤无关，专供空态展示）
+  const nearestSession = useMemo(
+    () => latestSessionOf(groups.flatMap((group) => group.sessions)),
+    [groups],
+  );
+  // 筛选态下「加载更多/剩余计数」必须用未过滤的原始分组，否则分页游标错位
+  const originalGroupByRootId = useMemo(() => {
+    const byRoot = new Map<string, ProjectSessionGroup>();
+    for (const group of groups) {
+      byRoot.set(group.rootId, group);
+    }
+    return byRoot;
+  }, [groups]);
+  const loadTargetGroup = (group: ProjectSessionGroup): ProjectSessionGroup =>
+    originalGroupByRootId.get(group.rootId) ?? group;
   const orderedGroups = useMemo(
     () =>
-      groups.slice().sort((left, right) => {
+      effectiveGroups.slice().sort((left, right) => {
         const leftPinnedAt = pinnedProjects[left.rootId] || 0;
         const rightPinnedAt = pinnedProjects[right.rootId] || 0;
         if (leftPinnedAt || rightPinnedAt) {
@@ -809,7 +931,7 @@ export function MultiProjectSessionList({
         }
         return 0;
       }),
-    [groups, pinnedProjects],
+    [effectiveGroups, pinnedProjects],
   );
   const togglePinnedProject = (rootId: string) => {
     setPinnedProjects((prev) => {
@@ -824,6 +946,7 @@ export function MultiProjectSessionList({
   };
   const sessionByKey = useMemo(() => {
     const byKey = new Map<string, SessionItem>();
+    // 用未过滤的原始分组：fork 名/父会话查找不应随筛选结果缩水
     for (const group of groups) {
       for (const item of group.sessions) {
         const sessionRoot = item.root_id || group.rootId;
@@ -928,13 +1051,19 @@ export function MultiProjectSessionList({
 
   const handleProjectToggle = async (group: ProjectSessionGroup) => {
     const expanded = !!expandedProjects[group.rootId];
-    const remaining = Math.max(0, group.totalCount - group.sessions.length);
+    // 用原始分组算剩余（未加载）数：筛选副本的 sessions 是命中子集；
+    // 置顶会话已在顶部专区展示但仍算已加载，不参与剩余数
+    const source = loadTargetGroup(group);
+    const remaining = Math.max(
+      0,
+      source.totalCount - topLevelSessionsForGroup(source.sessions).length,
+    );
     if (!expanded) {
       setExpandedProjects((prev) => ({ ...prev, [group.rootId]: true }));
       if (remaining > 0 && onLoadMoreProject) {
         setLoadingProjects((prev) => ({ ...prev, [group.rootId]: true }));
         try {
-          await onLoadMoreProject(group);
+          await onLoadMoreProject(source);
         } finally {
           setLoadingProjects((prev) => ({ ...prev, [group.rootId]: false }));
         }
@@ -944,7 +1073,7 @@ export function MultiProjectSessionList({
     if (remaining > 0 && onLoadMoreProject) {
       setLoadingProjects((prev) => ({ ...prev, [group.rootId]: true }));
       try {
-        await onLoadMoreProject(group);
+        await onLoadMoreProject(source);
       } finally {
         setLoadingProjects((prev) => ({ ...prev, [group.rootId]: false }));
       }
@@ -1019,22 +1148,96 @@ export function MultiProjectSessionList({
         </div>
         {headerAction ? <div style={{ display: "inline-flex", alignItems: "center" }}>{headerAction}</div> : null}
       </div>
+      {filter && onFilterChange ? (
+        <SessionFilterBar filter={filter} onChange={onFilterChange} />
+      ) : null}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "8px" }}>
         {loading && groups.length === 0 ? (
           <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "18px", textAlign: "center" }}>{t("sessionList.loading")}</div>
-        ) : groups.length === 0 ? (
-          <div style={{ fontSize: "12px", color: "var(--text-secondary)", minHeight: "100%", padding: "12px 18px", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", lineHeight: 1.6 }}>
-            {effectiveEmptyText}
+        ) : effectiveGroups.length === 0 ? (
+          <div style={{ fontSize: "12px", color: "var(--text-secondary)", minHeight: "100%", padding: "12px 18px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", lineHeight: 1.6 }}>
+            <div>{groups.length === 0 ? effectiveEmptyText : t("sessionList.noFilterMatch")}</div>
+            {groups.length > 0 && nearestSession ? (
+              <div style={{ marginTop: "8px" }}>
+                {t("sessionList.filterNearestHint", {
+                  name: nearestSession.name || `Session ${nearestSession.session_key.slice(0, 8)}`,
+                  time: formatTime(
+                    nearestSession.updated_at || nearestSession.created_at || "",
+                    locale,
+                    t("time.justNow"),
+                  ),
+                })}
+              </div>
+            ) : null}
+            {groups.length > 0 ? (
+              <div style={{ marginTop: "6px", opacity: 0.75 }}>{t("sessionList.filterEmptyGuide")}</div>
+            ) : null}
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "9px" }}>
+            {orderedGroups.some((group) =>
+              topLevelSessionsForGroup(group.sessions).some((session) => !!session.pinned_at),
+            ) ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "2px", paddingBottom: "4px" }}>
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "4px 6px 6px",
+                    fontSize: "11px",
+                    color: "var(--text-secondary)",
+                    letterSpacing: "0.02em",
+                  }}
+                >
+                  <PinIcon pinned={true} />
+                  {t("sessionList.pinnedSection")}
+                </div>
+                {orderedGroups.flatMap((group) =>
+                  topLevelSessionsForGroup(group.sessions)
+                    .filter((session) => !!session.pinned_at)
+                    .map((session) => (
+                      <SessionCard
+                        key={`pinned:${group.rootId}:${session.key}`}
+                        session={{ ...session, root_id: session.root_id || group.rootId }}
+                        sessionByKey={sessionByKey}
+                        selected={session.key === selectedKey && (session.root_id || group.rootId) === selectedRootId}
+                        parentHighlighted={false}
+                        highlightQuery=""
+                        syncing={isSessionSyncing({ ...session, root_id: session.root_id || group.rootId }, syncingSessionKeys)}
+                        projectBadge={group.rootName || group.rootId}
+                        onSelect={onSelect}
+                        onSync={onSync}
+                        onPin={onPin}
+                        onRename={onRename}
+                        onScheduledTask={onScheduledTask}
+                        onDelete={onDelete}
+                        onHandoffPack={onHandoffPack}
+                      />
+                    )),
+                )}
+              </div>
+            ) : null}
             {orderedGroups.map((group) => {
               const expanded = !!expandedProjects[group.rootId];
               const pinned = !!pinnedProjects[group.rootId];
               const topLevelSessions = topLevelSessionsForGroup(group.sessions);
+              // 会话级置顶（pinned_at）：抽到顶部「已置顶」专区，组内不再重复显示；
+              // 置顶父会话的子会话保留在组内原位（跟随置顶父卡渲染在专区）
+              const pinnedInGroup = topLevelSessions.filter((session) => !!session.pinned_at);
+              const unpinnedSessions = pinnedInGroup.length > 0
+                ? [
+                    ...topLevelSessions.filter((session) => !session.pinned_at),
+                    ...group.sessions.filter((session) => {
+                      const parentKey = String(session.parent_session_key || "").trim();
+                      if (!parentKey) return false;
+                      return pinnedInGroup.some((pinnedSession) => pinnedSession.key === parentKey);
+                    }),
+                  ]
+                : group.sessions;
               const sessions = expanded
-                ? group.sessions
-                : sessionsForTopLevelLimit(group.sessions, MULTI_PROJECT_VISIBLE_LIMIT);
+                ? unpinnedSessions
+                : sessionsForTopLevelLimit(unpinnedSessions, MULTI_PROJECT_VISIBLE_LIMIT);
               const rows = buildRows(sessions, group.rootId);
               const childCountByParent = new Map<string, number>();
               const sessionKeys = new Set(group.sessions.map((item) => item.key));
@@ -1044,7 +1247,14 @@ export function MultiProjectSessionList({
                   childCountByParent.set(parentKey, (childCountByParent.get(parentKey) || 0) + 1);
                 }
               }
-              const remaining = Math.max(0, group.totalCount - topLevelSessions.length);
+              // 剩余数用原始分组的顶层会话数推：筛选副本会把子会话混进计数。
+              // 置顶会话仍属于已加载会话（只是在顶部专区展示），不计入剩余
+              const sourceGroup = loadTargetGroup(group);
+              const remaining = Math.max(
+                0,
+                sourceGroup.totalCount
+                  - topLevelSessionsForGroup(sourceGroup.sessions).length,
+              );
               const projectLoading = !!loadingProjects[group.rootId];
               return (
                 <section key={group.rootId} style={{ minWidth: 0 }}>
@@ -1195,7 +1405,14 @@ export function MultiProjectSessionList({
                               ? remaining > 0
                                 ? t("sessionList.remainingSessions", { count: remaining })
                                 : t("common.collapse")
-                              : t("sessionList.remainingSessions", { count: Math.max(0, group.totalCount - MULTI_PROJECT_VISIBLE_LIMIT) })
+                              : t("sessionList.remainingSessions", {
+                                  count: Math.max(
+                                    0,
+                                    // 减实际渲染的顶层会话数而非固定上限：筛选后可见数可能不足 6
+                                    (filterActive ? group.totalCount : sourceGroup.totalCount)
+                                      - topLevelSessionsForGroup(group.sessions).length,
+                                  ),
+                                })
                         }
                         showExpandIcon={!projectLoading && (!expanded || remaining > 0)}
                         showCollapseIcon={!projectLoading && expanded}
@@ -1233,6 +1450,7 @@ function SessionCard({
   highlightQuery,
   syncing = false,
   childCount = 0,
+  projectBadge,
   onSelect,
   onSync,
   onPin,
@@ -1248,6 +1466,7 @@ function SessionCard({
   highlightQuery?: string;
   syncing?: boolean;
   childCount?: number;
+  projectBadge?: string;
   onSelect?: (session: SessionItem) => void;
   onSync?: (session: SessionItem) => Promise<void> | void;
   onPin?: (session: SessionItem, pinned: boolean) => Promise<boolean> | boolean;
@@ -1594,6 +1813,27 @@ function SessionCard({
                 textOverflow: "ellipsis",
               }}
             >
+              {projectBadge ? (
+                <span
+                  style={{
+                    display: "inline-block",
+                    marginRight: "6px",
+                    padding: "1px 6px",
+                    borderRadius: "6px",
+                    fontSize: "10px",
+                    lineHeight: "16px",
+                    verticalAlign: "middle",
+                    color: "var(--accent-color)",
+                    background: "color-mix(in srgb, var(--accent-color) 12%, transparent)",
+                    whiteSpace: "nowrap",
+                    maxWidth: "88px",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {projectBadge}
+                </span>
+              ) : null}
               {renderHighlightedText(displayName, highlightQuery, {
                 color: selected ? "var(--accent-color)" : "var(--text-primary)",
               })}
@@ -2039,6 +2279,20 @@ function formatTime(isoString: string, locale: Locale, justNow: string): string 
     return new Intl.DateTimeFormat(locale, { month: "numeric", day: "numeric" }).format(date);
   }
   return new Intl.DateTimeFormat(locale, { year: "2-digit", month: "numeric" }).format(date);
+}
+
+// 时间窗筛空时给用户指路：从（未过滤的）列表里找最近一条，告诉用户"差多少"
+function latestSessionOf(items: readonly SessionItem[]): SessionItem | null {
+  let latest: SessionItem | null = null;
+  let latestTs = 0;
+  for (const item of items) {
+    const ts = Date.parse(item.updated_at || item.created_at || "") || 0;
+    if (ts > latestTs) {
+      latestTs = ts;
+      latest = item;
+    }
+  }
+  return latest;
 }
 
 function renderHighlightedText(
