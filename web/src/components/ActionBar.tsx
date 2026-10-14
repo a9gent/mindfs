@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { type SessionMode } from "./ModeSelector";
 import { ModeSelector } from "./ModeSelector";
 import { AgentSelector } from "./AgentSelector";
-import type { ComposerStyle } from "../services/preferences";
 import { fetchAgents, fetchShells, restartAgent, type AgentStatus, type ShellStatus } from "../services/agents";
 import { fetchCandidates, type CandidateItem } from "../services/candidates";
 import { reportError } from "../services/error";
@@ -126,7 +125,6 @@ type ActionBarProps = {
   onToggleRightSidebar?: () => void;
   sidebarsSwapped?: boolean;
   blueRingGestures?: BlueRingGestureConfig;
-  composerStyle?: ComposerStyle;
 };
 
 function wsStatusMeta(status: WSStatus, t: (key: MessageKey) => string): {
@@ -423,10 +421,8 @@ export function ActionBar({
   sendShortcut = null,
   sidebarsSwapped = false,
   blueRingGestures,
-  composerStyle = "classic",
 }: ActionBarProps) {
   const { t } = useI18n();
-  const isModern = composerStyle === "modern";
   const [modelSelectorSignal, setModelSelectorSignal] = useState(0);
   const [mode, setMode] = useState<SessionMode>("chat");
   const [agent, setAgent] = useState("");
@@ -813,18 +809,10 @@ export function ActionBar({
     activeItem.scrollIntoView({ block: "nearest" });
   }, [candidates, activeCandidateIndex]);
 
-  // Keep this callback stable so style changes do not replay edit drafts.
   const syncEditorHeight = useCallback(() => {
     const height = editorRef.current?.getHeight() || 44;
     setIsMultiLine(height > 50);
   }, []);
-
-  useEffect(() => {
-    if (isModern) return;
-    setIsMultiLine(false);
-    const frame = requestAnimationFrame(syncEditorHeight);
-    return () => cancelAnimationFrame(frame);
-  }, [isModern, syncEditorHeight]);
 
   useEffect(() => {
     if (!editDraftRequest) {
@@ -1263,10 +1251,9 @@ export function ActionBar({
       ? t(placeholderVariant === 1 ? "action.placeholder.tip" : "action.placeholder.quickSwitch")
       : t(currentSession ? "action.placeholder.continueSession" : "action.placeholder.newSession")
     : t(mode === "command" ? "action.placeholder.command" : "action.placeholder.plugin");
-  const editorRightInset = isModern ? 16 : isMultiLine ? 14 : mode === "command" ? (isMobile ? 84 : 108) : isMobile ? 116 : 140;
-  const editorBottomInset = isModern ? 56 : isMultiLine ? 44 : 12;
-  const editorMinHeight = isModern ? (isMobile ? 128 : 120) : 44;
-  const controlsAtBottom = isModern || isMultiLine;
+  const editorRightInset = isMultiLine ? 14 : mode === "command" ? (isMobile ? 84 : 108) : isMobile ? 116 : 140;
+  const editorBottomInset = isMultiLine ? 44 : 12;
+  const editorMinHeight = 44;
   const mobileFileSidebarButton = isMobile ? (
     <button
       type="button"
@@ -1297,7 +1284,7 @@ export function ActionBar({
   ) : null;
 
   return (
-    <div data-onboarding="action-bar" data-composer-style={composerStyle} style={{ width: "100%", minWidth: 0, padding: isMobile ? "0 0 var(--mindfs-actionbar-bottom-padding, calc(env(safe-area-inset-bottom, 0px) + 2px))" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
+    <div data-onboarding="action-bar" style={{ width: "100%", minWidth: 0, padding: isMobile ? "0 0 var(--mindfs-actionbar-bottom-padding, calc(env(safe-area-inset-bottom, 0px) + 2px))" : "0 16px 12px", display: "flex", justifyContent: "center", boxSizing: "border-box", background: "var(--content-bg)" }}>
       <div style={{ position: "relative", width: "100%", minWidth: 0, display: "flex", flexDirection: "column", gap: 0 }}>
         <div
             style={{
@@ -1526,7 +1513,7 @@ export function ActionBar({
                 border: isFocused
                   ? "1px solid var(--accent-color)"
                   : "1px solid var(--panel-border)",
-                borderRadius: isModern ? "16px" : isMobile ? "10px" : "12px",
+                borderRadius: isMobile ? "10px" : "12px",
                 boxShadow: isMobile
                   ? "none"
                   : (isFocused ? "var(--panel-focus-shadow)" : "var(--panel-shadow)"),
@@ -1546,9 +1533,8 @@ export function ActionBar({
 	              disabled={sending}
 	              isDark={isDark}
 	              rightInset={editorRightInset}
-	              topInset={isModern ? 8 : 0}
+	              topInset={0}
 	              bottomInset={editorBottomInset}
-	              minHeight={isModern ? editorMinHeight : undefined}
               onChange={handleEditorChange}
               onFocusChange={(focused) => {
                 setIsFocused(focused);
@@ -1817,21 +1803,7 @@ export function ActionBar({
               }}
             />
 
-            <div
-              data-onboarding="input-controls"
-              style={{
-                position: "absolute",
-                left: isModern ? "10px" : undefined,
-                right: isModern ? "10px" : isMobile ? "4px" : "8px",
-                bottom: isModern ? "10px" : controlsAtBottom ? "6px" : "50%",
-                transform: controlsAtBottom ? "none" : "translateY(50%)",
-                display: "flex",
-                alignItems: "center",
-                gap: isModern ? "4px" : isMobile ? "0px" : "2px",
-                zIndex: 5,
-                transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
-              }}
-            >
+            <div data-onboarding="input-controls" style={{ position: "absolute", right: isMobile ? "4px" : "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: isMobile ? "0px" : "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
               <SessionQuickActions currentRootId={currentRootId} currentSessionKey={currentSession?.key || currentSession?.session_key} gestureConfig={blueRingGestures} onNewSession={() => { resetForNewSession(); onNewSession(); }} onSelectProject={onSelectProject} onSelectSession={onSelectSession} onToggleFileSidebar={onToggleLeftSidebar} onToggleSessionSidebar={onToggleRightSidebar} onOpenModelSelector={() => setModelSelectorSignal((value) => value + 1)} />
               <>
                 <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} onboardingId="mode-selector" viewportMenu />
@@ -1886,10 +1858,9 @@ export function ActionBar({
                 onClick={() => attachmentInputRef.current?.click()}
                 disabled={!currentRootId || sending}
                 style={{
-                  marginLeft: isModern ? "auto" : "-4px",
-                  width: isModern ? "34px" : "28px",
-                  height: isModern ? "34px" : "28px",
-                  flexShrink: 0,
+                  marginLeft: "-4px",
+                  width: "28px",
+                  height: "28px",
                   borderRadius: "8px",
                   border: "none",
                   background: pendingAttachments.length > 0
@@ -1914,12 +1885,10 @@ export function ActionBar({
                 </button>
                 <button
                 data-onboarding="send-action"
-                aria-label={t(showCancel ? "composer.stop" : "composer.send")}
-                title={t(showCancel ? "composer.stop" : "composer.send")}
                 type="button"
                 onClick={showCancel ? handleCancel : handleSend}
                 disabled={showCancel ? cancelling : !canSend}
-                style={{ width: isModern ? "36px" : "28px", height: isModern ? "36px" : "28px", flexShrink: 0, borderRadius: "8px", border: "none", background: showCancel ? "rgba(239,68,68,0.14)" : (canSend ? "var(--accent-color)" : "transparent"), color: showCancel ? "#ef4444" : (canSend ? "#fff" : "var(--text-secondary)"), display: "flex", alignItems: "center", justifyContent: "center", cursor: showCancel ? (cancelling ? "wait" : "pointer") : (canSend ? "pointer" : "not-allowed"), transition: "all 0.2s", opacity: showCancel ? 1 : (canSend ? 1 : 0.3) }}
+                style={{ width: "28px", height: "28px", borderRadius: "8px", border: "none", background: showCancel ? "rgba(239,68,68,0.14)" : (canSend ? "var(--accent-color)" : "transparent"), color: showCancel ? "#ef4444" : (canSend ? "#fff" : "var(--text-secondary)"), display: "flex", alignItems: "center", justifyContent: "center", cursor: showCancel ? (cancelling ? "wait" : "pointer") : (canSend ? "pointer" : "not-allowed"), transition: "all 0.2s", opacity: showCancel ? 1 : (canSend ? 1 : 0.3) }}
               >
                 {sending || cancelling ? (
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>

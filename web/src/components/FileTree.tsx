@@ -57,7 +57,6 @@ import {
   updateIdleSessionResourceReleasePreference,
   updateNewProjectMetaLocationPreference,
   updateSessionNamingPreference,
-  type ComposerStyle,
   type NewProjectMetaLocation,
 } from "../services/preferences";
 import {
@@ -204,8 +203,6 @@ type FileTreeProps = {
   showSendShortcutOption?: boolean;
   sendShortcut?: SendShortcut | null;
   onSendShortcutChange?: (shortcut: SendShortcut | null) => void;
-  composerStyle?: ComposerStyle;
-  onComposerStyleChange?: (style: ComposerStyle) => void;
   sidebarsSwapped?: boolean;
   onSidebarsSwappedChange?: (enabled: boolean) => void;
   blueRingGestures?: BlueRingGestureConfig;
@@ -1499,8 +1496,6 @@ export function FileTree({
   showSendShortcutOption = false,
   sendShortcut = null,
   onSendShortcutChange,
-  composerStyle = "classic",
-  onComposerStyleChange,
   sidebarsSwapped = false,
   onSidebarsSwappedChange,
   blueRingGestures,
@@ -3315,27 +3310,6 @@ export function FileTree({
                     </button>
                   );
                 }) : null}
-                {isAppearanceMenuOpen && onComposerStyleChange ? (
-                  <div style={{ ...fileTreeMenuButtonStyle, cursor: "default" }}>
-                    <label htmlFor="composer-style" style={{ flex: 1 }}>{t("fileTree.composerStyle")}</label>
-                    <select
-                      id="composer-style"
-                      value={composerStyle}
-                      onChange={(event) => onComposerStyleChange(event.target.value === "modern" ? "modern" : "classic")}
-                      style={{
-                        border: "1px solid var(--menu-border)",
-                        borderRadius: "6px",
-                        padding: "4px 6px",
-                        background: "var(--menu-bg)",
-                        color: "var(--text-primary)",
-                        fontSize: "12px",
-                      }}
-                    >
-                      <option value="classic">{t("composerStyle.classic")}</option>
-                      <option value="modern">{t("composerStyle.modern")}</option>
-                    </select>
-                  </div>
-                ) : null}
                 <button
                   type="button"
                   onClick={() => {

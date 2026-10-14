@@ -56,11 +56,6 @@ import {
 } from "./services/api";
 import { reportError } from "./services/error";
 import {
-  loadComposerStyle,
-  persistComposerStyle,
-  type ComposerStyle,
-} from "./services/preferences";
-import {
   loadSendShortcut,
   persistSendShortcut,
   type SendShortcut,
@@ -1724,7 +1719,6 @@ export function App({ onGoHome }: AppProps) {
   const { isMobile, isTablet } = useResponsive();
   const [mobileEnterKeySends, setMobileEnterKeySends] = useState(loadMobileEnterKeySends);
   const [sendShortcut, setSendShortcut] = useState<SendShortcut | null>(loadSendShortcut);
-  const [composerStyle, setComposerStyle] = useState<ComposerStyle>(loadComposerStyle);
   const [blueRingGestures, setBlueRingGestures] = useState<BlueRingGestureConfig>(loadBlueRingGestureConfig);
   const [sidebarsSwapped, setSidebarsSwapped] = useState(loadSidebarsSwapped);
   const [fontSizePreferences, setFontSizePreferences] = useState<FontSizePreferences>(loadFontSizePreferences);
@@ -2386,10 +2380,6 @@ export function App({ onGoHome }: AppProps) {
   useEffect(() => {
     persistSendShortcut(sendShortcut);
   }, [sendShortcut]);
-
-  useEffect(() => {
-    persistComposerStyle(composerStyle);
-  }, [composerStyle]);
 
   useEffect(() => {
     persistBlueRingGestureConfig(blueRingGestures);
@@ -14537,8 +14527,6 @@ export function App({ onGoHome }: AppProps) {
             showSendShortcutOption={!isMobile}
             sendShortcut={sendShortcut}
             onSendShortcutChange={setSendShortcut}
-            composerStyle={composerStyle}
-            onComposerStyleChange={setComposerStyle}
             sidebarsSwapped={sidebarsSwapped}
             onSidebarsSwappedChange={setSidebarsSwapped}
             blueRingGestures={blueRingGestures}
@@ -14663,7 +14651,6 @@ export function App({ onGoHome }: AppProps) {
               onSendQueuedMessageNow={handleSendQueuedMessageNow}
               mobileEnterKeySends={mobileEnterKeySends}
               sendShortcut={sendShortcut}
-              composerStyle={composerStyle}
               onRequestFileContext={handleRequestFileContext}
               onClearFileContext={handleClearFileContext}
               onToggleLeftSidebar={() => setIsLeftOpen((v) => !v)}
