@@ -58,7 +58,14 @@ export type BlueRingAction =
   | "quickSaveFile"
   | "renameCurrentFile"
   | "copyCurrentFilePath"
-  | "copySessionHandoff";
+  | "copySessionHandoff"
+  | "globalSearch"
+  | "openNodesPage"
+  | "openGestureSettings"
+  | "kanbanCreateTask"
+  | "kanbanEditTask"
+  | "kanbanStartTask"
+  | "kanbanCompleteTask";
 
 export type BlueRingGestureConfig = {
   enabled: boolean;
@@ -135,6 +142,13 @@ export const BLUE_RING_ACTION_OPTIONS: readonly BlueRingAction[] = [
   "renameCurrentFile",
   "copyCurrentFilePath",
   "copySessionHandoff",
+  "globalSearch",
+  "openNodesPage",
+  "openGestureSettings",
+  "kanbanCreateTask",
+  "kanbanEditTask",
+  "kanbanStartTask",
+  "kanbanCompleteTask",
 ];
 
 export const BLUE_RING_GESTURE_LABEL_KEYS: Record<BlueRingGesture, MessageKey> = {
@@ -178,6 +192,13 @@ export const BLUE_RING_ACTION_LABEL_KEYS: Record<BlueRingAction, MessageKey> = {
   renameCurrentFile: "blueRing.action.renameCurrentFile",
   copyCurrentFilePath: "blueRing.action.copyCurrentFilePath",
   copySessionHandoff: "blueRing.action.copySessionHandoff",
+  globalSearch: "blueRing.action.globalSearch",
+  openNodesPage: "blueRing.action.openNodesPage",
+  openGestureSettings: "blueRing.action.openGestureSettings",
+  kanbanCreateTask: "blueRing.action.kanbanCreateTask",
+  kanbanEditTask: "blueRing.action.kanbanEditTask",
+  kanbanStartTask: "blueRing.action.kanbanStartTask",
+  kanbanCompleteTask: "blueRing.action.kanbanCompleteTask",
 };
 
 const BLUE_RING_ACTION_SET = new Set<string>(BLUE_RING_ACTION_OPTIONS);

@@ -217,12 +217,16 @@ type FileTreeProps = {
   onSidebarsSwappedChange?: (enabled: boolean) => void;
   blueRingGestures?: BlueRingGestureConfig;
   onBlueRingGesturesChange?: (config: BlueRingGestureConfig) => void;
+  /** Timestamp signal from blue-ring "openGestureSettings" action; >0 opens the popover. */
+  openBlueRingSettingsRequest?: number;
   /** Task templates for the "newTask" quick action binding. */
   taskTemplates?: Array<{ id: string; name: string }>;
   gitDiffSideBySide?: boolean;
   onGitDiffSideBySideChange?: (enabled: boolean) => void;
   multiProjectSessionsEnabled?: boolean;
   onMultiProjectSessionsChange?: (enabled: boolean) => void;
+  flatSessionListEnabled?: boolean;
+  onFlatSessionListChange?: (enabled: boolean) => void;
   fontSizePreferences?: FontSizePreferences;
   onFontSizePreferencesChange?: (preferences: FontSizePreferences) => void;
   onRunAgentLifecycleCommand?: (agentName: string, action: AgentLifecycleCommandAction, commands: string[]) => void | Promise<void>;
@@ -1963,10 +1967,13 @@ export function FileTree({
   blueRingGestures,
   taskTemplates,
   onBlueRingGesturesChange,
+  openBlueRingSettingsRequest,
   gitDiffSideBySide = false,
   onGitDiffSideBySideChange,
   multiProjectSessionsEnabled = false,
   onMultiProjectSessionsChange,
+  flatSessionListEnabled = false,
+  onFlatSessionListChange,
   fontSizePreferences = { fileSidebar: 1, main: 1, sessionSidebar: 1 },
   onFontSizePreferencesChange,
   onRunAgentLifecycleCommand,
@@ -2714,6 +2721,13 @@ export function FileTree({
     setIsMenuOpen(false);
     setBlueRingMenuOpen(true);
   }, []);
+
+  React.useEffect(() => {
+    if (openBlueRingSettingsRequest && openBlueRingSettingsRequest > 0) {
+      openBlueRingSettings();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openBlueRingSettingsRequest]);
 
   const updateBlueRingAction = React.useCallback((gesture: BlueRingGesture, action: BlueRingAction) => {
     const nextActions = { ...gestureConfig.actions };
@@ -4248,6 +4262,33 @@ export function FileTree({
                 <span>{t("fileTree.multiProjectSessions")}</span>
                 <span style={{ fontSize: "11px", opacity: multiProjectSessionsEnabled ? 1 : 0 }}>✓</span>
               </button>
+              {multiProjectSessionsEnabled ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onFlatSessionListChange?.(!flatSessionListEnabled);
+                    setIsAppearanceMenuOpen(false);
+                    setIsSortMenuOpen(false);
+                  }}
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    background: flatSessionListEnabled ? "var(--selection-bg)" : "transparent",
+                    color: flatSessionListEnabled ? "var(--accent-color)" : "var(--text-primary)",
+                    borderRadius: "8px",
+                    padding: "8px 10px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    textAlign: "left",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                  }}
+                >
+                  <span>{t("sessionList.flatMode")}</span>
+                  <span style={{ fontSize: "11px", opacity: flatSessionListEnabled ? 1 : 0 }}>✓</span>
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => {

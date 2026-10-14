@@ -388,6 +388,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/tasks/{id}/read/{resource}", h.protectedEndpoint(h.handleTaskRead))
 	r.Post("/api/tasks/{id}/orchestration/{operation}", h.protectedEndpoint(h.handleTaskOrchestration))
 	r.Post("/api/tasks/{id}/input", h.protectedEndpoint(h.handleKanbanTaskInputUpdate))
+	r.Post("/api/tasks/{id}/attach-session", h.protectedEndpoint(h.handleTaskAttachSession))
 	r.Post("/api/tasks/{id}/next", h.protectedEndpoint(h.handleKanbanTaskNext))
 	r.Post("/api/tasks/{id}/run-now", h.protectedEndpoint(h.handleKanbanTaskRunNow))
 	r.Post("/api/tasks/{id}/prev", h.protectedEndpoint(h.handleKanbanTaskPrev))

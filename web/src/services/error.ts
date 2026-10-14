@@ -10,6 +10,7 @@ export type ErrorCode =
   | "session.delete_failed"
   | "session.import_failed"
   | "session.rename_failed"
+  | "session.search_failed"
   | "session.pin_failed"
   | "session.sync_failed"
   | "session.slash_command_failed"
@@ -153,6 +154,11 @@ class ErrorService {
       "session.rename_failed": {
         messageKey: "error.session.renameFailed",
         severity: "error",
+        recoverable: true,
+      },
+      "session.search_failed": {
+        messageKey: "error.session.searchFailed",
+        severity: "warning",
         recoverable: true,
       },
       "session.pin_failed": {

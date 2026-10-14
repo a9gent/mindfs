@@ -98,6 +98,13 @@ type ActionBarProps = {
   onRenameCurrentFile?: SessionQuickActionsProps["onRenameCurrentFile"];
   onCopyCurrentFilePath?: SessionQuickActionsProps["onCopyCurrentFilePath"];
   onCopySessionHandoff?: SessionQuickActionsProps["onCopySessionHandoff"];
+  onGlobalSearch?: SessionQuickActionsProps["onGlobalSearch"];
+  onOpenNodesPage?: SessionQuickActionsProps["onOpenNodesPage"];
+  onOpenGestureSettings?: SessionQuickActionsProps["onOpenGestureSettings"];
+  onKanbanCreateTask?: SessionQuickActionsProps["onKanbanCreateTask"];
+  onKanbanEditTask?: SessionQuickActionsProps["onKanbanEditTask"];
+  onKanbanStartTask?: SessionQuickActionsProps["onKanbanStartTask"];
+  onKanbanCompleteTask?: SessionQuickActionsProps["onKanbanCompleteTask"];
   recentFiles?: SessionQuickActionsProps["recentFiles"];
   onOpenFileFromQuickSwitch?: SessionQuickActionsProps["onOpenFile"];
   taskGroupBadge?: React.ReactNode;
@@ -470,6 +477,13 @@ export function ActionBar({
   onRenameCurrentFile,
   onCopyCurrentFilePath,
   onCopySessionHandoff,
+  onGlobalSearch,
+  onOpenNodesPage,
+  onOpenGestureSettings,
+  onKanbanCreateTask,
+  onKanbanEditTask,
+  onKanbanStartTask,
+  onKanbanCompleteTask,
   recentFiles,
   onOpenFileFromQuickSwitch,
 }: ActionBarProps) {
@@ -1989,7 +2003,7 @@ export function ActionBar({
             />
 
             <div data-onboarding="input-controls" style={{ position: "absolute", right: isMobile ? "4px" : "8px", bottom: isMultiLine ? "6px" : "50%", transform: isMultiLine ? "none" : "translateY(50%)", display: "flex", alignItems: "center", gap: isMobile ? "0px" : "2px", zIndex: 5, transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
-              <SessionQuickActions currentRootId={currentRootId} currentSessionKey={currentSession?.key || currentSession?.session_key} currentDirPath={currentDirPath} gestureConfig={blueRingGestures} roots={roots} onNewSession={() => { resetForNewSession(); onNewSession(); }} onSelectProject={onSelectProject} onSelectSession={onSelectSession} onToggleFileSidebar={onToggleLeftSidebar} onToggleSessionSidebar={onToggleRightSidebar} onOpenModelSelector={() => setModelSelectorSignal((value) => value + 1)} onToggleRecentAgent={toggleRecentAgent} onPickAgent={pickAgent} onOpenRecentDirectory={onOpenRecentDirectory} onToggleMultiProjectSessions={onToggleMultiProjectSessions} onToggleEnterKeySends={onToggleEnterKeySends} onCycleMainFontScale={onCycleMainFontScale} onToggleMainContentView={onToggleMainContentView} onCycleKanbanTemplate={onCycleKanbanTemplate} onCreateTask={onCreateTask} onOpenScheduledTasks={onOpenScheduledTasks} onQuickSaveFile={onQuickSaveFile} onRenameCurrentFile={onRenameCurrentFile} onCopyCurrentFilePath={onCopyCurrentFilePath} onCopySessionHandoff={onCopySessionHandoff} recentFiles={recentFiles} onOpenFile={onOpenFileFromQuickSwitch} />
+              <SessionQuickActions currentRootId={currentRootId} currentSessionKey={currentSession?.key || currentSession?.session_key} currentDirPath={currentDirPath} gestureConfig={blueRingGestures} roots={roots} onNewSession={() => { resetForNewSession(); onNewSession(); }} onSelectProject={onSelectProject} onSelectSession={onSelectSession} onToggleFileSidebar={onToggleLeftSidebar} onToggleSessionSidebar={onToggleRightSidebar} onOpenModelSelector={() => setModelSelectorSignal((value) => value + 1)} onToggleRecentAgent={toggleRecentAgent} onPickAgent={pickAgent} onOpenRecentDirectory={onOpenRecentDirectory} onToggleMultiProjectSessions={onToggleMultiProjectSessions} onToggleEnterKeySends={onToggleEnterKeySends} onCycleMainFontScale={onCycleMainFontScale} onToggleMainContentView={onToggleMainContentView} onCycleKanbanTemplate={onCycleKanbanTemplate} onCreateTask={onCreateTask} onOpenScheduledTasks={onOpenScheduledTasks} onQuickSaveFile={onQuickSaveFile} onRenameCurrentFile={onRenameCurrentFile} onCopyCurrentFilePath={onCopyCurrentFilePath} onCopySessionHandoff={onCopySessionHandoff} onGlobalSearch={onGlobalSearch} onOpenNodesPage={onOpenNodesPage} onOpenGestureSettings={onOpenGestureSettings} onKanbanCreateTask={onKanbanCreateTask} onKanbanEditTask={onKanbanEditTask} onKanbanStartTask={onKanbanStartTask} onKanbanCompleteTask={onKanbanCompleteTask} recentFiles={recentFiles} onOpenFile={onOpenFileFromQuickSwitch} />
               <>
                 <ModeSelector mode={mode} onModeChange={setMode} compact={true} disabled={isModeLocked} onboardingId="mode-selector" viewportMenu />
                 {mode !== "command" ? (

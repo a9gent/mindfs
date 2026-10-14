@@ -941,6 +941,29 @@ func (m *Manager) Rename(_ context.Context, key, name string) (*Session, error) 
 	return session, nil
 }
 
+// SetTaskID binds a session to a kanban task without touching UpdatedAt —
+// the binding is metadata, not activity, and bumping it would reorder the
+// session list.
+func (m *Manager) SetTaskID(_ context.Context, key, taskID string) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, err := m.getSessionUnsafe(key, 0)
+	if err != nil {
+		return nil, err
+	}
+	if session.TaskID == taskID {
+		return session, nil
+	}
+	if session.TaskID != "" {
+		return nil, errors.New("session is already bound to a task")
+	}
+	session.TaskID = taskID
+	if err := m.upsertSessionMetaUnsafe(session); err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
 func (m *Manager) SetPinned(_ context.Context, key string, pinned bool) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

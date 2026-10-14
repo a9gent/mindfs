@@ -46,6 +46,13 @@ export type SessionQuickActionsProps = {
   onRenameCurrentFile?: () => void;
   onCopyCurrentFilePath?: () => void;
   onCopySessionHandoff?: () => void;
+  onGlobalSearch?: () => void;
+  onOpenNodesPage?: () => void;
+  onOpenGestureSettings?: () => void;
+  onKanbanCreateTask?: () => void;
+  onKanbanEditTask?: () => void;
+  onKanbanStartTask?: () => void;
+  onKanbanCompleteTask?: () => void;
   recentFiles?: Array<{ root: string; path: string; name: string; modifiedInSession?: boolean }>;
   onOpenFile?: (path: string) => void;
 };
@@ -80,6 +87,13 @@ export function SessionQuickActions({
   onRenameCurrentFile,
   onCopyCurrentFilePath,
   onCopySessionHandoff,
+  onGlobalSearch,
+  onOpenNodesPage,
+  onOpenGestureSettings,
+  onKanbanCreateTask,
+  onKanbanEditTask,
+  onKanbanStartTask,
+  onKanbanCompleteTask,
   recentFiles,
   onOpenFile,
 }: SessionQuickActionsProps) {
@@ -205,6 +219,13 @@ export function SessionQuickActions({
       case "renameCurrentFile": setOpen(false); onRenameCurrentFile?.(); break;
       case "copyCurrentFilePath": setOpen(false); onCopyCurrentFilePath?.(); break;
       case "copySessionHandoff": setOpen(false); onCopySessionHandoff?.(); break;
+      case "globalSearch": setOpen(false); onGlobalSearch?.(); break;
+      case "openNodesPage": setOpen(false); onOpenNodesPage?.(); break;
+      case "openGestureSettings": setOpen(false); onOpenGestureSettings?.(); break;
+      case "kanbanCreateTask": setOpen(false); onKanbanCreateTask?.(); break;
+      case "kanbanEditTask": setOpen(false); onKanbanEditTask?.(); break;
+      case "kanbanStartTask": setOpen(false); onKanbanStartTask?.(); break;
+      case "kanbanCompleteTask": setOpen(false); onKanbanCompleteTask?.(); break;
       case "recentSession": {
         void sessionService.fetchMultiRootSessions(5).then((items) => {
           for (const group of recentQuickSwitchGroups(items)) {
