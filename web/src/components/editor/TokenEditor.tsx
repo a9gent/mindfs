@@ -52,6 +52,7 @@ type TokenEditorProps = {
   topInset?: number;
   bottomInset?: number;
   fillHeight?: boolean;
+  minHeight?: number;
   onChange: (payload: { serializedText: string; displayText: string; activeToken: ActiveToken | null }) => void;
   onFocusChange?: (focused: boolean) => void;
   onPointerDown?: () => void;
@@ -634,6 +635,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
     topInset = 0,
     bottomInset = 12,
     fillHeight = false,
+    minHeight,
     onChange,
     onFocusChange,
     onPointerDown,
@@ -842,7 +844,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
         position: "relative",
         width: "100%",
         height: fillHeight ? "100%" : undefined,
-        minHeight: "44px",
+        minHeight: minHeight ?? 44,
         ["--token-file-bg" as any]: isDark ? "rgba(59,130,246,0.16)" : "rgba(59,130,246,0.10)",
         ["--token-file-text" as any]: isDark ? "#93c5fd" : "#1d4ed8",
         ["--token-skill-bg" as any]: isDark ? "rgba(139,92,246,0.18)" : "rgba(139,92,246,0.10)",
@@ -872,7 +874,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
               onCompositionEnd={onCompositionEnd}
               style={{
                 width: "100%",
-                minHeight: fillHeight ? "100%" : isSingleLine ? "44px" : "20px",
+                minHeight: fillHeight ? "100%" : minHeight ?? (isSingleLine ? 44 : 20),
                 height: fillHeight ? "100%" : isSingleLine ? "44px" : "auto",
                 maxHeight: fillHeight ? "none" : "240px",
                 overflowY: "auto",
