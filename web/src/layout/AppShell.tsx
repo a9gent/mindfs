@@ -3,6 +3,7 @@ import { useI18n } from "../i18n";
 import {
   classifySwipeIntent,
   clamp01,
+  drawerSwipeStartSide,
   swipeProgress,
   swipeRelease,
   type SidebarSide,
@@ -30,7 +31,6 @@ type AppShellProps = {
 const MOBILE_BREAKPOINT = 768;
 const TABLET_BREAKPOINT = 1024;
 const MOBILE_SIDEBAR_WIDTH = "min(85vw, 360px)";
-const EDGE_HOT_ZONE_PX = 12;
 
 function useResponsive() {
   const [isMobile, setIsMobile] = useState(false);
@@ -110,22 +110,6 @@ type DrawerDrag = {
   el: HTMLElement;
 };
 
-// 热区/抽屉吃掉的轻点：还原 hit-test，把 click 还给下层真实控件
-function tapThrough(x: number, y: number, covered: HTMLElement) {
-  if (typeof document === "undefined" || !document.elementFromPoint) {
-    return;
-  }
-  const prev = covered.style.pointerEvents;
-  covered.style.pointerEvents = "none";
-  const target = document.elementFromPoint(x, y);
-  covered.style.pointerEvents = prev;
-  if (target && target !== covered) {
-    target.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, cancelable: true, clientX: x, clientY: y }),
-    );
-  }
-}
-
 function mobileSidebarPixelWidth(): number {
   if (typeof window === "undefined") {
     return 360;
@@ -152,6 +136,7 @@ export function AppShell({
 }: AppShellProps) {
   const { t } = useI18n();
   const { isMobile, isTablet } = useResponsive();
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DrawerDrag | null>(null);
   const dragProgressRef = useRef(0);
   const suppressClickUntilRef = useRef(0);
@@ -390,14 +375,7 @@ export function AppShell({
     }
     dragRef.current = null;
     if (!drag.active) {
-      // 未成手势的轻点：热区把点击还给下层控件；抽屉本体走原生点击。
-      // 起指后抽屉可能已被别的方式打开（多指/汉堡键），前提失效就不透传
-      if (drag.mode === "open") {
-        const openNow = drag.side === "left" ? physicalLeftOpen : physicalRightOpen;
-        if (!openNow) {
-          tapThrough(e.clientX, e.clientY, drag.el);
-        }
-      }
+      // No overlay intercepts taps: leave the underlying control's native click alone.
       return;
     }
     const progress = dragProgressRef.current;
@@ -537,19 +515,6 @@ export function AppShell({
     endDrag(swipeRelease(progress, velocity, mobileSidebarPixelWidth()), drag.side);
   };
 
-  const edgeHotZoneStyle = (side: SidebarSide): React.CSSProperties => ({
-    position: "fixed",
-    top: 0,
-    bottom: 0,
-    [side]: 0,
-    width: EDGE_HOT_ZONE_PX,
-    zIndex: 1900,
-    touchAction: "none",
-    background: "transparent",
-    border: "none",
-    padding: 0,
-  });
-
   const mobileFooterStyle: React.CSSProperties = {
     ...footerStyle,
     flexShrink: 0,
@@ -585,13 +550,35 @@ export function AppShell({
   // 触屏通道挂 document：touchstart/touchend 冒泡可达，touchmove 必须 non-passive
   // 才能 preventDefault（React 合成事件对 touchmove 是 passive 的，拦不住滚动）。
   // 处理器经 ref 间接调用，保证每次渲染用的都是最新 state（开合前提判定）。
+  const drawerTouchStartFromEvent = (e: TouchEvent) => {
+    const target = e.target instanceof Element ? e.target : null;
+    const shell = shellRef.current;
+    if (!target || !shell?.contains(target) || target.closest('[role="dialog"], [aria-modal="true"]')) {
+      return;
+    }
+    const host = target.closest<HTMLElement>("[data-drawer-touch]");
+    if (!host) {
+      if (physicalLeftOpen || physicalRightOpen) return;
+      const touch = e.changedTouches[0];
+      const side = touch && drawerSwipeStartSide(touch.clientX, window.innerWidth);
+      if (side && (side === "left" ? physicalLeftContent : physicalRightContent)) {
+        drawerTouchStart(side, true, e, shell);
+      }
+      return;
+    }
+    const side = host.getAttribute("data-drawer-touch") as SidebarSide | null;
+    if (side !== "left" && side !== "right") {
+      return;
+    }
+    drawerTouchStart(side, false, e, host);
+  };
   const touchHandlersRef = useRef({
-    start: drawerTouchStart,
+    start: drawerTouchStartFromEvent,
     move: drawerTouchMove,
     end: drawerTouchEnd,
   });
   useEffect(() => {
-    touchHandlersRef.current = { start: drawerTouchStart, move: drawerTouchMove, end: drawerTouchEnd };
+    touchHandlersRef.current = { start: drawerTouchStartFromEvent, move: drawerTouchMove, end: drawerTouchEnd };
   });
 
   useEffect(() => {
@@ -601,17 +588,7 @@ export function AppShell({
     const touchDragIdReset = () => {
       touchDragIdRef.current = null;
     };
-    const onStart = (e: TouchEvent) => {
-      const host = (e.target instanceof Element ? e.target : null)?.closest<HTMLElement>("[data-drawer-touch]");
-      if (!host) {
-        return;
-      }
-      const side = host.getAttribute("data-drawer-touch") as SidebarSide | null;
-      if (side !== "left" && side !== "right") {
-        return;
-      }
-      touchHandlersRef.current.start(side, host.hasAttribute("data-drawer-edge"), e, host);
-    };
+    const onStart = (e: TouchEvent) => touchHandlersRef.current.start(e);
     const onMove = (e: TouchEvent) => touchHandlersRef.current.move(e);
     const onEnd = (e: TouchEvent) => touchHandlersRef.current.end(e, false);
     const onCancel = (e: TouchEvent) => touchHandlersRef.current.end(e, true);
@@ -632,7 +609,27 @@ export function AppShell({
   }, [isMobile]);
 
   return (
-    <div style={shellStyle} data-onboarding="shell">
+    <div
+      ref={shellRef}
+      style={shellStyle}
+      data-onboarding="shell"
+      onPointerDown={isMobile ? (e) => {
+        const target = e.target instanceof Element ? e.target : null;
+        if (!target || target.closest('[data-drawer-touch], [role="dialog"], [aria-modal="true"]')) return;
+        if (physicalLeftOpen || physicalRightOpen) return;
+        const side = drawerSwipeStartSide(e.clientX, window.innerWidth);
+        if (side && (side === "left" ? physicalLeftContent : physicalRightContent)
+          && !touchStartInHorizontalScroller(e.target, e.currentTarget)) {
+          drawerPointerDown(side, true)(e);
+        }
+      } : undefined}
+      onClickCapture={isMobile ? (e) => {
+        if (performance.now() < suppressClickUntilRef.current) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      } : undefined}
+    >
       {isMobile ? (
         <div
           style={overlayStyle}
@@ -728,25 +725,6 @@ export function AppShell({
         >
           {physicalRightContent}
         </aside>
-      ) : null}
-
-      {isMobile ? (
-        <>
-          <div
-            aria-hidden
-            style={edgeHotZoneStyle("left")}
-            data-drawer-touch="left"
-            data-drawer-edge=""
-            onPointerDown={drawerPointerDown("left", true)}
-          />
-          <div
-            aria-hidden
-            style={edgeHotZoneStyle("right")}
-            data-drawer-touch="right"
-            data-drawer-edge=""
-            onPointerDown={drawerPointerDown("right", true)}
-          />
-        </>
       ) : null}
 
       {!isMobile ? (

@@ -3,19 +3,11 @@ import assert from "node:assert/strict";
 
 import {
   classifySwipeIntent,
+  drawerSwipeStartSide,
   swipeProgress,
   swipeRelease,
   clamp01,
 } from "../src/services/edgeSwipe.ts";
-import {
-  normalizeSessionFilter,
-  loadSessionFilter,
-  persistSessionFilter,
-  isSessionFilterActive,
-  sessionWithinTimeWindow,
-  applySessionFilters,
-  SESSION_FILTER_STORAGE_KEY,
-} from "../src/services/sessionFilter.ts";
 import {
   DEFAULT_HANDOFF_TEMPLATE,
   loadHandoffTemplate,
@@ -26,6 +18,14 @@ import {
 } from "../src/services/handoff.ts";
 
 // ---------- edgeSwipe ----------
+
+test("drawer start zones are inset from system edges on both sides", () => {
+  for (const x of [0, 12, 23, 57, 196, 336, 370, 381, 393]) {
+    assert.equal(drawerSwipeStartSide(x, 393), null, `outside zone: ${x}`);
+  }
+  for (const x of [24, 40, 56]) assert.equal(drawerSwipeStartSide(x, 393), "left");
+  for (const x of [337, 353, 369]) assert.equal(drawerSwipeStartSide(x, 393), "right");
+});
 
 test("classifySwipeIntent: dead zone keeps intent open", () => {
   assert.equal(classifySwipeIntent(4, 3), null);
@@ -81,8 +81,6 @@ test("clamp01 clamps bounds", () => {
   assert.equal(clamp01(2), 1);
 });
 
-// ---------- sessionFilter ----------
-
 // Minimal window/localStorage shim: the services guard on `typeof window ===
 // "undefined"`, so tests install a fake before exercising persistence paths.
 const shimStore = new Map();
@@ -98,70 +96,6 @@ function withStorage(fn) {
   shimStore.clear();
   fn(shimStore);
 }
-
-test("normalizeSessionFilter rejects unknown values", () => {
-  assert.deepEqual(normalizeSessionFilter(null), { runningOnly: false, timeWindow: "all", sortAsc: false });
-  assert.deepEqual(normalizeSessionFilter({ timeWindow: "1h", runningOnly: true, sortAsc: true }), {
-    runningOnly: true,
-    timeWindow: "1h",
-    sortAsc: true,
-  });
-  assert.deepEqual(normalizeSessionFilter({ timeWindow: "bogus" }).timeWindow, "all");
-});
-
-test("session filter load/persist round-trips through localStorage", () => {
-  withStorage((store) => {
-    assert.deepEqual(loadSessionFilter(), { runningOnly: false, timeWindow: "all", sortAsc: false });
-    persistSessionFilter({ runningOnly: true, timeWindow: "3h", sortAsc: false });
-    assert.equal(store.get(SESSION_FILTER_STORAGE_KEY), JSON.stringify({ runningOnly: true, timeWindow: "3h", sortAsc: false }));
-    assert.deepEqual(loadSessionFilter(), { runningOnly: true, timeWindow: "3h", sortAsc: false });
-    window.localStorage.setItem(SESSION_FILTER_STORAGE_KEY, "{broken");
-    assert.deepEqual(loadSessionFilter(), { runningOnly: false, timeWindow: "all", sortAsc: false });
-  });
-});
-
-test("isSessionFilterActive detects any active dimension", () => {
-  assert.equal(isSessionFilterActive({ runningOnly: false, timeWindow: "all", sortAsc: false }), false);
-  assert.equal(isSessionFilterActive({ runningOnly: true, timeWindow: "all", sortAsc: false }), true);
-  assert.equal(isSessionFilterActive({ runningOnly: false, timeWindow: "day", sortAsc: false }), true);
-  assert.equal(isSessionFilterActive({ runningOnly: false, timeWindow: "all", sortAsc: true }), true);
-});
-
-test("sessionWithinTimeWindow buckets by updated_at", () => {
-  const now = Date.now();
-  assert.equal(sessionWithinTimeWindow(new Date(now - 30 * 60000).toISOString(), "1h", now), true);
-  assert.equal(sessionWithinTimeWindow(new Date(now - 2 * 3600000).toISOString(), "1h", now), false);
-  assert.equal(sessionWithinTimeWindow(new Date(now - 2 * 3600000).toISOString(), "3h", now), true);
-  assert.equal(sessionWithinTimeWindow(undefined, "day", now), false);
-  assert.equal(sessionWithinTimeWindow(new Date(now - 90000000).toISOString(), "day", now), false);
-  assert.equal(sessionWithinTimeWindow(undefined, "all", now), true);
-});
-
-test("applySessionFilters splits running to top and honors time window + sortAsc", () => {
-  const now = Date.now();
-  const sessions = [
-    { key: "a", pending: true, updated_at: new Date(now - 60000).toISOString() },
-    { key: "b", pending: false, updated_at: new Date(now - 7200000).toISOString() },
-    { key: "c", pending: false, updated_at: new Date(now - 60000).toISOString() },
-    { key: "d", pending: false, updated_at: new Date(now - 90000000).toISOString() },
-    { key: "e", pending: true, updated_at: new Date(now - 7200000).toISOString() },
-  ];
-  const all = applySessionFilters(sessions, { runningOnly: false, timeWindow: "all", sortAsc: false }, now);
-  assert.deepEqual(all.running.map((s) => s.key), ["a", "e"]);
-  assert.deepEqual(all.rest.map((s) => s.key), ["b", "c", "d"]);
-
-  const hour = applySessionFilters(sessions, { runningOnly: false, timeWindow: "1h", sortAsc: false }, now);
-  // 运行中会话豁免时间窗：2 小时没更新的 pending 仍保留在置顶区
-  assert.deepEqual(hour.running.map((s) => s.key), ["a", "e"]);
-  assert.deepEqual(hour.rest.map((s) => s.key), ["c"]);
-
-  const runningOnly = applySessionFilters(sessions, { runningOnly: true, timeWindow: "all", sortAsc: false }, now);
-  assert.deepEqual(runningOnly.running.map((s) => s.key), ["a", "e"]);
-  assert.deepEqual(runningOnly.rest, []);
-
-  const asc = applySessionFilters(sessions, { runningOnly: false, timeWindow: "all", sortAsc: true }, now);
-  assert.deepEqual(asc.rest.map((s) => s.key), ["d", "c", "b"]);
-});
 
 // ---------- handoff ----------
 
@@ -226,35 +160,4 @@ test("templateFromRenderedPack restores placeholders from fallback literals", ()
   assert.ok(restored.includes("{agent_session_id}"));
   assert.ok(!restored.includes("（无）"));
   assert.equal(renderHandoffPack(restored, context), rendered);
-});
-
-// ---------- 批v62 回归：时间窗边界与空态口径 ----------
-test("sessionWithinTimeWindow: window boundary is inclusive", () => {
-  const now = Date.now();
-  const edge = new Date(now - 3600_000).toISOString();
-  assert.equal(sessionWithinTimeWindow(edge, "1h", now), true);
-  assert.equal(sessionWithinTimeWindow(new Date(now - 3600_001).toISOString(), "1h", now), false);
-});
-
-test("sessionWithinTimeWindow: sessions without updated_at fall out of windows", () => {
-  assert.equal(sessionWithinTimeWindow(undefined, "3h"), false);
-  assert.equal(sessionWithinTimeWindow("not-a-date", "3h"), false);
-  assert.equal(sessionWithinTimeWindow(undefined, "all"), true);
-});
-
-test("applySessionFilters: pending sessions bypass the time window", () => {
-  const now = Date.now();
-  const stale = { key: "stale", pending: true, updated_at: new Date(now - 48 * 3600_000).toISOString() };
-  const result = applySessionFilters([stale], { runningOnly: false, timeWindow: "1h", sortAsc: false }, now);
-  assert.equal(result.running.length, 1);
-  assert.equal(result.rest.length, 0);
-});
-
-test("applySessionFilters: runningOnly keeps only pending sessions", () => {
-  const now = Date.now();
-  const fresh = { key: "fresh", updated_at: new Date(now - 60_000).toISOString() };
-  const stale = { key: "stale", pending: true, updated_at: new Date(now - 48 * 3600_000).toISOString() };
-  const result = applySessionFilters([fresh, stale], { runningOnly: true, timeWindow: "all", sortAsc: false }, now);
-  assert.deepEqual(result.running.map((s) => s.key), ["stale"]);
-  assert.equal(result.rest.length, 0);
 });

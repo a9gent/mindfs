@@ -130,14 +130,21 @@ if (chips) {
   check("D chips横滚正常+抽屉不动", true, "抽屉内无可横滚 chips，跳过");
 }
 
-// ---------- E: 左边缘右滑拉开 ----------
-// 先确保左抽屉关闭
+// ---------- E: 左侧靠内触发带右滑拉开 ----------
+// 先确保两个抽屉关闭
+await swipe(cdp, page, 200, 400, 180, 10, 12);
 await swipe(cdp, page, 200, 400, -150, 10, 12);
 await page.waitForTimeout(300);
-await swipe(cdp, page, 3, 420, 150, 8, 12);
+await swipe(cdp, page, 40, 420, 180, 8, 12);
 await page.screenshot({ path: `${SHOT}-E-edge-open.png` });
 const openedE = await drawerX(page, "left");
-check("E 左边缘右滑拉开", (openedE?.x ?? -999) > -50, `after x=${openedE?.x}`);
+check("E 左侧靠内右滑拉开", (openedE?.x ?? -999) > -50, `after x=${openedE?.x}`);
+
+// ---------- F: 右侧靠内触发带左滑拉开 ----------
+await swipe(cdp, page, 200, 400, -180, 10, 12);
+await swipe(cdp, page, 353, 420, -180, 8, 12);
+const openedF = await drawerX(page, "right");
+check("F 右侧靠内左滑拉开", (openedF?.x ?? 999) < 350, `after x=${openedF?.x}`);
 
 console.log("\n== 结果 ==", JSON.stringify(results));
 await browser.close();

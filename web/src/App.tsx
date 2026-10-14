@@ -161,11 +161,6 @@ import { GitStatusPanel } from "./components/GitStatusPanel";
 import { SessionViewer } from "./components/SessionViewer";
 import { DefaultListView, type MainContentViewMode } from "./components/DefaultListView";
 import { MultiProjectSessionList, SessionList, type ProjectSessionGroup } from "./components/SessionList";
-import {
-  loadSessionFilter,
-  persistSessionFilter,
-  type SessionFilterState,
-} from "./services/sessionFilter";
 import { HandoffPackDialog } from "./components/HandoffPackDialog";
 import { ExternalSessionList } from "./components/ExternalSessionList";
 import { InlineTokenText } from "./components/InlineTokenText";
@@ -2522,11 +2517,6 @@ export function App({ onGoHome }: AppProps) {
     content: string;
     mode?: "replace" | "append";
   } | null>(null);
-  const [sessionFilter, setSessionFilter] = useState<SessionFilterState>(() => loadSessionFilter());
-  const handleSessionFilterChange = useCallback((next: SessionFilterState) => {
-    setSessionFilter(next);
-    persistSessionFilter(next);
-  }, []);
   const [handoffPackSession, setHandoffPackSession] = useState<SessionItem | null>(null);
   const handleHandoffPack = useCallback((session: SessionItem) => {
     setHandoffPackSession(session);
@@ -14230,8 +14220,6 @@ export function App({ onGoHome }: AppProps) {
         onLoadMoreProject={loadMoreMultiProjectSessions}
         onLoadChildren={loadChildSessionsForParent}
         onHandoffPack={handleHandoffPack}
-        filter={sessionFilter}
-        onFilterChange={handleSessionFilterChange}
       />
     ) : (
       <SessionList
@@ -14329,8 +14317,6 @@ export function App({ onGoHome }: AppProps) {
             : hasMoreSessions
         }
         onHandoffPack={handleHandoffPack}
-        filter={sessionFilter}
-        onFilterChange={handleSessionFilterChange}
       />
     );
   const tokenStationBalanceText = tokenStationLoading

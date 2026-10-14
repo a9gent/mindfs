@@ -4,6 +4,20 @@ export type SwipeDragMode = "open" | "close";
 
 export type SwipeIntent = "horizontal" | "vertical" | null;
 
+// Leave the outer edge to Android's back gesture; listen without covering controls.
+const DRAWER_SWIPE_INSET = 24;
+const DRAWER_SWIPE_WIDTH = 32;
+
+export function drawerSwipeStartSide(x: number, viewportWidth: number): SidebarSide | null {
+  const leftDistance = x;
+  const rightDistance = viewportWidth - x;
+  const inZone = (distance: number) =>
+    distance >= DRAWER_SWIPE_INSET && distance <= DRAWER_SWIPE_INSET + DRAWER_SWIPE_WIDTH;
+  if (inZone(leftDistance)) return "left";
+  if (inZone(rightDistance)) return "right";
+  return null;
+}
+
 /**
  * Classify the intent of the first few pixels of movement on an edge hot zone
  * or sidebar body. Horizontal drags drive the drawer, vertical drags are left
