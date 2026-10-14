@@ -1710,87 +1710,16 @@ function SessionViewerInner({
     setRelatedFilesCollapsed(defaultRelatedFilesCollapsed);
   }, [defaultRelatedFilesCollapsed, relatedFilesDefaultStateKey]);
 
-  if (!session) {
-    return (
-      <div
-        style={{
-          padding: "40px",
-          textAlign: "center",
-          color: "var(--text-secondary)",
-        }}
-      >
-        {t("session.empty")}
-      </div>
-    );
-  }
-
-  const displayFiles = relatedFiles;
-  const displayFileGroups = (() => {
-    const currentRootPath = String(rootPath || "").replace(/[\\/]+$/, "");
-    const repoGroups = displayFiles.reduce<
-      Array<{
-        key: string;
-        repoPath: string;
-        repoName: string;
-        repoKind: string;
-        headGroups: Array<{ key: string; head: string; files: typeof displayFiles }>;
-      }>
-    >((groups, file) => {
-    const head = file.head || "";
-    const rawRepoPath = file.repo_path || "";
-    const normalizedRepoPath = String(rawRepoPath || "").replace(/[\\/]+$/, "");
-    const isCurrentRepoRecord =
-      !rawRepoPath ||
-      file.repo_name === t("session.currentProject") ||
-      (!!currentRootPath && normalizedRepoPath === currentRootPath);
-    const repoPath = isCurrentRepoRecord ? "" : rawRepoPath;
-    const rawRepoKind = file.repo_kind || "";
-    const repoKind = isCurrentRepoRecord && rawRepoKind !== "plain" ? "" : rawRepoKind;
-    const repoKey = `${repoKind}\0${repoPath}`;
-    let repoGroup = groups.find((group) => group.key === repoKey);
-    if (!repoGroup) {
-      repoGroup = {
-        key: repoKey,
-        repoPath,
-        repoName: isCurrentRepoRecord
-          ? t("session.currentProject")
-          : file.repo_name || repoPath.split(/[\\/]/).filter(Boolean).pop() || t("session.currentProject"),
-        repoKind,
-        headGroups: [],
-      };
-      groups.push(repoGroup);
-    }
-    const headKey = `${repoKey}\0${head}`;
-    const existing = repoGroup.headGroups.find((group) => group.key === headKey);
-    if (existing) {
-      existing.files.push(file);
-    } else {
-      repoGroup.headGroups.push({
-        key: headKey,
-        head,
-        files: [file],
-      });
-    }
-    return groups;
-    }, []);
-    return repoGroups.flatMap((repoGroup) =>
-      repoGroup.headGroups.map((headGroup) => ({
-        key: headGroup.key,
-        head: headGroup.head,
-        repoPath: repoGroup.repoPath,
-        repoName: repoGroup.repoName,
-        repoKind: repoGroup.repoKind,
-        files: headGroup.files,
-      })),
-    );
-  })();
+  // Hooks 必须全部位于下方 if (!session) 早期 return 之前：
+  // 深链 (?session=) 首帧 session 为 null，session 到位后同一组件实例重渲染，
+  // 若 hook 在 return 之后，hook 数量会增多触发 React #310（白屏）。
   const displayName =
-    session.name ||
-    session.purpose ||
-    session.key ||
-    session.session_key ||
+    session?.name ||
+    session?.purpose ||
+    session?.key ||
+    session?.session_key ||
     "Session";
-  const sessionLogKey = session.session_key || session.key || "";
+  const sessionLogKey = session?.session_key || session?.key || "";
   const headerCopyValue = useCallback((value: string) => {
     setHeaderMenuOpen(false);
     setHeaderCopied(false);
@@ -1885,6 +1814,81 @@ function SessionViewerInner({
       setSavingEdit(false);
     }
   }, [rootId, sessionKey, editingMessage]);
+
+  if (!session) {
+    return (
+      <div
+        style={{
+          padding: "40px",
+          textAlign: "center",
+          color: "var(--text-secondary)",
+        }}
+      >
+        {t("session.empty")}
+      </div>
+    );
+  }
+
+  const displayFiles = relatedFiles;
+  const displayFileGroups = (() => {
+    const currentRootPath = String(rootPath || "").replace(/[\\/]+$/, "");
+    const repoGroups = displayFiles.reduce<
+      Array<{
+        key: string;
+        repoPath: string;
+        repoName: string;
+        repoKind: string;
+        headGroups: Array<{ key: string; head: string; files: typeof displayFiles }>;
+      }>
+    >((groups, file) => {
+    const head = file.head || "";
+    const rawRepoPath = file.repo_path || "";
+    const normalizedRepoPath = String(rawRepoPath || "").replace(/[\\/]+$/, "");
+    const isCurrentRepoRecord =
+      !rawRepoPath ||
+      file.repo_name === t("session.currentProject") ||
+      (!!currentRootPath && normalizedRepoPath === currentRootPath);
+    const repoPath = isCurrentRepoRecord ? "" : rawRepoPath;
+    const rawRepoKind = file.repo_kind || "";
+    const repoKind = isCurrentRepoRecord && rawRepoKind !== "plain" ? "" : rawRepoKind;
+    const repoKey = `${repoKind}\0${repoPath}`;
+    let repoGroup = groups.find((group) => group.key === repoKey);
+    if (!repoGroup) {
+      repoGroup = {
+        key: repoKey,
+        repoPath,
+        repoName: isCurrentRepoRecord
+          ? t("session.currentProject")
+          : file.repo_name || repoPath.split(/[\\/]/).filter(Boolean).pop() || t("session.currentProject"),
+        repoKind,
+        headGroups: [],
+      };
+      groups.push(repoGroup);
+    }
+    const headKey = `${repoKey}\0${head}`;
+    const existing = repoGroup.headGroups.find((group) => group.key === headKey);
+    if (existing) {
+      existing.files.push(file);
+    } else {
+      repoGroup.headGroups.push({
+        key: headKey,
+        head,
+        files: [file],
+      });
+    }
+    return groups;
+    }, []);
+    return repoGroups.flatMap((repoGroup) =>
+      repoGroup.headGroups.map((headGroup) => ({
+        key: headGroup.key,
+        head: headGroup.head,
+        repoPath: repoGroup.repoPath,
+        repoName: repoGroup.repoName,
+        repoKind: repoGroup.repoKind,
+        files: headGroup.files,
+      })),
+    );
+  })();
   const hasVisibleTimeline = timeline.length > 0;
   const headerMenuItemStyle: React.CSSProperties = {
     display: "flex",
