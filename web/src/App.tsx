@@ -56,6 +56,11 @@ import {
 } from "./services/api";
 import { reportError } from "./services/error";
 import {
+  loadComposerStyle,
+  persistComposerStyle,
+  type ComposerStyle,
+} from "./services/preferences";
+import {
   loadSendShortcut,
   persistSendShortcut,
   type SendShortcut,
@@ -1725,6 +1730,8 @@ export function App({ onGoHome }: AppProps) {
   const { isMobile, isTablet } = useResponsive();
   const [mobileEnterKeySends, setMobileEnterKeySends] = useState(loadMobileEnterKeySends);
   const [sendShortcut, setSendShortcut] = useState<SendShortcut | null>(loadSendShortcut);
+  const [composerStyle, setComposerStyle] = useState<ComposerStyle>(loadComposerStyle);
+  const [blueRingSettingsSignal, setBlueRingSettingsSignal] = useState(0);
   const [blueRingGestures, setBlueRingGestures] = useState<BlueRingGestureConfig>(loadBlueRingGestureConfig);
   const [sidebarsSwapped, setSidebarsSwapped] = useState(loadSidebarsSwapped);
   const [fontSizePreferences, setFontSizePreferences] = useState<FontSizePreferences>(loadFontSizePreferences);
@@ -2386,6 +2393,10 @@ export function App({ onGoHome }: AppProps) {
   useEffect(() => {
     persistSendShortcut(sendShortcut);
   }, [sendShortcut]);
+
+  useEffect(() => {
+    persistComposerStyle(composerStyle);
+  }, [composerStyle]);
 
   useEffect(() => {
     persistBlueRingGestureConfig(blueRingGestures);
@@ -11523,9 +11534,20 @@ export function App({ onGoHome }: AppProps) {
   // The memory badge is always rendered above the composer, so floating
   // session controls must always clear that overlay row.
   const sessionViewerComposerOverlayInset = 20;
+  const mobileHeaderSession = isDrawerOpen ? drawerSessionSnapshot : selectedSessionSnapshot;
+  const mobileHeaderRootId = isDrawerOpen
+    ? currentRootId
+    : selectedSession?.root_id || currentRootId;
+  const mobileHeaderProject = mobileHeaderRootId
+    ? managedRootByIdRef.current[mobileHeaderRootId]?.display_name || mobileHeaderRootId
+    : null;
+  const mobileHeaderTitle = mobileHeaderSession
+    ? mobileHeaderSession.name || mobileHeaderSession.purpose || mobileHeaderSession.key || mobileHeaderSession.session_key || "Session"
+    : file?.name || (selectedDir && selectedDir !== currentRootId ? basenameOfPath(selectedDir) : t("app.name"));
   const sessionView = (
     <SessionViewer
       session={selectedSessionSnapshot}
+      hideHeader={isMobile && composerStyle === "modern"}
       agents={availableAgents}
       slashCommandResult={slashCommandResultForSession(
         selectedSession?.root_id || currentRootId,
@@ -14463,6 +14485,19 @@ export function App({ onGoHome }: AppProps) {
   return (
     <>
       <AppShell
+        mobileHeader={composerStyle === "modern" ? {
+          projectLabel: mobileHeaderProject,
+          title: mobileHeaderTitle,
+          onProjectClick: mobileHeaderRootId ? () => {
+            void actionHandlers.open_dir({
+              path: mobileHeaderRootId,
+              root: mobileHeaderRootId,
+              isRoot: true,
+              forceDirectory: true,
+              suppressTreeExpand: true,
+            });
+          } : undefined,
+        } : undefined}
         leftOpen={isLeftOpen}
         rightOpen={isRightOpen}
         sidebarsSwapped={sidebarsSwapped}
@@ -14555,10 +14590,14 @@ export function App({ onGoHome }: AppProps) {
             showSendShortcutOption={!isMobile}
             sendShortcut={sendShortcut}
             onSendShortcutChange={setSendShortcut}
+            composerStyle={composerStyle}
+            onComposerStyleChange={setComposerStyle}
             sidebarsSwapped={sidebarsSwapped}
             onSidebarsSwappedChange={setSidebarsSwapped}
             blueRingGestures={blueRingGestures}
             onBlueRingGesturesChange={setBlueRingGestures}
+            blueRingSettingsSignal={blueRingSettingsSignal}
+            onBlueRingSettingsOpened={() => setBlueRingSettingsSignal(0)}
             gitDiffSideBySide={gitDiffSideBySide}
             onGitDiffSideBySideChange={setGitDiffSideBySide}
             multiProjectSessionsEnabled={multiProjectSessionsEnabled}
@@ -14679,12 +14718,18 @@ export function App({ onGoHome }: AppProps) {
               onSendQueuedMessageNow={handleSendQueuedMessageNow}
               mobileEnterKeySends={mobileEnterKeySends}
               sendShortcut={sendShortcut}
+              composerStyle={composerStyle}
               onRequestFileContext={handleRequestFileContext}
               onClearFileContext={handleClearFileContext}
               onToggleLeftSidebar={() => setIsLeftOpen((v) => !v)}
               onToggleRightSidebar={() => setIsRightOpen((v) => !v)}
               sidebarsSwapped={sidebarsSwapped}
               blueRingGestures={blueRingGestures}
+              onOpenGestureSettings={() => {
+                setIsRightOpen(false);
+                setIsLeftOpen(true);
+                setBlueRingSettingsSignal((signal) => signal + 1);
+              }}
             />
           </div>
         }
