@@ -57,13 +57,19 @@ export function AddToKanbanDialog({
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const sessionKeyFromItem = session?.key || session?.session_key || "";
+  const defaultSessionName = session?.name || `Session ${sessionKeyFromItem.slice(0, 8)}`;
 
   useEffect(() => {
     if (!open) {
       setTemplates([]);
       setFailed(false);
+      setNameDraft("");
       return;
     }
+    // 打开时重置为当前会话名，用户可改；改过的草稿在会话变化时也跟随刷新
+    setNameDraft(session?.name || `Session ${(session?.key || session?.session_key || "").slice(0, 8)}`);
     let cancelled = false;
     setLoading(true);
     setFailed(false);
@@ -80,7 +86,7 @@ export function AddToKanbanDialog({
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, sessionKeyFromItem]);
 
   useEffect(() => {
     if (!open) return;
@@ -95,15 +101,17 @@ export function AddToKanbanDialog({
   const rootId = session.root_id || "";
   const sessionKey = session.key || session.session_key;
   const sessionName = session.name || `Session ${sessionKey.slice(0, 8)}`;
+  // 用户可编辑的看板显示名（默认当前会话名，非必填可改）
+  const effectiveName = (nameDraft.trim() || sessionName).slice(0, 120);
 
   const handlePick = async (template: TaskTemplate) => {
     if (!rootId || !sessionKey || busy) return;
     setBusy(true);
     try {
-      const detail = await createTask(rootId, template.id || "", sessionName);
+      const detail = await createTask(rootId, template.id || "", effectiveName);
       await attachSessionToTask(rootId, detail.task.id, sessionKey);
       // 前缀命名对齐看板原生 "{模板名} / #{N}" 格式，保留用户原语义
-      const nextName = `${template.name} / ${sessionName}`;
+      const nextName = `${template.name} / ${effectiveName}`;
       if ((session.name || "").trim() !== nextName) {
         try {
           await sessionService.renameSession(rootId, sessionKey, nextName);
@@ -190,6 +198,34 @@ export function AddToKanbanDialog({
               </button>
             ))
           )}
+        </div>
+        <div style={{ marginTop: "14px" }}>
+          <label
+            htmlFor="add-to-kanban-name"
+            style={{ display: "block", fontSize: "11px", color: "var(--text-secondary)", marginBottom: "4px" }}
+          >
+            {t("sessionList.addToKanbanNameLabel")}
+          </label>
+          <input
+            id="add-to-kanban-name"
+            type="text"
+            value={nameDraft}
+            disabled={busy}
+            maxLength={120}
+            onChange={(event) => setNameDraft(event.target.value)}
+            placeholder={t("sessionList.addToKanbanNamePlaceholder")}
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              border: "1px solid var(--border-color)",
+              borderRadius: "8px",
+              background: "transparent",
+              color: "var(--text-primary)",
+              fontSize: "13px",
+              padding: "8px 10px",
+              outline: "none",
+            }}
+          />
         </div>
         {busy ? (
           <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "10px" }}>

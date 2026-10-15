@@ -1567,68 +1567,112 @@ export function MultiProjectSessionList({
           </div>
         ) : flatMode ? (
           <>
-            {orderedGroups.some((group) =>
-              topLevelSessionsForGroup(group.sessions).some((session) => !!session.pinned_at),
-            ) ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: "2px", paddingBottom: "6px" }}>
-                <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "4px 6px 6px", fontSize: "11px", color: "var(--text-secondary)", letterSpacing: "0.02em" }}>
-                  <PinIcon pinned={true} />
-                  {t("sessionList.pinnedSection")}
-                </div>
-                {orderedGroups.flatMap((group) =>
-                  topLevelSessionsForGroup(group.sessions)
-                    .filter((session) => !!session.pinned_at)
-                    .map((session) => (
-                      <SessionCard
-                        key={`pinned:${group.rootId}:${session.key}`}
-                        session={{ ...session, root_id: session.root_id || group.rootId }}
-                        sessionByKey={sessionByKey}
-                        selected={session.key === selectedKey && (session.root_id || group.rootId) === selectedRootId}
-                        parentHighlighted={false}
-                        highlightQuery=""
-                        syncing={isSessionSyncing({ ...session, root_id: session.root_id || group.rootId }, syncingSessionKeys)}
-                        projectBadge={group.rootName || group.rootId}
-                        onSelect={onSelect}
-                        onSync={onSync}
-                        onPin={onPin}
-                        onRename={onRename}
-                        onScheduledTask={onScheduledTask}
-                        onDelete={onDelete}
-                        onHandoffPack={onHandoffPack}
-                  onAddToKanban={onAddToKanban}
-                      />
-                    )),
-                )}
-              </div>
-            ) : null}
-            {flatRows && flatRows.length > 0 ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                {flatRows.map(({ session, rootName }) => (
-                  <SessionCard
-                    key={`flat:${session.root_id}:${session.key}`}
-                    session={session}
-                    sessionByKey={sessionByKey}
-                    selected={session.key === selectedKey && session.root_id === selectedRootId}
-                    parentHighlighted={false}
-                    highlightQuery=""
-                    syncing={isSessionSyncing(session, syncingSessionKeys)}
-                    projectBadge={rootName}
-                    onSelect={onSelect}
-                    onSync={onSync}
-                    onPin={onPin}
-                    onRename={onRename}
-                    onScheduledTask={onScheduledTask}
-                    onDelete={onDelete}
-                    onHandoffPack={onHandoffPack}
-                  onAddToKanban={onAddToKanban}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "12px", textAlign: "center" }}>
-                {effectiveEmptyText}
-              </div>
-            )}
+            {(() => {
+              // 平铺分区：①已置顶卡片 ②「项目」卡片（全部平铺会话），
+              // sortAsc 正/倒序在两个区域内各自生效（置顶区按 pinned_at、项目区按时间）。
+              const pinnedRows = orderedGroups.flatMap((group) =>
+                topLevelSessionsForGroup(group.sessions)
+                  .filter((session) => !!session.pinned_at)
+                  .sort((left, right) => {
+                    const leftTs = Date.parse(left.pinned_at || "") || 0;
+                    const rightTs = Date.parse(right.pinned_at || "") || 0;
+                    const asc = filter?.sortAsc ?? false;
+                    return asc ? leftTs - rightTs : rightTs - leftTs;
+                  }),
+              );
+              const flatPinnedVisible = pinnedRows.length > 0;
+              const flatProjectVisible = !!flatRows && flatRows.length > 0;
+              if (!flatPinnedVisible && !flatProjectVisible) {
+                return (
+                  <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "12px", textAlign: "center" }}>
+                    {effectiveEmptyText}
+                  </div>
+                );
+              }
+              const sectionCardStyle: React.CSSProperties = {
+                border: "1px solid var(--border-color)",
+                borderRadius: "10px",
+                padding: "6px",
+                marginBottom: "8px",
+                background: "var(--menu-bg, transparent)",
+              };
+              const sectionLabelStyle: React.CSSProperties = {
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "2px 4px 6px",
+                fontSize: "11px",
+                color: "var(--text-secondary)",
+                letterSpacing: "0.02em",
+              };
+              return (
+                <>
+                  {flatPinnedVisible ? (
+                    <div style={sectionCardStyle}>
+                      <div style={sectionLabelStyle}>
+                        <PinIcon pinned={true} />
+                        {t("sessionList.pinnedSection")}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                        {pinnedRows.map((session) => {
+                          const sessionRoot = session.root_id || "";
+                          const ownerGroup = orderedGroups.find((group) => group.rootId === sessionRoot);
+                          return (
+                            <SessionCard
+                              key={`pinned:${sessionRoot}:${session.key}`}
+                              session={{ ...session, root_id: sessionRoot }}
+                              sessionByKey={sessionByKey}
+                              selected={session.key === selectedKey && sessionRoot === selectedRootId}
+                              parentHighlighted={false}
+                              highlightQuery=""
+                              syncing={isSessionSyncing({ ...session, root_id: sessionRoot }, syncingSessionKeys)}
+                              projectBadge={ownerGroup?.rootName || sessionRoot}
+                              onSelect={onSelect}
+                              onSync={onSync}
+                              onPin={onPin}
+                              onRename={onRename}
+                              onScheduledTask={onScheduledTask}
+                              onDelete={onDelete}
+                              onHandoffPack={onHandoffPack}
+                              onAddToKanban={onAddToKanban}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                  {flatProjectVisible ? (
+                    <div style={sectionCardStyle}>
+                      <div style={sectionLabelStyle}>
+                        {t("sessionList.projectSection")}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                        {flatRows!.map(({ session, rootName }) => (
+                          <SessionCard
+                            key={`flat:${session.root_id}:${session.key}`}
+                            session={session}
+                            sessionByKey={sessionByKey}
+                            selected={session.key === selectedKey && session.root_id === selectedRootId}
+                            parentHighlighted={false}
+                            highlightQuery=""
+                            syncing={isSessionSyncing(session, syncingSessionKeys)}
+                            projectBadge={rootName}
+                            onSelect={onSelect}
+                            onSync={onSync}
+                            onPin={onPin}
+                            onRename={onRename}
+                            onScheduledTask={onScheduledTask}
+                            onDelete={onDelete}
+                            onHandoffPack={onHandoffPack}
+                            onAddToKanban={onAddToKanban}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              );
+            })()}
           </>
         ) : loading && groups.length === 0 ? (
           <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "18px", textAlign: "center" }}>{t("sessionList.loading")}</div>
@@ -1774,6 +1818,47 @@ export function MultiProjectSessionList({
                       }}
                     >
                       {group.rootName || group.rootId}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={expanded ? t("common.collapse") : t("sessionList.expandChildren")}
+                      title={expanded ? t("common.collapse") : t("sessionList.expandChildren")}
+                      onClick={() => {
+                        if (expanded) handleProjectCollapse(group.rootId);
+                        else void handleProjectToggle(group);
+                      }}
+                      style={{
+                        width: "20px",
+                        height: "20px",
+                        border: "none",
+                        borderRadius: "6px",
+                        padding: 0,
+                        background: "transparent",
+                        color: "var(--text-secondary)",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.4"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                        style={{
+                          transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
+                          transition: "transform 0.15s ease",
+                        }}
+                      >
+                        {expanded ? <path d="M9 18l6-6-6-6" /> : <path d="M15 18l-6-6 6-6" />}
+                      </svg>
                     </button>
                     <span
                       aria-hidden="true"

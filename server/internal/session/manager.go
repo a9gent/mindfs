@@ -430,7 +430,8 @@ func (m *Manager) Search(_ context.Context, opts SearchOptions) ([]SearchHit, er
 		}
 		hit, ok, err := m.searchSessionContent(item, qLower)
 		if err != nil {
-			return nil, err
+			// 单个会话内容损坏不应让整个搜索失败：跳过该会话继续。
+			continue
 		}
 		if !ok {
 			continue

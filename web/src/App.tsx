@@ -171,8 +171,8 @@ import {
 } from "./services/sessionFilter";
 import { HandoffPackDialog } from "./components/HandoffPackDialog";
 import { GlobalSearchDialog } from "./components/GlobalSearchDialog";
+import { NodePickerCard } from "./components/NodePickerCard";
 import { AddToKanbanDialog } from "./components/AddToKanbanDialog";
-import { ownNodePageURL } from "./services/nodePage";
 import { QuickSaveFilePanel } from "./components/QuickSaveFilePanel";
 import { ExternalSessionList } from "./components/ExternalSessionList";
 import { InlineTokenText } from "./components/InlineTokenText";
@@ -3200,6 +3200,54 @@ export function App({ onGoHome }: AppProps) {
     const index = order.indexOf(taskTemplateFilter);
     setTaskTemplateFilter(order[(index + 1) % order.length]);
   }, [onboardingMainContentViewRoot, mainContentViewByRoot, defaultMainContentView, setMainContentViewForRoot, taskTemplateFilter, taskTemplates]);
+  // 看板阶段列滑到最左/最右仍继续同向滑 → 循环切换模板（-1 上一档 / +1 下一档）。
+  const shiftKanbanTemplate = useCallback((direction: -1 | 1) => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID) return;
+    if ((mainContentViewByRoot[rootID] || defaultMainContentView) !== "task-kanban") {
+      return;
+    }
+    const order = [TASK_TEMPLATE_ALL_FILTER, ...taskTemplates.map((template) => template.id || "").filter(Boolean)];
+    if (order.length < 2) return;
+    const index = order.indexOf(taskTemplateFilter);
+    const next = (index < 0 ? 0 : index) + direction;
+    setTaskTemplateFilter(order[(next + order.length) % order.length]);
+  }, [mainContentViewByRoot, defaultMainContentView, taskTemplateFilter, taskTemplates]);
+  // ---- 看板阶段列边界滑动快切模板 ----
+  // 仅当阶段列已横向滚到对应边界（scrollLeft≈0 / ≈max）且继续收到同向滑时触发，
+  // 阶段区正常翻列不触发。阈值复用悬浮球手势的 40px 判定习惯。
+  const kanbanStageScrollRef = useRef<HTMLDivElement | null>(null);
+  const kanbanStageSwipeRef = useRef<{ x: number; y: number; fired: boolean } | null>(null);
+  const handleKanbanStageTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    kanbanStageSwipeRef.current = { x: touch.clientX, y: touch.clientY, fired: false };
+  }, []);
+  const handleKanbanStageTouchMove = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    const state = kanbanStageSwipeRef.current;
+    const touch = event.touches[0];
+    if (!state || state.fired || !touch) return;
+    const dx = touch.clientX - state.x;
+    const dy = touch.clientY - state.y;
+    // 竖向滚动意图不碰：让列内原生竖滚/触摸走默认行为
+    if (Math.abs(dy) > Math.abs(dx)) return;
+    const el = kanbanStageScrollRef.current;
+    if (!el) return;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    const atLeftEdge = el.scrollLeft <= 1;
+    const atRightEdge = el.scrollLeft >= maxScroll - 1;
+    // 手指向左滑（dx<0）= 看右边内容；已在最右继续左滑 → 下一档模板
+    if (dx <= -40 && atRightEdge) {
+      state.fired = true;
+      shiftKanbanTemplate(1);
+    } else if (dx >= 40 && atLeftEdge) {
+      state.fired = true;
+      shiftKanbanTemplate(-1);
+    }
+  }, [shiftKanbanTemplate]);
+  const handleKanbanStageTouchEnd = useCallback(() => {
+    kanbanStageSwipeRef.current = null;
+  }, []);
   const createTaskFromQuickAction = useCallback((templateId?: string) => {
     const template = (templateId && taskTemplates.find((item) => item.id === templateId))
       || (taskTemplateFilter && taskTemplateFilter !== TASK_TEMPLATE_ALL_FILTER
@@ -3216,10 +3264,14 @@ export function App({ onGoHome }: AppProps) {
   const handleAddToKanban = useCallback((session: SessionItem) => {
     setAddToKanbanSession(session);
   }, []);
+  const [nodePickerOpen, setNodePickerOpen] = useState(false);
   const handleOpenNodesPage = useCallback(() => {
-    window.location.assign(ownNodePageURL());
+    setNodePickerOpen(true);
   }, []);
   const handleOpenGestureSettings = useCallback(() => {
+    // 蓝环设置弹层渲染在左侧栏 FileTree 内：移动端左抽屉关着时 FileTree 虽挂载
+    // 但 visibility:hidden，弹层"打开了也看不见"。先拉出左抽屉再发打开请求。
+    setIsLeftOpen(true);
     setOpenBlueRingSettingsRequest(Date.now());
   }, []);
   const kanbanSelectedTaskRef = useRef<KanbanTask | null>(null);
@@ -5768,6 +5820,7 @@ export function App({ onGoHome }: AppProps) {
       }
       if (currentRootIdRef.current !== targetRoot) {
         setCurrentRootId(targetRoot);
+        void loadSessionsForRoot(targetRoot, { replace: true, force: true });
       }
       setSelectedDir(targetRoot);
       setSelectedDirKey(
@@ -5890,6 +5943,7 @@ export function App({ onGoHome }: AppProps) {
     },
     [
       isMobile,
+      loadSessionsForRoot,
       rootSessionKey,
       bumpCacheVersion,
       clearSessionStale,
@@ -13679,7 +13733,12 @@ export function App({ onGoHome }: AppProps) {
       ) : !isAllTaskTemplateFilter && !selectedTaskTemplateForFilter ? (
         <div style={{ padding: "12px", fontSize: "12px", color: "var(--text-secondary)" }}>{t("task.createTemplateFirst")}</div>
       ) : (
-	        <div style={{ overflowX: "auto", overflowY: "hidden", padding: "0 0 12px 1px", minHeight: 0 }}>
+	      <div style={{ overflowX: "auto", overflowY: "hidden", padding: "0 0 12px 1px", minHeight: 0 }}
+	        ref={kanbanStageScrollRef}
+	        onTouchStart={handleKanbanStageTouchStart}
+	        onTouchMove={handleKanbanStageTouchMove}
+	        onTouchEnd={handleKanbanStageTouchEnd}
+	      >
 	          <div
 	            style={{
 	              display: "grid",
@@ -15230,6 +15289,10 @@ export function App({ onGoHome }: AppProps) {
         open={globalSearchOpen}
         onClose={() => setGlobalSearchOpen(false)}
         onOpenHit={handleGlobalSearchOpenHit}
+      />
+      <NodePickerCard
+        open={nodePickerOpen}
+        onClose={() => setNodePickerOpen(false)}
       />
       <AddToKanbanDialog
         open={!!addToKanbanSession}
