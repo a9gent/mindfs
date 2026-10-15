@@ -12,6 +12,7 @@ import type { ExchangeAux, RelatedFile, TokenUsage, ToolCall } from "../services
 import { savePrompt } from "../services/prompts";
 import { reportError } from "../services/error";
 import { rootBadgeButtonStyle } from "./rootBadgeStyle";
+import { menuPopoverCapStyle } from "./popoverStyles";
 import { copyText } from "../services/clipboard";
 import type { AgentStatus } from "../services/agents";
 import { useI18n, type Locale } from "../i18n";
@@ -2961,6 +2962,7 @@ function SessionViewerInner({
                   background: "var(--menu-bg)",
                   boxShadow: "0 12px 30px rgba(15, 23, 42, 0.14)",
                   zIndex: 20,
+                  ...menuPopoverCapStyle,
                 }}
               >
                 <button

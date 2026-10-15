@@ -1,5 +1,6 @@
 import React from "react";
 import { useI18n } from "../i18n";
+import { menuPopoverCapStyle } from "./popoverStyles";
 
 export type ProjectAddMode =
   | "mode"
@@ -71,6 +72,7 @@ const popoverStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "10px",
+  ...menuPopoverCapStyle,
 };
 
 const inputStyle: React.CSSProperties = {

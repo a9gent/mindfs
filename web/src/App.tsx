@@ -164,6 +164,7 @@ import { GitStatusPanel } from "./components/GitStatusPanel";
 import { SessionViewer } from "./components/SessionViewer";
 import { DefaultListView, type MainContentViewMode } from "./components/DefaultListView";
 import { MultiProjectSessionList, SessionList, type ProjectSessionGroup } from "./components/SessionList";
+import { menuPopoverCapStyle } from "./components/popoverStyles";
 import {
   loadSessionFilter,
   persistSessionFilter,
@@ -13457,6 +13458,7 @@ export function App({ onGoHome }: AppProps) {
                   background: "var(--menu-bg)",
                   boxShadow: "0 12px 30px rgba(15, 23, 42, 0.14)",
                   zIndex: 40,
+                  ...menuPopoverCapStyle,
                 }}
               >
                 <button
@@ -14483,6 +14485,7 @@ export function App({ onGoHome }: AppProps) {
             display: "flex",
             flexDirection: "column",
             gap: "10px",
+            ...menuPopoverCapStyle,
           }}
         >
           <div

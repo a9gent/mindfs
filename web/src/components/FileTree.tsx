@@ -1,6 +1,7 @@
 import React from "react";
 import { ProviderModelSelect } from "./ProviderModelSelect";
 import { rootBadgeStyle } from "./rootBadgeStyle";
+import { menuPopoverCapStyle } from "./popoverStyles";
 import { openExternalURL } from "../services/platformNavigation";
 import { isNativeShellRuntime, shouldEnablePWAInstall } from "../services/runtime";
 import {
@@ -279,6 +280,11 @@ const fileTreeMenuButtonStyle: React.CSSProperties = {
   cursor: "pointer",
   fontSize: "12px",
 };
+
+// 顶栏菜单弹层统一加视口内上限：矮屏（手机浏览器工具栏占高）下弹层底部会落到
+// 视口外，又被抽屉的 overflow:hidden 裁掉，底部条目（蓝环手势、回车键发送等）
+// 既看不到也点不到——hit-test 连元素都命中不了，不是"开关没反应"。
+const fileTreePopoverCapStyle: React.CSSProperties = menuPopoverCapStyle;
 
 const fontSizeAdjustButtonStyle: React.CSSProperties = {
   width: "26px",
@@ -3753,13 +3759,13 @@ export function FileTree({
           {isMenuOpen ? (
             <div
               style={{
+                ...fileTreePopoverCapStyle,
                 position: "absolute",
                 top: "calc(100% + 6px)",
                 right: 0,
                 width: "var(--mindfs-file-menu-width, 182px)",
                 maxWidth: "calc(100vw - 16px)",
                 padding: "6px",
-                boxSizing: "border-box",
                 whiteSpace: "nowrap",
                 borderRadius: "10px",
                 border: "1px solid var(--border-color)",
@@ -4411,6 +4417,7 @@ export function FileTree({
           <div
             ref={agentConfigPopoverRef}
             style={{
+              ...fileTreePopoverCapStyle,
               position: "absolute",
               top: "calc(100% + 6px)",
               left: "8px",
@@ -4501,6 +4508,7 @@ export function FileTree({
         {idleReleaseOpen ? (
           <div
             style={{
+              ...fileTreePopoverCapStyle,
               position: "absolute",
               top: "calc(100% + 6px)",
               left: "8px",
@@ -4585,6 +4593,7 @@ export function FileTree({
           <div
             ref={sendShortcutPopoverRef}
             style={{
+              ...fileTreePopoverCapStyle,
               position: "absolute",
               top: "calc(100% + 6px)",
               left: "8px",
@@ -4664,6 +4673,7 @@ export function FileTree({
           <div
             ref={blueRingPopoverRef}
             style={{
+              ...fileTreePopoverCapStyle,
               position: "absolute",
               top: "calc(100% + 6px)",
               left: "8px",
@@ -4674,9 +4684,6 @@ export function FileTree({
               border: "1px solid var(--border-color)",
               background: "var(--menu-bg)",
               boxShadow: "0 16px 36px rgba(15, 23, 42, 0.18)",
-              boxSizing: "border-box",
-              maxHeight: "calc(100dvh - 96px)",
-              overflowY: "auto",
             }}
           >
             <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)" }}>
@@ -4811,6 +4818,7 @@ export function FileTree({
         {sessionNamingOpen ? (
           <div
             style={{
+              ...fileTreePopoverCapStyle,
               position: "absolute",
               top: "calc(100% + 6px)",
               left: "8px",
@@ -4912,6 +4920,7 @@ export function FileTree({
           <div
             ref={relayServicesPopoverRef}
             style={{
+              ...fileTreePopoverCapStyle,
               position: "absolute",
               top: "calc(100% + 6px)",
               left: "8px",
@@ -4933,6 +4942,7 @@ export function FileTree({
           <div
             ref={agentLifecyclePopoverRef}
             style={{
+              ...fileTreePopoverCapStyle,
               position: "absolute",
               top: "calc(100% + 6px)",
               left: "8px",

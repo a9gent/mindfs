@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AgentIcon } from "./AgentIcon";
 import { ModeIcon } from "./ModeIcon";
 import { rootBadgeButtonStyle, rootBadgeStyle } from "./rootBadgeStyle";
+import { menuPopoverCapStyle } from "./popoverStyles";
+import { useAnchoredPopover } from "./useAnchoredPopover";
 import { useI18n, type Locale } from "../i18n";
 import { copyText } from "../services/clipboard";
 import { reportError } from "../services/error";
@@ -2061,6 +2063,8 @@ function SessionCard({
       ? "rgba(0,0,0,0.03)"
       : "transparent";
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuPopoverRef = useRef<HTMLDivElement | null>(null);
+  const menuPlacement = useAnchoredPopover(menuRef, menuPopoverRef, menuOpen);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const composingRef = useRef(false);
   const submittingRef = useRef(false);
@@ -2630,9 +2634,12 @@ function SessionCard({
         ) : null}
         {menuOpen ? (
           <div
+            ref={menuPopoverRef}
             style={{
               position: "absolute",
-              top: "calc(100% + 6px)",
+              ...(menuPlacement.placement === "above"
+                ? { bottom: "calc(100% + 6px)" }
+                : { top: "calc(100% + 6px)" }),
               right: 0,
               minWidth: "170px",
               padding: "6px",
@@ -2641,6 +2648,8 @@ function SessionCard({
               background: "var(--menu-bg)",
               boxShadow: "0 12px 30px rgba(15, 23, 42, 0.14)",
               zIndex: 20,
+              ...sessionMenuPopoverCapStyle,
+              maxHeight: menuPlacement.maxHeight || undefined,
             }}
           >
             <button
@@ -3017,6 +3026,10 @@ const menuItemStyle: React.CSSProperties = {
   fontSize: "12px",
   fontWeight: 500,
 };
+
+// 会话行右键菜单条目多，矮屏下会伸到视口外、被抽屉 overflow:hidden 裁掉。
+// 与 FileTree 顶栏弹层同一处理：视口内限高 + 内部滚动。
+const sessionMenuPopoverCapStyle: React.CSSProperties = menuPopoverCapStyle;
 
 const inlineActionStyle: React.CSSProperties = {
   width: "24px",
