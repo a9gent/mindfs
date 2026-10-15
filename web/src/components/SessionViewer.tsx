@@ -100,6 +100,10 @@ type SessionViewerProps = {
   targetSeqRequestKey?: string | number;
   agents?: AgentStatus[];
   composerOverlayInset?: number;
+  onRenameSession?: (nextName: string) => Promise<boolean> | boolean;
+  onDeleteSession?: () => void;
+  onHandoffPack?: () => void;
+  onScheduledTask?: () => void;
 };
 
 type AskUserQuestionOption = {
@@ -1070,6 +1074,10 @@ function SessionViewerInner({
   onForkAgentMessage,
   agents,
   composerOverlayInset = 0,
+  onRenameSession,
+  onDeleteSession,
+  onHandoffPack,
+  onScheduledTask,
 }: SessionViewerProps) {
   const { locale, t } = useI18n();
   const [relatedFilesCollapsed, setRelatedFilesCollapsed] = useState(false);
@@ -1098,7 +1106,25 @@ function SessionViewerInner({
   const [editingMessage, setEditingMessage] = useState<{ seq: number; original: string; timestamp: string; content: string } | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState("");
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [headerCopied, setHeaderCopied] = useState(false);
+  const [headerCopyingPath, setHeaderCopyingPath] = useState(false);
+  const [headerRenaming, setHeaderRenaming] = useState(false);
+  const [headerDraftName, setHeaderDraftName] = useState("");
+  const [headerSavingName, setHeaderSavingName] = useState(false);
+  const headerMenuRef = useRef<HTMLDivElement | null>(null);
+  const headerRenameInputRef = useRef<HTMLInputElement | null>(null);
+  const headerComposingRef = useRef(false);
+  const headerSubmittingRef = useRef(false);
+  // Set while the rename input is being torn down on purpose (Enter/Escape), so the
+  // resulting blur does not fire a second submit.
+  const headerRenameClosingRef = useRef(false);
   useEffect(() => { setEditingMessage(null); setEditError(""); }, [rootId, sessionKey]);
+  useEffect(() => {
+    setHeaderMenuOpen(false);
+    setHeaderRenaming(false);
+    setHeaderCopied(false);
+  }, [rootId, sessionKey]);
   const exchanges = Array.isArray(session?.exchanges) ? session.exchanges : [];
   const isAwaiting = !!(session as any)?.pending;
   const { timeline, isStreaming, streamVersion, streamStatusText } = useSessionStream(
@@ -1684,6 +1710,111 @@ function SessionViewerInner({
     setRelatedFilesCollapsed(defaultRelatedFilesCollapsed);
   }, [defaultRelatedFilesCollapsed, relatedFilesDefaultStateKey]);
 
+  // Hooks 必须全部位于下方 if (!session) 早期 return 之前：
+  // 深链 (?session=) 首帧 session 为 null，session 到位后同一组件实例重渲染，
+  // 若 hook 在 return 之后，hook 数量会增多触发 React #310（白屏）。
+  const displayName =
+    session?.name ||
+    session?.purpose ||
+    session?.key ||
+    session?.session_key ||
+    "Session";
+  const sessionLogKey = session?.session_key || session?.key || "";
+  const headerCopyValue = useCallback((value: string) => {
+    setHeaderMenuOpen(false);
+    setHeaderCopied(false);
+    void copyText(value)
+      .then(() => setHeaderCopied(true))
+      .catch((err) => {
+        reportError("clipboard.write_failed", String((err as Error)?.message || t("session.copyFailed")));
+      });
+  }, [t]);
+  const copySessionLogPath = useCallback(() => {
+    if (!rootId || !sessionLogKey) return;
+    setHeaderCopyingPath(true);
+    void sessionService.getSessionLogPath(rootId, sessionLogKey)
+      .then(({ path }) => headerCopyValue(path))
+      .catch((err) => {
+        reportError("clipboard.write_failed", String((err as Error)?.message || t("session.copyFailed")));
+      })
+      .finally(() => setHeaderCopyingPath(false));
+  }, [rootId, sessionLogKey, headerCopyValue, t]);
+  const beginHeaderRename = useCallback(() => {
+    setHeaderMenuOpen(false);
+    headerRenameClosingRef.current = false;
+    setHeaderDraftName(displayName);
+    setHeaderRenaming(true);
+  }, [displayName]);
+  const cancelHeaderRename = useCallback(() => {
+    headerRenameClosingRef.current = true;
+    setHeaderRenaming(false);
+    setHeaderDraftName("");
+  }, []);
+  const submitHeaderRename = useCallback(async () => {
+    if (headerSubmittingRef.current || headerRenameClosingRef.current) return;
+    const trimmed = headerDraftName.trim();
+    if (!trimmed || trimmed === displayName.trim() || !onRenameSession) {
+      cancelHeaderRename();
+      return;
+    }
+    headerSubmittingRef.current = true;
+    setHeaderSavingName(true);
+    try {
+      const ok = await onRenameSession(trimmed);
+      if (ok === false) {
+        headerRenameInputRef.current?.focus();
+        headerRenameInputRef.current?.select();
+        return;
+      }
+      headerRenameClosingRef.current = true;
+      setHeaderRenaming(false);
+    } finally {
+      headerSubmittingRef.current = false;
+      setHeaderSavingName(false);
+    }
+  }, [headerDraftName, displayName, onRenameSession, cancelHeaderRename]);
+  useEffect(() => {
+    if (!headerCopied) return;
+    const timer = window.setTimeout(() => setHeaderCopied(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [headerCopied]);
+  useEffect(() => {
+    if (!headerMenuOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!headerMenuRef.current?.contains(event.target as Node)) {
+        setHeaderMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setHeaderMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [headerMenuOpen]);
+  useEffect(() => {
+    if (!headerRenaming) return;
+    headerRenameInputRef.current?.focus();
+    headerRenameInputRef.current?.select();
+  }, [headerRenaming]);
+  const submitEdit = useCallback(async () => {
+    if (!rootId || !sessionKey || !editingMessage) return;
+    if (!editingMessage.content.trim()) return;
+    setSavingEdit(true);
+    setEditError("");
+    try {
+      await sessionService.editMessage(rootId, sessionKey, editingMessage.seq, editingMessage.content, editingMessage.original, editingMessage.timestamp);
+      setEditingMessage(null);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingEdit(false);
+    }
+  }, [rootId, sessionKey, editingMessage]);
+
   if (!session) {
     return (
       <div
@@ -1758,13 +1889,21 @@ function SessionViewerInner({
       })),
     );
   })();
-  const displayName =
-    session.name ||
-    session.purpose ||
-    session.key ||
-    session.session_key ||
-    "Session";
   const hasVisibleTimeline = timeline.length > 0;
+  const headerMenuItemStyle: React.CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    width: "100%",
+    padding: "7px 9px",
+    borderRadius: "7px",
+    border: "none",
+    background: "transparent",
+    cursor: "pointer",
+    fontSize: "13px",
+    textAlign: "left",
+    font: "inherit",
+  };
   const userMetaButtonStyle: React.CSSProperties = {
     width: "18px",
     height: "18px",
@@ -2051,19 +2190,23 @@ function SessionViewerInner({
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <textarea autoFocus aria-label={t("session.editMessage")} value={editingMessage.content} disabled={savingEdit}
                   onChange={(event) => setEditingMessage({ ...editingMessage, content: event.target.value })}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setEditingMessage(null);
+                      return;
+                    }
+                    if (event.key !== "Enter" || event.shiftKey) return;
+                    const nativeEvent = event.nativeEvent as KeyboardEvent;
+                    if (nativeEvent.isComposing || nativeEvent.keyCode === 229) return;
+                    event.preventDefault();
+                    void submitEdit();
+                  }}
                   rows={3} style={{ width: "100%", boxSizing: "border-box", resize: "vertical", padding: "10px 16px", border: "1px solid var(--border-color, #d1d5db)", borderRadius: "18px 18px 4px 18px", font: "inherit", fontSize: 14, lineHeight: 1.5, color: "var(--text-primary)", background: "rgba(148,163,184,0.14)" }} />
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <span style={{ flex: "1 1 auto", minWidth: 0, fontSize: 11, lineHeight: 1.5, color: "var(--text-secondary, #64748b)" }}><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={{ verticalAlign: "-2px", marginRight: 4 }}><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7v1" /></svg>{t("session.editNotice")}</span>
                   <button type="button" disabled={savingEdit} style={{ flexShrink: 0, padding: "2px 8px", fontSize: 12, lineHeight: "16px", borderRadius: 5, border: "1px solid var(--border-color, #d1d5db)", background: "transparent", color: "var(--text-primary)" }} onClick={() => setEditingMessage(null)}>{t("common.cancel")}</button>
-                  <button type="button" disabled={savingEdit || !editingMessage.content.trim()} style={{ flexShrink: 0, padding: "2px 8px", fontSize: 12, lineHeight: "16px", borderRadius: 5, border: "1px solid transparent", background: "#2563eb", color: "white", opacity: savingEdit || !editingMessage.content.trim() ? 0.5 : 1 }} onClick={async () => {
-                    if (!rootId || !sessionKey) return;
-                    setSavingEdit(true); setEditError("");
-                    try {
-                      await sessionService.editMessage(rootId, sessionKey, editingMessage.seq, editingMessage.content, editingMessage.original, editingMessage.timestamp);
-                      setEditingMessage(null);
-                    } catch (error) { setEditError(error instanceof Error ? error.message : String(error)); }
-                    finally { setSavingEdit(false); }
-                  }}>{t(savingEdit ? "session.editSaving" : "session.editRegenerate")}</button>
+                  <button type="button" disabled={savingEdit || !editingMessage.content.trim()} style={{ flexShrink: 0, padding: "2px 8px", fontSize: 12, lineHeight: "16px", borderRadius: 5, border: "1px solid transparent", background: "#2563eb", color: "white", opacity: savingEdit || !editingMessage.content.trim() ? 0.5 : 1 }} onClick={() => { void submitEdit(); }}>{t(savingEdit ? "session.editSaving" : "session.editRegenerate")}</button>
                 </div>
                 {editError && <span role="alert" style={{ fontSize: 12, color: "var(--text-danger, #dc2626)" }}>{editError}</span>}
               </div>
@@ -2667,6 +2810,7 @@ function SessionViewerInner({
             borderBottom: "1px solid var(--border-color)",
             display: "flex",
             alignItems: "center",
+            gap: "8px",
             background: "var(--mindfs-topbar-bg, transparent)",
             boxSizing: "border-box",
             zIndex: 10,
@@ -2682,6 +2826,7 @@ function SessionViewerInner({
               fontWeight: 600,
               margin: 0,
               minWidth: 0,
+              flex: 1,
             }}
           >
             {rootId ? (
@@ -2697,17 +2842,207 @@ function SessionViewerInner({
                 {rootId}
               </button>
             ) : null}
-            <span
+            {headerRenaming ? (
+              <input
+                ref={headerRenameInputRef}
+                value={headerDraftName}
+                disabled={headerSavingName}
+                aria-label={t("sessionList.rename")}
+                onChange={(event) => setHeaderDraftName(event.target.value)}
+                onCompositionStart={() => { headerComposingRef.current = true; }}
+                onCompositionEnd={() => { headerComposingRef.current = false; }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    cancelHeaderRename();
+                    return;
+                  }
+                  if (event.key !== "Enter") return;
+                  const nativeEvent = event.nativeEvent as KeyboardEvent;
+                  if (headerComposingRef.current || nativeEvent.isComposing || nativeEvent.keyCode === 229) return;
+                  event.preventDefault();
+                  void submitHeaderRename();
+                }}
+                onBlur={() => { void submitHeaderRename(); }}
+                style={{
+                  minWidth: 0,
+                  flex: 1,
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  font: "inherit",
+                  padding: "2px 6px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color, #d1d5db)",
+                  background: "var(--content-bg, #fff)",
+                  color: "var(--text-primary)",
+                  outline: "none",
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={onRenameSession ? beginHeaderRename : undefined}
+                title={onRenameSession ? t("sessionList.rename") : undefined}
+                style={{
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  font: "inherit",
+                  fontWeight: 600,
+                  fontSize: "14px",
+                  color: "var(--text-primary)",
+                  background: "transparent",
+                  border: "none",
+                  padding: "2px 4px",
+                  borderRadius: "6px",
+                  cursor: onRenameSession ? "pointer" : "default",
+                  textAlign: "left",
+                }}
+              >
+                {displayName}
+              </button>
+            )}
+          </h1>
+          <div ref={headerMenuRef} style={{ position: "relative", flexShrink: 0 }}>
+            <button
+              type="button"
+              aria-label={t("sessionList.menu")}
+              onClick={() => setHeaderMenuOpen((open) => !open)}
               style={{
-                minWidth: 0,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
+                width: "28px",
+                height: "28px",
+                borderRadius: "8px",
+                border: "none",
+                background: headerMenuOpen ? "rgba(0, 0, 0, 0.06)" : "transparent",
+                color: "var(--text-secondary)",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                outline: "none",
               }}
             >
-              {displayName}
-            </span>
-          </h1>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="12" cy="5" r="1.8" />
+                <circle cx="12" cy="12" r="1.8" />
+                <circle cx="12" cy="19" r="1.8" />
+              </svg>
+            </button>
+            {headerCopied ? (
+              <span
+                role="status"
+                style={{
+                  position: "absolute",
+                  right: 0,
+                  top: "100%",
+                  whiteSpace: "nowrap",
+                  padding: "4px 8px",
+                  borderRadius: "6px",
+                  background: "var(--menu-bg)",
+                  color: "var(--text-primary)",
+                  fontSize: "12px",
+                  zIndex: 21,
+                }}
+              >
+                {t("session.copied")}
+              </span>
+            ) : null}
+            {headerMenuOpen ? (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 6px)",
+                  right: 0,
+                  minWidth: "170px",
+                  padding: "6px",
+                  borderRadius: "10px",
+                  border: "1px solid var(--border-color)",
+                  background: "var(--menu-bg)",
+                  boxShadow: "0 12px 30px rgba(15, 23, 42, 0.14)",
+                  zIndex: 20,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={beginHeaderRename}
+                  style={{ ...headerMenuItemStyle, color: "var(--text-primary)" }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                  </svg>
+                  {t("sessionList.rename")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => headerCopyValue(sessionLogKey)}
+                  style={{ ...headerMenuItemStyle, color: "var(--text-primary)", whiteSpace: "nowrap" }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <rect x="9" y="9" width="12" height="12" rx="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                  {t("sessionList.copyId")}
+                </button>
+                <button
+                  type="button"
+                  disabled={headerCopyingPath || !rootId || !sessionLogKey}
+                  onClick={copySessionLogPath}
+                  style={{ ...headerMenuItemStyle, color: "var(--text-primary)", whiteSpace: "nowrap", opacity: headerCopyingPath || !rootId || !sessionLogKey ? 0.55 : 1 }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6M8 13h8M8 17h8" />
+                  </svg>
+                  {headerCopyingPath ? t("common.loading") : t("sessionList.copyPath")}
+                </button>
+                {onHandoffPack ? (
+                  <button
+                    type="button"
+                    onClick={() => { setHeaderMenuOpen(false); onHandoffPack(); }}
+                    style={{ ...headerMenuItemStyle, color: "var(--text-primary)", whiteSpace: "nowrap" }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+                      <path d="M10 17l5-5-5-5" />
+                      <path d="M15 12H3" />
+                    </svg>
+                    {t("sessionList.handoffPack")}
+                  </button>
+                ) : null}
+                {onScheduledTask ? (
+                  <button
+                    type="button"
+                    onClick={() => { setHeaderMenuOpen(false); onScheduledTask(); }}
+                    style={{ ...headerMenuItemStyle, color: "var(--text-primary)", whiteSpace: "nowrap" }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <circle cx="12" cy="12" r="9" />
+                      <path d="M12 7v5l3 2" />
+                    </svg>
+                    {t("scheduled.title")}
+                  </button>
+                ) : null}
+                {onDeleteSession ? (
+                  <button
+                    type="button"
+                    onClick={() => { setHeaderMenuOpen(false); onDeleteSession(); }}
+                    style={{ ...headerMenuItemStyle, color: "#dc2626" }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6l-1 14H6L5 6" />
+                      <path d="M10 11v6" />
+                      <path d="M14 11v6" />
+                      <path d="M9 6V4h6v2" />
+                    </svg>
+                    {t("common.delete")}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </header>
       )}
 

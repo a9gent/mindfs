@@ -162,6 +162,7 @@ import { SessionViewer } from "./components/SessionViewer";
 import { DefaultListView, type MainContentViewMode } from "./components/DefaultListView";
 import { MultiProjectSessionList, SessionList, type ProjectSessionGroup } from "./components/SessionList";
 import { HandoffPackDialog } from "./components/HandoffPackDialog";
+import { QuickSaveFilePanel } from "./components/QuickSaveFilePanel";
 import { ExternalSessionList } from "./components/ExternalSessionList";
 import { InlineTokenText } from "./components/InlineTokenText";
 import { AgentIcon } from "./components/AgentIcon";
@@ -2518,6 +2519,7 @@ export function App({ onGoHome }: AppProps) {
     mode?: "replace" | "append";
   } | null>(null);
   const [handoffPackSession, setHandoffPackSession] = useState<SessionItem | null>(null);
+  const [quickSaveFileOpen, setQuickSaveFileOpen] = useState(false);
   const handleHandoffPack = useCallback((session: SessionItem) => {
     setHandoffPackSession(session);
   }, []);
@@ -11589,6 +11591,26 @@ export function App({ onGoHome }: AppProps) {
           seq,
         )
       }
+      onRenameSession={
+        selectedSessionSnapshot
+          ? (nextName) => handleRenameSession(selectedSessionSnapshot, nextName)
+          : undefined
+      }
+      onDeleteSession={
+        selectedSessionSnapshot
+          ? () => void handleDeleteSession(selectedSessionSnapshot)
+          : undefined
+      }
+      onHandoffPack={
+        selectedSessionSnapshot
+          ? () => handleHandoffPack(selectedSessionSnapshot)
+          : undefined
+      }
+      onScheduledTask={
+        selectedSessionSnapshot
+          ? () => openSessionScheduledTask(selectedSessionSnapshot)
+          : undefined
+      }
     />
   );
 
@@ -14776,6 +14798,12 @@ export function App({ onGoHome }: AppProps) {
                     seq,
                   )
                 }
+                onRenameSession={(nextName) =>
+                  handleRenameSession(drawerSessionSnapshot, nextName)
+                }
+                onDeleteSession={() => void handleDeleteSession(drawerSessionSnapshot)}
+                onHandoffPack={() => handleHandoffPack(drawerSessionSnapshot)}
+                onScheduledTask={() => openSessionScheduledTask(drawerSessionSnapshot)}
               />
             ) : (
               <div style={{ padding: "40px", textAlign: "center" }}>
@@ -14789,6 +14817,20 @@ export function App({ onGoHome }: AppProps) {
         session={handoffPackSession}
         onClose={() => setHandoffPackSession(null)}
         onInsert={handleHandoffPackInsert}
+      />
+      <QuickSaveFilePanel
+        open={quickSaveFileOpen}
+        rootId={currentRootId}
+        currentDir={
+          (selectedDirRef.current === currentRootId ? "." : selectedDirRef.current) || "."
+        }
+        rootPath={managedRootByIdRef.current[currentRootId || ""]?.root_path || null}
+        onClose={() => setQuickSaveFileOpen(false)}
+        onSaved={(_path, dir) => {
+          const root = currentRootIdRef.current;
+          if (!root) return;
+          void refreshTreeDir(root, dir, dir === ".");
+        }}
       />
       {!isMobile ? <OnboardingTour
         open={onboardingOpen}
