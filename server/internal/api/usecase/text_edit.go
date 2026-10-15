@@ -176,3 +176,33 @@ func (s *Service) CreateBlankFile(rootID, dir, name string) (string, error) {
 	}
 	return filepath.ToSlash(filepath.Join(dir, name)), nil
 }
+
+// CreateDir creates exactly the requested folder without replacing existing entries.
+func (s *Service) CreateDir(rootID, dir, name string) (string, error) {
+	if strings.TrimSpace(name) == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
+		return "", errors.New("invalid directory name")
+	}
+	if err := s.ensureRegistry(); err != nil {
+		return "", err
+	}
+	root, err := s.Registry.GetRoot(rootID)
+	if err != nil {
+		return "", err
+	}
+	if dir == "" {
+		dir = "."
+	}
+	dir, err = root.NormalizePath(dir)
+	if err != nil {
+		return "", err
+	}
+	absDir, err := root.ResolvePath(dir)
+	if err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(filepath.Join(absDir, name), 0o755); err != nil {
+		return "", err
+	}
+	s.ensureFileWatcher(rootID, filepath.ToSlash(filepath.Join(dir, name)))
+	return filepath.ToSlash(filepath.Join(dir, name)), nil
+}

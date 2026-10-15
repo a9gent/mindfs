@@ -24,10 +24,35 @@ assert.deepEqual(ringPathGesture(path([0, 0], [40, 0]), true), { gesture: "right
 assert.deepEqual(ringPathGesture(path([0, 0], [0, -40]), true), { gesture: "up", ready: true });
 assert.equal(ringPathGesture(path([0, 0], [-39, 0]), true), null);
 assert.deepEqual(ringPathGesture(path([0, 0], [-50, -50]), true), { gesture: "upLeft", ready: true });
-assert.deepEqual(ringPathGesture(path([0, 0], [0, 40]), true), { gesture: "down", ready: true }, "downward swipes map to the new down gesture");
-assert.deepEqual(ringPathGesture(path([0, 0], [-40, 40]), true), { gesture: "downLeft", ready: true });
-assert.deepEqual(ringPathGesture(path([0, 0], [40, 40]), true), { gesture: "downRight", ready: true });
+assert.equal(ringPathGesture(path([0, 0], [0, 40]), true), null, "downward swipes no longer map to a gesture");
+assert.equal(ringPathGesture(path([0, 0], [-40, 40]), true), null);
+assert.equal(ringPathGesture(path([0, 0], [40, 40]), true), null);
 assert.deepEqual(ringPathGesture(path([0, 0], [-40, -40], [-40, 20]), true), { gesture: "upLeftThenDown", ready: true });
+// A corner trail that rises ≥40px stays two-stage territory even when it returns
+// near the origin — the round-trip check must not swallow it.
+assert.deepEqual(ringPathGesture(path([0, 0], [40, -40], [-5, -40]), true), { gesture: "upRightThenLeft", ready: true });
+
+// Round-trip trails: leave horizontally then return near the origin.
+assert.deepEqual(
+  ringPathGesture(path([0, 0], [60, 0], [5, 0]), true),
+  { gesture: "rightThenLeft", ready: true },
+  "out to the right then back to the start",
+);
+assert.deepEqual(
+  ringPathGesture(path([0, 0], [-60, 0], [-5, 0]), true),
+  { gesture: "leftThenRight", ready: true },
+  "out to the left then back to the start",
+);
+assert.deepEqual(
+  ringPathGesture(path([0, 0], [60, 0], [55, 0]), true),
+  { gesture: "right", ready: true },
+  "ending far from the origin stays a plain right swipe",
+);
+assert.equal(
+  ringPathGesture(path([0, 0], [60, 0], [5, 0], [5, 60]), true),
+  null,
+  "a round trip with a large downward excursion is not a round-trip gesture",
+);
 
 // Upper corners: a diagonal stroke (or a route that ends in the corner without
 // a long second leg) still counts as the corner gesture.
@@ -64,10 +89,10 @@ assert.deepEqual(ringPathGesture(path([0, 0], [0, -90], [-50, -84]), false), { g
 assert.equal(ringPathGesture(path([0, 0], [5, -5]), false), null);
 
 // Gesture config: unknown values fall back to the original behavior.
-assert.deepEqual(normalizeBlueRingGestureConfig(null), { enabled: false, actions: { ...DEFAULT_BLUE_RING_ACTIONS }, agentPicks: {}, taskPicks: {} });
+assert.deepEqual(normalizeBlueRingGestureConfig(null), { enabled: false, actions: { ...DEFAULT_BLUE_RING_ACTIONS }, agentPicks: {}, taskPicks: {}, nodePicks: {} });
 assert.deepEqual(
   normalizeBlueRingGestureConfig({ enabled: "yes", actions: { left: "toggleFileSidebar", up: 42 } }),
-  { enabled: false, actions: { ...DEFAULT_BLUE_RING_ACTIONS, left: "toggleFileSidebar" }, agentPicks: {}, taskPicks: {} },
+  { enabled: false, actions: { ...DEFAULT_BLUE_RING_ACTIONS, left: "toggleFileSidebar" }, agentPicks: {}, taskPicks: {}, nodePicks: {} },
 );
 assert.deepEqual(effectiveBlueRingActions({ enabled: false, actions: { ...DEFAULT_BLUE_RING_ACTIONS, left: "modelSelector" } }), DEFAULT_BLUE_RING_ACTIONS, "disabled config keeps the original mapping");
 assert.deepEqual(

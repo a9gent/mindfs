@@ -49,6 +49,7 @@ export type SessionQuickActionsProps = {
   onCopySessionHandoff?: () => void;
   onGlobalSearch?: () => void;
   onOpenNodesPage?: () => void;
+  onPickNode?: (nodeId: string) => void;
   onOpenGestureSettings?: () => void;
   onKanbanCreateTask?: () => void;
   onKanbanEditTask?: () => void;
@@ -90,6 +91,7 @@ export function SessionQuickActions({
   onCopySessionHandoff,
   onGlobalSearch,
   onOpenNodesPage,
+  onPickNode,
   onOpenGestureSettings,
   onKanbanCreateTask,
   onKanbanEditTask,
@@ -222,6 +224,11 @@ export function SessionQuickActions({
       case "copySessionHandoff": setOpen(false); onCopySessionHandoff?.(); break;
       case "globalSearch": setOpen(false); onGlobalSearch?.(); break;
       case "openNodesPage": setOpen(false); onOpenNodesPage?.(); break;
+      case "openNodePick": {
+        const pick = gesture ? gestureConfig?.nodePicks?.[gesture] : undefined;
+        if (pick) { setOpen(false); onPickNode?.(pick); }
+        break;
+      }
       case "openGestureSettings": setOpen(false); onOpenGestureSettings?.(); break;
       case "kanbanCreateTask": setOpen(false); onKanbanCreateTask?.(); break;
       case "kanbanEditTask": setOpen(false); onKanbanEditTask?.(); break;
