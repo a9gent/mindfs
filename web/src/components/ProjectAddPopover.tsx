@@ -72,7 +72,6 @@ const popoverStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "10px",
-  ...menuPopoverCapStyle,
 };
 
 const inputStyle: React.CSSProperties = {
@@ -187,6 +186,7 @@ function PathBreadcrumb({
             display: "flex",
             flexDirection: "column",
             gap: "2px",
+            ...menuPopoverCapStyle,
           }}
         >
           {volumeItems.map((volume) => {

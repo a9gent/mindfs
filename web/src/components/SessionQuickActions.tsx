@@ -11,6 +11,7 @@ import {
   BLUE_RING_ACTION_LABEL_KEYS,
   BLUE_RING_GESTURE_LABEL_KEYS,
   BLUE_RING_PATH_GESTURES,
+  BLUE_RING_TWO_STAGE_GESTURES,
   recentQuickSwitchGroups,
   ringPathGesture,
   type BlueRingAction,
@@ -255,8 +256,10 @@ export function SessionQuickActions({
   // 10px 分类器就会切到两段式名字，漏一个名字提示条就会中途闪没。
   const hintGesture: BlueRingGesture | null = hint && !hint.ready && actions[hint.gesture] === "none"
     && BLUE_RING_PATH_GESTURES.includes(hint.gesture)
-    ? "up"
-    : hint?.gesture ?? null;
+      ? BLUE_RING_TWO_STAGE_GESTURES.has(hint.gesture)
+        ? "up"
+        : hint.gesture
+      : hint?.gesture ?? null;
   const hintReady = hint?.ready ?? false;
   const hintAction: BlueRingAction | null = hintGesture ? actions[hintGesture] : null;
   const hintText = hintGesture && hintAction && hintAction !== "none"

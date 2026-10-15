@@ -8,6 +8,8 @@ import type { LauncherNode } from "../services/storage";
 export type NodePickerCardProps = {
   open: boolean;
   onClose: () => void;
+  /** Protected (E2EE) API readiness — when false the card waits instead of fetching. */
+  apiReady?: boolean;
 };
 
 const overlayStyle: React.CSSProperties = {
@@ -58,14 +60,14 @@ const rowStyle: React.CSSProperties = {
   fontSize: "14px",
 };
 
-export function NodePickerCard({ open, onClose }: NodePickerCardProps) {
+export function NodePickerCard({ open, onClose, apiReady = true }: NodePickerCardProps) {
   const { t } = useI18n();
   const [nodes, setNodes] = useState<LauncherNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !apiReady) return;
     let cancelled = false;
     setLoading(true);
     setError("");
@@ -75,7 +77,13 @@ export function NodePickerCard({ open, onClose }: NodePickerCardProps) {
         if (!cancelled) setNodes(items);
       })
       .catch((err) => {
-        if (!cancelled) setError(String(err instanceof Error ? err.message : err));
+        if (!cancelled) {
+          setError(
+            err instanceof Error && err.message === "api_not_ready"
+              ? t("globalSearch.apiNotReady")
+              : String(err instanceof Error ? err.message : err),
+          );
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -83,7 +91,7 @@ export function NodePickerCard({ open, onClose }: NodePickerCardProps) {
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, apiReady]);
 
   useEffect(() => {
     if (!open) return;
@@ -140,7 +148,11 @@ export function NodePickerCard({ open, onClose }: NodePickerCardProps) {
           </button>
         </div>
         <div style={listStyle}>
-          {loading ? (
+          {!apiReady ? (
+            <div style={{ padding: "14px", textAlign: "center", color: "var(--text-secondary)", fontSize: "13px" }}>
+              {t("globalSearch.apiNotReady")}
+            </div>
+          ) : loading ? (
             <div style={{ padding: "14px", textAlign: "center", color: "var(--text-secondary)", fontSize: "13px" }}>
               {t("common.loading")}
             </div>

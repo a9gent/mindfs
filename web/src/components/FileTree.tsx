@@ -1,4 +1,5 @@
 import React from "react";
+import { createPortal } from "react-dom";
 import { ProviderModelSelect } from "./ProviderModelSelect";
 import { rootBadgeStyle } from "./rootBadgeStyle";
 import { menuPopoverCapStyle } from "./popoverStyles";
@@ -4669,23 +4670,46 @@ export function FileTree({
             </div>
           </div>
         ) : null}
-        {blueRingMenuOpen ? (
-          <div
-            ref={blueRingPopoverRef}
-            style={{
-              ...fileTreePopoverCapStyle,
-              position: "absolute",
-              top: "calc(100% + 6px)",
-              left: "8px",
-              right: "3px",
-              zIndex: 40,
-              padding: "14px",
-              borderRadius: "12px",
-              border: "1px solid var(--border-color)",
-              background: "var(--menu-bg)",
-              boxShadow: "0 16px 36px rgba(15, 23, 42, 0.18)",
-            }}
-          >
+        {blueRingMenuOpen
+          ? createPortal(
+              <div
+                role="presentation"
+                onMouseDown={(event) => {
+                  // 点遮罩空白处关闭；点卡片本身不冒泡到遮罩
+                  if (event.target === event.currentTarget) {
+                    setBlueRingMenuOpen(false);
+                  }
+                }}
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  background: "rgba(0,0,0,0.4)",
+                  zIndex: 3000,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "16px",
+                }}
+              >
+              <div
+                ref={blueRingPopoverRef}
+                role="dialog"
+                aria-label={t("blueRing.title")}
+                onMouseDown={(event) => event.stopPropagation()}
+                style={{
+                  width: "min(92vw, 420px)",
+                  maxHeight: "min(78dvh, 620px)",
+                  overflowY: "auto",
+                  overscrollBehavior: "contain",
+                  WebkitOverflowScrolling: "touch",
+                  boxSizing: "border-box",
+                  padding: "14px",
+                  borderRadius: "12px",
+                  border: "1px solid var(--border-color)",
+                  background: "var(--menu-bg)",
+                  boxShadow: "0 16px 36px rgba(15, 23, 42, 0.18)",
+                }}
+              >
             <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)" }}>
               {t("blueRing.title")}
             </div>
@@ -4813,8 +4837,11 @@ export function FileTree({
                 </React.Fragment>
               ))}
             </div>
-          </div>
-        ) : null}
+              </div>
+              </div>,
+              document.body,
+            )
+          : null}
         {sessionNamingOpen ? (
           <div
             style={{

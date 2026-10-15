@@ -57,6 +57,28 @@ export function AddToKanbanDialog({
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+
+  const baseSessionName = (() => {
+    if (!session) return "";
+    const sessionKey = session.key || session.session_key;
+    const raw = session.name || `Session ${sessionKey.slice(0, 8)}`;
+    // 剥掉任意已知模板前缀 "{模板名} / "，避免叠加双前缀；不用正则，模板名可含特殊字符
+    const stripped = templates.reduce(
+      (acc, template) =>
+        template.name && acc.startsWith(`${template.name} / `)
+          ? acc.slice(template.name.length + 3)
+          : acc,
+      raw,
+    );
+    return stripped.trim() || raw;
+  })();
+
+  useEffect(() => {
+    if (open) {
+      setNameDraft("");
+    }
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -100,10 +122,11 @@ export function AddToKanbanDialog({
     if (!rootId || !sessionKey || busy) return;
     setBusy(true);
     try {
-      const detail = await createTask(rootId, template.id || "", sessionName);
+      const displayName = (nameDraft.trim() || baseSessionName).trim();
+      const detail = await createTask(rootId, template.id || "", displayName);
       await attachSessionToTask(rootId, detail.task.id, sessionKey);
       // 前缀命名对齐看板原生 "{模板名} / #{N}" 格式，保留用户原语义
-      const nextName = `${template.name} / ${sessionName}`;
+      const nextName = `${template.name} / ${displayName}`;
       if ((session.name || "").trim() !== nextName) {
         try {
           await sessionService.renameSession(rootId, sessionKey, nextName);
@@ -112,7 +135,7 @@ export function AddToKanbanDialog({
         }
       }
       reportError("clipboard.write_failed", t("sessionList.addToKanbanSuccess"), { severity: "info" });
-      onAttached?.({ ...session, task_id: detail.task.id });
+      onAttached?.({ ...session, task_id: detail.task.id, name: nextName });
       onClose();
     } catch (err) {
       const message = String((err as Error)?.message || "");
@@ -196,9 +219,38 @@ export function AddToKanbanDialog({
             {t("sessionList.addToKanbanCreating")}
           </div>
         ) : (
-          <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "12px", lineHeight: 1.5 }}>
-            {t("sessionList.addToKanbanAttachWarning")}
-          </div>
+          <>
+            <label
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "4px",
+                marginTop: "12px",
+                fontSize: "11px",
+                color: "var(--text-secondary)",
+              }}
+            >
+              <span>{t("sessionList.addToKanbanNameLabel")}</span>
+              <input
+                type="text"
+                value={nameDraft}
+                placeholder={baseSessionName}
+                onChange={(event) => setNameDraft(event.target.value)}
+                style={{
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "7px 10px",
+                  fontSize: "13px",
+                  color: "var(--text-primary)",
+                  background: "var(--content-bg, transparent)",
+                  outline: "none",
+                }}
+              />
+            </label>
+            <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "10px", lineHeight: 1.5 }}>
+              {t("sessionList.addToKanbanAttachWarning")}
+            </div>
+          </>
         )}
       </div>
     </div>,

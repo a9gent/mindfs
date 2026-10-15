@@ -7,6 +7,8 @@ export type GlobalSearchDialogProps = {
   open: boolean;
   onClose: () => void;
   onOpenHit: (rootId: string, sessionKey: string) => void;
+  /** Protected (E2EE) API readiness — when false the dialog waits instead of erroring. */
+  apiReady?: boolean;
 };
 
 const overlayStyle: React.CSSProperties = {
@@ -89,12 +91,13 @@ function formatRelativeTime(iso: string, locale: string): string {
   return new Date(time).toLocaleDateString(locale);
 }
 
-export function GlobalSearchDialog({ open, onClose, onOpenHit }: GlobalSearchDialogProps) {
+export function GlobalSearchDialog({ open, onClose, onOpenHit, apiReady = true }: GlobalSearchDialogProps) {
   const { locale, t } = useI18n();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SessionSearchHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [apiNotReady, setApiNotReady] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [globalScope, setGlobalScope] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -105,6 +108,7 @@ export function GlobalSearchDialog({ open, onClose, onOpenHit }: GlobalSearchDia
       setQuery("");
       setResults([]);
       setFailed(false);
+      setApiNotReady(false);
       setActiveIndex(0);
       window.setTimeout(() => inputRef.current?.focus(), 30);
     }
@@ -118,6 +122,15 @@ export function GlobalSearchDialog({ open, onClose, onOpenHit }: GlobalSearchDia
     if (!trimmed) {
       setResults([]);
       setFailed(false);
+      setApiNotReady(false);
+      setLoading(false);
+      return;
+    }
+    if (!apiReady) {
+      // E2EE 通道未就绪：保持等待态，ready 后 effect 因 apiReady 变化自动重跑
+      setResults([]);
+      setFailed(false);
+      setApiNotReady(true);
       setLoading(false);
       return;
     }
@@ -130,13 +143,20 @@ export function GlobalSearchDialog({ open, onClose, onOpenHit }: GlobalSearchDia
           if (cancelled) return;
           setResults(hits);
           setFailed(false);
+          setApiNotReady(false);
           setActiveIndex(0);
         })
         .catch((err) => {
           if (cancelled) return;
           console.error("[globalSearch] failed", err);
           setResults([]);
-          setFailed(true);
+          if (err instanceof Error && err.message === "api_not_ready") {
+            setApiNotReady(true);
+            setFailed(false);
+          } else {
+            setApiNotReady(false);
+            setFailed(true);
+          }
         })
         .finally(() => {
           if (!cancelled) {
@@ -148,7 +168,7 @@ export function GlobalSearchDialog({ open, onClose, onOpenHit }: GlobalSearchDia
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [globalScope, open, query]);
+  }, [apiReady, globalScope, open, query]);
 
   useEffect(() => {
     if (!open) return;
@@ -188,6 +208,9 @@ export function GlobalSearchDialog({ open, onClose, onOpenHit }: GlobalSearchDia
     if (loading) {
       return t("globalSearch.searching");
     }
+    if (apiNotReady) {
+      return t("globalSearch.apiNotReady");
+    }
     if (failed) {
       return t("globalSearch.failed");
     }
@@ -195,7 +218,7 @@ export function GlobalSearchDialog({ open, onClose, onOpenHit }: GlobalSearchDia
       return t("globalSearch.hint");
     }
     return t("globalSearch.noMatch");
-  }, [failed, loading, query]);
+  }, [apiNotReady, failed, loading, query]);
 
   if (!open) {
     return null;

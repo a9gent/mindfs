@@ -173,7 +173,8 @@ import {
 import { HandoffPackDialog } from "./components/HandoffPackDialog";
 import { GlobalSearchDialog } from "./components/GlobalSearchDialog";
 import { AddToKanbanDialog } from "./components/AddToKanbanDialog";
-import { ownNodePageURL } from "./services/nodePage";
+import { NodePickerCard } from "./components/NodePickerCard";
+import { classifySwipeIntent } from "./services/edgeSwipe";
 import { QuickSaveFilePanel } from "./components/QuickSaveFilePanel";
 import { ExternalSessionList } from "./components/ExternalSessionList";
 import { InlineTokenText } from "./components/InlineTokenText";
@@ -1621,6 +1622,7 @@ export function App({ onGoHome }: AppProps) {
   });
   const [multiProjectSessionGroups, setMultiProjectSessionGroups] = useState<MultiProjectSessionGroup[]>([]);
   const [multiProjectSessionsLoading, setMultiProjectSessionsLoading] = useState(false);
+  const [multiProjectSessionsError, setMultiProjectSessionsError] = useState("");
   const [multiProjectPendingByKey, setMultiProjectPendingByKey] = useState<Record<string, boolean>>({});
   const multiProjectPendingRef = useRef<Record<string, boolean>>({});
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
@@ -3201,6 +3203,74 @@ export function App({ onGoHome }: AppProps) {
     const index = order.indexOf(taskTemplateFilter);
     setTaskTemplateFilter(order[(index + 1) % order.length]);
   }, [onboardingMainContentViewRoot, mainContentViewByRoot, defaultMainContentView, setMainContentViewForRoot, taskTemplateFilter, taskTemplates]);
+  // 看板模板顺序（含"全部"），模板边界滑动与 cycleKanbanTemplate 共用，防漂移
+  const kanbanTemplateOrder = useMemo(
+    () => [TASK_TEMPLATE_ALL_FILTER, ...taskTemplates.map((template) => template.id || "").filter(Boolean)],
+    [taskTemplates],
+  );
+  const switchKanbanTemplateByOffset = useCallback(
+    (offset: 1 | -1) => {
+      const order = kanbanTemplateOrder;
+      if (order.length < 2) return;
+      const index = order.indexOf(taskTemplateFilter);
+      setTaskTemplateFilter(order[(((index < 0 ? 0 : index) + offset) % order.length + order.length) % order.length]);
+    },
+    [kanbanTemplateOrder, taskTemplateFilter],
+  );
+  // ---- 看板阶段列边界滑动切模板（仅触摸；passive 事件，绝不 preventDefault）----
+  // 左边界(scrollLeft<=0)手指右移(dx>0)=上一模板；右边界(dx<0)=下一模板；
+  // 未到边界时是正常的阶段横向浏览，不触发。
+  const kanbanStageScrollRef = useRef<HTMLDivElement | null>(null);
+  const kanbanSwipeRef = useRef<{
+    touchId: number;
+    startX: number;
+    startY: number;
+    startScrollLeft: number;
+    maxScrollLeft: number;
+    atLeft: boolean;
+    atRight: boolean;
+    fired: boolean;
+  } | null>(null);
+  const handleKanbanStageTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    const node = event.currentTarget;
+    const maxScrollLeft = node.scrollWidth - node.clientWidth;
+    kanbanSwipeRef.current = {
+      touchId: touch.identifier,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      startScrollLeft: node.scrollLeft,
+      maxScrollLeft,
+      atLeft: node.scrollLeft <= 1 || maxScrollLeft <= 0,
+      atRight: node.scrollLeft >= maxScrollLeft - 1 || maxScrollLeft <= 0,
+      fired: false,
+    };
+  }, []);
+  const handleKanbanStageTouchMove = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    const state = kanbanSwipeRef.current;
+    if (!state || state.fired || event.touches.length !== 1) return;
+    const touch = Array.from(event.touches).find((item) => item.identifier === state.touchId);
+    if (!touch) return;
+    const dx = touch.clientX - state.startX;
+    const dy = touch.clientY - state.startY;
+    const intent = classifySwipeIntent(dx, dy);
+    if (intent !== "horizontal") return;
+    // 越界量：手指拖过当前边界之外的位移
+    let overscroll = 0;
+    if (state.atLeft && dx > 0) {
+      overscroll = dx + state.startScrollLeft;
+    } else if (state.atRight && dx < 0) {
+      overscroll = -(dx - (state.maxScrollLeft - state.startScrollLeft));
+    }
+    if (overscroll >= 10) {
+      state.fired = true;
+      switchKanbanTemplateByOffset(state.atLeft && dx > 0 ? -1 : 1);
+    }
+  }, [switchKanbanTemplateByOffset]);
+  const handleKanbanStageTouchEnd = useCallback(() => {
+    kanbanSwipeRef.current = null;
+  }, []);
   const createTaskFromQuickAction = useCallback((templateId?: string) => {
     const template = (templateId && taskTemplates.find((item) => item.id === templateId))
       || (taskTemplateFilter && taskTemplateFilter !== TASK_TEMPLATE_ALL_FILTER
@@ -3213,12 +3283,13 @@ export function App({ onGoHome }: AppProps) {
   }, [taskTemplates, taskTemplateFilter, openTaskCreateDialog]);
   // ---- 蓝环新动作：全局搜索 / 节点页 / 手势设置 / 看板快捷操作 ----
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [nodePickerOpen, setNodePickerOpen] = useState(false);
   const [addToKanbanSession, setAddToKanbanSession] = useState<SessionItem | null>(null);
   const handleAddToKanban = useCallback((session: SessionItem) => {
     setAddToKanbanSession(session);
   }, []);
   const handleOpenNodesPage = useCallback(() => {
-    window.location.assign(ownNodePageURL());
+    setNodePickerOpen(true);
   }, []);
   const handleOpenGestureSettings = useCallback(() => {
     setOpenBlueRingSettingsRequest(Date.now());
@@ -5270,6 +5341,7 @@ export function App({ onGoHome }: AppProps) {
       return;
     }
     setMultiProjectSessionsLoading(true);
+    setMultiProjectSessionsError("");
     try {
       const cachedGroups = await getCachedMultiRootSessionList();
       if (cachedGroups?.length) {
@@ -5317,6 +5389,14 @@ export function App({ onGoHome }: AppProps) {
         applyPendingToMultiProjectGroups(nextGroups, multiProjectPendingRef.current),
       );
       void saveCachedMultiRootSessionList(groups);
+      setMultiProjectSessionsError("");
+    } catch (err) {
+      if (err instanceof Error && err.message === "api_not_ready") {
+        setMultiProjectSessionsError(t("sessionList.waitForEncryption"));
+      } else {
+        console.error("[sessions] multi-project load failed", err);
+        setMultiProjectSessionsError(t("sessionList.loadFailed"));
+      }
     } finally {
       setMultiProjectSessionsLoading(false);
     }
@@ -13681,7 +13761,13 @@ export function App({ onGoHome }: AppProps) {
       ) : !isAllTaskTemplateFilter && !selectedTaskTemplateForFilter ? (
         <div style={{ padding: "12px", fontSize: "12px", color: "var(--text-secondary)" }}>{t("task.createTemplateFirst")}</div>
       ) : (
-	        <div style={{ overflowX: "auto", overflowY: "hidden", padding: "0 0 12px 1px", minHeight: 0 }}>
+	        <div
+	          ref={kanbanStageScrollRef}
+	          style={{ overflowX: "auto", overflowY: "hidden", padding: "0 0 12px 1px", minHeight: 0 }}
+	          onTouchStart={handleKanbanStageTouchStart}
+	          onTouchMove={handleKanbanStageTouchMove}
+	          onTouchEnd={handleKanbanStageTouchEnd}
+	        >
 	          <div
 	            style={{
 	              display: "grid",
@@ -14566,6 +14652,8 @@ export function App({ onGoHome }: AppProps) {
         selectedRootId={(selectedSession?.root_id as string | undefined) || currentRootId || ""}
         headerAction={sessionImportMenu}
         loading={multiProjectSessionsLoading}
+        error={multiProjectSessionsError}
+        onRetryLoad={() => void loadMultiProjectSessionGroups()}
         emptyText={t("externalImport.empty")}
         syncingSessionKeys={syncingSessionKeys}
         onSearchToggle={() => {
@@ -15233,7 +15321,9 @@ export function App({ onGoHome }: AppProps) {
         open={globalSearchOpen}
         onClose={() => setGlobalSearchOpen(false)}
         onOpenHit={handleGlobalSearchOpenHit}
+        apiReady={bootstrapState.phase === "ready"}
       />
+      <NodePickerCard open={nodePickerOpen} onClose={() => setNodePickerOpen(false)} apiReady={bootstrapState.phase === "ready"} />
       <AddToKanbanDialog
         open={!!addToKanbanSession}
         session={addToKanbanSession}

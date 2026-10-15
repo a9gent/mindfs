@@ -24,7 +24,10 @@ assert.deepEqual(ringPathGesture(path([0, 0], [40, 0]), true), { gesture: "right
 assert.deepEqual(ringPathGesture(path([0, 0], [0, -40]), true), { gesture: "up", ready: true });
 assert.equal(ringPathGesture(path([0, 0], [-39, 0]), true), null);
 assert.deepEqual(ringPathGesture(path([0, 0], [-50, -50]), true), { gesture: "upLeft", ready: true });
-assert.equal(ringPathGesture(path([0, 0], [0, 40]), true), null, "downward swipes stay unrecognized");
+assert.deepEqual(ringPathGesture(path([0, 0], [0, 40]), true), { gesture: "down", ready: true }, "downward swipes map to the new down gesture");
+assert.deepEqual(ringPathGesture(path([0, 0], [-40, 40]), true), { gesture: "downLeft", ready: true });
+assert.deepEqual(ringPathGesture(path([0, 0], [40, 40]), true), { gesture: "downRight", ready: true });
+assert.deepEqual(ringPathGesture(path([0, 0], [-40, -40], [-40, 20]), true), { gesture: "upLeftThenDown", ready: true });
 
 // Upper corners: a diagonal stroke (or a route that ends in the corner without
 // a long second leg) still counts as the corner gesture.
@@ -153,9 +156,9 @@ assert.deepEqual(
   "a 39px sideways leg is still a plain swipe up",
 );
 assert.deepEqual(
-  ringPathGesture(path([0, 0], [-60, -60], [-55, -5]), true),
-  { gesture: "left", ready: true },
-  "up-left then down falls back to displacement (left)",
+  ringPathGesture(path([0, 0], [-60, -60], [-55, 5]), true),
+  { gesture: "upLeftThenDown", ready: true },
+  "up-left then a long drop forms the upLeftThenDown gesture",
 );
 assert.equal(
   ringPathGesture(path([0, 0], [0, -50], [0, -20]), true),

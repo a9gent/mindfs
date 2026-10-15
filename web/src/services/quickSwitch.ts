@@ -26,12 +26,16 @@ export type BlueRingGesture =
   | "up"
   | "upLeft"
   | "upRight"
+  | "down"
+  | "downLeft"
+  | "downRight"
   | "upDown"
   | "upThenLeft"
   | "upThenRight"
   | "upLeftThenRight"
   | "upRightThenLeft"
-  | "upRightThenDown";
+  | "upRightThenDown"
+  | "upLeftThenDown";
 
 /** Actions a blue ring gesture can trigger. */
 export type BlueRingAction =
@@ -88,12 +92,16 @@ export const DEFAULT_BLUE_RING_ACTIONS: Record<BlueRingGesture, BlueRingAction> 
   up: "quickSwitch",
   upLeft: "none",
   upRight: "none",
+  down: "none",
+  downLeft: "none",
+  downRight: "none",
   upDown: "none",
   upThenLeft: "none",
   upThenRight: "none",
   upLeftThenRight: "none",
   upRightThenLeft: "none",
   upRightThenDown: "none",
+  upLeftThenDown: "none",
 };
 
 /** Click-scale gestures are handled by the tap/double-tap logic, not path matching. */
@@ -103,12 +111,16 @@ export const BLUE_RING_PATH_GESTURES: readonly BlueRingGesture[] = [
   "up",
   "upLeft",
   "upRight",
+  "down",
+  "downLeft",
+  "downRight",
   "upDown",
   "upThenLeft",
   "upThenRight",
   "upLeftThenRight",
   "upRightThenLeft",
   "upRightThenDown",
+  "upLeftThenDown",
 ];
 
 export const BLUE_RING_GESTURES: readonly BlueRingGesture[] = [
@@ -116,6 +128,17 @@ export const BLUE_RING_GESTURES: readonly BlueRingGesture[] = [
   "doubleTap",
   ...BLUE_RING_PATH_GESTURES,
 ];
+
+/** Two-stage trails: while dragging, an unbound two-stage hint falls back to the "up" binding. */
+export const BLUE_RING_TWO_STAGE_GESTURES: ReadonlySet<BlueRingGesture> = new Set([
+  "upDown",
+  "upThenLeft",
+  "upThenRight",
+  "upLeftThenRight",
+  "upRightThenLeft",
+  "upRightThenDown",
+  "upLeftThenDown",
+] as const satisfies readonly BlueRingGesture[]);
 
 export const BLUE_RING_ACTION_OPTIONS: readonly BlueRingAction[] = [
   "none",
@@ -159,12 +182,16 @@ export const BLUE_RING_GESTURE_LABEL_KEYS: Record<BlueRingGesture, MessageKey> =
   up: "blueRing.gesture.up",
   upLeft: "blueRing.gesture.upLeft",
   upRight: "blueRing.gesture.upRight",
+  down: "blueRing.gesture.down",
+  downLeft: "blueRing.gesture.downLeft",
+  downRight: "blueRing.gesture.downRight",
   upDown: "blueRing.gesture.upDown",
   upThenLeft: "blueRing.gesture.upThenLeft",
   upThenRight: "blueRing.gesture.upThenRight",
   upLeftThenRight: "blueRing.gesture.upLeftThenRight",
   upRightThenLeft: "blueRing.gesture.upRightThenLeft",
   upRightThenDown: "blueRing.gesture.upRightThenDown",
+  upLeftThenDown: "blueRing.gesture.upLeftThenDown",
 };
 
 export const BLUE_RING_ACTION_LABEL_KEYS: Record<BlueRingAction, MessageKey> = {
@@ -239,12 +266,16 @@ export function normalizeBlueRingGestureConfig(value: unknown): BlueRingGestureC
       up: normalizeBlueRingAction(actions.up, DEFAULT_BLUE_RING_ACTIONS.up),
       upLeft: normalizeBlueRingAction(actions.upLeft, DEFAULT_BLUE_RING_ACTIONS.upLeft),
       upRight: normalizeBlueRingAction(actions.upRight, DEFAULT_BLUE_RING_ACTIONS.upRight),
+      down: normalizeBlueRingAction(actions.down, DEFAULT_BLUE_RING_ACTIONS.down),
+      downLeft: normalizeBlueRingAction(actions.downLeft, DEFAULT_BLUE_RING_ACTIONS.downLeft),
+      downRight: normalizeBlueRingAction(actions.downRight, DEFAULT_BLUE_RING_ACTIONS.downRight),
       upDown: normalizeBlueRingAction(actions.upDown, DEFAULT_BLUE_RING_ACTIONS.upDown),
       upThenLeft: normalizeBlueRingAction(actions.upThenLeft, DEFAULT_BLUE_RING_ACTIONS.upThenLeft),
       upThenRight: normalizeBlueRingAction(actions.upThenRight, DEFAULT_BLUE_RING_ACTIONS.upThenRight),
       upLeftThenRight: normalizeBlueRingAction(actions.upLeftThenRight, DEFAULT_BLUE_RING_ACTIONS.upLeftThenRight),
       upRightThenLeft: normalizeBlueRingAction(actions.upRightThenLeft, DEFAULT_BLUE_RING_ACTIONS.upRightThenLeft),
       upRightThenDown: normalizeBlueRingAction(actions.upRightThenDown, DEFAULT_BLUE_RING_ACTIONS.upRightThenDown),
+      upLeftThenDown: normalizeBlueRingAction(actions.upLeftThenDown, DEFAULT_BLUE_RING_ACTIONS.upLeftThenDown),
     },
     agentPicks: normalizeBlueRingAgentPicks(input.agentPicks),
     taskPicks: normalizeBlueRingGesturePicks(input.taskPicks),
@@ -326,7 +357,9 @@ function mapTwoStageGesture(seg1: UpSegment, seg2: TurnSegment | null): BlueRing
     return null;
   }
   if (seg1 === "upLeft") {
-    return seg2 === "right" ? "upLeftThenRight" : null;
+    if (seg2 === "right") return "upLeftThenRight";
+    if (seg2 === "down") return "upLeftThenDown";
+    return null;
   }
   if (seg1 === "upRight") {
     if (seg2 === "left") return "upRightThenLeft";
@@ -384,6 +417,16 @@ function classifyRingPath(points: RingPathPoint[], minSwipe: number): BlueRingGe
   }
   if (dy <= -minSwipe && upward > horizontal) {
     return "up";
+  }
+  // Downward family: mirror the upward diagonal band (horizontal within
+  // [down/2, down*2]); pure down wins when vertical dominates.
+  const downward = dy;
+  if (downward >= minSwipe && downward > horizontal) {
+    return "down";
+  }
+  if (downward > 0 && horizontal >= downward / 2 && downward >= horizontal / 2
+    && horizontal >= minSwipe && downward >= minSwipe) {
+    return dx < 0 ? "downLeft" : "downRight";
   }
   return null;
 }
