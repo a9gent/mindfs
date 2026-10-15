@@ -14774,6 +14774,7 @@ export function App({ onGoHome }: AppProps) {
               currentDirPath={selectedDir}
               roots={managedRootIds.map((id) => ({ id, name: managedRootByIdRef.current[id]?.display_name || id }))}
               onOpenRecentDirectory={(target) => {
+                if (!managedRootIdsRef.current.has(target.rootId)) return;
                 // 轮切目标不回写最近列表：该列表只收“手动点击”的目录，
                 // 否则每次轮切都会把目标顶到队首，永远在两个目录之间打转。
                 void actionHandlers.open_dir({

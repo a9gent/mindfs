@@ -7,10 +7,15 @@ const source = fs.readFileSync("src/services/recentDirs.ts", "utf8");
 const compiled = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS },
 }).outputText;
+const baseCompiled = ts.transpileModule(fs.readFileSync("src/services/base.ts", "utf8"), {
+  compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS },
+}).outputText;
 
 // 近期目录是纯 localStorage 逻辑：用一个内存 stub 顶上 window.localStorage。
 const makeSandbox = () => {
   const store = new Map();
+  const endpoint = { base: "https://mindfs.test", prefix: "" };
+  const storageKey = () => `mindfs-recent-dirs:v2:${encodeURIComponent(`${endpoint.base}${endpoint.prefix}/`)}`;
   const localStorage = {
     __failWrite: false,
     getItem: (key) => (store.has(key) ? store.get(key) : null),
@@ -20,19 +25,25 @@ const makeSandbox = () => {
     },
     removeItem: (key) => store.delete(key),
   };
+  const window = { localStorage, location: { get pathname() { return `${endpoint.prefix}/`; } } };
+  const baseSandbox = {
+    exports: {}, window,
+    require: () => ({ getApiBaseURL: () => endpoint.base, getWsBaseURL: () => "", isBrowserRuntime: () => true }),
+  };
+  vm.runInNewContext(baseCompiled, baseSandbox);
   const sandbox = {
-    require: () => ({}),
+    require: (name) => name === "./base" ? baseSandbox.exports : {},
     exports: {},
     module: { exports: {} },
-    window: { localStorage },
+    window,
   };
-  return { sandbox, store, localStorage };
+  return { sandbox, store, localStorage, endpoint, storageKey };
 };
 
 const load = () => {
-  const { sandbox, store } = makeSandbox();
+  const { sandbox, store, endpoint, storageKey } = makeSandbox();
   vm.runInNewContext(compiled, sandbox);
-  return { ...sandbox.exports, store, localStorage: sandbox.window.localStorage };
+  return { ...sandbox.exports, store, endpoint, storageKey, localStorage: sandbox.window.localStorage };
 };
 
 const { recordRecentDir, listRecentDirs, nextRecentDir, clearRecentDirs, RECENT_DIRS_LIMIT } = load();
@@ -94,7 +105,7 @@ assert.equal(cross.nextRecentDir("d-project", "/mnt/Projects/MindFS").rootId, "r
 
 // 存储坏 JSON / 非数组：静默回空列表，后续记录可恢复
 const broken = load();
-broken.localStorage.setItem("mindfs-recent-dirs", "{not json");
+broken.localStorage.setItem(broken.storageKey(), "{not json");
 assert.deepEqual(host(broken.listRecentDirs()), []);
 assert.equal(broken.nextRecentDir("root", null), null);
 broken.recordRecentDir({ rootId: "root", path: "/root/back" });
@@ -103,7 +114,7 @@ assert.equal(broken.listRecentDirs().length, 1);
 // 缺字段的条目被过滤，不抛异常
 const dirty = load();
 dirty.localStorage.setItem(
-  "mindfs-recent-dirs",
+  dirty.storageKey(),
   JSON.stringify([{ rootId: "", path: "/x" }, { rootId: "root" }, { rootId: "root", path: "/root/ok" }]),
 );
 assert.deepEqual([...dirty.listRecentDirs().map((item) => item.path)], ["/root/ok"]);
@@ -120,5 +131,45 @@ const wipe = load();
 wipe.recordRecentDir({ rootId: "root", path: "/root/x" });
 wipe.clearRecentDirs();
 assert.deepEqual(host(wipe.listRecentDirs()), []);
+
+// Relay nodes on the same origin can have identical root IDs. Never share paths.
+const nodes = load();
+nodes.endpoint.prefix = "/n/node-a";
+nodes.recordRecentDir({ rootId: "001", path: "/machine-a/private-project" });
+nodes.endpoint.prefix = "/n/node-b";
+assert.deepEqual(host(nodes.listRecentDirs()), []);
+assert.equal(nodes.nextRecentDir("001", "/machine-b/work", ["001"]), null);
+nodes.recordRecentDir({ rootId: "001", path: "/machine-b/work" });
+nodes.recordRecentDir({ rootId: "002", path: "/machine-b/other-project" });
+assert.equal(nodes.nextRecentDir("001", "/machine-b/work", ["001", "002"]).path, "/machine-b/other-project");
+nodes.clearRecentDirs();
+nodes.endpoint.prefix = "/n/node-a";
+assert.equal(nodes.listRecentDirs()[0].path, "/machine-a/private-project", "clearing one node must preserve the others");
+nodes.endpoint.prefix = "";
+assert.deepEqual(host(nodes.listRecentDirs()), [], "direct access must be isolated from relay nodes");
+
+// Native shells can switch backends without changing the local WebView origin.
+nodes.recordRecentDir({ rootId: "001", path: "/backend-one" });
+nodes.endpoint.base = "https://other-backend.test";
+assert.deepEqual(host(nodes.listRecentDirs()), []);
+nodes.recordRecentDir({ rootId: "001", path: "/backend-two" });
+nodes.endpoint.base = "https://mindfs.test";
+assert.equal(nodes.listRecentDirs()[0].path, "/backend-one");
+
+// Legacy history has no node identity and must not be attributed to a new node.
+const legacy = load();
+legacy.localStorage.setItem("mindfs-recent-dirs", JSON.stringify([{ rootId: "001", path: "/unknown-node/private" }]));
+assert.deepEqual(host(legacy.listRecentDirs()), []);
+legacy.recordRecentDir({ rootId: "001", path: "/current-node" });
+assert.equal(legacy.listRecentDirs().length, 1);
+assert.equal(legacy.listRecentDirs()[0].path, "/current-node");
+
+// Removed workspaces are skipped without preventing rotation to valid ones.
+const removed = load();
+removed.recordRecentDir({ rootId: "valid", path: "/valid" });
+removed.recordRecentDir({ rootId: "deleted", path: "/deleted" });
+assert.equal(removed.nextRecentDir(null, null, ["valid"]).rootId, "valid");
+assert.equal(removed.nextRecentDir(null, null, []), null);
+assert.equal(removed.nextRecentDir("valid", "/valid", ["valid"]), null);
 
 console.log("ok: tests/recent-dirs.test.mjs");

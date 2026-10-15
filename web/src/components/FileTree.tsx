@@ -4149,10 +4149,7 @@ export function FileTree({
                         models={blueRingAgents.map((item) => item.name)}
                         value={gestureConfig.agentPicks?.[gesture] || ""}
                         label={t("blueRing.agentPickHint")}
-                        getOptionLabel={(name) => {
-                          const status = blueRingAgents.find((item) => item.name === name);
-                          return status?.brief || status?.name || String(name);
-                        }}
+                        getOptionLabel={(name) => String(name)}
                         onChange={(name) => updateBlueRingAgentPick(gesture, String(name || ""))}
                         style={{
                           flex: "0 1 58%",

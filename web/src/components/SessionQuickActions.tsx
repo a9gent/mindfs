@@ -163,8 +163,8 @@ export function SessionQuickActions({
         // selectedDir/currentRootId 都是异步更新的，连发手势若读 prop 会卡在同一项；
         // 用上次目标做基准让每次触发都推进一轮，ref 的失效完全交给
         // currentDirPath 变化的 effect（手动导航/换 root 后自动回正）。
-        const base = lastRecentDirRef.current?.path || currentDirPath;
-        const next = nextRecentDir(currentRootId || null, base || null);
+        const base = lastRecentDirRef.current || { rootId: currentRootId || null, path: currentDirPath || null };
+        const next = nextRecentDir(base.rootId, base.path, (roots || []).map((root) => root.id));
         if (!next) break;
         lastRecentDirRef.current = { rootId: next.rootId, path: next.path };
         setOpen(false);
