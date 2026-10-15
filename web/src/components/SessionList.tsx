@@ -876,6 +876,7 @@ export function MultiProjectSessionList({
 }: ProjectSessionListProps) {
   const { locale, t } = useI18n();
   const effectiveEmptyText = emptyText || t("sessionList.empty");
+  const waitForEncryptionText = t("sessionList.waitForEncryption");
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>(() => {
     if (typeof window === "undefined") {
       return {};
@@ -1609,7 +1610,7 @@ export function MultiProjectSessionList({
         ) : !loading && groups.length === 0 && error ? (
           <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "18px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }}>
             <div>{error}</div>
-            {onRetryLoad ? (
+            {error !== waitForEncryptionText && onRetryLoad ? (
               <button
                 type="button"
                 onClick={onRetryLoad}
@@ -1636,11 +1637,10 @@ export function MultiProjectSessionList({
               if (!hasContent) {
                 return (
                   <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "12px", textAlign: "center" }}>
-                    {effectiveEmptyText}
+                    {error || effectiveEmptyText}
                   </div>
                 );
-              }
-              const renderCard = (session: SessionItem, rootId: string, rootName: string, keyPrefix: string) => (
+              }              const renderCard = (session: SessionItem, rootId: string, rootName: string, keyPrefix: string) => (
                 <SessionCard
                   key={`${keyPrefix}:${rootId}:${session.key}`}
                   session={{ ...session, root_id: session.root_id || rootId }}

@@ -5337,7 +5337,12 @@ export function App({ onGoHome }: AppProps) {
   );
 
   const loadMultiProjectSessionGroups = useCallback(async () => {
-    if (!multiProjectSessionsEnabled || !protectedAPIReady()) {
+    if (!multiProjectSessionsEnabled) {
+      return;
+    }
+    if (!protectedAPIReady()) {
+      // 加载函数可能在 E2EE 就绪前被触发（开关切换/挂载），显示等待态而非空列表
+      setMultiProjectSessionsError(t("sessionList.waitForEncryption"));
       return;
     }
     setMultiProjectSessionsLoading(true);
@@ -5400,7 +5405,7 @@ export function App({ onGoHome }: AppProps) {
     } finally {
       setMultiProjectSessionsLoading(false);
     }
-  }, [applyPendingToMultiProjectGroups, multiProjectSessionsEnabled]);
+  }, [applyPendingToMultiProjectGroups, multiProjectSessionsEnabled, t]);
 
   const loadMoreMultiProjectSessions = useCallback(
     async (group: ProjectSessionGroup) => {
@@ -12979,8 +12984,9 @@ export function App({ onGoHome }: AppProps) {
     : selectedTaskTemplateForFilter
       ? selectedTaskTemplateForFilter.stages.map((stage, index) => ({
         index,
-        name: stage.snapshot.name || (stage.snapshot.role === "agent" ? t("task.stage.agent") : t("task.stage.user")),
-        role: stage.snapshot.role,
+        // snapshot 可能缺失（旧数据/接口降级），不能让看板整个白屏
+        name: stage.snapshot?.name || (stage.snapshot?.role === "agent" ? t("task.stage.agent") : t("task.stage.user")),
+        role: stage.snapshot?.role,
         tasks: kanbanTasks.filter((task) => task.current_stage_index === index),
       }))
     : [];
@@ -15227,8 +15233,10 @@ export function App({ onGoHome }: AppProps) {
               sendShortcut={sendShortcut}
               onRequestFileContext={handleRequestFileContext}
               onClearFileContext={handleClearFileContext}
-              onToggleLeftSidebar={() => setIsLeftOpen((v) => !v)}
-              onToggleRightSidebar={() => setIsRightOpen((v) => !v)}
+              // On mobile the drawers are full-screen and would stack over each
+              // other; opening one closes the other.
+              onToggleLeftSidebar={() => { setIsLeftOpen((v) => !v); if (isMobile) setIsRightOpen(false); }}
+              onToggleRightSidebar={() => { setIsRightOpen((v) => !v); if (isMobile) setIsLeftOpen(false); }}
               sidebarsSwapped={sidebarsSwapped}
               blueRingGestures={blueRingGestures}
             />
