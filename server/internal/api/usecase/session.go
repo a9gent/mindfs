@@ -302,19 +302,27 @@ func (s *Service) SearchSessions(ctx context.Context, in SearchSessionsInput) (S
 func (s *Service) searchMultiRootSessions(ctx context.Context, in SearchSessionsInput) (SearchSessionsOutput, error) {
 	limit := normalizeSessionSearchLimit(in.Limit)
 	items := make([]SessionSearchHit, 0, limit)
+	// 单个 root 损坏（管理器缺失/会话文件读取失败）不应拖垮全局搜索：
+	// 跳过失败的 root 继续搜其余，只在没有可用结果时才报错。
+	var lastErr error
 	for _, root := range s.Registry.ListRoots() {
 		manager, err := s.Registry.GetSessionManager(root.ID)
 		if err != nil {
-			return SearchSessionsOutput{}, err
+			lastErr = err
+			continue
 		}
 		hits, err := manager.Search(ctx, session.SearchOptions{
 			Query: in.Query,
 			Limit: limit,
 		})
 		if err != nil {
-			return SearchSessionsOutput{}, err
+			lastErr = err
+			continue
 		}
 		items = append(items, mapSessionSearchHits(root.ID, hits)...)
+	}
+	if len(items) == 0 && lastErr != nil {
+		return SearchSessionsOutput{}, lastErr
 	}
 	sortSessionSearchHits(items)
 	if len(items) > limit {

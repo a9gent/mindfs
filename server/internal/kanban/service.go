@@ -22,6 +22,13 @@ type RootProvider interface {
 	ListRoots() []fs.RootInfo
 }
 
+// SessionBinder lets AttachSession stamp task_id back onto the chat session
+// without the kanban package importing the session manager. Implemented by
+// the api layer.
+type SessionBinder interface {
+	BindSessionTask(ctx context.Context, rootID, sessionKey, taskID string) error
+}
+
 type Service struct {
 	runCtx    context.Context
 	cancel    context.CancelFunc
@@ -30,6 +37,7 @@ type Service struct {
 	Templates *TemplateStore
 	Roots     RootProvider
 	Runner    Runner
+	sessionBinder SessionBinder
 
 	opMu             sync.Mutex
 	running          map[string]bool
@@ -45,6 +53,10 @@ var errStopTaskExecution = errors.New("stop task execution")
 func NewService(templates *TemplateStore, roots RootProvider) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{runCtx: ctx, cancel: cancel, Templates: templates, Roots: roots, stores: map[string]*TaskStore{}, scheduleRun: map[string]bool{}, schedulePend: map[string]bool{}}
+}
+
+func (s *Service) SetSessionBinder(binder SessionBinder) {
+	s.sessionBinder = binder
 }
 
 func (s *Service) SetRunner(runner Runner) {

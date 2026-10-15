@@ -259,6 +259,37 @@ func (h *HTTPHandler) handleKanbanTaskInputUpdate(w http.ResponseWriter, r *http
 	respondJSON(w, http.StatusOK, detail)
 }
 
+func (h *HTTPHandler) handleTaskAttachSession(w http.ResponseWriter, r *http.Request) {
+	svc, ok := h.kanbanService(w)
+	if !ok {
+		return
+	}
+	var req struct {
+		RootID     string `json:"root_id"`
+		SessionKey string `json:"session_key"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json body"))
+		return
+	}
+	detail, err := svc.AttachSession(r.Context(), req.RootID, chi.URLParam(r, "id"), req.SessionKey)
+	if err != nil {
+		// AttachSession errors are state/validation conflicts, matching the
+		// 409 convention of the other task mutation handlers.
+		respondError(w, http.StatusConflict, err)
+		return
+	}
+	h.broadcastTaskUpdated(req.RootID, detail)
+	if h.AppContext != nil {
+		if manager, mErr := h.AppContext.GetSessionManager(req.RootID); mErr == nil {
+			if sess, sErr := manager.Get(r.Context(), req.SessionKey, 0); sErr == nil && sess != nil {
+				h.AppContext.BroadcastSessionMetaUpdated(req.RootID, sess)
+			}
+		}
+	}
+	respondJSON(w, http.StatusOK, detail)
+}
+
 func (h *HTTPHandler) handleKanbanTaskNext(w http.ResponseWriter, r *http.Request) {
 	h.handleKanbanTaskMove(w, r, "next")
 }

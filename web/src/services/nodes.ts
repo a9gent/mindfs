@@ -4,13 +4,14 @@ import type { LauncherNode } from "./storage";
 
 export const backendNodes = {
   async load(): Promise<LauncherNode[]> {
-    return (await protectedJSON<{ nodes: LauncherNode[] }>(appPath("/api/nodes"))).nodes;
+    // Defensive: a malformed/empty backend payload must not crash the node picker.
+    return (await protectedJSON<{ nodes?: LauncherNode[] }>(appPath("/api/nodes"))).nodes ?? [];
   },
   async save(nodes: LauncherNode[]): Promise<LauncherNode[]> {
-    return (await protectedJSON<{ nodes: LauncherNode[] }>(appPath("/api/nodes"), {
+    return (await protectedJSON<{ nodes?: LauncherNode[] }>(appPath("/api/nodes"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ nodes }),
-    })).nodes;
+    })).nodes ?? [];
   },
 };

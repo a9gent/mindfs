@@ -388,6 +388,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/tasks/{id}/read/{resource}", h.protectedEndpoint(h.handleTaskRead))
 	r.Post("/api/tasks/{id}/orchestration/{operation}", h.protectedEndpoint(h.handleTaskOrchestration))
 	r.Post("/api/tasks/{id}/input", h.protectedEndpoint(h.handleKanbanTaskInputUpdate))
+	r.Post("/api/tasks/{id}/attach-session", h.protectedEndpoint(h.handleTaskAttachSession))
 	r.Post("/api/tasks/{id}/next", h.protectedEndpoint(h.handleKanbanTaskNext))
 	r.Post("/api/tasks/{id}/run-now", h.protectedEndpoint(h.handleKanbanTaskRunNow))
 	r.Post("/api/tasks/{id}/prev", h.protectedEndpoint(h.handleKanbanTaskPrev))
@@ -436,6 +437,11 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/agent-api-providers/test", h.protectedEndpoint(h.handleAgentAPIProviderTest))
 	r.Delete("/api/agent-api-providers", h.protectedEndpoint(h.handleAgentAPIProviderDelete))
 	r.Post("/api/agent-api-providers/switch", h.protectedEndpoint(h.handleAgentAPIProviderSwitch))
+	r.Put("/api/agent-api-providers/{id}/pinned", h.protectedEndpoint(h.handleAgentAPIProviderPinnedPut))
+	r.Post("/api/agent-api-providers/{id}/apply", h.protectedEndpoint(h.handleAgentAPIProviderApply))
+	r.Patch("/api/agents/{name}/metadata", h.protectedEndpoint(h.handleAgentMetadataPatch))
+	r.Get("/api/preferences/agent-visibility", h.protectedEndpoint(h.handleAgentVisibilityGet))
+	r.Put("/api/preferences/agent-visibility", h.protectedEndpoint(h.handleAgentVisibilityPut))
 	r.NotFound(h.handleNotFound)
 
 	return r

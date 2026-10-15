@@ -137,12 +137,22 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 	}
 	services.Scheduled = scheduled.NewService(services, services)
 	services.Scheduled.Start(ctx)
+	// Definition 解析走 prober 的合并配置（含 agents.json 用户层），避免每个
+	// 协议解析都回读磁盘；prober 缺位时 api 层自行回退读盘。定义枚举同理：
+	// zcode 规则清理要扫到仅存在于 hosted extra 层的 agent。
+	api.SetAgentDefinitionResolver(func(name string) (agent.Definition, bool) {
+		return agentProber.DefinitionForAgent(name)
+	})
+	api.SetAgentDefinitionsLister(func() []agent.Definition {
+		return agentProber.Definitions()
+	})
 	taskTemplates, err := kanban.NewTemplateStore()
 	if err != nil {
 		return err
 	}
 	services.Kanban = kanban.NewService(taskTemplates, services)
 	services.Kanban.SetRunner(services)
+	services.Kanban.SetSessionBinder(services)
 	services.Kanban.Start(ctx)
 	githubImportSvc, err := githubimport.NewService(services)
 	if err != nil {

@@ -6,6 +6,12 @@ import { useI18n, type Locale } from "../i18n";
 import { copyText } from "../services/clipboard";
 import { reportError } from "../services/error";
 import { sessionService } from "../services/session";
+import {
+  applySessionFilters,
+  isSessionFilterActive,
+  type SessionFilterState,
+} from "../services/sessionFilter";
+import { SessionFilterBar } from "./SessionFilterBar";
 
 export type SessionType = "chat" | "plugin" | "command";
 
@@ -43,6 +49,7 @@ type SessionListProps = {
   emptyText?: React.ReactNode;
   onSearchToggle?: () => void;
   onSearchBack?: () => void;
+  onAddToKanban?: (session: SessionItem) => void;
   onSearchQueryChange?: (query: string) => void;
   onSearchSubmit?: () => void;
   onSearchBlur?: () => void;
@@ -61,6 +68,8 @@ type SessionListProps = {
   onLoadOlder?: () => void;
   loadingOlder?: boolean;
   hasMore?: boolean;
+  filter?: SessionFilterState;
+  onFilterChange?: (filter: SessionFilterState) => void;
 };
 
 const COLLAPSED_CHILD_SESSION_LIMIT = 3;
@@ -68,6 +77,14 @@ const MULTI_PROJECT_VISIBLE_LIMIT = 6;
 const MAIN_SESSION_ICON_OFFSET = "2px";
 const SUB_SESSION_ICON_OFFSET = "0px";
 const PINNED_PROJECTS_STORAGE_KEY = "mindfs-pinned-session-projects";
+// 记「已展开集合」：缺省（无记录）= 折叠，与现有 expandedProjects 语义一致
+const EXPANDED_PROJECTS_STORAGE_KEY = "mindfs-session-projects-expanded";
+// 顶层会话 = 没有父会话的条目；多个 memo（flatRows/cleanupCandidates）在组件
+// 声明顺序上先于原先的组件内定义，提前提升到模块层避免 TDZ 报错
+function topLevelSessionsForGroup(sessions: SessionItem[]): SessionItem[] {
+  return sessions.filter((session) => !String(session.parent_session_key || "").trim());
+}
+
 
 type VisibleSessionRow =
   | { type: "session"; session: SessionItem }
@@ -103,12 +120,20 @@ type ProjectSessionListProps = {
   onScheduledTask?: (session: SessionItem) => void;
   onDelete?: (session: SessionItem) => void;
   onHandoffPack?: (session: SessionItem) => void;
+  onAddToKanban?: (session: SessionItem) => void;
   onProjectClick?: (rootId: string) => void;
   onLoadMoreProject?: (group: ProjectSessionGroup) => Promise<void> | void;
   onLoadChildren?: (
     session: SessionItem,
     options?: { beforeTime?: string },
   ) => Promise<{ hasMore?: boolean } | void> | { hasMore?: boolean } | void;
+  filter?: SessionFilterState;
+  onFilterChange?: (filter: SessionFilterState) => void;
+  flatMode?: boolean;
+  onBatchDelete?: (sessions: SessionItem[]) => Promise<void> | void;
+  currentSessionKey?: string;
+  error?: string;
+  onRetryLoad?: () => void;
 };
 
 function ToggleRowButton({
@@ -310,6 +335,7 @@ export function SessionList({
   emptyText = "",
   onSearchToggle,
   onSearchBack,
+  onAddToKanban,
   onSearchQueryChange,
   onSearchSubmit,
   onSearchBlur,
@@ -325,23 +351,38 @@ export function SessionList({
   onLoadOlder,
   loadingOlder = false,
   hasMore = false,
+  filter,
+  onFilterChange,
 }: SessionListProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const effectiveEmptyText = emptyText || t("sessionList.empty");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const searchBlurTimerRef = useRef<number | null>(null);
   const [expandedChildren, setExpandedChildren] = useState<Record<string, boolean>>({});
   const [loadingChildren, setLoadingChildren] = useState<Record<string, boolean>>({});
   const [childrenHasMore, setChildrenHasMore] = useState<Record<string, boolean>>({});
+  const filterActive = !!filter && !!onFilterChange && !searchResultsMode && isSessionFilterActive(filter);
+  const filteredSessions = useMemo(() => {
+    if (!filter || !filterActive) {
+      return null;
+    }
+    return applySessionFilters(sessions, filter);
+  }, [filter, filterActive, sessions]);
+  // 筛空提示的数据源用未过滤列表：空态里告诉用户"最近的一条其实在多久之前"
+  const nearestSession = useMemo(() => latestSessionOf(sessions), [sessions]);
+  const effectiveSessions = useMemo(
+    () => (filteredSessions ? [...filteredSessions.running, ...filteredSessions.rest] : sessions),
+    [filteredSessions, sessions],
+  );
   const visibleSessions = useMemo(() => {
     if (searchResultsMode) {
       return sessions.map((session): VisibleSessionRow => ({ type: "session", session }));
     }
     const childrenByParent = new Map<string, SessionItem[]>();
     const topLevel: SessionItem[] = [];
-    const keys = new Set(sessions.map((item) => item.key));
+    const keys = new Set(effectiveSessions.map((item) => item.key));
     const parentByKey = new Map<string, string>();
-    for (const item of sessions) {
+    for (const item of effectiveSessions) {
       const parentKey = String(item.parent_session_key || "").trim();
       if (parentKey && keys.has(parentKey)) {
         const children = childrenByParent.get(parentKey) || [];
@@ -388,22 +429,22 @@ export function SessionList({
     };
     topLevel.forEach((item) => append(item));
     return out;
-  }, [childrenHasMore, expandedChildren, searchResultsMode, selectedKey, sessions]);
+  }, [childrenHasMore, effectiveSessions, expandedChildren, searchResultsMode, selectedKey, sessions]);
   const childCountByParent = useMemo(() => {
     const counts = new Map<string, number>();
-    const keys = new Set(sessions.map((item) => item.key));
-    for (const item of sessions) {
+    const keys = new Set(effectiveSessions.map((item) => item.key));
+    for (const item of effectiveSessions) {
       const parentKey = String(item.parent_session_key || "").trim();
       if (parentKey && keys.has(parentKey)) {
         counts.set(parentKey, (counts.get(parentKey) || 0) + 1);
       }
     }
     return counts;
-  }, [sessions]);
+  }, [effectiveSessions]);
   const selectedParentKey = useMemo(() => {
     if (!selectedKey) return "";
-    return sessions.find((item) => item.key === selectedKey)?.parent_session_key || "";
-  }, [selectedKey, sessions]);
+    return effectiveSessions.find((item) => item.key === selectedKey)?.parent_session_key || "";
+  }, [selectedKey, effectiveSessions]);
   const sessionByKey = useMemo(() => {
     const byKey = new Map<string, SessionItem>();
     for (const item of sessions) {
@@ -634,9 +675,43 @@ export function SessionList({
         </div>
       ) : null}
 
+      {filter && onFilterChange && !searchResultsMode ? (
+        <SessionFilterBar filter={filter} onChange={onFilterChange} />
+      ) : null}
+
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "8px" }}>
-        {!sessions.length ? (
-          emptyText ? (
+        {!effectiveSessions.length ? (
+          filterActive && sessions.length ? (
+            <div
+              style={{
+                fontSize: "12px",
+                color: "var(--text-secondary)",
+                minHeight: "100%",
+                padding: "12px 18px",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                textAlign: "center",
+                lineHeight: 1.6,
+              }}
+            >
+              <div>{t("sessionList.noFilterMatch")}</div>
+              {nearestSession ? (
+                <div style={{ marginTop: "8px" }}>
+                  {t("sessionList.filterNearestHint", {
+                    name: nearestSession.name || `Session ${nearestSession.session_key.slice(0, 8)}`,
+                    time: formatTime(
+                      nearestSession.updated_at || nearestSession.created_at || "",
+                      locale,
+                      t("time.justNow"),
+                    ),
+                  })}
+                </div>
+              ) : null}
+              <div style={{ marginTop: "6px", opacity: 0.75 }}>{t("sessionList.filterEmptyGuide")}</div>
+            </div>
+          ) : emptyText ? (
             <div
               style={{
                 fontSize: "12px",
@@ -655,6 +730,31 @@ export function SessionList({
           ) : null
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+            {filterActive && filteredSessions && filteredSessions.running.length > 0 ? (
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "4px 6px 6px",
+                  fontSize: "11px",
+                  color: "var(--text-secondary)",
+                  letterSpacing: "0.02em",
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: "6px",
+                    height: "6px",
+                    borderRadius: "50%",
+                    background: "#ef4444",
+                    flexShrink: 0,
+                  }}
+                />
+                {t("sessionList.runningSection", { count: filteredSessions.running.length })}
+              </div>
+            ) : null}
             {visibleSessions.map((row) => {
               if (row.type === "child-toggle") {
                 const loading = !!loadingChildren[row.parent.key];
@@ -704,6 +804,7 @@ export function SessionList({
                   onScheduledTask={onScheduledTask}
                   onDelete={onDelete}
                   onHandoffPack={onHandoffPack}
+                  onAddToKanban={onAddToKanban}
                 />
               );
             })}
@@ -758,14 +859,48 @@ export function MultiProjectSessionList({
   onRename,
   onScheduledTask,
   onDelete,
-  onHandoffPack,
   onProjectClick,
   onLoadMoreProject,
   onLoadChildren,
+  onHandoffPack,
+  onAddToKanban,
+  filter,
+  onFilterChange,
+  flatMode = false,
+  onBatchDelete,
+  currentSessionKey = "",
+  error = "",
+  onRetryLoad,
 }: ProjectSessionListProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const effectiveEmptyText = emptyText || t("sessionList.empty");
-  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
+  const waitForEncryptionText = t("sessionList.waitForEncryption");
+  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>(() => {
+    if (typeof window === "undefined") {
+      return {};
+    }
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(EXPANDED_PROJECTS_STORAGE_KEY) || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return {};
+      }
+      const next: Record<string, boolean> = {};
+      for (const [key, value] of Object.entries(parsed)) {
+        if (key && value === true) {
+          next[key] = true;
+        }
+      }
+      return next;
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(EXPANDED_PROJECTS_STORAGE_KEY, JSON.stringify(expandedProjects));
+  }, [expandedProjects]);
   const [loadingProjects, setLoadingProjects] = useState<Record<string, boolean>>({});
   const [expandedChildren, setExpandedChildren] = useState<Record<string, boolean>>({});
   const [loadingChildren, setLoadingChildren] = useState<Record<string, boolean>>({});
@@ -797,9 +932,45 @@ export function MultiProjectSessionList({
     }
     window.localStorage.setItem(PINNED_PROJECTS_STORAGE_KEY, JSON.stringify(pinnedProjects));
   }, [pinnedProjects]);
+  const filterActive = !!filter && !!onFilterChange && isSessionFilterActive(filter);
+  const filteredGroups = useMemo(() => {
+    if (!filter || !filterActive) {
+      return null;
+    }
+    const now = Date.now();
+    return groups
+      .map((group) => {
+        const result = applySessionFilters(group.sessions, filter, now);
+        const matchCount = result.running.length + result.rest.length;
+        const unloaded = Math.max(0, group.totalCount - group.sessions.length);
+        return {
+          ...group,
+          sessions: [...result.running, ...result.rest],
+          // 剩余计数基于「未加载 + 命中」，避免被移到置顶区的运行中会话被重复计入
+          totalCount: unloaded + matchCount,
+        };
+      })
+      .filter((group) => group.sessions.length > 0 || group.totalCount > group.sessions.length);
+  }, [filter, filterActive, groups]);
+  const effectiveGroups = filteredGroups ?? groups;
+  // 筛空提示：跨所有已加载分组找最近一条（与过滤无关，专供空态展示）
+  const nearestSession = useMemo(
+    () => latestSessionOf(groups.flatMap((group) => group.sessions)),
+    [groups],
+  );
+  // 筛选态下「加载更多/剩余计数」必须用未过滤的原始分组，否则分页游标错位
+  const originalGroupByRootId = useMemo(() => {
+    const byRoot = new Map<string, ProjectSessionGroup>();
+    for (const group of groups) {
+      byRoot.set(group.rootId, group);
+    }
+    return byRoot;
+  }, [groups]);
+  const loadTargetGroup = (group: ProjectSessionGroup): ProjectSessionGroup =>
+    originalGroupByRootId.get(group.rootId) ?? group;
   const orderedGroups = useMemo(
     () =>
-      groups.slice().sort((left, right) => {
+      effectiveGroups.slice().sort((left, right) => {
         const leftPinnedAt = pinnedProjects[left.rootId] || 0;
         const rightPinnedAt = pinnedProjects[right.rootId] || 0;
         if (leftPinnedAt || rightPinnedAt) {
@@ -809,8 +980,107 @@ export function MultiProjectSessionList({
         }
         return 0;
       }),
-    [groups, pinnedProjects],
+    [effectiveGroups, pinnedProjects],
   );
+  // ---- 平铺模式：已置顶专区之下，全部组的会话合成单一时间序列 ----
+  const flatRows = useMemo(() => {
+    if (!flatMode) return null;
+    const sortAsc = filter?.sortAsc ?? false;
+    const flat = orderedGroups.flatMap((group) =>
+      topLevelSessionsForGroup(group.sessions)
+        .filter((session) => !session.pinned_at)
+        .map((session) => ({
+        session: { ...session, root_id: session.root_id || group.rootId },
+        rootName: group.rootName || group.rootId,
+      })),
+    );
+    flat.sort((left, right) => {
+      const leftTs = Date.parse(left.session.updated_at || left.session.created_at || "") || 0;
+      const rightTs = Date.parse(right.session.updated_at || right.session.created_at || "") || 0;
+      return sortAsc ? leftTs - rightTs : rightTs - leftTs;
+    });
+    return flat;
+  }, [flatMode, orderedGroups, filter?.sortAsc]);
+
+  // ---- 清理闲置：多选模式状态 ----
+  const [cleanupMode, setCleanupMode] = useState(false);
+  const [cleanupAgeDays, setCleanupAgeDays] = useState<0 | 3 | 5 | 7>(7);
+  const [cleanupOldestFirst, setCleanupOldestFirst] = useState(true);
+  const [cleanupSelected, setCleanupSelected] = useState<Set<string>>(new Set());
+  const [cleanupConfirmOpen, setCleanupConfirmOpen] = useState(false);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+
+  // 清理候选：顶层、已加载、非运行中、未绑定看板任务、非当前打开
+  const cleanupCandidates = useMemo(() => {
+    if (!cleanupMode) return [] as { session: SessionItem; rootName: string }[];
+    const cutoff = cleanupAgeDays > 0 ? Date.now() - cleanupAgeDays * 86400000 : 0;
+    const list = orderedGroups.flatMap((group) =>
+      topLevelSessionsForGroup(group.sessions)
+        .map((session) => ({ ...session, root_id: session.root_id || group.rootId }))
+        .filter((session) => {
+          if (session.pending) return false;
+          if (session.task_id) return false;
+          if (session.key && session.key === currentSessionKey) return false;
+          if (cleanupAgeDays > 0) {
+            const ts = Date.parse(session.updated_at || session.created_at || "") || 0;
+            if (!ts || ts > cutoff) return false;
+          }
+          return true;
+        })
+        .map((session) => ({ session, rootName: group.rootName || group.rootId })),
+    );
+    list.sort((left, right) => {
+      const leftTs = Date.parse(left.session.updated_at || left.session.created_at || "") || 0;
+      const rightTs = Date.parse(right.session.updated_at || right.session.created_at || "") || 0;
+      return cleanupOldestFirst ? leftTs - rightTs : rightTs - leftTs;
+    });
+    return list;
+  }, [cleanupMode, cleanupAgeDays, cleanupOldestFirst, orderedGroups, currentSessionKey]);
+
+  useEffect(() => {
+    if (!cleanupMode) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setCleanupMode(false);
+        setCleanupSelected(new Set());
+        setCleanupConfirmOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [cleanupMode]);
+
+  const exitCleanupMode = () => {
+    setCleanupMode(false);
+    setCleanupSelected(new Set());
+    setCleanupConfirmOpen(false);
+  };
+
+  const toggleCleanupSession = (rootId: string, key: string) => {
+    const id = `${rootId}:${key}`;
+    setCleanupSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const runBatchDelete = async () => {
+    if (!onBatchDelete || cleanupBusy) return;
+    const targets = cleanupCandidates.filter((item) =>
+      cleanupSelected.has(`${item.session.root_id}:${item.session.key}`),
+    );
+    if (targets.length === 0) return;
+    setCleanupBusy(true);
+    try {
+      await onBatchDelete(targets.map((item) => item.session));
+    } finally {
+      setCleanupBusy(false);
+      exitCleanupMode();
+    }
+  };
+
   const togglePinnedProject = (rootId: string) => {
     setPinnedProjects((prev) => {
       const next = { ...prev };
@@ -824,6 +1094,7 @@ export function MultiProjectSessionList({
   };
   const sessionByKey = useMemo(() => {
     const byKey = new Map<string, SessionItem>();
+    // 用未过滤的原始分组：fork 名/父会话查找不应随筛选结果缩水
     for (const group of groups) {
       for (const item of group.sessions) {
         const sessionRoot = item.root_id || group.rootId;
@@ -928,13 +1199,19 @@ export function MultiProjectSessionList({
 
   const handleProjectToggle = async (group: ProjectSessionGroup) => {
     const expanded = !!expandedProjects[group.rootId];
-    const remaining = Math.max(0, group.totalCount - group.sessions.length);
+    // 用原始分组算剩余（未加载）数：筛选副本的 sessions 是命中子集；
+    // 置顶会话已在顶部专区展示但仍算已加载，不参与剩余数
+    const source = loadTargetGroup(group);
+    const remaining = Math.max(
+      0,
+      source.totalCount - topLevelSessionsForGroup(source.sessions).length,
+    );
     if (!expanded) {
       setExpandedProjects((prev) => ({ ...prev, [group.rootId]: true }));
       if (remaining > 0 && onLoadMoreProject) {
         setLoadingProjects((prev) => ({ ...prev, [group.rootId]: true }));
         try {
-          await onLoadMoreProject(group);
+          await onLoadMoreProject(source);
         } finally {
           setLoadingProjects((prev) => ({ ...prev, [group.rootId]: false }));
         }
@@ -944,7 +1221,7 @@ export function MultiProjectSessionList({
     if (remaining > 0 && onLoadMoreProject) {
       setLoadingProjects((prev) => ({ ...prev, [group.rootId]: true }));
       try {
-        await onLoadMoreProject(group);
+        await onLoadMoreProject(source);
       } finally {
         setLoadingProjects((prev) => ({ ...prev, [group.rootId]: false }));
       }
@@ -956,9 +1233,6 @@ export function MultiProjectSessionList({
   const handleProjectCollapse = (rootId: string) => {
     setExpandedProjects((prev) => ({ ...prev, [rootId]: false }));
   };
-
-  const topLevelSessionsForGroup = (sessions: SessionItem[]) =>
-    sessions.filter((session) => !String(session.parent_session_key || "").trim());
 
   const sessionsForTopLevelLimit = (sessions: SessionItem[], limit: number) => {
     const topLevel = topLevelSessionsForGroup(sessions);
@@ -989,7 +1263,221 @@ export function MultiProjectSessionList({
         }}
       >
         <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-          {onSearchToggle ? (
+          {onBatchDelete && orderedGroups.length > 0 && !cleanupMode ? (
+            <button
+              type="button"
+              aria-label={t("sessionList.cleanupIdle")}
+              title={t("sessionList.cleanupIdle")}
+              onClick={() => setCleanupMode(true)}
+              style={{
+                width: "34px",
+                height: "34px",
+                minWidth: "34px",
+                border: "none",
+                borderRadius: "8px",
+                padding: 0,
+                background: "transparent",
+                color: "var(--text-secondary)",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+              }}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6l-1 14H6L5 6" />
+                <path d="M10 11v6" />
+                <path d="M14 11v6" />
+              </svg>
+            </button>
+          ) : null}
+          {cleanupMode ? (
+            <div style={{ display: "inline-flex", alignItems: "center", gap: "4px", flex: 1, minWidth: 0, overflow: "auto" }}>
+              {([3, 5, 7] as const).map((days) => (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={() => { setCleanupAgeDays(days); setCleanupSelected(new Set()); }}
+                  style={{
+                    border: "1px solid",
+                    borderColor: cleanupAgeDays === days ? "var(--accent-color)" : "var(--border-color)",
+                    background: cleanupAgeDays === days ? "var(--selection-bg)" : "transparent",
+                    color: cleanupAgeDays === days ? "var(--accent-color)" : "var(--text-secondary)",
+                    borderRadius: "999px",
+                    padding: "2px 8px",
+                    fontSize: "11px",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {t(`sessionList.cleanupAge${days}`)}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => { setCleanupAgeDays(0); setCleanupSelected(new Set()); }}
+                style={{
+                  border: "1px solid",
+                  borderColor: cleanupAgeDays === 0 ? "var(--accent-color)" : "var(--border-color)",
+                  background: cleanupAgeDays === 0 ? "var(--selection-bg)" : "transparent",
+                  color: cleanupAgeDays === 0 ? "var(--accent-color)" : "var(--text-secondary)",
+                  borderRadius: "999px",
+                  padding: "2px 8px",
+                  fontSize: "11px",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {t("sessionList.cleanupAgeAll")}
+              </button>
+              <button
+                type="button"
+                title={cleanupOldestFirst ? t("sessionList.cleanupOldestFirst") : t("sessionList.cleanupNewestFirst")}
+                onClick={() => { setCleanupOldestFirst((prev) => !prev); setCleanupSelected(new Set()); }}
+                style={{
+                  border: "1px solid var(--border-color)",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  borderRadius: "999px",
+                  padding: "2px 8px",
+                  fontSize: "11px",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {cleanupOldestFirst ? "↑" : "↓"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const allSelected = cleanupCandidates.length > 0
+                    && cleanupSelected.size >= cleanupCandidates.length;
+                  setCleanupSelected(allSelected
+                    ? new Set()
+                    : new Set(cleanupCandidates.map((item) => `${item.session.root_id}:${item.session.key}`)));
+                }}
+                disabled={cleanupCandidates.length === 0}
+                style={{
+                  border: "1px solid var(--border-color)",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  borderRadius: "999px",
+                  padding: "2px 8px",
+                  fontSize: "11px",
+                  cursor: cleanupCandidates.length ? "pointer" : "default",
+                  opacity: cleanupCandidates.length ? 1 : 0.5,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {cleanupSelected.size > 0 && cleanupSelected.size >= cleanupCandidates.length && cleanupCandidates.length > 0
+                  ? t("sessionList.cleanupDeselectAll")
+                  : t("sessionList.cleanupSelectAll")}
+              </button>
+              <button
+                type="button"
+                onClick={exitCleanupMode}
+                style={{
+                  border: "1px solid var(--border-color)",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  borderRadius: "999px",
+                  padding: "2px 8px",
+                  fontSize: "11px",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {t("sessionList.cleanupExit")}
+              </button>
+            </div>
+          ) : null}
+          {orderedGroups.length > 1 ? (
+            (() => {
+              const anyExpanded = orderedGroups.some((group) => !!expandedProjects[group.rootId]);
+              const collapseAll = () => {
+                setExpandedProjects({});
+              };
+              const expandAll = () => {
+                setExpandedProjects((prev) => {
+                  const next = { ...prev };
+                  for (const group of orderedGroups) {
+                    next[group.rootId] = true;
+                  }
+                  return next;
+                });
+              };
+              return (
+                <button
+                  type="button"
+                  aria-label={anyExpanded ? t("sessionList.collapseAllProjects") : t("sessionList.expandAllProjects")}
+                  title={anyExpanded ? t("sessionList.collapseAllProjects") : t("sessionList.expandAllProjects")}
+                  onClick={() => {
+                    if (anyExpanded) {
+                      collapseAll();
+                    } else {
+                      void (async () => {
+                        // 全部展开时把有未加载剩余的组也拉满，避免展开后只看到 6 条
+                        setExpandedProjects((prev) => {
+                          const next = { ...prev };
+                          for (const group of orderedGroups) {
+                            next[group.rootId] = true;
+                          }
+                          return next;
+                        });
+                        for (const group of orderedGroups) {
+                          const source = loadTargetGroup(group);
+                          const remaining = Math.max(
+                            0,
+                            source.totalCount - topLevelSessionsForGroup(source.sessions).length,
+                          );
+                          if (remaining > 0 && onLoadMoreProject && !loadingProjects[group.rootId]) {
+                            setLoadingProjects((prev) => ({ ...prev, [group.rootId]: true }));
+                            try {
+                              await onLoadMoreProject(source);
+                            } finally {
+                              setLoadingProjects((prev) => ({ ...prev, [group.rootId]: false }));
+                            }
+                          }
+                        }
+                      })();
+                    }
+                  }}
+                  style={{
+                    width: "34px",
+                    height: "34px",
+                    minWidth: "34px",
+                    border: "none",
+                    borderRadius: "8px",
+                    padding: 0,
+                    background: "transparent",
+                    color: "var(--text-secondary)",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    {anyExpanded ? (
+                      <>
+                        <rect x="3" y="3" width="7" height="7" rx="1" />
+                        <rect x="14" y="3" width="7" height="7" rx="1" />
+                        <rect x="3" y="14" width="7" height="7" rx="1" />
+                        <rect x="14" y="14" width="7" height="7" rx="1" />
+                      </>
+                    ) : (
+                      <>
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <path d="M3 9h18M3 15h18M9 3v18M15 3v18" />
+                      </>
+                    )}
+                  </svg>
+                </button>
+              );
+            })()
+          ) : null}
             <button
               type="button"
               aria-label={t("sessionList.searchCurrentProject")}
@@ -1015,26 +1503,292 @@ export function MultiProjectSessionList({
                 <path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5A6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5S14 7.01 14 9.5S11.99 14 9.5 14" />
               </svg>
             </button>
-          ) : null}
-        </div>
+          </div>
         {headerAction ? <div style={{ display: "inline-flex", alignItems: "center" }}>{headerAction}</div> : null}
       </div>
+      {filter && onFilterChange ? (
+        <SessionFilterBar filter={filter} onChange={onFilterChange} />
+      ) : null}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "8px" }}>
-        {loading && groups.length === 0 ? (
+        {cleanupMode ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+            {cleanupCandidates.length === 0 ? (
+              <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "18px", textAlign: "center" }}>
+                {t("sessionList.noFilterMatch")}
+              </div>
+            ) : (
+              cleanupCandidates.map(({ session, rootName }) => {
+                const id = `${session.root_id}:${session.key}`;
+                const checked = cleanupSelected.has(id);
+                return (
+                  <button
+                    key={`cleanup:${id}`}
+                    type="button"
+                    onClick={() => toggleCleanupSession(session.root_id || "", session.key)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      width: "100%",
+                      border: "none",
+                      background: checked ? "rgba(59, 130, 246, 0.1)" : "transparent",
+                      borderRadius: "8px",
+                      padding: "7px 6px",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        width: "16px",
+                        height: "16px",
+                        flexShrink: 0,
+                        borderRadius: "4px",
+                        border: checked ? "none" : "1px solid var(--border-color)",
+                        background: checked ? "var(--accent-color)" : "transparent",
+                        color: "#fff",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: "11px",
+                      }}
+                    >
+                      {checked ? "✓" : ""}
+                    </span>
+                    <span style={{ minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "12px", color: "var(--text-primary)" }}>
+                      {session.name || `Session ${session.key.slice(0, 8)}`}
+                    </span>
+                    <span style={{ flexShrink: 0, fontSize: "10px", color: "var(--text-secondary)", padding: "0 4px", borderRadius: "5px", background: "var(--border-color)" }}>
+                      {rootName}
+                    </span>
+                    <span style={{ flexShrink: 0, fontSize: "11px", color: "var(--text-secondary)" }}>
+                      {formatTime(session.updated_at || "", locale, t("time.justNow"))}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        ) : loading && groups.length === 0 ? (
           <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "18px", textAlign: "center" }}>{t("sessionList.loading")}</div>
-        ) : groups.length === 0 ? (
-          <div style={{ fontSize: "12px", color: "var(--text-secondary)", minHeight: "100%", padding: "12px 18px", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", lineHeight: 1.6 }}>
-            {effectiveEmptyText}
+        ) : !loading && groups.length === 0 && error ? (
+          <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "18px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }}>
+            <div>{error}</div>
+            {error !== waitForEncryptionText && onRetryLoad ? (
+              <button
+                type="button"
+                onClick={onRetryLoad}
+                style={{
+                  border: "1px solid var(--border-color)",
+                  background: "transparent",
+                  color: "var(--text-primary)",
+                  borderRadius: "8px",
+                  padding: "4px 12px",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                }}
+              >
+                {t("sessionList.retryLoad")}
+              </button>
+            ) : null}
+          </div>
+        ) : flatMode ? (
+          <>
+            {(() => {
+              // 平铺分区：①已置顶卡片 ②「项目」卡片（全部平铺会话），
+              // sortAsc 正/倒序在两个区域内各自生效（置顶区按 pinned_at、项目区按时间）。
+              const pinnedRows = orderedGroups.flatMap((group) =>
+                topLevelSessionsForGroup(group.sessions)
+                  .filter((session) => !!session.pinned_at)
+                  .sort((left, right) => {
+                    const leftTs = Date.parse(left.pinned_at || "") || 0;
+                    const rightTs = Date.parse(right.pinned_at || "") || 0;
+                    const asc = filter?.sortAsc ?? false;
+                    return asc ? leftTs - rightTs : rightTs - leftTs;
+                  }),
+              );
+              const flatPinnedVisible = pinnedRows.length > 0;
+              const flatProjectVisible = !!flatRows && flatRows.length > 0;
+              if (!flatPinnedVisible && !flatProjectVisible) {
+                return (
+                  <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "12px", textAlign: "center" }}>
+                    {error || effectiveEmptyText}
+                  </div>
+                );
+              }
+              const sectionCardStyle: React.CSSProperties = {
+                border: "1px solid var(--border-color)",
+                borderRadius: "10px",
+                padding: "6px",
+                marginBottom: "8px",
+                background: "var(--menu-bg, transparent)",
+              };
+              const sectionLabelStyle: React.CSSProperties = {
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "2px 4px 6px",
+                fontSize: "11px",
+                color: "var(--text-secondary)",
+                letterSpacing: "0.02em",
+              };
+              return (
+                <>
+                  {flatPinnedVisible ? (
+                    <div style={sectionCardStyle}>
+                      <div style={sectionLabelStyle}>
+                        <PinIcon pinned={true} />
+                        {t("sessionList.pinnedSection")}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                        {pinnedRows.map((session) => {
+                          const sessionRoot = session.root_id || "";
+                          const ownerGroup = orderedGroups.find((group) => group.rootId === sessionRoot);
+                          return (
+                            <SessionCard
+                              key={`pinned:${sessionRoot}:${session.key}`}
+                              session={{ ...session, root_id: sessionRoot }}
+                              sessionByKey={sessionByKey}
+                              selected={session.key === selectedKey && sessionRoot === selectedRootId}
+                              parentHighlighted={false}
+                              highlightQuery=""
+                              syncing={isSessionSyncing({ ...session, root_id: sessionRoot }, syncingSessionKeys)}
+                              projectBadge={ownerGroup?.rootName || sessionRoot}
+                              onSelect={onSelect}
+                              onSync={onSync}
+                              onPin={onPin}
+                              onRename={onRename}
+                              onScheduledTask={onScheduledTask}
+                              onDelete={onDelete}
+                              onHandoffPack={onHandoffPack}
+                              onAddToKanban={onAddToKanban}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                  {flatProjectVisible ? (
+                    <div style={sectionCardStyle}>
+                      <div style={sectionLabelStyle}>
+                        {t("sessionList.projectSection")}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                        {flatRows!.map(({ session, rootName }) => (
+                          <SessionCard
+                            key={`flat:${session.root_id}:${session.key}`}
+                            session={session}
+                            sessionByKey={sessionByKey}
+                            selected={session.key === selectedKey && session.root_id === selectedRootId}
+                            parentHighlighted={false}
+                            highlightQuery=""
+                            syncing={isSessionSyncing(session, syncingSessionKeys)}
+                            projectBadge={rootName}
+                            onSelect={onSelect}
+                            onSync={onSync}
+                            onPin={onPin}
+                            onRename={onRename}
+                            onScheduledTask={onScheduledTask}
+                            onDelete={onDelete}
+                            onHandoffPack={onHandoffPack}
+                            onAddToKanban={onAddToKanban}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              );
+            })()}
+          </>
+        ) : loading && groups.length === 0 ? (
+          <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "18px", textAlign: "center" }}>{t("sessionList.loading")}</div>
+        ) : effectiveGroups.length === 0 ? (
+          <div style={{ fontSize: "12px", color: "var(--text-secondary)", minHeight: "100%", padding: "12px 18px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", lineHeight: 1.6 }}>
+            <div>{groups.length === 0 ? effectiveEmptyText : t("sessionList.noFilterMatch")}</div>
+            {groups.length > 0 && nearestSession ? (
+              <div style={{ marginTop: "8px" }}>
+                {t("sessionList.filterNearestHint", {
+                  name: nearestSession.name || `Session ${nearestSession.session_key.slice(0, 8)}`,
+                  time: formatTime(
+                    nearestSession.updated_at || nearestSession.created_at || "",
+                    locale,
+                    t("time.justNow"),
+                  ),
+                })}
+              </div>
+            ) : null}
+            {groups.length > 0 ? (
+              <div style={{ marginTop: "6px", opacity: 0.75 }}>{t("sessionList.filterEmptyGuide")}</div>
+            ) : null}
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "9px" }}>
+            {orderedGroups.some((group) =>
+              topLevelSessionsForGroup(group.sessions).some((session) => !!session.pinned_at),
+            ) ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "2px", paddingBottom: "4px" }}>
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "4px 6px 6px",
+                    fontSize: "11px",
+                    color: "var(--text-secondary)",
+                    letterSpacing: "0.02em",
+                  }}
+                >
+                  <PinIcon pinned={true} />
+                  {t("sessionList.pinnedSection")}
+                </div>
+                {orderedGroups.flatMap((group) =>
+                  topLevelSessionsForGroup(group.sessions)
+                    .filter((session) => !!session.pinned_at)
+                    .map((session) => (
+                      <SessionCard
+                        key={`pinned:${group.rootId}:${session.key}`}
+                        session={{ ...session, root_id: session.root_id || group.rootId }}
+                        sessionByKey={sessionByKey}
+                        selected={session.key === selectedKey && (session.root_id || group.rootId) === selectedRootId}
+                        parentHighlighted={false}
+                        highlightQuery=""
+                        syncing={isSessionSyncing({ ...session, root_id: session.root_id || group.rootId }, syncingSessionKeys)}
+                        projectBadge={group.rootName || group.rootId}
+                        onSelect={onSelect}
+                        onSync={onSync}
+                        onPin={onPin}
+                        onRename={onRename}
+                        onScheduledTask={onScheduledTask}
+                        onDelete={onDelete}
+                        onHandoffPack={onHandoffPack}
+                  onAddToKanban={onAddToKanban}
+                      />
+                    )),
+                )}
+              </div>
+            ) : null}
             {orderedGroups.map((group) => {
               const expanded = !!expandedProjects[group.rootId];
               const pinned = !!pinnedProjects[group.rootId];
               const topLevelSessions = topLevelSessionsForGroup(group.sessions);
+              // 会话级置顶（pinned_at）：抽到顶部「已置顶」专区，组内不再重复显示；
+              // 置顶父会话的子会话保留在组内原位（跟随置顶父卡渲染在专区）
+              const pinnedInGroup = topLevelSessions.filter((session) => !!session.pinned_at);
+              const unpinnedSessions = pinnedInGroup.length > 0
+                ? [
+                    ...topLevelSessions.filter((session) => !session.pinned_at),
+                    ...group.sessions.filter((session) => {
+                      const parentKey = String(session.parent_session_key || "").trim();
+                      if (!parentKey) return false;
+                      return pinnedInGroup.some((pinnedSession) => pinnedSession.key === parentKey);
+                    }),
+                  ]
+                : group.sessions;
               const sessions = expanded
-                ? group.sessions
-                : sessionsForTopLevelLimit(group.sessions, MULTI_PROJECT_VISIBLE_LIMIT);
+                ? unpinnedSessions
+                : sessionsForTopLevelLimit(unpinnedSessions, MULTI_PROJECT_VISIBLE_LIMIT);
               const rows = buildRows(sessions, group.rootId);
               const childCountByParent = new Map<string, number>();
               const sessionKeys = new Set(group.sessions.map((item) => item.key));
@@ -1044,7 +1798,14 @@ export function MultiProjectSessionList({
                   childCountByParent.set(parentKey, (childCountByParent.get(parentKey) || 0) + 1);
                 }
               }
-              const remaining = Math.max(0, group.totalCount - topLevelSessions.length);
+              // 剩余数用原始分组的顶层会话数推：筛选副本会把子会话混进计数。
+              // 置顶会话仍属于已加载会话（只是在顶部专区展示），不计入剩余
+              const sourceGroup = loadTargetGroup(group);
+              const remaining = Math.max(
+                0,
+                sourceGroup.totalCount
+                  - topLevelSessionsForGroup(sourceGroup.sessions).length,
+              );
               const projectLoading = !!loadingProjects[group.rootId];
               return (
                 <section key={group.rootId} style={{ minWidth: 0 }}>
@@ -1085,6 +1846,47 @@ export function MultiProjectSessionList({
                       }}
                     >
                       {group.rootName || group.rootId}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={expanded ? t("common.collapse") : t("sessionList.expandChildren")}
+                      title={expanded ? t("common.collapse") : t("sessionList.expandChildren")}
+                      onClick={() => {
+                        if (expanded) handleProjectCollapse(group.rootId);
+                        else void handleProjectToggle(group);
+                      }}
+                      style={{
+                        width: "20px",
+                        height: "20px",
+                        border: "none",
+                        borderRadius: "6px",
+                        padding: 0,
+                        background: "transparent",
+                        color: "var(--text-secondary)",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.4"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                        style={{
+                          transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
+                          transition: "transform 0.15s ease",
+                        }}
+                      >
+                        {expanded ? <path d="M9 18l6-6-6-6" /> : <path d="M15 18l-6-6 6-6" />}
+                      </svg>
                     </button>
                     <span
                       aria-hidden="true"
@@ -1182,6 +1984,7 @@ export function MultiProjectSessionList({
                           onScheduledTask={onScheduledTask}
                           onDelete={onDelete}
                           onHandoffPack={onHandoffPack}
+                  onAddToKanban={onAddToKanban}
                         />
                       );
                     })}
@@ -1195,7 +1998,14 @@ export function MultiProjectSessionList({
                               ? remaining > 0
                                 ? t("sessionList.remainingSessions", { count: remaining })
                                 : t("common.collapse")
-                              : t("sessionList.remainingSessions", { count: Math.max(0, group.totalCount - MULTI_PROJECT_VISIBLE_LIMIT) })
+                              : t("sessionList.remainingSessions", {
+                                  count: Math.max(
+                                    0,
+                                    // 减实际渲染的顶层会话数而非固定上限：筛选后可见数可能不足 6
+                                    (filterActive ? group.totalCount : sourceGroup.totalCount)
+                                      - topLevelSessionsForGroup(group.sessions).length,
+                                  ),
+                                })
                         }
                         showExpandIcon={!projectLoading && (!expanded || remaining > 0)}
                         showCollapseIcon={!projectLoading && expanded}
@@ -1211,6 +2021,86 @@ export function MultiProjectSessionList({
           </div>
         )}
       </div>
+      {cleanupMode && cleanupSelected.size > 0 ? (
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 12px", borderTop: "1px solid var(--border-color)", flexShrink: 0, background: "var(--menu-bg, transparent)" }}>
+          <span style={{ fontSize: "12px", color: "var(--text-primary)", flex: 1 }}>
+            {t("sessionList.cleanupSelected", { count: cleanupSelected.size })}
+          </span>
+          <button
+            type="button"
+            disabled={cleanupBusy}
+            onClick={() => setCleanupConfirmOpen(true)}
+            style={{
+              border: "none",
+              borderRadius: "8px",
+              padding: "6px 14px",
+              background: "#dc2626",
+              color: "#fff",
+              fontSize: "12px",
+              cursor: cleanupBusy ? "default" : "pointer",
+              opacity: cleanupBusy ? 0.6 : 1,
+            }}
+          >
+            {t("sessionList.cleanupDelete")}
+          </button>
+        </div>
+      ) : null}
+      {cleanupConfirmOpen ? (
+        <div
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCleanupConfirmOpen(false);
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            zIndex: 3000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <div
+            role="dialog"
+            aria-label={t("sessionList.cleanupConfirmTitle")}
+            style={{
+              width: "min(92vw, 360px)",
+              borderRadius: "12px",
+              border: "1px solid var(--border-color)",
+              background: "var(--menu-bg)",
+              padding: "16px",
+              boxShadow: "0 12px 30px rgba(15, 23, 42, 0.2)",
+            }}
+          >
+            <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-primary)" }}>
+              {t("sessionList.cleanupConfirmTitle")}
+            </div>
+            <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "8px", lineHeight: 1.6 }}>
+              {t("sessionList.cleanupConfirmBody", {
+                count: cleanupCandidates.filter((item) => cleanupSelected.has(`${item.session.root_id}:${item.session.key}`)).length,
+              })}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "14px" }}>
+              <button
+                type="button"
+                onClick={() => setCleanupConfirmOpen(false)}
+                style={{ border: "1px solid var(--border-color)", background: "transparent", borderRadius: "8px", padding: "6px 12px", fontSize: "12px", color: "var(--text-primary)", cursor: "pointer" }}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                type="button"
+                disabled={cleanupBusy}
+                onClick={() => void runBatchDelete()}
+                style={{ border: "none", borderRadius: "8px", padding: "6px 12px", fontSize: "12px", background: "#dc2626", color: "#fff", cursor: cleanupBusy ? "default" : "pointer", opacity: cleanupBusy ? 0.6 : 1 }}
+              >
+                {cleanupBusy ? t("sessionList.cleanupDeleting") : t("common.delete")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <style>{`
         @keyframes mindfs-bound-pulse {
           0%, 100% { opacity: 1; box-shadow: 0 0 0 1.5px rgba(37,99,235,0.14); }
@@ -1233,6 +2123,7 @@ function SessionCard({
   highlightQuery,
   syncing = false,
   childCount = 0,
+  projectBadge,
   onSelect,
   onSync,
   onPin,
@@ -1240,6 +2131,7 @@ function SessionCard({
   onScheduledTask,
   onDelete,
   onHandoffPack,
+  onAddToKanban,
 }: {
   session: SessionItem;
   sessionByKey: Map<string, SessionItem>;
@@ -1248,6 +2140,7 @@ function SessionCard({
   highlightQuery?: string;
   syncing?: boolean;
   childCount?: number;
+  projectBadge?: string;
   onSelect?: (session: SessionItem) => void;
   onSync?: (session: SessionItem) => Promise<void> | void;
   onPin?: (session: SessionItem, pinned: boolean) => Promise<boolean> | boolean;
@@ -1255,6 +2148,7 @@ function SessionCard({
   onScheduledTask?: (session: SessionItem) => void;
   onDelete?: (session: SessionItem) => void;
   onHandoffPack?: (session: SessionItem) => void;
+  onAddToKanban?: (session: SessionItem) => void;
 }) {
   const { locale, t } = useI18n();
   const isClosed = !!session.closed_at;
@@ -1594,6 +2488,27 @@ function SessionCard({
                 textOverflow: "ellipsis",
               }}
             >
+              {projectBadge ? (
+                <span
+                  style={{
+                    display: "inline-block",
+                    marginRight: "6px",
+                    padding: "1px 6px",
+                    borderRadius: "6px",
+                    fontSize: "10px",
+                    lineHeight: "16px",
+                    verticalAlign: "middle",
+                    color: "var(--accent-color)",
+                    background: "color-mix(in srgb, var(--accent-color) 12%, transparent)",
+                    whiteSpace: "nowrap",
+                    maxWidth: "88px",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {projectBadge}
+                </span>
+              ) : null}
               {renderHighlightedText(displayName, highlightQuery, {
                 color: selected ? "var(--accent-color)" : "var(--text-primary)",
               })}
@@ -1987,6 +2902,25 @@ function SessionCard({
                 {t("sessionList.handoffPack")}
               </button>
             ) : null}
+            {onAddToKanban && !session.task_id && !session.pending && !session.parent_session_key ? (
+              <button
+                type="button"
+                disabled={!session.root_id || session.pending}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpen(false);
+                  onAddToKanban(session);
+                }}
+                style={{ ...menuItemStyle, color: "var(--text-primary)", whiteSpace: "nowrap", opacity: !session.root_id || session.pending ? 0.55 : 1 }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <path d="M3 9h18" />
+                  <path d="M9 21V9" />
+                </svg>
+                {t("sessionList.addToKanban")}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={(e) => {
@@ -2039,6 +2973,20 @@ function formatTime(isoString: string, locale: Locale, justNow: string): string 
     return new Intl.DateTimeFormat(locale, { month: "numeric", day: "numeric" }).format(date);
   }
   return new Intl.DateTimeFormat(locale, { year: "2-digit", month: "numeric" }).format(date);
+}
+
+// 时间窗筛空时给用户指路：从（未过滤的）列表里找最近一条，告诉用户"差多少"
+function latestSessionOf(items: readonly SessionItem[]): SessionItem | null {
+  let latest: SessionItem | null = null;
+  let latestTs = 0;
+  for (const item of items) {
+    const ts = Date.parse(item.updated_at || item.created_at || "") || 0;
+    if (ts > latestTs) {
+      latestTs = ts;
+      latest = item;
+    }
+  }
+  return latest;
 }
 
 function renderHighlightedText(
