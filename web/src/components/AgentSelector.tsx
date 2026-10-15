@@ -10,6 +10,7 @@ import { createPortal } from "react-dom";
 import { AgentIcon } from "./AgentIcon";
 import type { AgentStatus } from "../services/agents";
 import { filterAgentModels } from "./modelFiltering";
+import { openExternalURL } from "../services/platformNavigation";
 import { useI18n } from "../i18n";
 
 type AgentSelectorProps = {
@@ -285,11 +286,12 @@ export function AgentSelector({
     if (warnUnavailable) {
       return t("agent.currentUnavailable", { name: agent });
     }
-    if (agent && model) {
-      return `${agent} · ${model}`;
+    const label = agents.find((item) => item.name === agent)?.label || agent;
+    if (label && model) {
+      return `${label} · ${model}`;
     }
     return undefined;
-  }, [agent, model, t, warnUnavailable]);
+  }, [agents, agent, model, t, warnUnavailable]);
 
   useEffect(() => {
     const handlePointerOutside = (e: PointerEvent) => {
@@ -656,6 +658,11 @@ export function AgentSelector({
               const isSelected = a.name === agent;
               const isExpanded = submenuAgent === a.name;
               const isShowingError = errorAgent === a.name;
+              const agentDisplayName = a.label || a.name;
+              // 只放行 http(s)：agents.json 是可手编/外部合并的文件，服务端只在
+              // PATCH 通道校验，这里再闸一道，防止 javascript: 之类 scheme 流入
+              // 原生桥的打开路径。
+              const consoleURL = /^https?:\/\//i.test(a.url || "") ? (a.url as string) : "";
               return (
                 <div
                   key={a.name}
@@ -666,7 +673,7 @@ export function AgentSelector({
                   <div
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "20px minmax(0, 1fr) 18px 18px",
+                      gridTemplateColumns: `20px minmax(0, 1fr) 18px 18px${a.url ? " 18px" : ""}`,
                       alignItems: "center",
                       columnGap: "4px",
                       width: "100%",
@@ -709,7 +716,7 @@ export function AgentSelector({
                           whiteSpace: "nowrap",
                         }}
                       >
-                        {a.name}
+                        {agentDisplayName}
                       </span>
                     </button>
                     {hasError ? (
@@ -791,6 +798,35 @@ export function AgentSelector({
                         style={{ width: "18px", height: "18px" }}
                       />
                     )}
+                    {consoleURL ? (
+                      <button
+                        type="button"
+                        aria-label={t("agent.openConsole", { name: agentDisplayName })}
+                        title={consoleURL}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          openExternalURL(consoleURL);
+                        }}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: "18px",
+                          height: "18px",
+                          borderRadius: "6px",
+                          border: "none",
+                          background: "transparent",
+                          color: "var(--text-secondary)",
+                          cursor: "pointer",
+                          fontSize: "11px",
+                          fontWeight: 700,
+                          justifySelf: "center",
+                        }}
+                      >
+                        ↗
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               );

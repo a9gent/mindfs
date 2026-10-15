@@ -1,8 +1,14 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { type SessionMode } from "./ModeSelector";
 import { ModeSelector } from "./ModeSelector";
 import { AgentSelector } from "./AgentSelector";
 import { fetchAgents, fetchShells, restartAgent, type AgentStatus, type ShellStatus } from "../services/agents";
+import {
+  filterEntryAgents,
+  getAgentVisibilitySnapshot,
+  refreshAgentVisibility,
+  subscribeAgentVisibility,
+} from "../services/agentVisibility";
 import { fetchCandidates, type CandidateItem } from "../services/candidates";
 import { reportError } from "../services/error";
 import { isUploadAbortError, uploadFiles, type UploadProgress } from "../services/upload";
@@ -616,7 +622,13 @@ export function ActionBar({
         setShells(nextShells);
       })
       .catch((err) => console.error("Failed to fetch agents:", err));
+    refreshAgentVisibility().catch(() => {});
   }, [agentsVersion]);
+
+  // Agent 入口（AgentSelector 菜单）按显隐偏好过滤；悬浮球手势
+  // （toggleRecentAgent/pickAgent）继续用全量列表——隐藏不等于禁用。
+  const agentVisibility = useSyncExternalStore(subscribeAgentVisibility, getAgentVisibilitySnapshot);
+  const entryAgents = useMemo(() => filterEntryAgents(agents, agentVisibility), [agents, agentVisibility]);
 
   useEffect(() => {
     if (mode !== "command" || shells.length === 0) {
@@ -1824,7 +1836,7 @@ export function ActionBar({
                     model={model}
                     mode={agentMode}
                     effort={effort}
-                    agents={agents}
+                    agents={entryAgents}
                     onAgentChange={(nextAgent, nextModel) => {
                       const nextStatus = agents.find((item) => item.name === nextAgent);
                       const defaults = getAgentDefaults(nextStatus);
