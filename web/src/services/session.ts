@@ -1233,6 +1233,11 @@ class SessionService {
         return [];
       }
       console.error("[Session] Failed to fetch multi-root sessions:", err);
+      // Re-throw real failures so the multi-project list can surface its
+      // load-failed + retry UI (api_not_ready stays a silent empty result).
+      if (!(err instanceof Error && err.message === "api_not_ready")) {
+        throw err;
+      }
       return [];
     }
   }

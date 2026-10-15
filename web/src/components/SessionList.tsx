@@ -132,6 +132,8 @@ type ProjectSessionListProps = {
   flatMode?: boolean;
   onBatchDelete?: (sessions: SessionItem[]) => Promise<void> | void;
   currentSessionKey?: string;
+  error?: string;
+  onRetryLoad?: () => void;
 };
 
 function ToggleRowButton({
@@ -867,9 +869,12 @@ export function MultiProjectSessionList({
   flatMode = false,
   onBatchDelete,
   currentSessionKey = "",
+  error = "",
+  onRetryLoad,
 }: ProjectSessionListProps) {
   const { locale, t } = useI18n();
   const effectiveEmptyText = emptyText || t("sessionList.empty");
+  const waitForEncryptionText = t("sessionList.waitForEncryption");
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>(() => {
     if (typeof window === "undefined") {
       return {};
@@ -1565,6 +1570,29 @@ export function MultiProjectSessionList({
               })
             )}
           </div>
+        ) : loading && groups.length === 0 ? (
+          <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "18px", textAlign: "center" }}>{t("sessionList.loading")}</div>
+        ) : !loading && groups.length === 0 && error ? (
+          <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "18px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }}>
+            <div>{error}</div>
+            {error !== waitForEncryptionText && onRetryLoad ? (
+              <button
+                type="button"
+                onClick={onRetryLoad}
+                style={{
+                  border: "1px solid var(--border-color)",
+                  background: "transparent",
+                  color: "var(--text-primary)",
+                  borderRadius: "8px",
+                  padding: "4px 12px",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                }}
+              >
+                {t("sessionList.retryLoad")}
+              </button>
+            ) : null}
+          </div>
         ) : flatMode ? (
           <>
             {(() => {
@@ -1585,7 +1613,7 @@ export function MultiProjectSessionList({
               if (!flatPinnedVisible && !flatProjectVisible) {
                 return (
                   <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "12px", textAlign: "center" }}>
-                    {effectiveEmptyText}
+                    {error || effectiveEmptyText}
                   </div>
                 );
               }
