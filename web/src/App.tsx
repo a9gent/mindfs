@@ -62,9 +62,11 @@ import {
 } from "./services/sendShortcut";
 import {
   loadBlueRingGestureConfig,
+  nextFontCycleScale,
   persistBlueRingGestureConfig,
   type BlueRingGestureConfig,
 } from "./services/quickSwitch";
+import { recordRecentDir } from "./services/recentDirs";
 import {
   loadFontSizePreferences,
   persistFontSizePreferences,
@@ -1545,6 +1547,9 @@ export function App({ onGoHome }: AppProps) {
   const managedRootIdsRef = useRef<Set<string>>(new Set());
   const expandedRef = useRef<string[]>([]);
   const selectedDirRef = useRef<string | null>(null);
+  // selectedDir 属于哪个 root 的凭证：open_dir 换 root 时 setSelectedDir 要等 /api/tree
+  // 返回才更新，这段窗口里 selectedDirRef 还是旧 root 的目录；保存 ?dir= 前先对 key。
+  const selectedDirKeyRef = useRef<string | null>(null);
   const fileRef = useRef<FilePayload | null>(null);
   const selectedSessionRef = useRef<SessionItem | null>(null);
   const lastMainSessionSnapshotRef = useRef<Session | null>(null);
@@ -2396,6 +2401,22 @@ export function App({ onGoHome }: AppProps) {
     persistFontSizePreferences(fontSizePreferences);
   }, [fontSizePreferences]);
 
+  // Blue-ring font cycle: main session font walks 100%→140% then back down,
+  // looping; the walk direction lives for the session only. State updater must
+  // stay pure, so the walking value/direction live in refs and the updater
+  // only applies the precomputed result.
+  const mainFontCycleDirectionRef = useRef<"up" | "down">("up");
+  const mainFontCycleScaleRef = useRef(fontSizePreferences.main);
+  useEffect(() => {
+    mainFontCycleScaleRef.current = fontSizePreferences.main;
+  }, [fontSizePreferences.main]);
+  const cycleMainFontScale = useCallback(() => {
+    const next = nextFontCycleScale(mainFontCycleScaleRef.current, mainFontCycleDirectionRef.current);
+    mainFontCycleDirectionRef.current = next.direction;
+    mainFontCycleScaleRef.current = next.scale;
+    setFontSizePreferences((prev) => ({ ...prev, main: next.scale }));
+  }, []);
+
   useEffect(() => {
     return () => {
       Object.values(slashCopyResetTimersRef.current).forEach((timer) =>
@@ -2810,6 +2831,9 @@ export function App({ onGoHome }: AppProps) {
     selectedDirRef.current = selectedDir;
   }, [selectedDir]);
   useEffect(() => {
+    selectedDirKeyRef.current = selectedDirKey;
+  }, [selectedDirKey]);
+  useEffect(() => {
     entriesByPathRef.current = entriesByPath;
   }, [entriesByPath]);
   useEffect(() => {
@@ -3024,6 +3048,51 @@ export function App({ onGoHome }: AppProps) {
     setMainContentViewForRoot(rootID, mode);
     setDefaultMainContentView(mode);
   }, [setMainContentViewForRoot]);
+
+  // Blue-ring actions over the home middle section: view toggle, kanban
+  // template cycle, task creation and the scheduled tasks dialog. The toggle
+  // reads the same effective view the middle pane renders (onboarding override
+  // included) so it always flips what the user is actually looking at.
+  const toggleMainContentView = useCallback(() => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID) return;
+    const current = rootID && onboardingMainContentViewRoot === rootID
+      ? "task-kanban"
+      : mainContentViewByRoot[rootID] || defaultMainContentView;
+    if (onboardingMainContentViewRoot === rootID) setOnboardingMainContentViewRoot(null);
+    setMainContentViewForRoot(rootID, current === "task-kanban" ? "file-browser" : "task-kanban");
+  }, [onboardingMainContentViewRoot, mainContentViewByRoot, defaultMainContentView, setMainContentViewForRoot]);
+  const cycleKanbanTemplate = useCallback(() => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID) return;
+    // 主视图不在看板时先切过去，否则手势改了过滤器用户却看不到任何反应。
+    if (onboardingMainContentViewRoot === rootID) {
+      setOnboardingMainContentViewRoot(null);
+      // 引导态清掉后露出的是该 root 记住的上次视图，可能不是看板——一并固化成看板，
+      // 与 toggleMainContentView 的持久化语义一致，避免过滤器在背后盲转。
+      setMainContentViewForRoot(rootID, "task-kanban");
+    } else if ((mainContentViewByRoot[rootID] || defaultMainContentView) !== "task-kanban") {
+      setMainContentViewForRoot(rootID, "task-kanban");
+    }
+    const order = [TASK_TEMPLATE_ALL_FILTER, ...taskTemplates.map((template) => template.id || "").filter(Boolean)];
+    if (order.length < 2) return;
+    const index = order.indexOf(taskTemplateFilter);
+    setTaskTemplateFilter(order[(index + 1) % order.length]);
+  }, [onboardingMainContentViewRoot, mainContentViewByRoot, defaultMainContentView, setMainContentViewForRoot, taskTemplateFilter, taskTemplates]);
+  const createTaskFromQuickAction = useCallback((templateId?: string) => {
+    const template = (templateId && taskTemplates.find((item) => item.id === templateId))
+      || (taskTemplateFilter && taskTemplateFilter !== TASK_TEMPLATE_ALL_FILTER
+        ? taskTemplates.find((item) => item.id === taskTemplateFilter)
+        : null)
+      || taskTemplates[0]
+      || null;
+    if (!template) return;
+    openTaskCreateDialog(template);
+  }, [taskTemplates, taskTemplateFilter, openTaskCreateDialog]);
+  const openScheduledTasksFromQuickAction = useCallback(() => {
+    setScheduledAgentSession(null);
+    setScheduledAgentDialogOpen(true);
+  }, []);
   const currentDirectorySortMode = currentDirectorySortOverride || treeSortMode;
 
   const replaceURLState = useCallback((next: URLState) => {
@@ -8945,8 +9014,10 @@ export function App({ onGoHome }: AppProps) {
       if (!file) return;
       const root = file.root || currentRootIdRef.current;
       if (!root) return;
+      const targetPath = path === "." ? root : path;
+      recordRecentDir({ rootId: root, path: targetPath });
       actionHandlers.open_dir({
-        path: path === "." ? root : path,
+        path: targetPath,
         root,
         isRoot: path === ".",
         suppressTreeExpand: path === ".",
@@ -8969,9 +9040,11 @@ export function App({ onGoHome }: AppProps) {
     (path: string) => {
       const root = currentRootIdRef.current;
       if (!root) return;
+      const targetPath = path === "." ? root : path;
+      recordRecentDir({ rootId: root, path: targetPath });
       setGitDiff(null);
       actionHandlers.open_dir({
-        path: path === "." ? root : path,
+        path: targetPath,
         root,
         isRoot: path === ".",
         suppressTreeExpand: path === ".",
@@ -8984,8 +9057,10 @@ export function App({ onGoHome }: AppProps) {
     (path: string) => {
       const root = currentRootIdRef.current;
       if (!root) return;
+      const targetPath = path === "." ? root : path;
+      recordRecentDir({ rootId: root, path: targetPath });
       actionHandlers.open_dir({
-        path: path === "." ? root : path,
+        path: targetPath,
         root,
         isRoot: path === ".",
         suppressTreeExpand: path === ".",
@@ -14526,14 +14601,15 @@ export function App({ onGoHome }: AppProps) {
               actionHandlers.open({ path: e.path, root: r });
               if (isMobile) setIsLeftOpen(false);
             }}
-            onSelectRoot={(e, r) =>
+            onSelectRoot={(e, r) => {
+              recordRecentDir({ rootId: r, path: e.path });
               actionHandlers.open_dir({
                 path: e.path,
                 root: r,
                 isRoot: e.is_root === true,
                 suppressTreeExpand: true,
-              })
-            }
+              });
+            }}
             onToggleDir={(e, r) =>
               actionHandlers.open_dir({
                 path: e.path,
@@ -14579,6 +14655,7 @@ export function App({ onGoHome }: AppProps) {
             onSidebarsSwappedChange={setSidebarsSwapped}
             blueRingGestures={blueRingGestures}
             onBlueRingGesturesChange={setBlueRingGestures}
+            taskTemplates={taskTemplates.map((template) => ({ id: template.id || "", name: template.name || "" }))}
             gitDiffSideBySide={gitDiffSideBySide}
             onGitDiffSideBySideChange={setGitDiffSideBySide}
             multiProjectSessionsEnabled={multiProjectSessionsEnabled}
@@ -14670,6 +14747,21 @@ export function App({ onGoHome }: AppProps) {
                 currentSessionRef.current = null;
                 selectedSessionByRootRef.current[root] = null;
                 setSelectedSession(null);
+                setSelectedSessionLoading(false);
+                // 新建会话 = 回到空白首页：文件预览/diff 也一并退出，否则预览态无法快速返回
+                setFile(null);
+                setGitDiff(null);
+                setRelatedSelectedFileKey("");
+                // 目录视图保留 ?dir=：界面还停在原目录，URL 抹掉 dir 会让 F5 跳回根目录。
+                // key 对不上说明 selectedDirRef 还挂着旧 root 的目录（open_dir 拉树未返回），
+                // 此时宁可不带 dir，也不能把旧 root 的绝对路径塞进新 root 的 URL。
+                const dirCandidate = selectedDirRef.current && selectedDirRef.current !== root && selectedDirRef.current !== "."
+                  ? selectedDirRef.current
+                  : "";
+                const dir = dirCandidate && selectedDirKeyRef.current === buildDirectorySelectionKey(root, dirCandidate, false)
+                  ? dirCandidate
+                  : "";
+                replaceURLState({ root, file: "", session: "", cursor: 0, pluginQuery: {}, dir });
                 setDrawerSessionForRoot(root, null);
                 interactionModeRef.current = "main";
                 setInteractionMode("main");
@@ -14679,6 +14771,25 @@ export function App({ onGoHome }: AppProps) {
                 void actionHandlers.open_dir({ path: root, root, isRoot: true, suppressTreeExpand: true });
               }}
               onSelectSession={(session) => { void handleSelectSession(session); }}
+              currentDirPath={selectedDir}
+              roots={managedRootIds.map((id) => ({ id, name: managedRootByIdRef.current[id]?.display_name || id }))}
+              onOpenRecentDirectory={(target) => {
+                // 轮切目标不回写最近列表：该列表只收“手动点击”的目录，
+                // 否则每次轮切都会把目标顶到队首，永远在两个目录之间打转。
+                void actionHandlers.open_dir({
+                  path: target.path,
+                  root: target.rootId,
+                  isRoot: target.path === target.rootId,
+                  forceDirectory: true,
+                });
+              }}
+              onToggleMultiProjectSessions={() => setMultiProjectSessionsEnabled((value) => !value)}
+              onToggleEnterKeySends={() => setMobileEnterKeySends((value) => !value)}
+              onCycleMainFontScale={cycleMainFontScale}
+              onToggleMainContentView={toggleMainContentView}
+              onCycleKanbanTemplate={cycleKanbanTemplate}
+              onCreateTask={createTaskFromQuickAction}
+              onOpenScheduledTasks={openScheduledTasksFromQuickAction}
               taskGroupBadge={actionBarSessionKey ? <TaskGroupPanel key={`${actionBarSession?.root_id || currentRootId}:${actionBarSessionKey}`} rootId={actionBarSession?.root_id || currentRootId || ""} sessionKey={actionBarSessionKey} renderTask={(detail, close) => renderKanbanTaskCard(detail.task, isTerminalKanbanTask(detail.task) ? t("task.column.done") : t("task.column.running"), detail, true, close)} /> : null}
               status={status}
               agentsVersion={agentsVersion}
