@@ -744,7 +744,8 @@ export function ActionBar({
   useEffect(() => {
     if (currentSession || agents.length === 0) return;
     if (agents.some((a) => a.name === agent)) return;
-    const preferred = agents.find((a) => a.available) ?? agents[0];
+    const preferred = agents.find((a) => a.last_used && a.available)
+      ?? agents.find((a) => a.available) ?? agents[0];
     if (!preferred) {
       return;
     }

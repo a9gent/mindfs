@@ -1,3 +1,5 @@
+import { appPath } from "./base";
+
 export type RecentDirEntry = {
   rootId: string;
   path: string;
@@ -9,6 +11,14 @@ export type RecentDirEntry = {
 export const RECENT_DIRS_STORAGE_KEY = "mindfs-recent-dirs";
 export const RECENT_DIRS_LIMIT = 8;
 
+function recentDirsStorageKey(): string {
+  // appPath includes the configured backend (native shells) and /n/<node>
+  // relay prefix. Resolve it on each access so backend changes cannot reuse
+  // another node's history. Never migrate the unscoped legacy key: its owner
+  // is unknown, and root IDs can collide between nodes.
+  return `${RECENT_DIRS_STORAGE_KEY}:v2:${encodeURIComponent(appPath("/"))}`;
+}
+
 function dirDisplayName(path: string): string {
   const trimmed = (path || "").replace(/\/+$/, "");
   if (!trimmed) return "/";
@@ -19,7 +29,7 @@ function dirDisplayName(path: string): string {
 export function listRecentDirs(): RecentDirEntry[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = JSON.parse(window.localStorage.getItem(RECENT_DIRS_STORAGE_KEY) || "[]") as unknown;
+    const raw = JSON.parse(window.localStorage.getItem(recentDirsStorageKey()) || "[]") as unknown;
     if (!Array.isArray(raw)) return [];
     return raw
       .filter((item): item is RecentDirEntry => {
@@ -46,7 +56,7 @@ export function recordRecentDir(entry: { rootId: string; path: string; name?: st
   );
   const updated = [next, ...rest].slice(0, RECENT_DIRS_LIMIT);
   try {
-    window.localStorage.setItem(RECENT_DIRS_STORAGE_KEY, JSON.stringify(updated));
+    window.localStorage.setItem(recentDirsStorageKey(), JSON.stringify(updated));
   } catch {
     // Storage may be unavailable; the list still works for this session.
   }
@@ -56,8 +66,9 @@ export function recordRecentDir(entry: { rootId: string; path: string; name?: st
  * Pick the next recent directory after the current one, cycling through the
  * list. Returns null when there is nothing to switch to.
  */
-export function nextRecentDir(currentRootId: string | null, currentPath: string | null): RecentDirEntry | null {
-  const list = listRecentDirs().filter((item) => item.rootId && item.path);
+export function nextRecentDir(currentRootId: string | null, currentPath: string | null, allowedRootIds?: readonly string[]): RecentDirEntry | null {
+  const allowed = allowedRootIds ? new Set(allowedRootIds) : null;
+  const list = listRecentDirs().filter((item) => item.rootId && item.path && (!allowed || allowed.has(item.rootId)));
   if (list.length === 0) return null;
   const currentKey = currentRootId ? `${currentRootId}\u0000${currentPath || ""}` : null;
   const candidates = list.filter((item) => !currentKey || `${item.rootId}\u0000${item.path}` !== currentKey);
@@ -75,7 +86,7 @@ export function nextRecentDir(currentRootId: string | null, currentPath: string 
 export function clearRecentDirs(): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.removeItem(RECENT_DIRS_STORAGE_KEY);
+    window.localStorage.removeItem(recentDirsStorageKey());
   } catch {
     // Ignore storage failures.
   }
