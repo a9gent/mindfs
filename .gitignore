@@ -26,3 +26,8 @@ harmony/.appanalyzer/
 harmony/local.properties
 harmony/entry/src/main/resources/rawfile/public/
 .qoder/
+
+# 私有：ZCode 会话产物 / 流程文档，绝不进任何仓库
+.zcode/
+.agents/
+.zcodeignore
