@@ -38,6 +38,44 @@ export async function updateNewProjectMetaLocationPreference(
   );
 }
 
+export type UILayoutPreference = {
+  configured: boolean;
+  sidebarsSwapped: boolean;
+  gitDiffSideBySide: boolean;
+};
+
+function normalizeUILayoutPreference(value: unknown): UILayoutPreference {
+  const input = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    configured: input.configured === true,
+    sidebarsSwapped: input.sidebars_swapped === true,
+    gitDiffSideBySide: input.git_diff_side_by_side === true,
+  };
+}
+
+export async function fetchUILayoutPreference(): Promise<UILayoutPreference> {
+  return normalizeUILayoutPreference(
+    await protectedJSON(appPath("/api/preferences/ui-layout")),
+  );
+}
+
+export async function updateUILayoutPreference(
+  layout: Pick<UILayoutPreference, "sidebarsSwapped" | "gitDiffSideBySide">,
+): Promise<UILayoutPreference> {
+  return normalizeUILayoutPreference(
+    await protectedJSON(appPath("/api/preferences/ui-layout"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sidebars_swapped: layout.sidebarsSwapped,
+        git_diff_side_by_side: layout.gitDiffSideBySide,
+      }),
+    }),
+  );
+}
+
 const DEFAULT_IDLE_SESSION_RESOURCE_RELEASE_HOURS = 72;
 
 function normalizeIdleSessionResourceReleasePreference(

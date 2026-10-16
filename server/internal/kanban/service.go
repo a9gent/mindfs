@@ -15,7 +15,11 @@ import (
 	"time"
 
 	"mindfs/server/internal/fs"
+	"mindfs/server/internal/logthrottle"
 )
+
+// scheduleErrorLogInterval bounds repeated scheduler failures for one root.
+const scheduleErrorLogInterval = 10 * time.Minute
 
 type RootProvider interface {
 	GetRoot(rootID string) (fs.RootInfo, error)
@@ -30,13 +34,13 @@ type SessionBinder interface {
 }
 
 type Service struct {
-	runCtx    context.Context
-	cancel    context.CancelFunc
-	workers   sync.WaitGroup
-	closed    bool
-	Templates *TemplateStore
-	Roots     RootProvider
-	Runner    Runner
+	runCtx        context.Context
+	cancel        context.CancelFunc
+	workers       sync.WaitGroup
+	closed        bool
+	Templates     *TemplateStore
+	Roots         RootProvider
+	Runner        Runner
 	sessionBinder SessionBinder
 
 	opMu             sync.Mutex
@@ -606,7 +610,12 @@ func (s *Service) Schedule(rootID string) {
 		defer s.workers.Done()
 		for {
 			if err := s.schedule(s.runCtx, rootID); err != nil {
-				log.Printf("[kanban] schedule.error root=%s err=%v", rootID, err)
+				logthrottle.Printf(
+					"kanban.schedule.error:"+rootID,
+					scheduleErrorLogInterval,
+					"[kanban] schedule.error root=%s err=%v",
+					rootID, err,
+				)
 			}
 			s.mu.Lock()
 			pending := s.schedulePend[rootID]

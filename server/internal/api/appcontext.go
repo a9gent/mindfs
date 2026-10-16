@@ -21,6 +21,7 @@ import (
 	"mindfs/server/internal/githubimport"
 	"mindfs/server/internal/gitview"
 	"mindfs/server/internal/kanban"
+	"mindfs/server/internal/logthrottle"
 	"mindfs/server/internal/notify"
 	"mindfs/server/internal/notifyscript"
 	"mindfs/server/internal/preferences"
@@ -667,6 +668,10 @@ func (s *AppContext) RenameRoot(rootID, name, rootPath string) (fs.RootInfo, err
 	return dir, nil
 }
 
+// unavailableRootLogInterval bounds how often the same unreadable root is
+// reported: root lists are polled every few seconds.
+const unavailableRootLogInterval = 10 * time.Minute
+
 func (s *AppContext) ListRoots() []fs.RootInfo {
 	if s.Dirs == nil {
 		return []fs.RootInfo{}
@@ -676,8 +681,16 @@ func (s *AppContext) ListRoots() []fs.RootInfo {
 	for _, root := range roots {
 		exists, err := managedRootExists(root)
 		if err != nil {
-			log.Printf("[registry] stat.root.error root=%s path=%s err=%v", root.ID, root.RootPath, err)
-			active = append(active, root)
+			// Keep the registration (data stays on disk) but hide the root: an
+			// unreadable path left in the list makes every root-wide aggregation
+			// fail, so one broken root would blank out sessions, kanban and git
+			// views for all the healthy ones.
+			logthrottle.Printf(
+				"root.unavailable:"+root.ID,
+				unavailableRootLogInterval,
+				"[registry] root.unavailable root=%s path=%s err=%v; hidden until the path is readable",
+				root.ID, root.RootPath, err,
+			)
 			continue
 		}
 		if exists {

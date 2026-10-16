@@ -32,6 +32,23 @@ type UserPreferences struct {
 	NewProjectMetaLocation          string                   `json:"new_project_meta_location,omitempty"`
 	AgentHidden                     []string                 `json:"agent_hidden,omitempty"`
 	AgentVisibilityCustomized       bool                     `json:"agent_visibility_customized,omitempty"`
+	UILayout                        *storedUILayout          `json:"ui_layout,omitempty"`
+}
+
+// UILayout is the browser panel arrangement, kept server-side so it follows the
+// user across entrances (LAN address, tailnet hostname, port, PWA) instead of
+// living only in one origin's localStorage.
+type UILayout struct {
+	Configured        bool
+	SidebarsSwapped   bool
+	GitDiffSideBySide bool
+}
+
+// storedUILayout keeps pointers so an unset preference stays distinguishable
+// from an explicit false.
+type storedUILayout struct {
+	SidebarsSwapped   *bool `json:"sidebars_swapped,omitempty"`
+	GitDiffSideBySide *bool `json:"git_diff_side_by_side,omitempty"`
 }
 
 type LauncherNode struct {
@@ -103,6 +120,44 @@ func (s *Store) UpdateNewProjectMetaLocation(location string) error {
 	}
 	s.data.NewProjectMetaLocation = location
 	return s.saveLocked()
+}
+
+func (s *Store) UILayout() UILayout {
+	if s == nil {
+		return UILayout{}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	stored := s.data.UILayout
+	if stored == nil {
+		return UILayout{}
+	}
+	out := UILayout{
+		Configured:        stored.SidebarsSwapped != nil || stored.GitDiffSideBySide != nil,
+		SidebarsSwapped:   stored.SidebarsSwapped != nil && *stored.SidebarsSwapped,
+		GitDiffSideBySide: stored.GitDiffSideBySide != nil && *stored.GitDiffSideBySide,
+	}
+	return out
+}
+
+func (s *Store) UpdateUILayout(sidebarsSwapped, gitDiffSideBySide bool) error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if current := s.data.UILayout; current != nil && current.SidebarsSwapped != nil && current.GitDiffSideBySide != nil &&
+		*current.SidebarsSwapped == sidebarsSwapped && *current.GitDiffSideBySide == gitDiffSideBySide {
+		return nil
+	}
+	next := &storedUILayout{SidebarsSwapped: &sidebarsSwapped, GitDiffSideBySide: &gitDiffSideBySide}
+	previous := s.data.UILayout
+	s.data.UILayout = next
+	if err := s.saveLocked(); err != nil {
+		s.data.UILayout = previous
+		return err
+	}
+	return nil
 }
 
 func (s *Store) IdleSessionResourceReleaseHours() int {

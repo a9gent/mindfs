@@ -345,6 +345,8 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/agents/release-idle", h.protectedEndpoint(h.handleAgentIdleRelease))
 	r.Get("/api/preferences/new-project-meta-location", h.protectedEndpoint(h.handleNewProjectMetaLocationPreferenceGet))
 	r.Put("/api/preferences/new-project-meta-location", h.protectedEndpoint(h.handleNewProjectMetaLocationPreferencePut))
+	r.Get("/api/preferences/ui-layout", h.protectedEndpoint(h.handleUILayoutPreferenceGet))
+	r.Put("/api/preferences/ui-layout", h.protectedEndpoint(h.handleUILayoutPreferencePut))
 	r.Get("/api/replying-sessions", h.protectedEndpoint(h.handleReplyingSessions))
 	r.Get("/api/sessions/search", h.protectedEndpoint(h.handleSessionSearch))
 	r.Get("/api/sessions/children", h.protectedEndpoint(h.handleSessionChildren))
@@ -1373,6 +1375,49 @@ func (h *HTTPHandler) handleNewProjectMetaLocationPreferencePut(w http.ResponseW
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"location": h.AppContext.GetPreferences().NewProjectMetaLocation()})
+}
+
+type uiLayoutPreferenceRequest struct {
+	SidebarsSwapped   *bool `json:"sidebars_swapped"`
+	GitDiffSideBySide *bool `json:"git_diff_side_by_side"`
+}
+
+func uiLayoutPreferenceResponse(layout preferences.UILayout) map[string]any {
+	return map[string]any{
+		"configured":            layout.Configured,
+		"sidebars_swapped":      layout.SidebarsSwapped,
+		"git_diff_side_by_side": layout.GitDiffSideBySide,
+	}
+}
+
+func (h *HTTPHandler) handleUILayoutPreferenceGet(w http.ResponseWriter, _ *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetPreferences() == nil {
+		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("preferences not configured"))
+		return
+	}
+	respondJSON(w, http.StatusOK, uiLayoutPreferenceResponse(h.AppContext.GetPreferences().UILayout()))
+}
+
+func (h *HTTPHandler) handleUILayoutPreferencePut(w http.ResponseWriter, r *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetPreferences() == nil {
+		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("preferences not configured"))
+		return
+	}
+	var req uiLayoutPreferenceRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest(err.Error()))
+		return
+	}
+	// Pointers, so a client that omits a key cannot silently flip it to false.
+	if req.SidebarsSwapped == nil || req.GitDiffSideBySide == nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("sidebars_swapped and git_diff_side_by_side are required"))
+		return
+	}
+	if err := h.AppContext.GetPreferences().UpdateUILayout(*req.SidebarsSwapped, *req.GitDiffSideBySide); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest(err.Error()))
+		return
+	}
+	respondJSON(w, http.StatusOK, uiLayoutPreferenceResponse(h.AppContext.GetPreferences().UILayout()))
 }
 
 func (h *HTTPHandler) handleIdleSessionResourceReleasePreferenceGet(w http.ResponseWriter, _ *http.Request) {

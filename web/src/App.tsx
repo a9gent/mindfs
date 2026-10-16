@@ -67,6 +67,11 @@ import {
   type BlueRingGestureConfig,
 } from "./services/quickSwitch";
 import { recordRecentDir } from "./services/recentDirs";
+import {
+  fetchUILayoutPreference,
+  updateUILayoutPreference,
+  type UILayoutPreference,
+} from "./services/preferences";
 import { loadHandoffTemplate, renderHandoffPack } from "./services/handoff";
 import {
   loadFontSizePreferences,
@@ -1761,6 +1766,49 @@ export function App({ onGoHome }: AppProps) {
   const onboardingAutoStartRef = useRef(false);
   const [currentRootId, setCurrentRootId] = useState<string | null>(null);
   const currentRootIdRef = useRef<string | null>(null);
+  const [uiLayoutHydrated, setUILayoutHydrated] = useState(false);
+  const uiLayoutHydratedRef = useRef(false);
+  const uiLayoutCurrentRef = useRef({ sidebarsSwapped, gitDiffSideBySide });
+  const uiLayoutAtMountRef = useRef(uiLayoutCurrentRef.current);
+  const uiLayoutPushedRef = useRef<Pick<UILayoutPreference, "sidebarsSwapped" | "gitDiffSideBySide"> | null>(null);
+
+  const hydrateUILayoutPreference = useCallback(async () => {
+    if (uiLayoutHydratedRef.current) {
+      return;
+    }
+    try {
+      const layout = await fetchUILayoutPreference();
+      if (uiLayoutHydratedRef.current) {
+        return;
+      }
+      uiLayoutHydratedRef.current = true;
+      setUILayoutHydrated(true);
+      const current = uiLayoutCurrentRef.current;
+      const untouched =
+        current.sidebarsSwapped === uiLayoutAtMountRef.current.sidebarsSwapped &&
+        current.gitDiffSideBySide === uiLayoutAtMountRef.current.gitDiffSideBySide;
+      if (layout.configured && untouched) {
+        // 服务端为准：换个入口/设备访问同一实例时，布局不再像"被重置了"
+        uiLayoutPushedRef.current = {
+          sidebarsSwapped: layout.sidebarsSwapped,
+          gitDiffSideBySide: layout.gitDiffSideBySide,
+        };
+        setSidebarsSwapped(layout.sidebarsSwapped);
+        setGitDiffSideBySide(layout.gitDiffSideBySide);
+        return;
+      }
+      if (
+        !layout.configured ||
+        layout.sidebarsSwapped !== current.sidebarsSwapped ||
+        layout.gitDiffSideBySide !== current.gitDiffSideBySide
+      ) {
+        uiLayoutPushedRef.current = current;
+        await updateUILayoutPreference(current).catch(() => {});
+      }
+    } catch {
+      // 服务端不可达时保持 localStorage 行为，等下次变更再同步
+    }
+  }, []);
 
   const loadTaskTemplates = useCallback(async () => {
     if (!protectedAPIReady()) {
@@ -2463,6 +2511,29 @@ export function App({ onGoHome }: AppProps) {
       // Ignore storage failures; the setting can still apply for this session.
     }
   }, [gitDiffSideBySide]);
+
+  useEffect(() => {
+    uiLayoutCurrentRef.current = { sidebarsSwapped, gitDiffSideBySide };
+  }, [sidebarsSwapped, gitDiffSideBySide]);
+
+  useEffect(() => {
+    if (!uiLayoutHydrated) {
+      return;
+    }
+    const current = { sidebarsSwapped, gitDiffSideBySide };
+    const pushed = uiLayoutPushedRef.current;
+    if (
+      pushed &&
+      pushed.sidebarsSwapped === current.sidebarsSwapped &&
+      pushed.gitDiffSideBySide === current.gitDiffSideBySide
+    ) {
+      return;
+    }
+    uiLayoutPushedRef.current = current;
+    void updateUILayoutPreference(current).catch(() => {
+      uiLayoutPushedRef.current = pushed;
+    });
+  }, [sidebarsSwapped, gitDiffSideBySide, uiLayoutHydrated]);
 
   const [managedRootIds, setManagedRootIds] = useState<string[]>([]);
   const managedRootByIdRef = useRef<Record<string, ManagedRootPayload>>({});
@@ -11182,12 +11253,14 @@ export function App({ onGoHome }: AppProps) {
     }
     setAgentsVersion((v) => v + 1);
     void loadTaskTemplates();
+    void hydrateUILayoutPreference();
     void loadKanbanTasks(currentRootIdRef.current);
     if (multiProjectSessionsEnabled) {
       void loadMultiProjectSessionGroups();
     }
   }, [
     bootstrapState.phase,
+    hydrateUILayoutPreference,
     loadKanbanTasks,
     loadMultiProjectSessionGroups,
     loadTaskTemplates,

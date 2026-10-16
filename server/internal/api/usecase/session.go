@@ -20,8 +20,13 @@ import (
 	agenttypes "mindfs/server/internal/agent/types"
 	"mindfs/server/internal/commandexec"
 	"mindfs/server/internal/fs"
+	"mindfs/server/internal/logthrottle"
 	"mindfs/server/internal/session"
 )
+
+// rootAggregateLogInterval bounds how often the same failing root is reported
+// while aggregating sessions across roots (the web polls this every few seconds).
+const rootAggregateLogInterval = 10 * time.Minute
 
 type ClientContext struct {
 	CurrentRoot   string     `json:"current_root"`
@@ -160,52 +165,73 @@ func (s *Service) ListMultiRootSessions(ctx context.Context, in ListMultiRootSes
 	}
 	groups := make([]SessionRootGroup, 0)
 	for _, root := range s.Registry.ListRoots() {
-		manager, err := s.Registry.GetSessionManager(root.ID)
+		group, err := s.sessionGroupForRoot(ctx, root, limit)
 		if err != nil {
-			return ListMultiRootSessionsOutput{}, err
-		}
-		totalCount, err := manager.Count(ctx, session.ListOptions{TopLevelOnly: true})
-		if err != nil {
-			return ListMultiRootSessionsOutput{}, err
-		}
-		if totalCount <= 0 {
+			// One unreadable or corrupt root must not blank the whole list.
+			logthrottle.Printf(
+				"sessions.multi_root.skip:"+root.ID,
+				rootAggregateLogInterval,
+				"[sessions] multi_root.skip_root root=%s err=%v",
+				root.ID, err,
+			)
 			continue
 		}
-		items, err := manager.List(ctx, session.ListOptions{TopLevelOnly: true, Limit: limit})
-		if err != nil {
-			return ListMultiRootSessionsOutput{}, err
+		if group.TotalCount <= 0 {
+			continue
 		}
-		items, err = appendChildSessions(ctx, manager, items)
-		if err != nil {
-			return ListMultiRootSessionsOutput{}, err
-		}
-		pinnedItems, err := manager.ListPinned(ctx, session.ListOptions{TopLevelOnly: true})
-		if err != nil {
-			return ListMultiRootSessionsOutput{}, err
-		}
-		pinnedKeys := pinnedSessionKeys(pinnedItems)
-		allForShells := append(append([]*session.Session{}, items...), pinnedItems...)
-		if err := fillCommandShells(ctx, manager, allForShells); err != nil {
-			return ListMultiRootSessionsOutput{}, err
-		}
-		latest := time.Time{}
-		if len(items) > 0 && items[0] != nil {
-			latest = items[0].UpdatedAt
-		}
-		groups = append(groups, SessionRootGroup{
-			RootID:            root.ID,
-			RootName:          root.Name,
-			LatestSessionTime: latest,
-			Sessions:          items,
-			PinnedSessions:    pinnedItems,
-			PinnedKeys:        pinnedKeys,
-			TotalCount:        totalCount,
-		})
+		groups = append(groups, group)
 	}
 	sort.SliceStable(groups, func(i, j int) bool {
 		return groups[i].LatestSessionTime.After(groups[j].LatestSessionTime)
 	})
 	return ListMultiRootSessionsOutput{Groups: groups}, nil
+}
+
+// sessionGroupForRoot collects one root's session rows for the multi-root list.
+func (s *Service) sessionGroupForRoot(ctx context.Context, root fs.RootInfo, limit int) (SessionRootGroup, error) {
+	manager, err := s.Registry.GetSessionManager(root.ID)
+	if err != nil {
+		return SessionRootGroup{}, err
+	}
+	totalCount, err := manager.Count(ctx, session.ListOptions{TopLevelOnly: true})
+	if err != nil {
+		return SessionRootGroup{}, err
+	}
+	group := SessionRootGroup{
+		RootID:   root.ID,
+		RootName: root.Name,
+	}
+	if totalCount <= 0 {
+		group.TotalCount = totalCount
+		return group, nil
+	}
+	items, err := manager.List(ctx, session.ListOptions{TopLevelOnly: true, Limit: limit})
+	if err != nil {
+		return SessionRootGroup{}, err
+	}
+	items, err = appendChildSessions(ctx, manager, items)
+	if err != nil {
+		return SessionRootGroup{}, err
+	}
+	pinnedItems, err := manager.ListPinned(ctx, session.ListOptions{TopLevelOnly: true})
+	if err != nil {
+		return SessionRootGroup{}, err
+	}
+	pinnedKeys := pinnedSessionKeys(pinnedItems)
+	allForShells := append(append([]*session.Session{}, items...), pinnedItems...)
+	if err := fillCommandShells(ctx, manager, allForShells); err != nil {
+		return SessionRootGroup{}, err
+	}
+	latest := time.Time{}
+	if len(items) > 0 && items[0] != nil {
+		latest = items[0].UpdatedAt
+	}
+	group.LatestSessionTime = latest
+	group.Sessions = items
+	group.PinnedSessions = pinnedItems
+	group.PinnedKeys = pinnedKeys
+	group.TotalCount = totalCount
+	return group, nil
 }
 
 func pinnedSessionKeys(items []*session.Session) []string {
@@ -305,14 +331,26 @@ func (s *Service) searchMultiRootSessions(ctx context.Context, in SearchSessions
 	for _, root := range s.Registry.ListRoots() {
 		manager, err := s.Registry.GetSessionManager(root.ID)
 		if err != nil {
-			return SearchSessionsOutput{}, err
+			logthrottle.Printf(
+				"sessions.search.skip:"+root.ID,
+				rootAggregateLogInterval,
+				"[sessions] multi_root_search.skip_root root=%s err=%v",
+				root.ID, err,
+			)
+			continue
 		}
 		hits, err := manager.Search(ctx, session.SearchOptions{
 			Query: in.Query,
 			Limit: limit,
 		})
 		if err != nil {
-			return SearchSessionsOutput{}, err
+			logthrottle.Printf(
+				"sessions.search.skip:"+root.ID,
+				rootAggregateLogInterval,
+				"[sessions] multi_root_search.skip_root root=%s err=%v",
+				root.ID, err,
+			)
+			continue
 		}
 		items = append(items, mapSessionSearchHits(root.ID, hits)...)
 	}
