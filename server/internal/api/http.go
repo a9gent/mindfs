@@ -1171,7 +1171,8 @@ func (h *HTTPHandler) handleSessionParent(w http.ResponseWriter, r *http.Request
 	var req struct {
 		ParentSessionKey string `json:"parent_session_key"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+	// An empty body means "detach": the menu action has nothing else to say.
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json body"))
 		return
 	}
@@ -1181,6 +1182,10 @@ func (h *HTTPHandler) handleSessionParent(w http.ResponseWriter, r *http.Request
 		ParentSessionKey: strings.TrimSpace(req.ParentSessionKey),
 	})
 	if err != nil {
+		if session.IsNotFound(err) {
+			respondError(w, http.StatusNotFound, err)
+			return
+		}
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -1202,29 +1207,58 @@ func (h *HTTPHandler) handleSessionDelete(w http.ResponseWriter, r *http.Request
 		respondError(w, http.StatusBadRequest, errInvalidRequest("session key required"))
 		return
 	}
-	keepChildren := false
-	if raw := strings.TrimSpace(r.URL.Query().Get("keep_children")); raw != "" {
+	queryBool := func(name string) (bool, error) {
+		raw := strings.TrimSpace(r.URL.Query().Get(name))
+		if raw == "" {
+			return false, nil
+		}
 		parsed, err := strconv.ParseBool(raw)
 		if err != nil {
-			respondError(w, http.StatusBadRequest, errInvalidRequest("keep_children must be a boolean"))
-			return
+			return false, errInvalidRequest(name + " must be a boolean")
 		}
-		keepChildren = parsed
+		return parsed, nil
+	}
+	keepChildren, err := queryBool("keep_children")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	cascade, err := queryBool("cascade")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	if keepChildren && cascade {
+		// Contradictory: one keeps the subtree, the other removes it.
+		respondError(w, http.StatusBadRequest, errInvalidRequest("keep_children and cascade are mutually exclusive"))
+		return
 	}
 	uc := h.service()
 	if err := uc.DeleteSession(r.Context(), usecase.DeleteSessionInput{
 		RootID:       rootID,
 		Key:          key,
 		KeepChildren: keepChildren,
+		Cascade:      cascade,
 	}); err != nil {
+		var needsChoice *usecase.ErrDeleteNeedsChoice
+		if errors.As(err, &needsChoice) {
+			// The client believed the session had no children (its list may be
+			// filtered or paginated) and would have cascaded the whole subtree by
+			// omission. Nothing was deleted; report the real count so the client
+			// can ask the user.
+			respondJSON(w, http.StatusConflict, map[string]any{
+				"error":       "delete_needs_choice",
+				"child_count": needsChoice.ChildCount,
+			})
+			return
+		}
 		respondError(w, http.StatusNotFound, err)
 		return
 	}
-	if keepChildren && h.AppContext != nil {
-		// Children were re-parented, so their parent_session_key changed under the
-		// client's feet and their updated_at did not (re-parenting is not
-		// activity), which means an incremental fetch cannot see them. Ask clients
-		// to reload the list for this root.
+	if h.AppContext != nil {
+		// Re-parenting and cascade deletion both change rows in ways an
+		// incremental after_time fetch cannot see (re-parenting does not bump
+		// updated_at; deleted rows simply disappear), so peers must reload.
 		h.AppContext.GetSessionStreamHub().BroadcastAll(WSResponse{
 			Type:    "sessions.changed",
 			Payload: map[string]any{"root_id": rootID},

@@ -2126,6 +2126,12 @@ func cleanRelatedRepoPath(path string) string {
 
 var errSessionNotFound = errors.New("session not found")
 
+// IsNotFound reports whether err means the session key does not exist, so the
+// HTTP layer can answer 404 instead of lumping every failure into one status.
+func IsNotFound(err error) bool {
+	return errors.Is(err, errSessionNotFound)
+}
+
 func normalizeSearchLimit(limit int) int {
 	switch {
 	case limit <= 0:

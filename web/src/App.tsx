@@ -169,6 +169,10 @@ import { GitStatusPanel } from "./components/GitStatusPanel";
 import { SessionViewer } from "./components/SessionViewer";
 import { DefaultListView, type MainContentViewMode } from "./components/DefaultListView";
 import { MultiProjectSessionList, SessionList, type ProjectSessionGroup } from "./components/SessionList";
+import {
+  DeleteSessionDialog,
+  type DeleteSessionChoice,
+} from "./components/DeleteSessionDialog";
 import { menuPopoverCapStyle } from "./components/popoverStyles";
 import {
   loadSessionFilter,
@@ -1617,6 +1621,9 @@ export function App({ onGoHome }: AppProps) {
 
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const sessionsRef = useRef<SessionItem[]>([]);
+  // Opened when the server refuses an ambiguous delete (the target still has
+  // children). Kept at app level so every delete entry point shares it.
+  const [deleteChoice, setDeleteChoice] = useState<DeleteSessionChoice | null>(null);
   const [multiProjectSessionsEnabled, setMultiProjectSessionsEnabled] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem(MULTI_PROJECT_SESSION_STORAGE_KEY) === "1";
@@ -1626,6 +1633,7 @@ export function App({ onGoHome }: AppProps) {
     return window.localStorage.getItem(FLAT_SESSION_LIST_STORAGE_KEY) === "1";
   });
   const [multiProjectSessionGroups, setMultiProjectSessionGroups] = useState<MultiProjectSessionGroup[]>([]);
+  const multiProjectSessionGroupsRef = useRef<MultiProjectSessionGroup[]>([]);
   const [multiProjectSessionsLoading, setMultiProjectSessionsLoading] = useState(false);
   const [multiProjectSessionsError, setMultiProjectSessionsError] = useState("");
   const [multiProjectPendingByKey, setMultiProjectPendingByKey] = useState<Record<string, boolean>>({});
@@ -3057,6 +3065,9 @@ export function App({ onGoHome }: AppProps) {
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+  useEffect(() => {
+    multiProjectSessionGroupsRef.current = multiProjectSessionGroups;
+  }, [multiProjectSessionGroups]);
   useEffect(() => {
     multiProjectPendingRef.current = multiProjectPendingByKey;
   }, [multiProjectPendingByKey]);
@@ -6135,30 +6146,73 @@ export function App({ onGoHome }: AppProps) {
     [handleSelectSession, isMobile, rootSessionKey, bumpCacheVersion],
   );
 
+  const deleteSessionRef = useRef<
+    | ((
+        session: SessionItem,
+        options?: { keepChildren?: boolean; cascade?: boolean },
+      ) => Promise<{ needsChoice: boolean; childCount: number }>)
+    | null
+  >(null);
+
   const handleDeleteSession = useCallback(
-    async (session: SessionItem, options?: { keepChildren?: boolean }) => {
+    async (
+      session: SessionItem,
+      options?: { keepChildren?: boolean; cascade?: boolean },
+    ): Promise<{ needsChoice: boolean; childCount: number }> => {
       const sessionKey = session?.key || session?.session_key;
       const rootID =
         (session?.root_id as string | undefined) || currentRootIdRef.current;
-      if (!rootID || !sessionKey) return;
+      if (!rootID || !sessionKey) return { needsChoice: false, childCount: 0 };
 
       const keepChildren = !!options?.keepChildren;
-      const deleted = await sessionService.deleteSession(rootID, sessionKey, {
+      const cascade = !!options?.cascade;
+      const result = await sessionService.deleteSession(rootID, sessionKey, {
         keepChildren,
+        cascade,
       });
-      if (!deleted) {
+      if (!result.ok) {
+        if (result.needsChoice) {
+          // The local list undercounted the children (filter, search results or
+          // pagination), so the server refused to guess. Ask the user, with the
+          // server's real count, and let the chosen branch retry explicitly.
+          const sessionName = session?.name || sessionKey;
+          setDeleteChoice({
+            sessionName,
+            childCount: result.childCount,
+            onKeepChildren: () => {
+              setDeleteChoice(null);
+              void deleteSessionRef.current?.(session, { keepChildren: true });
+            },
+            onCascade: () => {
+              setDeleteChoice(null);
+              void deleteSessionRef.current?.(session, { cascade: true });
+            },
+            onCancel: () => setDeleteChoice(null),
+          });
+          return { needsChoice: true, childCount: result.childCount };
+        }
         reportError("session.delete_failed", t("session.deleteFailed"));
-        return;
+        return { needsChoice: false, childCount: 0 };
       }
 
       const deletedKeys = new Set<string>();
       const collectDeletedKeys = (key: string) => {
         if (!key || deletedKeys.has(key)) return;
         deletedKeys.add(key);
+        // Walk both sources: in multi-project mode the visible list is grouped
+        // per root, so descendants of another project live only in that group.
         for (const item of sessionsRef.current) {
           const itemKey = item.key || item.session_key || "";
           if (String(item.parent_session_key || "").trim() === key) {
             collectDeletedKeys(itemKey);
+          }
+        }
+        for (const group of multiProjectSessionGroupsRef.current) {
+          for (const item of group.sessions) {
+            const itemKey = item.key || item.session_key || "";
+            if (String(item.parent_session_key || "").trim() === key) {
+              collectDeletedKeys(itemKey);
+            }
           }
         }
       };
@@ -6232,6 +6286,7 @@ export function App({ onGoHome }: AppProps) {
       }
 
       bumpCacheVersion();
+      return { needsChoice: false, childCount: 0 };
     },
     [
       bumpCacheVersion,
@@ -6245,13 +6300,20 @@ export function App({ onGoHome }: AppProps) {
     ],
   );
 
+  // The dialog's retry handlers call back into handleDeleteSession, which is
+  // declared above; a ref avoids a self-referential useCallback dependency.
+  deleteSessionRef.current = handleDeleteSession;
+
   const handleBatchDeleteSessions = useCallback(
     async (targets: SessionItem[]) => {
       const total = targets.length;
       let failed = 0;
       for (const target of targets) {
         try {
-          await handleDeleteSession(target);
+          // Cleanup mode is an explicit "delete these branches" action: the
+          // confirmation copy already says child sessions go too, so the intent
+          // is unambiguous and the server may cascade.
+          await handleDeleteSession(target, { cascade: true });
         } catch {
           failed += 1;
         }
@@ -10314,11 +10376,11 @@ export function App({ onGoHome }: AppProps) {
           setStatus("connected");
           void refreshManagedRoots();
           if (currentRootIdRef.current) {
-            const newest = sessionsRef.current[0]?.updated_at || "";
-            void loadSessionsForRoot(
-              currentRootIdRef.current,
-              newest ? { afterTime: newest } : { replace: true },
-            );
+            // While the socket was down, sessions may have been deleted or
+            // re-parented. An afterTime merge only ever adds rows, so deleted
+            // sessions would linger as ghosts; a full replace is the only way
+            // to converge on the server's tree.
+            void loadSessionsForRoot(currentRootIdRef.current, { replace: true, force: true });
           }
           if (multiProjectSessionsEnabled) {
             void refreshMultiProjectReplyingSessions();
@@ -15495,6 +15557,7 @@ export function App({ onGoHome }: AppProps) {
           void refreshTreeDir(root, dir, dir === ".");
         }}
       />
+      <DeleteSessionDialog choice={deleteChoice} />
       {!isMobile ? <OnboardingTour
         open={onboardingOpen}
         isMobile={isMobile}

@@ -716,6 +716,9 @@ func TestManagerSetParentSessionKeepsUpdatedAtAndRejectsCycles(t *testing.T) {
 	}
 
 	manager.now = func() time.Time { return base.Add(3 * time.Hour) }
+	// Copy the value: SetParentSession returns the same pointer that is cached in
+	// the manager, so comparing the fields of two aliases proves nothing.
+	before := child.UpdatedAt
 	detached, err := manager.SetParentSession(ctx, child.Key, "")
 	if err != nil {
 		t.Fatalf("detach child: %v", err)
@@ -723,7 +726,14 @@ func TestManagerSetParentSessionKeepsUpdatedAtAndRejectsCycles(t *testing.T) {
 	if detached.ParentSessionKey != "" {
 		t.Fatalf("ParentSessionKey = %q, want empty", detached.ParentSessionKey)
 	}
-	if !detached.UpdatedAt.Equal(child.UpdatedAt) {
-		t.Fatalf("UpdatedAt changed on re-parent: got %v, want %v", detached.UpdatedAt, child.UpdatedAt)
+	if !detached.UpdatedAt.Equal(before) {
+		t.Fatalf("UpdatedAt changed on re-parent: got %v, want %v", detached.UpdatedAt, before)
+	}
+	reloaded, err := manager.Get(ctx, child.Key, 0)
+	if err != nil {
+		t.Fatalf("reload child: %v", err)
+	}
+	if !reloaded.UpdatedAt.Equal(before) {
+		t.Fatalf("persisted UpdatedAt changed on re-parent: got %v, want %v", reloaded.UpdatedAt, before)
 	}
 }

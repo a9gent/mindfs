@@ -195,8 +195,15 @@ func (s *Store) UpdateForkOwnership(ownership string) error {
 	if s.data.ForkOwnership == ownership {
 		return nil
 	}
+	previous := s.data.ForkOwnership
 	s.data.ForkOwnership = ownership
-	return s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		// Keep memory and disk consistent: a failed write must not leave the
+		// process on the new value while the file still holds the old one.
+		s.data.ForkOwnership = previous
+		return err
+	}
+	return nil
 }
 
 func (s *Store) IdleSessionResourceReleaseHours() int {

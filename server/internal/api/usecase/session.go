@@ -304,6 +304,10 @@ func appendChildSessions(ctx context.Context, manager *session.Manager, parents 
 		seen[parent.Key] = true
 		out = append(out, parent)
 		if depth >= 64 {
+			// Pathological nesting (or corrupt metadata). Stop descending rather
+			// than recurse without bound, but make it visible: silent truncation
+			// here looks like a missing session in the list.
+			log.Printf("[sessions] append_children.depth_limit root=%s key=%s depth=%d", manager.Root().ID, parent.Key, depth)
 			return nil
 		}
 		children, err := manager.List(ctx, session.ListOptions{ParentSessionKey: parent.Key})
@@ -1036,6 +1040,20 @@ func (s *Service) CloseSession(ctx context.Context, in CloseSessionInput) (*sess
 	return closed, nil
 }
 
+// ErrDeleteNeedsChoice reports that the target still has children and the
+// caller did not say whether they should survive. Cascading a whole subtree is
+// irreversible, so the server refuses to guess: the client must resend with
+// KeepChildren or Cascade set. Counting children client-side is not reliable
+// (filters, search results and pagination all hide descendants), so the check
+// has to live here.
+type ErrDeleteNeedsChoice struct {
+	ChildCount int
+}
+
+func (e *ErrDeleteNeedsChoice) Error() string {
+	return "session has child sessions; choose keep_children or cascade"
+}
+
 type DeleteSessionInput struct {
 	RootID string
 	Key    string
@@ -1043,6 +1061,9 @@ type DeleteSessionInput struct {
 	// (or top level) instead of deleting the whole subtree. This is what lets a
 	// user remove a middle fork without losing the newer fork beneath it.
 	KeepChildren bool
+	// Cascade deletes the whole subtree. It must be set explicitly for sessions
+	// that have children; leaving both flags false yields ErrDeleteNeedsChoice.
+	Cascade bool
 }
 
 func (s *Service) DeleteSession(ctx context.Context, in DeleteSessionInput) error {
@@ -1057,6 +1078,13 @@ func (s *Service) DeleteSession(ctx context.Context, in DeleteSessionInput) erro
 	if err != nil {
 		return err
 	}
+	children, err := manager.List(ctx, session.ListOptions{ParentSessionKey: in.Key})
+	if err != nil {
+		return err
+	}
+	if len(children) > 0 && !in.KeepChildren && !in.Cascade {
+		return &ErrDeleteNeedsChoice{ChildCount: len(children)}
+	}
 	if in.KeepChildren {
 		if _, err := s.promoteChildren(ctx, manager, in.Key); err != nil {
 			return err
@@ -1065,6 +1093,18 @@ func (s *Service) DeleteSession(ctx context.Context, in DeleteSessionInput) erro
 	keys := []string{}
 	if in.KeepChildren {
 		keys = []string{in.Key}
+		// Subagent children are not promoted (they are internal detail of this
+		// session, not standalone work), so their subtrees go with it.
+		for _, child := range children {
+			if child == nil || strings.TrimSpace(child.ParentToolCallID) == "" {
+				continue
+			}
+			cascade, err := deleteSessionCascadeKeys(ctx, manager, child.Key)
+			if err != nil {
+				return err
+			}
+			keys = append(keys, cascade...)
+		}
 	} else {
 		keys, err = deleteSessionCascadeKeys(ctx, manager, in.Key)
 		if err != nil {
@@ -1143,6 +1183,12 @@ func (s *Service) promoteChildren(ctx context.Context, manager *session.Manager,
 	promoted := make([]*session.Session, 0, len(children))
 	for _, child := range children {
 		if child == nil {
+			continue
+		}
+		// A subagent is internal detail of this session, not an independent
+		// session the user can own; promoting it would strand an orphan in the
+		// list. Its subtree is deleted along with the target instead.
+		if strings.TrimSpace(child.ParentToolCallID) != "" {
 			continue
 		}
 		updated, err := manager.SetParentSession(ctx, child.Key, newParent)

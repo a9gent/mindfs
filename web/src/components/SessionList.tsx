@@ -1017,7 +1017,25 @@ export function MultiProjectSessionList({
             return parentKey && pinned.some((pinnedSession) => pinnedSession.key === parentKey);
           })
         : [];
-      const sessions = [...unpinned, ...childrenOfPinned].sort((left, right) =>
+      // 平铺模式只从顶层会话起排，但 fork 链的子会话必须跟着父会话一起进来：
+      // 少了它们，列表里就只剩父会话，fork 看起来像"没生成"。
+      const roots = [...unpinned, ...childrenOfPinned];
+      const included = new Set(roots.map((session) => session.key));
+      const descendants: SessionItem[] = [];
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const session of group.sessions) {
+          if (included.has(session.key)) continue;
+          const parentKey = String(session.parent_session_key || "").trim();
+          if (parentKey && included.has(parentKey)) {
+            included.add(session.key);
+            descendants.push(session);
+            grew = true;
+          }
+        }
+      }
+      const sessions = [...roots, ...descendants].sort((left, right) =>
         sortAsc ? tsOf(left) - tsOf(right) : tsOf(right) - tsOf(left),
       );
       return { group, sessions, latestTs: sessions.reduce((acc, s) => Math.max(acc, tsOf(s)), 0) };
@@ -1291,11 +1309,23 @@ export function MultiProjectSessionList({
     if (limit >= topLevel.length) {
       return sessions;
     }
-    const visibleParentKeys = new Set(topLevel.slice(0, limit).map((session) => session.key));
-    return sessions.filter((session) => {
-      const parentKey = String(session.parent_session_key || "").trim();
-      return !parentKey ? visibleParentKeys.has(session.key) : visibleParentKeys.has(parentKey);
-    });
+    const included = new Set(topLevel.slice(0, limit).map((session) => session.key));
+    // Take the whole descendant closure, not just direct children: a fork chain
+    // (main → fork → fork2) is three levels deep, and keeping only one level
+    // hides exactly the newest session the user cares about.
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const session of sessions) {
+        if (included.has(session.key)) continue;
+        const parentKey = String(session.parent_session_key || "").trim();
+        if (parentKey && included.has(parentKey)) {
+          included.add(session.key);
+          grew = true;
+        }
+      }
+    }
+    return sessions.filter((session) => included.has(session.key));
   };
 
   return (
@@ -2300,7 +2330,6 @@ function SessionCard({
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(storedName);
   const [saving, setSaving] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const rowBackground = selected
     ? "rgba(59, 130, 246, 0.1)"
     : parentHighlighted
@@ -3087,10 +3116,10 @@ function SessionCard({
               onClick={(e) => {
                 e.stopPropagation();
                 setMenuOpen(false);
-                if (childCount > 0) {
-                  setDeleteDialogOpen(true);
-                  return;
-                }
+                // Never decide here whether the subtree survives: the loaded
+                // list may hide children (filters, search results, pagination),
+                // and guessing "no children" cascades an entire branch. The
+                // server refuses the ambiguous delete and the app asks.
                 onDelete?.(session);
               }}
               style={{
@@ -3120,72 +3149,6 @@ function SessionCard({
           </div>
         ) : null}
       </div>
-      {deleteDialogOpen ? (
-        <div
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setDeleteDialogOpen(false);
-          }}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.4)",
-            zIndex: 3000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <div
-            role="dialog"
-            aria-label={t("sessionList.deleteWithChildrenTitle")}
-            style={{
-              width: "min(92vw, 400px)",
-              borderRadius: "12px",
-              border: "1px solid var(--border-color)",
-              background: "var(--menu-bg)",
-              padding: "16px",
-              boxShadow: "0 12px 30px rgba(15, 23, 42, 0.2)",
-            }}
-          >
-            <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-primary)" }}>
-              {t("sessionList.deleteWithChildrenTitle")}
-            </div>
-            <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "8px", lineHeight: 1.6 }}>
-              {t("sessionList.deleteWithChildrenBody", { count: childCount })}
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "14px" }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setDeleteDialogOpen(false);
-                  onDelete?.(session, { keepChildren: true });
-                }}
-                style={{ border: "none", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", background: "var(--accent-color)", color: "#fff", cursor: "pointer" }}
-              >
-                {t("sessionList.deleteKeepChildren")}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setDeleteDialogOpen(false);
-                  onDelete?.(session);
-                }}
-                style={{ border: "1px solid #dc2626", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", background: "transparent", color: "#dc2626", cursor: "pointer" }}
-              >
-                {t("sessionList.deleteWithChildren")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setDeleteDialogOpen(false)}
-                style={{ border: "1px solid var(--border-color)", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", background: "transparent", color: "var(--text-primary)", cursor: "pointer" }}
-              >
-                {t("common.cancel")}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }
