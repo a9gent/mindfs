@@ -11,6 +11,7 @@ export type ErrorCode =
   | "session.import_failed"
   | "session.rename_failed"
   | "session.pin_failed"
+  | "session.move_failed"
   | "session.sync_failed"
   | "session.slash_command_failed"
   | "app.init_failed"
@@ -157,6 +158,11 @@ class ErrorService {
       },
       "session.pin_failed": {
         messageKey: "error.session.pinFailed",
+        severity: "error",
+        recoverable: true,
+      },
+      "session.move_failed": {
+        messageKey: "error.session.moveFailed",
         severity: "error",
         recoverable: true,
       },

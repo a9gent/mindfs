@@ -606,7 +606,7 @@ func TestDeleteSessionDeletesSubSessionTree(t *testing.T) {
 		t.Fatalf("create sibling: %v", err)
 	}
 
-	if err := service.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: parent.Key}); err != nil {
+	if err := service.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: parent.Key, Cascade: true}); err != nil {
 		t.Fatalf("delete parent: %v", err)
 	}
 	for _, deleted := range []*session.Session{parent, child, grandchild} {
@@ -2558,7 +2558,7 @@ func TestDeleteSessionCleansTaskGroupsBeforeDeletingSessions(t *testing.T) {
 				return []string{execution.Key}, nil
 			}
 			svc := Service{Registry: registry}
-			err = svc.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: parent.Key})
+			err = svc.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: parent.Key, Cascade: true})
 			if !called || (err != nil) != fails {
 				t.Fatalf("called=%v err=%v", called, err)
 			}

@@ -53,7 +53,8 @@ type SessionListProps = {
   onPin?: (session: SessionItem, pinned: boolean) => Promise<boolean> | boolean;
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onScheduledTask?: (session: SessionItem) => void;
-  onDelete?: (session: SessionItem) => void;
+  onDelete?: (session: SessionItem, options?: { keepChildren?: boolean }) => void;
+  onSetParent?: (session: SessionItem, parentKey: string) => Promise<boolean> | boolean;
   onHandoffPack?: (session: SessionItem) => void;
   onLoadChildren?: (
     session: SessionItem,
@@ -102,7 +103,8 @@ type ProjectSessionListProps = {
   onPin?: (session: SessionItem, pinned: boolean) => Promise<boolean> | boolean;
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onScheduledTask?: (session: SessionItem) => void;
-  onDelete?: (session: SessionItem) => void;
+  onDelete?: (session: SessionItem, options?: { keepChildren?: boolean }) => void;
+  onSetParent?: (session: SessionItem, parentKey: string) => Promise<boolean> | boolean;
   onHandoffPack?: (session: SessionItem) => void;
   onProjectClick?: (rootId: string) => void;
   onLoadMoreProject?: (group: ProjectSessionGroup) => Promise<void> | void;
@@ -267,6 +269,16 @@ function forkSessionDisplayName(
   return source.seq > 0 ? `${base}#${source.seq}` : base;
 }
 
+// A fork is a user-visible session that happens to hang off another session, so
+// it must show up without the parent being selected. Subagent sessions are
+// internal detail and stay collapsed until their parent is active.
+function shouldExpandChildren(
+  active: boolean,
+  children: SessionItem[],
+): boolean {
+  return active || children.some((child) => !!parseForkSessionSource(child.source));
+}
+
 function isSessionSyncing(
   session: SessionItem,
   syncingSessionKeys?: Set<string>,
@@ -306,6 +318,7 @@ export function SessionList({
   onRename,
   onScheduledTask,
   onDelete,
+  onSetParent,
   onHandoffPack,
   onLoadChildren,
   onLoadOlder,
@@ -353,7 +366,8 @@ export function SessionList({
       const children = childrenByParent.get(item.key) || [];
       const active = activeParentKeys.has(item.key);
       const expanded = !!expandedChildren[item.key];
-      const visibleChildren = active
+      const showChildren = shouldExpandChildren(active, children);
+      const visibleChildren = showChildren
         ? expanded
           ? children
           : children.slice(0, COLLAPSED_CHILD_SESSION_LIMIT)
@@ -362,7 +376,7 @@ export function SessionList({
         append(child);
       }
       const hiddenCount = Math.max(0, children.length - COLLAPSED_CHILD_SESSION_LIMIT);
-      if (active && (children.length > COLLAPSED_CHILD_SESSION_LIMIT || expanded || childrenHasMore[item.key])) {
+      if (showChildren && (children.length > COLLAPSED_CHILD_SESSION_LIMIT || expanded || childrenHasMore[item.key])) {
         out.push({
           type: "child-toggle",
           parent: item,
@@ -689,6 +703,7 @@ export function SessionList({
                   onRename={onRename}
                   onScheduledTask={onScheduledTask}
                   onDelete={onDelete}
+                  onSetParent={onSetParent}
                   onHandoffPack={onHandoffPack}
                 />
               );
@@ -744,6 +759,7 @@ export function MultiProjectSessionList({
   onRename,
   onScheduledTask,
   onDelete,
+  onSetParent,
   onHandoffPack,
   onProjectClick,
   onLoadMoreProject,
@@ -867,7 +883,8 @@ export function MultiProjectSessionList({
       const stateKey = childStateKey(item, fallbackRootId);
       const active = activeParentKeys.has(item.key);
       const expanded = !!expandedChildren[stateKey];
-      const visibleChildren = active
+      const showChildren = shouldExpandChildren(active, children);
+      const visibleChildren = showChildren
         ? expanded
           ? children
           : children.slice(0, COLLAPSED_CHILD_SESSION_LIMIT)
@@ -876,7 +893,7 @@ export function MultiProjectSessionList({
         append(child);
       }
       const hiddenCount = Math.max(0, children.length - COLLAPSED_CHILD_SESSION_LIMIT);
-      if (active && (children.length > COLLAPSED_CHILD_SESSION_LIMIT || expanded || childrenHasMore[stateKey])) {
+      if (showChildren && (children.length > COLLAPSED_CHILD_SESSION_LIMIT || expanded || childrenHasMore[stateKey])) {
         out.push({
           type: "child-toggle",
           parent: item,
@@ -951,11 +968,23 @@ export function MultiProjectSessionList({
     if (limit >= topLevel.length) {
       return sessions;
     }
-    const visibleParentKeys = new Set(topLevel.slice(0, limit).map((session) => session.key));
-    return sessions.filter((session) => {
-      const parentKey = String(session.parent_session_key || "").trim();
-      return !parentKey ? visibleParentKeys.has(session.key) : visibleParentKeys.has(parentKey);
-    });
+    const included = new Set(topLevel.slice(0, limit).map((session) => session.key));
+    // Take the whole descendant closure, not just direct children: a fork chain
+    // (main → fork → fork2) is three levels deep, and keeping only one level
+    // hides exactly the newest session the user cares about.
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const session of sessions) {
+        if (included.has(session.key)) continue;
+        const parentKey = String(session.parent_session_key || "").trim();
+        if (parentKey && included.has(parentKey)) {
+          included.add(session.key);
+          grew = true;
+        }
+      }
+    }
+    return sessions.filter((session) => included.has(session.key));
   };
 
   return (
@@ -1167,6 +1196,7 @@ export function MultiProjectSessionList({
                           onRename={onRename}
                           onScheduledTask={onScheduledTask}
                           onDelete={onDelete}
+                          onSetParent={onSetParent}
                           onHandoffPack={onHandoffPack}
                         />
                       );
@@ -1225,6 +1255,7 @@ function SessionCard({
   onRename,
   onScheduledTask,
   onDelete,
+  onSetParent,
   onHandoffPack,
 }: {
   session: SessionItem;
@@ -1239,7 +1270,8 @@ function SessionCard({
   onPin?: (session: SessionItem, pinned: boolean) => Promise<boolean> | boolean;
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onScheduledTask?: (session: SessionItem) => void;
-  onDelete?: (session: SessionItem) => void;
+  onDelete?: (session: SessionItem, options?: { keepChildren?: boolean }) => void;
+  onSetParent?: (session: SessionItem, parentKey: string) => Promise<boolean> | boolean;
   onHandoffPack?: (session: SessionItem) => void;
 }) {
   const { locale, t } = useI18n();
@@ -1973,11 +2005,36 @@ function SessionCard({
                 {t("sessionList.handoffPack")}
               </button>
             ) : null}
+            {onSetParent && (isSubagent || (isForkSession && !!forkSource?.sessionKey)) ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpen(false);
+                  void onSetParent(
+                    session,
+                    isSubagent ? "" : String(forkSource?.sessionKey || ""),
+                  );
+                }}
+                style={{ ...menuItemStyle, color: "var(--text-primary)", whiteSpace: "nowrap" }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9 17H7A5 5 0 0 1 7 7h2" />
+                  <path d="M15 7h2a5 5 0 0 1 0 10h-2" />
+                  <line x1="8" y1="12" x2="16" y2="12" />
+                </svg>
+                {isSubagent ? t("sessionList.detachFromParent") : t("sessionList.attachToParent")}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 setMenuOpen(false);
+                // Never decide here whether the subtree survives: the loaded
+                // list may hide children (filters, search results, pagination),
+                // and guessing "no children" cascades an entire branch. The
+                // server refuses the ambiguous delete and the app asks.
                 onDelete?.(session);
               }}
               style={{
