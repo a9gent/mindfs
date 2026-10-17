@@ -32,6 +32,10 @@ type UserPreferences struct {
 	SessionNaming                   SessionNamingDefaults    `json:"session_naming,omitempty"`
 	IdleSessionResourceReleaseHours int                      `json:"idle_session_resource_release_hours,omitempty"`
 	NewProjectMetaLocation          string                   `json:"new_project_meta_location,omitempty"`
+	// ForkOwnership decides where a newly forked session lands:
+	//   "nested"   – under its parent session (default, cascade-deleted with it)
+	//   "detached" – at top level, parallel to the parent, survives its deletion
+	ForkOwnership string `json:"fork_ownership,omitempty"`
 }
 
 type LauncherNode struct {
@@ -103,6 +107,48 @@ func (s *Store) UpdateNewProjectMetaLocation(location string) error {
 	}
 	s.data.NewProjectMetaLocation = location
 	return s.saveLocked()
+}
+
+const (
+	ForkOwnershipNested   = "nested"
+	ForkOwnershipDetached = "detached"
+)
+
+// ForkOwnership returns the default placement for newly forked sessions.
+func (s *Store) ForkOwnership() string {
+	if s == nil {
+		return ForkOwnershipNested
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.data.ForkOwnership == ForkOwnershipDetached {
+		return ForkOwnershipDetached
+	}
+	return ForkOwnershipNested
+}
+
+func (s *Store) UpdateForkOwnership(ownership string) error {
+	if s == nil {
+		return nil
+	}
+	ownership = strings.TrimSpace(ownership)
+	if ownership != ForkOwnershipNested && ownership != ForkOwnershipDetached {
+		return errors.New("invalid fork ownership")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.ForkOwnership == ownership {
+		return nil
+	}
+	previous := s.data.ForkOwnership
+	s.data.ForkOwnership = ownership
+	if err := s.saveLocked(); err != nil {
+		// Keep memory and disk consistent: a failed write must not leave the
+		// process on the new value while the file still holds the old one.
+		s.data.ForkOwnership = previous
+		return err
+	}
+	return nil
 }
 
 func (s *Store) IdleSessionResourceReleaseHours() int {

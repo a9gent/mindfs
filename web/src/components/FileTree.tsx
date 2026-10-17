@@ -51,12 +51,15 @@ import {
   type WebPushStatus,
 } from "../services/webPush";
 import {
+  fetchForkOwnershipPreference,
   fetchIdleSessionResourceReleasePreference,
   fetchNewProjectMetaLocationPreference,
   fetchSessionNamingPreference,
+  updateForkOwnershipPreference,
   updateIdleSessionResourceReleasePreference,
   updateNewProjectMetaLocationPreference,
   updateSessionNamingPreference,
+  type ForkOwnership,
   type NewProjectMetaLocation,
 } from "../services/preferences";
 import {
@@ -1565,6 +1568,8 @@ export function FileTree({
   const [idleReleaseError, setIdleReleaseError] = React.useState("");
   const [newProjectMetaLocation, setNewProjectMetaLocation] = React.useState<NewProjectMetaLocation>("project");
   const [newProjectMetaLocationBusy, setNewProjectMetaLocationBusy] = React.useState(false);
+  const [forkOwnership, setForkOwnership] = React.useState<ForkOwnership>("nested");
+  const [forkOwnershipBusy, setForkOwnershipBusy] = React.useState(false);
   const [appearanceMode, setAppearanceModeState] = React.useState<AppearanceMode>(() => getAppearanceMode());
   const [isUpdateNotesOpen, setIsUpdateNotesOpen] = React.useState(false);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = React.useState<BeforeInstallPromptEvent | null>(null);
@@ -1980,6 +1985,11 @@ export function FileTree({
     fetchNewProjectMetaLocationPreference()
       .then((location) => {
         if (!cancelled) setNewProjectMetaLocation(location);
+      })
+      .catch(() => {});
+    fetchForkOwnershipPreference()
+      .then((ownership) => {
+        if (!cancelled) setForkOwnership(ownership);
       })
       .catch(() => {});
     return () => {
@@ -3691,6 +3701,42 @@ export function FileTree({
               >
                 <span>{t("fileTree.multiProjectSessions")}</span>
                 <span style={{ fontSize: "11px", opacity: multiProjectSessionsEnabled ? 1 : 0 }}>✓</span>
+              </button>
+              <button
+                type="button"
+                disabled={forkOwnershipBusy}
+                title={t("fileTree.forkOwnershipHint")}
+                onClick={() => {
+                  if (forkOwnershipBusy) return;
+                  const previous = forkOwnership;
+                  const next: ForkOwnership = previous === "nested" ? "detached" : "nested";
+                  setForkOwnership(next);
+                  setForkOwnershipBusy(true);
+                  updateForkOwnershipPreference(next)
+                    .then(setForkOwnership)
+                    .catch(() => setForkOwnership(previous))
+                    .finally(() => setForkOwnershipBusy(false));
+                }}
+                style={{
+                  width: "100%",
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--text-primary)",
+                  borderRadius: "8px",
+                  padding: "8px 10px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  textAlign: "left",
+                  cursor: forkOwnershipBusy ? "default" : "pointer",
+                  fontSize: "12px",
+                  opacity: forkOwnershipBusy ? 0.65 : 1,
+                }}
+              >
+                <span style={{ flex: 1 }}>{t("fileTree.forkOwnership")}</span>
+                <span style={{ color: "var(--text-secondary)", fontSize: "11px" }}>
+                  {t(forkOwnership === "detached" ? "fileTree.forkOwnershipDetached" : "fileTree.forkOwnershipNested")}
+                </span>
               </button>
               <button
                 type="button"
