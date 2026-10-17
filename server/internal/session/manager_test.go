@@ -656,3 +656,74 @@ func TestManagerMarkPendingAskUserAnsweredMergesAnswers(t *testing.T) {
 		t.Fatalf("answeredAt = %#v, want %s", toolCall.Meta["answeredAt"], answeredAt.Format(time.RFC3339Nano))
 	}
 }
+
+func TestManagerTouchBumpsUpdatedAt(t *testing.T) {
+	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
+	base := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	manager := NewManager(root, WithClock(func() time.Time { return base }))
+
+	created, err := manager.Create(context.Background(), CreateInput{Type: TypeChat, Name: "Fork"})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	later := base.Add(2 * time.Hour)
+	manager.now = func() time.Time { return later }
+	touched, err := manager.Touch(context.Background(), created.Key)
+	if err != nil {
+		t.Fatalf("touch session: %v", err)
+	}
+	if !touched.UpdatedAt.Equal(later) {
+		t.Fatalf("UpdatedAt = %v, want %v", touched.UpdatedAt, later)
+	}
+
+	manager.sessions = map[string]*Session{}
+	loaded, err := manager.Get(context.Background(), created.Key, 0)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if !loaded.UpdatedAt.Equal(later) {
+		t.Fatalf("reloaded UpdatedAt = %v, want %v", loaded.UpdatedAt, later)
+	}
+}
+
+func TestManagerSetParentSessionKeepsUpdatedAtAndRejectsCycles(t *testing.T) {
+	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
+	base := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	manager := NewManager(root, WithClock(func() time.Time { return base }))
+	ctx := context.Background()
+
+	parent, err := manager.Create(ctx, CreateInput{Type: TypeChat, Name: "parent"})
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	child, err := manager.Create(ctx, CreateInput{Type: TypeChat, ParentSessionKey: parent.Key, Name: "child"})
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	grandchild, err := manager.Create(ctx, CreateInput{Type: TypeChat, ParentSessionKey: child.Key, Name: "grandchild"})
+	if err != nil {
+		t.Fatalf("create grandchild: %v", err)
+	}
+
+	if _, err := manager.SetParentSession(ctx, parent.Key, grandchild.Key); err == nil {
+		t.Fatal("re-parenting under a descendant unexpectedly succeeded")
+	}
+	if _, err := manager.SetParentSession(ctx, parent.Key, parent.Key); err == nil {
+		t.Fatal("self-parenting unexpectedly succeeded")
+	}
+	if _, err := manager.SetParentSession(ctx, child.Key, "missing-parent"); err == nil {
+		t.Fatal("re-parenting under a missing session unexpectedly succeeded")
+	}
+
+	manager.now = func() time.Time { return base.Add(3 * time.Hour) }
+	detached, err := manager.SetParentSession(ctx, child.Key, "")
+	if err != nil {
+		t.Fatalf("detach child: %v", err)
+	}
+	if detached.ParentSessionKey != "" {
+		t.Fatalf("ParentSessionKey = %q, want empty", detached.ParentSessionKey)
+	}
+	if !detached.UpdatedAt.Equal(child.UpdatedAt) {
+		t.Fatalf("UpdatedAt changed on re-parent: got %v, want %v", detached.UpdatedAt, child.UpdatedAt)
+	}
+}

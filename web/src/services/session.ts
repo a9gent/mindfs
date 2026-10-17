@@ -1431,9 +1431,16 @@ class SessionService {
     }
   }
 
-  async deleteSession(rootId: string, sessionKey: string): Promise<boolean> {
+  async deleteSession(
+    rootId: string,
+    sessionKey: string,
+    options?: { keepChildren?: boolean },
+  ): Promise<boolean> {
     try {
       const params = new URLSearchParams({ root: rootId });
+      if (options?.keepChildren) {
+        params.set("keep_children", "true");
+      }
       const res = await protectedFetch(
         appURL(`/api/sessions/${encodeURIComponent(sessionKey)}`, params),
         { method: "DELETE" },
@@ -1445,6 +1452,33 @@ class SessionService {
     } catch (err) {
       console.error("[Session] Failed to delete session:", err);
       return false;
+    }
+  }
+
+  async setSessionParent(
+    rootId: string,
+    sessionKey: string,
+    parentSessionKey: string,
+  ): Promise<Session | null> {
+    try {
+      const params = new URLSearchParams({ root: rootId });
+      const data = await protectedJSON<Session>(
+        appURL(
+          `/api/sessions/${encodeURIComponent(sessionKey)}/parent`,
+          params,
+        ),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ parent_session_key: parentSessionKey }),
+        },
+      );
+      return data as Session;
+    } catch (err) {
+      console.error("[Session] Failed to move session:", err);
+      return null;
     }
   }
 

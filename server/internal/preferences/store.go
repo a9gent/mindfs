@@ -33,6 +33,10 @@ type UserPreferences struct {
 	AgentHidden                     []string                 `json:"agent_hidden,omitempty"`
 	AgentVisibilityCustomized       bool                     `json:"agent_visibility_customized,omitempty"`
 	UILayout                        *storedUILayout          `json:"ui_layout,omitempty"`
+	// ForkOwnership decides where a newly forked session lands:
+	//   "nested"   – under its parent session (default, cascade-deleted with it)
+	//   "detached" – at top level, parallel to the parent, survives its deletion
+	ForkOwnership string `json:"fork_ownership,omitempty"`
 }
 
 // UILayout is the browser panel arrangement, kept server-side so it follows the
@@ -158,6 +162,41 @@ func (s *Store) UpdateUILayout(sidebarsSwapped, gitDiffSideBySide bool) error {
 		return err
 	}
 	return nil
+}
+
+const (
+	ForkOwnershipNested   = "nested"
+	ForkOwnershipDetached = "detached"
+)
+
+// ForkOwnership returns the default placement for newly forked sessions.
+func (s *Store) ForkOwnership() string {
+	if s == nil {
+		return ForkOwnershipNested
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.data.ForkOwnership == ForkOwnershipDetached {
+		return ForkOwnershipDetached
+	}
+	return ForkOwnershipNested
+}
+
+func (s *Store) UpdateForkOwnership(ownership string) error {
+	if s == nil {
+		return nil
+	}
+	ownership = strings.TrimSpace(ownership)
+	if ownership != ForkOwnershipNested && ownership != ForkOwnershipDetached {
+		return errors.New("invalid fork ownership")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.ForkOwnership == ownership {
+		return nil
+	}
+	s.data.ForkOwnership = ownership
+	return s.saveLocked()
 }
 
 func (s *Store) IdleSessionResourceReleaseHours() int {

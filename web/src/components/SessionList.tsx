@@ -61,7 +61,8 @@ type SessionListProps = {
   onPin?: (session: SessionItem, pinned: boolean) => Promise<boolean> | boolean;
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onScheduledTask?: (session: SessionItem) => void;
-  onDelete?: (session: SessionItem) => void;
+  onDelete?: (session: SessionItem, options?: { keepChildren?: boolean }) => void;
+  onSetParent?: (session: SessionItem, parentKey: string) => Promise<boolean> | boolean;
   onHandoffPack?: (session: SessionItem) => void;
   onLoadChildren?: (
     session: SessionItem,
@@ -122,7 +123,8 @@ type ProjectSessionListProps = {
   onPin?: (session: SessionItem, pinned: boolean) => Promise<boolean> | boolean;
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onScheduledTask?: (session: SessionItem) => void;
-  onDelete?: (session: SessionItem) => void;
+  onDelete?: (session: SessionItem, options?: { keepChildren?: boolean }) => void;
+  onSetParent?: (session: SessionItem, parentKey: string) => Promise<boolean> | boolean;
   onHandoffPack?: (session: SessionItem) => void;
   onAddToKanban?: (session: SessionItem) => void;
   onProjectClick?: (rootId: string) => void;
@@ -308,6 +310,16 @@ function forkSessionDisplayName(
   return source.seq > 0 ? `${base}#${source.seq}` : base;
 }
 
+// A fork is a user-visible session that happens to hang off another session, so
+// it must show up without the parent being selected. Subagent sessions are
+// internal detail and stay collapsed until their parent is active.
+function shouldExpandChildren(
+  active: boolean,
+  children: SessionItem[],
+): boolean {
+  return active || children.some((child) => !!parseForkSessionSource(child.source));
+}
+
 function isSessionSyncing(
   session: SessionItem,
   syncingSessionKeys?: Set<string>,
@@ -348,6 +360,7 @@ export function SessionList({
   onRename,
   onScheduledTask,
   onDelete,
+  onSetParent,
   onHandoffPack,
   onLoadChildren,
   onLoadOlder,
@@ -410,7 +423,8 @@ export function SessionList({
       const children = childrenByParent.get(item.key) || [];
       const active = activeParentKeys.has(item.key);
       const expanded = !!expandedChildren[item.key];
-      const visibleChildren = active
+      const showChildren = shouldExpandChildren(active, children);
+      const visibleChildren = showChildren
         ? expanded
           ? children
           : children.slice(0, COLLAPSED_CHILD_SESSION_LIMIT)
@@ -419,7 +433,7 @@ export function SessionList({
         append(child);
       }
       const hiddenCount = Math.max(0, children.length - COLLAPSED_CHILD_SESSION_LIMIT);
-      if (active && (children.length > COLLAPSED_CHILD_SESSION_LIMIT || expanded || childrenHasMore[item.key])) {
+      if (showChildren && (children.length > COLLAPSED_CHILD_SESSION_LIMIT || expanded || childrenHasMore[item.key])) {
         out.push({
           type: "child-toggle",
           parent: item,
@@ -805,6 +819,7 @@ export function SessionList({
                   onRename={onRename}
                   onScheduledTask={onScheduledTask}
                   onDelete={onDelete}
+                  onSetParent={onSetParent}
                   onHandoffPack={onHandoffPack}
                   onAddToKanban={onAddToKanban}
                 />
@@ -863,6 +878,7 @@ export function MultiProjectSessionList({
   onRename,
   onScheduledTask,
   onDelete,
+  onSetParent,
   onProjectClick,
   onLoadMoreProject,
   onLoadChildren,
@@ -1187,7 +1203,8 @@ export function MultiProjectSessionList({
       const stateKey = childStateKey(item, fallbackRootId);
       const active = activeParentKeys.has(item.key);
       const expanded = !!expandedChildren[stateKey];
-      const visibleChildren = active
+      const showChildren = shouldExpandChildren(active, children);
+      const visibleChildren = showChildren
         ? expanded
           ? children
           : children.slice(0, COLLAPSED_CHILD_SESSION_LIMIT)
@@ -1196,7 +1213,7 @@ export function MultiProjectSessionList({
         append(child);
       }
       const hiddenCount = Math.max(0, children.length - COLLAPSED_CHILD_SESSION_LIMIT);
-      if (active && (children.length > COLLAPSED_CHILD_SESSION_LIMIT || expanded || childrenHasMore[stateKey])) {
+      if (showChildren && (children.length > COLLAPSED_CHILD_SESSION_LIMIT || expanded || childrenHasMore[stateKey])) {
         out.push({
           type: "child-toggle",
           parent: item,
@@ -2095,6 +2112,7 @@ export function MultiProjectSessionList({
                           onRename={onRename}
                           onScheduledTask={onScheduledTask}
                           onDelete={onDelete}
+                          onSetParent={onSetParent}
                           onHandoffPack={onHandoffPack}
                   onAddToKanban={onAddToKanban}
                         />
@@ -2242,6 +2260,7 @@ function SessionCard({
   onRename,
   onScheduledTask,
   onDelete,
+  onSetParent,
   onHandoffPack,
   onAddToKanban,
 }: {
@@ -2258,7 +2277,8 @@ function SessionCard({
   onPin?: (session: SessionItem, pinned: boolean) => Promise<boolean> | boolean;
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onScheduledTask?: (session: SessionItem) => void;
-  onDelete?: (session: SessionItem) => void;
+  onDelete?: (session: SessionItem, options?: { keepChildren?: boolean }) => void;
+  onSetParent?: (session: SessionItem, parentKey: string) => Promise<boolean> | boolean;
   onHandoffPack?: (session: SessionItem) => void;
   onAddToKanban?: (session: SessionItem) => void;
 }) {
@@ -2280,6 +2300,7 @@ function SessionCard({
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(storedName);
   const [saving, setSaving] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const rowBackground = selected
     ? "rgba(59, 130, 246, 0.1)"
     : parentHighlighted
@@ -3040,11 +3061,36 @@ function SessionCard({
                 {t("sessionList.addToKanban")}
               </button>
             ) : null}
+            {onSetParent && (isSubagent || (isForkSession && !!forkSource?.sessionKey)) ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpen(false);
+                  void onSetParent(
+                    session,
+                    isSubagent ? "" : String(forkSource?.sessionKey || ""),
+                  );
+                }}
+                style={{ ...menuItemStyle, color: "var(--text-primary)", whiteSpace: "nowrap" }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9 17H7A5 5 0 0 1 7 7h2" />
+                  <path d="M15 7h2a5 5 0 0 1 0 10h-2" />
+                  <line x1="8" y1="12" x2="16" y2="12" />
+                </svg>
+                {isSubagent ? t("sessionList.detachFromParent") : t("sessionList.attachToParent")}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 setMenuOpen(false);
+                if (childCount > 0) {
+                  setDeleteDialogOpen(true);
+                  return;
+                }
                 onDelete?.(session);
               }}
               style={{
@@ -3074,6 +3120,72 @@ function SessionCard({
           </div>
         ) : null}
       </div>
+      {deleteDialogOpen ? (
+        <div
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setDeleteDialogOpen(false);
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            zIndex: 3000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <div
+            role="dialog"
+            aria-label={t("sessionList.deleteWithChildrenTitle")}
+            style={{
+              width: "min(92vw, 400px)",
+              borderRadius: "12px",
+              border: "1px solid var(--border-color)",
+              background: "var(--menu-bg)",
+              padding: "16px",
+              boxShadow: "0 12px 30px rgba(15, 23, 42, 0.2)",
+            }}
+          >
+            <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-primary)" }}>
+              {t("sessionList.deleteWithChildrenTitle")}
+            </div>
+            <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "8px", lineHeight: 1.6 }}>
+              {t("sessionList.deleteWithChildrenBody", { count: childCount })}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "14px" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteDialogOpen(false);
+                  onDelete?.(session, { keepChildren: true });
+                }}
+                style={{ border: "none", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", background: "var(--accent-color)", color: "#fff", cursor: "pointer" }}
+              >
+                {t("sessionList.deleteKeepChildren")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteDialogOpen(false);
+                  onDelete?.(session);
+                }}
+                style={{ border: "1px solid #dc2626", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", background: "transparent", color: "#dc2626", cursor: "pointer" }}
+              >
+                {t("sessionList.deleteWithChildren")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeleteDialogOpen(false)}
+                style={{ border: "1px solid var(--border-color)", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", background: "transparent", color: "var(--text-primary)", cursor: "pointer" }}
+              >
+                {t("common.cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -21,6 +21,7 @@ import (
 	"mindfs/server/internal/commandexec"
 	"mindfs/server/internal/fs"
 	"mindfs/server/internal/logthrottle"
+	"mindfs/server/internal/preferences"
 	"mindfs/server/internal/session"
 )
 
@@ -285,21 +286,41 @@ func fillCommandShells(ctx context.Context, manager *session.Manager, items []*s
 	return nil
 }
 
+// appendChildSessions returns each parent followed by its whole descendant
+// tree, depth-first. Fork chains are arbitrarily deep (a fork of a fork is a
+// normal workflow), so one level is not enough: any descendant left out of the
+// payload has no loaded parent and the list cannot place it.
 func appendChildSessions(ctx context.Context, manager *session.Manager, parents []*session.Session) ([]*session.Session, error) {
 	if len(parents) == 0 {
 		return parents, nil
 	}
 	out := make([]*session.Session, 0, len(parents))
-	for _, parent := range parents {
-		if parent == nil {
-			continue
+	seen := make(map[string]bool, len(parents))
+	var appendTree func(parent *session.Session, depth int) error
+	appendTree = func(parent *session.Session, depth int) error {
+		if parent == nil || seen[parent.Key] {
+			return nil
 		}
+		seen[parent.Key] = true
 		out = append(out, parent)
+		if depth >= 64 {
+			return nil
+		}
 		children, err := manager.List(ctx, session.ListOptions{ParentSessionKey: parent.Key})
 		if err != nil {
+			return err
+		}
+		for _, child := range children {
+			if err := appendTree(child, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, parent := range parents {
+		if err := appendTree(parent, 0); err != nil {
 			return nil, err
 		}
-		out = append(out, children...)
 	}
 	return out, nil
 }
@@ -520,19 +541,28 @@ func (s *Service) ForkSession(ctx context.Context, in ForkSessionInput) (ForkSes
 			return ForkSessionOutput{}, err
 		}
 	}
+	// Fork ownership: "detached" forks sit at top level, parallel to the parent,
+	// so deleting the parent no longer takes the fork with it. The parent link
+	// is kept in source.session_key for provenance and display naming.
+	ownership := s.forkOwnership()
+	parentKey := current.Key
+	if ownership == preferences.ForkOwnershipDetached {
+		parentKey = ""
+	}
 	sourceJSON, err := json.Marshal(map[string]any{
 		"type":             "fork",
 		"session_key":      current.Key,
 		"seq":              target.Seq,
 		"agent":            agentName,
 		"agent_session_id": binding.AgentSessionID,
+		"ownership":        ownership,
 	})
 	if err != nil {
 		return ForkSessionOutput{}, err
 	}
 	created, err := manager.Create(ctx, session.CreateInput{
 		Type:             session.TypeChat,
-		ParentSessionKey: current.Key,
+		ParentSessionKey: parentKey,
 		Source:           string(sourceJSON),
 		Agent:            agentName,
 		Model:            resolveForkModel(current, target),
@@ -586,12 +616,28 @@ func (s *Service) ForkSession(ctx context.Context, in ForkSessionInput) (ForkSes
 		_ = manager.Delete(ctx, created.Key)
 		return ForkSessionOutput{}, err
 	}
+	// copyForkHistory replays historical timestamps, so the fork's UpdatedAt
+	// currently points at the fork point and the session would sort below newer
+	// sessions (and off the first list page). Creating a fork is activity now.
+	if _, err := manager.Touch(ctx, created.Key); err != nil {
+		_ = manager.Delete(ctx, created.Key)
+		return ForkSessionOutput{}, err
+	}
 	out, err := manager.Get(ctx, created.Key, 0)
 	if err != nil {
 		return ForkSessionOutput{}, err
 	}
 	log.Printf("[session/fork] done root=%s parent=%s child=%s agent=%s seq=%d turn=%d source_agent_session=%s fork_agent_session=%s", strings.TrimSpace(in.RootID), current.Key, out.Key, agentName, target.Seq, agentTurnIndex, binding.AgentSessionID, agentSessionID)
 	return ForkSessionOutput{Session: out}, nil
+}
+
+func (s *Service) forkOwnership() string {
+	if s != nil && s.Registry != nil {
+		if prefs := s.Registry.GetPreferences(); prefs != nil {
+			return prefs.ForkOwnership()
+		}
+	}
+	return preferences.ForkOwnershipNested
 }
 
 func isACPAgent(pool *agent.Pool, agentName string) bool {
@@ -993,6 +1039,10 @@ func (s *Service) CloseSession(ctx context.Context, in CloseSessionInput) (*sess
 type DeleteSessionInput struct {
 	RootID string
 	Key    string
+	// KeepChildren re-parents direct children onto the deleted session's parent
+	// (or top level) instead of deleting the whole subtree. This is what lets a
+	// user remove a middle fork without losing the newer fork beneath it.
+	KeepChildren bool
 }
 
 func (s *Service) DeleteSession(ctx context.Context, in DeleteSessionInput) error {
@@ -1007,9 +1057,19 @@ func (s *Service) DeleteSession(ctx context.Context, in DeleteSessionInput) erro
 	if err != nil {
 		return err
 	}
-	keys, err := deleteSessionCascadeKeys(ctx, manager, in.Key)
-	if err != nil {
-		return err
+	if in.KeepChildren {
+		if _, err := s.promoteChildren(ctx, manager, in.Key); err != nil {
+			return err
+		}
+	}
+	keys := []string{}
+	if in.KeepChildren {
+		keys = []string{in.Key}
+	} else {
+		keys, err = deleteSessionCascadeKeys(ctx, manager, in.Key)
+		if err != nil {
+			return err
+		}
 	}
 	for _, key := range keys {
 		cancelActiveSessionTurn(in.RootID, key)
@@ -1064,6 +1124,34 @@ func (s *Service) DeleteSession(ctx context.Context, in DeleteSessionInput) erro
 		s.Registry.ReleaseFileWatcher(in.RootID, key)
 	}
 	return nil
+}
+
+// promoteChildren re-parents direct children of key onto key's own parent (or
+// top level when key had no parent) so that deleting key does not take the
+// subtree with it. Descendants keep their links, so the promoted child carries
+// its own subtree along.
+func (s *Service) promoteChildren(ctx context.Context, manager *session.Manager, key string) ([]*session.Session, error) {
+	target, err := manager.Get(ctx, key, 0)
+	if err != nil {
+		return nil, err
+	}
+	newParent := strings.TrimSpace(target.ParentSessionKey)
+	children, err := manager.List(ctx, session.ListOptions{ParentSessionKey: key})
+	if err != nil {
+		return nil, err
+	}
+	promoted := make([]*session.Session, 0, len(children))
+	for _, child := range children {
+		if child == nil {
+			continue
+		}
+		updated, err := manager.SetParentSession(ctx, child.Key, newParent)
+		if err != nil {
+			return nil, err
+		}
+		promoted = append(promoted, updated)
+	}
+	return promoted, nil
 }
 
 func deleteSessionCascadeKeys(ctx context.Context, manager *session.Manager, key string) ([]string, error) {
@@ -1158,6 +1246,28 @@ func (s *Service) PinSession(ctx context.Context, in PinSessionInput) (*session.
 		return nil, err
 	}
 	return manager.SetPinned(ctx, in.Key, in.Pinned)
+}
+
+type SetSessionParentInput struct {
+	RootID string
+	Key    string
+	// ParentSessionKey empty detaches the session to top level.
+	ParentSessionKey string
+}
+
+// SetSessionParent moves a session between nested and detached ownership.
+// Detaching keeps the provenance recorded in Source but drops the list nesting
+// and cascade-delete link, which is the per-session escape hatch next to the
+// global fork_ownership default.
+func (s *Service) SetSessionParent(ctx context.Context, in SetSessionParentInput) (*session.Session, error) {
+	if err := s.ensureRegistry(); err != nil {
+		return nil, err
+	}
+	manager, err := s.Registry.GetSessionManager(in.RootID)
+	if err != nil {
+		return nil, err
+	}
+	return manager.SetParentSession(ctx, in.Key, in.ParentSessionKey)
 }
 
 type BuildPromptInput struct {

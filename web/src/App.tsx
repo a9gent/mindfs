@@ -6136,13 +6136,16 @@ export function App({ onGoHome }: AppProps) {
   );
 
   const handleDeleteSession = useCallback(
-    async (session: SessionItem) => {
+    async (session: SessionItem, options?: { keepChildren?: boolean }) => {
       const sessionKey = session?.key || session?.session_key;
       const rootID =
         (session?.root_id as string | undefined) || currentRootIdRef.current;
       if (!rootID || !sessionKey) return;
 
-      const deleted = await sessionService.deleteSession(rootID, sessionKey);
+      const keepChildren = !!options?.keepChildren;
+      const deleted = await sessionService.deleteSession(rootID, sessionKey, {
+        keepChildren,
+      });
       if (!deleted) {
         reportError("session.delete_failed", t("session.deleteFailed"));
         return;
@@ -6159,7 +6162,12 @@ export function App({ onGoHome }: AppProps) {
           }
         }
       };
-      collectDeletedKeys(sessionKey);
+      // Keep-children means the server re-parented the subtree, so only the
+      // target itself disappears locally.
+      if (!keepChildren) {
+        collectDeletedKeys(sessionKey);
+      }
+      deletedKeys.add(sessionKey);
 
       setSessions((prev) =>
         prev.filter((item) => !deletedKeys.has(item.key || item.session_key || "")),
@@ -6347,6 +6355,40 @@ export function App({ onGoHome }: AppProps) {
       return true;
     },
     [bumpCacheVersion, rootSessionKey, setDrawerSessionForRoot],
+  );
+
+  const handleSetSessionParent = useCallback(
+    async (session: SessionItem, parentKey: string) => {
+      const sessionKey = session?.key || session?.session_key;
+      const rootID =
+        (session?.root_id as string | undefined) || currentRootIdRef.current;
+      if (!rootID || !sessionKey) return false;
+
+      const updated = await sessionService.setSessionParent(
+        rootID,
+        sessionKey,
+        parentKey,
+      );
+      if (!updated) {
+        reportError("session.move_failed", t("session.moveFailed"));
+        return false;
+      }
+
+      const nextItem = toSessionItem(rootID, updated);
+      if (nextItem) {
+        setSessions((prev) => mergeSessionItems(prev, [nextItem]));
+        setMultiProjectSessionGroups((prev) =>
+          prev.map((group) =>
+            group.rootId === rootID
+              ? { ...group, sessions: mergeSessionItems(group.sessions, [nextItem]) }
+              : group,
+          ),
+        );
+      }
+      bumpCacheVersion();
+      return true;
+    },
+    [bumpCacheVersion, t],
   );
 
   const handlePinSession = useCallback(
@@ -10370,6 +10412,20 @@ export function App({ onGoHome }: AppProps) {
             void loadSessionsForRoot(rootID, { replace: true });
           }
           if (rootID && multiProjectSessionsEnabled) {
+            void loadMultiProjectSessionGroups();
+          }
+          break;
+        }
+        case "sessions.changed": {
+          // Metadata-only change (e.g. re-parenting on keep-children delete) that
+          // does not bump updated_at, so incremental after_time fetches miss it.
+          const rootID =
+            typeof payload?.root_id === "string" ? payload.root_id : "";
+          if (!rootID) break;
+          if (rootID === currentRootIdRef.current) {
+            void loadSessionsForRoot(rootID, { replace: true });
+          }
+          if (multiProjectSessionsEnabled) {
             void loadMultiProjectSessionGroups();
           }
           break;
@@ -14752,6 +14808,7 @@ export function App({ onGoHome }: AppProps) {
         onRename={handleRenameSession}
         onScheduledTask={openSessionScheduledTask}
         onDelete={handleDeleteSession}
+        onSetParent={handleSetSessionParent}
         onProjectClick={(rootId) => {
           actionHandlers.open_dir({
             path: rootId,
@@ -14846,6 +14903,7 @@ export function App({ onGoHome }: AppProps) {
         onRename={handleRenameSession}
         onScheduledTask={openSessionScheduledTask}
         onDelete={handleDeleteSession}
+        onSetParent={handleSetSessionParent}
         onLoadChildren={
           sessionSearchOpen && sessionSearchResultsMode
             ? undefined

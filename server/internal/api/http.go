@@ -347,6 +347,8 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Put("/api/preferences/new-project-meta-location", h.protectedEndpoint(h.handleNewProjectMetaLocationPreferencePut))
 	r.Get("/api/preferences/ui-layout", h.protectedEndpoint(h.handleUILayoutPreferenceGet))
 	r.Put("/api/preferences/ui-layout", h.protectedEndpoint(h.handleUILayoutPreferencePut))
+	r.Get("/api/preferences/fork-ownership", h.protectedEndpoint(h.handleForkOwnershipPreferenceGet))
+	r.Put("/api/preferences/fork-ownership", h.protectedEndpoint(h.handleForkOwnershipPreferencePut))
 	r.Get("/api/replying-sessions", h.protectedEndpoint(h.handleReplyingSessions))
 	r.Get("/api/sessions/search", h.protectedEndpoint(h.handleSessionSearch))
 	r.Get("/api/sessions/children", h.protectedEndpoint(h.handleSessionChildren))
@@ -362,6 +364,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/sessions/{key}/messages", h.protectedEndpoint(h.handleSessionUserMessage))
 	r.Get("/api/sessions/{key}/related-files", h.protectedEndpoint(h.handleSessionRelatedFilesGet))
 	r.Post("/api/sessions/{key}/pin", h.protectedEndpoint(h.handleSessionPin))
+	r.Post("/api/sessions/{key}/parent", h.protectedEndpoint(h.handleSessionParent))
 	r.Post("/api/sessions/{key}/rename", h.protectedEndpoint(h.handleSessionRename))
 	r.Delete("/api/sessions/{key}/related-files", h.protectedEndpoint(h.handleSessionRelatedFilesDelete))
 	r.Delete("/api/sessions/{key}", h.protectedEndpoint(h.handleSessionDelete))
@@ -1158,6 +1161,40 @@ func (h *HTTPHandler) handleSessionPin(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, h.sessionListResponse(updated))
 }
 
+func (h *HTTPHandler) handleSessionParent(w http.ResponseWriter, r *http.Request) {
+	rootID := r.URL.Query().Get("root")
+	key := chi.URLParam(r, "key")
+	if strings.TrimSpace(key) == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("session key required"))
+		return
+	}
+	var req struct {
+		ParentSessionKey string `json:"parent_session_key"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json body"))
+		return
+	}
+	updated, err := h.service().SetSessionParent(r.Context(), usecase.SetSessionParentInput{
+		RootID:           rootID,
+		Key:              key,
+		ParentSessionKey: strings.TrimSpace(req.ParentSessionKey),
+	})
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	if h.AppContext != nil {
+		// Re-parenting does not bump updated_at, so peers cannot pick it up with
+		// an incremental after_time fetch; tell them to reload the list instead.
+		h.AppContext.GetSessionStreamHub().BroadcastAll(WSResponse{
+			Type:    "sessions.changed",
+			Payload: map[string]any{"root_id": rootID},
+		})
+	}
+	respondJSON(w, http.StatusOK, h.sessionListResponse(updated))
+}
+
 func (h *HTTPHandler) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 	rootID := r.URL.Query().Get("root")
 	key := chi.URLParam(r, "key")
@@ -1165,13 +1202,33 @@ func (h *HTTPHandler) handleSessionDelete(w http.ResponseWriter, r *http.Request
 		respondError(w, http.StatusBadRequest, errInvalidRequest("session key required"))
 		return
 	}
+	keepChildren := false
+	if raw := strings.TrimSpace(r.URL.Query().Get("keep_children")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, errInvalidRequest("keep_children must be a boolean"))
+			return
+		}
+		keepChildren = parsed
+	}
 	uc := h.service()
 	if err := uc.DeleteSession(r.Context(), usecase.DeleteSessionInput{
-		RootID: rootID,
-		Key:    key,
+		RootID:       rootID,
+		Key:          key,
+		KeepChildren: keepChildren,
 	}); err != nil {
 		respondError(w, http.StatusNotFound, err)
 		return
+	}
+	if keepChildren && h.AppContext != nil {
+		// Children were re-parented, so their parent_session_key changed under the
+		// client's feet and their updated_at did not (re-parenting is not
+		// activity), which means an incremental fetch cannot see them. Ask clients
+		// to reload the list for this root.
+		h.AppContext.GetSessionStreamHub().BroadcastAll(WSResponse{
+			Type:    "sessions.changed",
+			Payload: map[string]any{"root_id": rootID},
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1350,6 +1407,35 @@ type idleSessionResourceReleasePreferenceRequest struct {
 
 type newProjectMetaLocationPreferenceRequest struct {
 	Location string `json:"location"`
+}
+
+type forkOwnershipPreferenceRequest struct {
+	Ownership string `json:"ownership"`
+}
+
+func (h *HTTPHandler) handleForkOwnershipPreferenceGet(w http.ResponseWriter, _ *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetPreferences() == nil {
+		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("preferences not configured"))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ownership": h.AppContext.GetPreferences().ForkOwnership()})
+}
+
+func (h *HTTPHandler) handleForkOwnershipPreferencePut(w http.ResponseWriter, r *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetPreferences() == nil {
+		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("preferences not configured"))
+		return
+	}
+	var req forkOwnershipPreferenceRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest(err.Error()))
+		return
+	}
+	if err := h.AppContext.GetPreferences().UpdateForkOwnership(req.Ownership); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest(err.Error()))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ownership": h.AppContext.GetPreferences().ForkOwnership()})
 }
 
 func (h *HTTPHandler) handleNewProjectMetaLocationPreferenceGet(w http.ResponseWriter, _ *http.Request) {

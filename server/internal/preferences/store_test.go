@@ -93,3 +93,24 @@ func TestNewProjectMetaLocationDefaultAndPersist(t *testing.T) {
 		t.Fatal("invalid location unexpectedly accepted")
 	}
 }
+
+func TestForkOwnershipDefaultAndPersist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), preferencesFileName)
+	store := &Store{path: path, data: UserPreferences{Agents: map[string]AgentDefaults{}}}
+	if got := store.ForkOwnership(); got != ForkOwnershipNested {
+		t.Fatalf("default ownership = %q", got)
+	}
+	if err := store.UpdateForkOwnership(ForkOwnershipDetached); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := &Store{path: path, data: UserPreferences{Agents: map[string]AgentDefaults{}}}
+	if err := reloaded.load(); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.ForkOwnership(); got != ForkOwnershipDetached {
+		t.Fatalf("reloaded ownership = %q", got)
+	}
+	if err := store.UpdateForkOwnership("sideways"); err == nil {
+		t.Fatal("invalid ownership unexpectedly accepted")
+	}
+}
