@@ -986,9 +986,6 @@ func deleteAgentAPIProvider(id string) ([]agentAPIProvider, error) {
 	if err := writeAgentAPIProviders(next); err != nil {
 		return nil, err
 	}
-	// 精选删除后，投影进 zcode bridge home 的 mfs-<slug> 规则还带着 API key，
-	// 必须一并清掉；清不动的（home 缺失/配置损坏）只记日志不拦删除。
-	removeZcodeAPIProviderRules(id)
 	return next, nil
 }
 
@@ -1195,19 +1192,6 @@ func applyAgentAPIProvider(agentName string, provider agentAPIProvider, app *App
 	case "hermes":
 		if err := applyHermesAPIProvider(provider); err != nil {
 			return err
-		}
-	case "zcode":
-		if err := applyZcodeAPIProvider(agentName, provider); err != nil {
-			if !errors.Is(err, errZcodeBridgeHomeMissing) {
-				return err
-			}
-			// 裸 zcode（无 BRIDGE_ZCODE_HOME 的桥环境变量）退回 env 注入。
-			if err := applyAgentProviderEnv(agentName, map[string]string{
-				"OPENAI_BASE_URL": provider.BaseURL,
-				"OPENAI_API_KEY":  provider.APIKey,
-			}, app); err != nil {
-				return err
-			}
 		}
 	default:
 		if err := applyAgentProviderEnv(agentName, map[string]string{
@@ -2257,28 +2241,6 @@ func SetAgentDefinitionResolver(resolver func(string) (agent.Definition, bool)) 
 	}
 }
 
-// agentDefinitionsList enumerates every configured agent definition, including
-// the hosted extra-config layer that LoadConfig("") cannot see. Callers that
-// must sweep ALL agents (zcode rule cleanup) use this instead of LoadConfig(""),
-// or hosted-only zcode agents silently keep their mfs-<slug> rule — together
-// with the API key it projects — after a provider delete. AppContext swaps
-// this at startup (SetAgentDefinitionsLister); the disk fallback keeps
-// standalone callers and tests working.
-var agentDefinitionsList = func() []agent.Definition {
-	cfg, err := agent.LoadConfig("")
-	if err != nil {
-		return nil
-	}
-	return append([]agent.Definition(nil), cfg.Agents...)
-}
-
-// SetAgentDefinitionsLister wires the prober-backed definition enumeration.
-func SetAgentDefinitionsLister(lister func() []agent.Definition) {
-	if lister != nil {
-		agentDefinitionsList = lister
-	}
-}
-
 func normalizeAPIProviderProtocolList(values []string) []string {
 	aliases := map[string]string{
 		"openai":               apiProviderProtocolOpenAICompatible,
@@ -2308,7 +2270,7 @@ func normalizeAPIProviderProtocolList(values []string) []string {
 
 func agentSupportedAPIProtocols(agentName string) []string {
 	// User-declared protocols (agents.json apiProviderProtocols) win over the
-	// built-in table — this is how zcode instances gain provider switching.
+	// built-in table, so a custom ACP bridge can opt into provider switching.
 	if def, ok := agentDefinitionForName(agentName); ok && len(def.APIProviderProtocols) > 0 {
 		return normalizeAPIProviderProtocolList(def.APIProviderProtocols)
 	}
@@ -2398,10 +2360,6 @@ func isTOMLBareKey(key string) bool {
 	return true
 }
 
-// zcodeInstancePattern matches bridge instances (zcode-1/zcode-2/…) without
-// swallowing unrelated names like "zcodefoo".
-var zcodeInstancePattern = regexp.MustCompile(`^zcode-\d+$`)
-
 func normalizedAPIProviderAgent(agentName string) string {
 	name := strings.ToLower(strings.TrimSpace(agentName))
 	switch name {
@@ -2416,9 +2374,6 @@ func normalizedAPIProviderAgent(agentName string) string {
 	case "kimi-code":
 		return "kimi"
 	default:
-		if name == "zcode" || zcodeInstancePattern.MatchString(name) {
-			return "zcode"
-		}
 		return name
 	}
 }

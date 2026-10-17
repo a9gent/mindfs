@@ -42,168 +42,20 @@ func TestMFSProviderRuleIDEdgeCases(t *testing.T) {
 		if got := agent.MFSProviderRuleID(input); got != want {
 			t.Fatalf("MFSProviderRuleID(%q) = %q, want %q", input, got, want)
 		}
-		if got := mfsProviderRuleID(input); got != agent.MFSProviderRuleID(input) {
-			t.Fatalf("api slugger diverges from agent slugger for %q: %q vs %q", input, got, agent.MFSProviderRuleID(input))
-		}
 	}
 }
 
-func TestRemoveZcodeProviderRuleDropsManagedRuleOnly(t *testing.T) {
-	home := t.TempDir()
-	dir := filepath.Join(home, ".zcode", "v2")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	seed := `{"schemaVersion":1,"config":{"providerOrder":["new-provider","mfs-api-cpa"],"providerConfigRules":{"providerRules":[{"providerId":"new-provider","config":{"access":{"apiKey":"user-key"}}},{"providerId":"mfs-api-cpa","config":{"access":{"apiKey":"sk-test"}}}]}}}`
-	path := filepath.Join(dir, "provider_config.json")
-	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	removed, err := removeZcodeProviderRule(home, "mfs-api-cpa")
-	if err != nil || !removed {
-		t.Fatalf("removeZcodeProviderRule = %v, %v", removed, err)
-	}
-
-	payload, _ := os.ReadFile(path)
-	var doc map[string]any
-	if err := json.Unmarshal(payload, &doc); err != nil {
-		t.Fatal(err)
-	}
-	config := doc["config"].(map[string]any)
-	order := zcodeStringSlice(config, "providerOrder")
-	if len(order) != 1 || order[0] != "new-provider" {
-		t.Fatalf("providerOrder = %v, want only user entry", order)
-	}
-	if strings.Contains(string(payload), "mfs-api-cpa") || strings.Contains(string(payload), "sk-test") {
-		t.Fatalf("managed rule/api key survived: %s", payload)
-	}
-	// 用户规则原样保留
-	userRule := readZcodeRule(t, path, "new-provider")
-	if access := userRule["config"].(map[string]any)["access"].(map[string]any); access["apiKey"] != "user-key" {
-		t.Fatalf("user rule was modified: %v", userRule)
-	}
-	// 备份 0600
-	entries, _ := os.ReadDir(dir)
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "provider_config.json.bak-") {
-			info, _ := entry.Info()
-			if info.Mode().Perm() != 0o600 {
-				t.Fatalf("backup perm = %v", info.Mode().Perm())
-			}
-		}
-	}
-}
-
-func TestRemoveZcodeProviderRuleNoopAndUnparsable(t *testing.T) {
-	home := t.TempDir()
-	dir := filepath.Join(home, ".zcode", "v2")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "provider_config.json")
-
-	// 文件不存在：安静 no-op
-	removed, err := removeZcodeProviderRule(home, "mfs-api-cpa")
-	if err != nil || removed {
-		t.Fatalf("missing file should no-op, got %v, %v", removed, err)
-	}
-
-	// 无匹配规则：no-op 且不重写
-	if err := os.WriteFile(path, []byte(`{"config":{"providerOrder":["a"]}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	before, _ := os.ReadFile(path)
-	removed, err = removeZcodeProviderRule(home, "mfs-api-cpa")
-	if err != nil || removed {
-		t.Fatalf("absent rule should no-op, got %v, %v", removed, err)
-	}
-	after, _ := os.ReadFile(path)
-	if string(before) != string(after) {
-		t.Fatalf("no-op rewrote the file")
-	}
-
-	// 坏 JSON：拒绝修改（与写入侧同一红线）
-	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := removeZcodeProviderRule(home, "mfs-api-cpa"); err == nil {
-		t.Fatalf("unparsable config must be refused")
-	}
-	if payload, _ := os.ReadFile(path); string(payload) != "{not json" {
-		t.Fatalf("unparsable config was modified")
-	}
-}
-
-func TestRemoveZcodeAPIProviderRulesIteratesBridgeHomes(t *testing.T) {
-	homeA := t.TempDir()
-	homeB := t.TempDir()
-	for _, home := range []string{homeA, homeB} {
-		dir := filepath.Join(home, ".zcode", "v2")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		seed := `{"config":{"providerOrder":["mfs-api-cpa"],"providerConfigRules":{"providerRules":[{"providerId":"mfs-api-cpa"}]}}}`
-		if err := os.WriteFile(filepath.Join(dir, "provider_config.json"), []byte(seed), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	configPath := filepath.Join(t.TempDir(), "agents.json")
-	definitions := []agent.Definition{
-		{Name: "zcode-1", Command: "zcode-acp-bridge", Env: map[string]string{"BRIDGE_ZCODE_HOME": homeA}},
-		{Name: "zcode-2", Command: "zcode-acp-bridge", Env: map[string]string{"BRIDGE_ZCODE_HOME": homeB}},
-		{Name: "codex", Command: "codex"},
-	}
-	payload, err := json.Marshal(map[string]any{"agents": definitions})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(configPath, payload, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("MINDFS_AGENTS_CONFIG", configPath)
-
-	removeZcodeAPIProviderRules("api-cpa")
-
-	for _, home := range []string{homeA, homeB} {
-		raw, err := os.ReadFile(filepath.Join(home, ".zcode", "v2", "provider_config.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(raw), "mfs-api-cpa") {
-			t.Fatalf("%s still carries the deleted provider rule: %s", home, raw)
-		}
-	}
-}
-
-func TestRemoveZcodeAPIProviderRulesCoversHostedLayerAgents(t *testing.T) {
-	home := t.TempDir()
-	dir := filepath.Join(home, ".zcode", "v2")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	seed := `{"config":{"providerOrder":["mfs-api-cpa"],"providerConfigRules":{"providerRules":[{"providerId":"mfs-api-cpa"}]}}}`
-	if err := os.WriteFile(filepath.Join(dir, "provider_config.json"), []byte(seed), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// hosted extra 层的 agent 不在 agents.json 里，LoadConfig("") 枚举不到；
-	// 清理必须走 prober 合并配置，否则它的 mfs- 规则（带 API key）会残留。
-	previous := agentDefinitionsList
-	agentDefinitionsList = func() []agent.Definition {
-		return []agent.Definition{
-			{Name: "zcode-hosted", Command: "zcode-acp-bridge", Env: map[string]string{"BRIDGE_ZCODE_HOME": home}},
-		}
-	}
-	t.Cleanup(func() { agentDefinitionsList = previous })
-
-	removeZcodeAPIProviderRules("api-cpa")
-
-	raw, err := os.ReadFile(filepath.Join(dir, "provider_config.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "mfs-api-cpa") {
-		t.Fatalf("hosted-layer agent still carries the deleted provider rule: %s", raw)
+// apiProviderFixture is a provider with a pinned subset, used by the writers
+// below to check what they project into each agent's config.
+func apiProviderFixture() agentAPIProvider {
+	return agentAPIProvider{
+		ID:           "api-cpa",
+		Name:         "CPA",
+		BaseURL:      "http://cpa.test:8317",
+		APIKey:       "sk-test",
+		Protocols:    []string{apiProviderProtocolAnthropicCompatible},
+		Models:       []string{"glm-5.3-flash", "deepseek-v4", "kimi-k3"},
+		PinnedModels: []string{"kimi-k3", "glm-5.3-flash"},
 	}
 }
 
@@ -256,7 +108,7 @@ model = "old-model"
 		t.Fatal(err)
 	}
 
-	provider := zcodeTestProvider()
+	provider := apiProviderFixture()
 	provider.Models = nil
 	provider.PinnedModels = nil
 	if err := applyKimiAPIProvider(provider); err != nil {
@@ -288,7 +140,7 @@ func TestApplyQwenAPIProviderKeepsModelNameOnEmptyProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	provider := zcodeTestProvider()
+	provider := apiProviderFixture()
 	provider.Models = nil
 	provider.PinnedModels = nil
 	if err := applyQwenAPIProvider(provider); err != nil {

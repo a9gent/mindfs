@@ -57,8 +57,8 @@ export async function saveAgentVisibility(hidden: string[], customized: boolean)
   return next;
 }
 
-// 同名实例组（zcode / zcode-1 / zcode-2 …）在用户从未动过显隐设置时折叠为
-// 只显示 base；动过（customized=true）则完全按用户名单。
+// 同名实例组（<name>-1 / <name>-2 …）在用户从未动过显隐设置时折叠为只显示
+// base；动过（customized=true）则完全按用户名单。
 const INSTANCE_GROUP_PATTERN = /^(.+)-(\d+)$/;
 
 export function foldInstanceGroups(names: string[]): string[] {
