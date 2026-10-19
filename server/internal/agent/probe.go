@@ -48,6 +48,8 @@ type Status struct {
 	Commands                      []agenttypes.CommandInfo `json:"commands,omitempty"`
 	CommandsError                 string                   `json:"commands_error,omitempty"`
 	Brief                         string                   `json:"brief,omitempty"`
+	Label                         string                   `json:"label,omitempty"`
+	URL                           string                   `json:"url,omitempty"`
 	InstallCommands               []string                 `json:"install_commands,omitempty"`
 	UpdateCommands                []string                 `json:"update_commands,omitempty"`
 }
@@ -89,11 +91,20 @@ type Prober struct {
 	pool          *Pool
 	probeSessions *probeSessionStore
 	statuses      map[string]Status
+	// metadata holds per-agent Label/URL overrides applied at read time.
+	// It survives hosted-config refreshes, which merge a local config
+	// captured at startup and would otherwise drop freshly written labels.
+	metadata      map[string]agentMetadataOverride
 	mu            sync.RWMutex
 	inFlight      map[string]struct{} // per-agent probe 去重，mu 保护
 	probeInterval time.Duration
 	stopCh        chan struct{}
 	listeners     []func(Status)
+}
+
+type agentMetadataOverride struct {
+	label string
+	url   string
 }
 
 func NewProber(cfg *Config, pool *Pool, probeInterval time.Duration) *Prober {
@@ -109,6 +120,7 @@ func NewProber(cfg *Config, pool *Pool, probeInterval time.Duration) *Prober {
 		pool:          pool,
 		probeSessions: probeSessions,
 		statuses:      make(map[string]Status),
+		metadata:      make(map[string]agentMetadataOverride),
 		inFlight:      make(map[string]struct{}),
 		probeInterval: probeInterval,
 		stopCh:        make(chan struct{}),
@@ -118,9 +130,63 @@ func NewProber(cfg *Config, pool *Pool, probeInterval time.Duration) *Prober {
 		now := time.Now().UTC()
 		for _, def := range cfg.Agents {
 			p.statuses[def.Name] = normalizeStatus(probeInstallStatus(def.Name, def, now))
+			p.seedMetadataLocked(def)
 		}
 	}
 	return p
+}
+
+// seedMetadataLocked records a definition's Label/URL unless the agent already
+// has an override (SetAgentMetadata wins over config re-reads).
+func (p *Prober) seedMetadataLocked(def Definition) {
+	if p.metadata == nil {
+		p.metadata = make(map[string]agentMetadataOverride)
+	}
+	if _, ok := p.metadata[def.Name]; ok {
+		return
+	}
+	if def.Label == "" && def.URL == "" {
+		return
+	}
+	p.metadata[def.Name] = agentMetadataOverride{label: def.Label, url: def.URL}
+}
+
+// DefinitionForAgent returns the merged definition the prober currently runs with.
+func (p *Prober) DefinitionForAgent(name string) (Definition, bool) {
+	if p == nil {
+		return Definition{}, false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.cfg == nil {
+		return Definition{}, false
+	}
+	return p.cfg.GetAgent(name)
+}
+
+// SetAgentMetadata updates the Label/URL override for an agent and pushes the
+// refreshed status to listeners so the change is visible without a restart.
+func (p *Prober) SetAgentMetadata(name, label, url string) {
+	if p == nil {
+		return
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	p.mu.Lock()
+	if p.metadata == nil {
+		p.metadata = make(map[string]agentMetadataOverride)
+	}
+	p.metadata[name] = agentMetadataOverride{label: strings.TrimSpace(label), url: strings.TrimSpace(url)}
+	current, ok := p.statuses[name]
+	p.mu.Unlock()
+	if !ok {
+		return
+	}
+	current.Label = strings.TrimSpace(label)
+	current.URL = strings.TrimSpace(url)
+	p.setStatus(current)
 }
 
 func loadProbeSessionStore() (*probeSessionStore, error) {
@@ -307,6 +373,7 @@ func (p *Prober) UpdateConfig(ctx context.Context, cfg *Config) {
 	p.mu.Lock()
 	p.cfg = cfg
 	for _, def := range cfg.Agents {
+		p.seedMetadataLocked(def)
 		if _, ok := p.statuses[def.Name]; ok {
 			continue
 		}
@@ -456,7 +523,23 @@ func (p *Prober) GetStatus(name string) (Status, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	status, ok := p.statuses[name]
+	if ok {
+		status = p.applyMetadataLocked(status)
+	}
 	return status, ok
+}
+
+// applyMetadataLocked overlays the Label/URL override onto a status snapshot.
+func (p *Prober) applyMetadataLocked(status Status) Status {
+	override, ok := p.metadata[status.Name]
+	if !ok {
+		return status
+	}
+	if override.label != "" || override.url != "" {
+		status.Label = override.label
+		status.URL = override.url
+	}
+	return status
 }
 
 // GetAllStatuses 获取所有缓存的 Agent 状态
@@ -470,7 +553,7 @@ func (p *Prober) GetAllStatuses() []Status {
 	if p.cfg != nil {
 		for _, def := range p.cfg.Agents {
 			if st, ok := p.statuses[def.Name]; ok {
-				statuses = append(statuses, st)
+				statuses = append(statuses, p.applyMetadataLocked(st))
 			}
 			seen[def.Name] = struct{}{}
 		}
@@ -481,7 +564,7 @@ func (p *Prober) GetAllStatuses() []Status {
 		if _, ok := seen[name]; ok {
 			continue
 		}
-		extra = append(extra, st)
+		extra = append(extra, p.applyMetadataLocked(st))
 	}
 	sort.Slice(extra, func(i, j int) bool {
 		return extra[i].Name < extra[j].Name
@@ -503,10 +586,10 @@ func (p *Prober) GetConfiguredStatuses() []Status {
 	now := time.Now().UTC()
 	for _, def := range p.cfg.Agents {
 		if st, ok := p.statuses[def.Name]; ok {
-			statuses = append(statuses, st)
+			statuses = append(statuses, p.applyMetadataLocked(st))
 			continue
 		}
-		statuses = append(statuses, normalizeStatus(probeInstallStatus(def.Name, def, now)))
+		statuses = append(statuses, p.applyMetadataLocked(normalizeStatus(probeInstallStatus(def.Name, def, now))))
 	}
 	return statuses
 }
@@ -699,6 +782,12 @@ func statusChanged(prev Status, next Status) bool {
 	if prev.Brief != next.Brief {
 		return true
 	}
+	if prev.Label != next.Label {
+		return true
+	}
+	if prev.URL != next.URL {
+		return true
+	}
 	if len(prev.InstallCommands) != len(next.InstallCommands) {
 		return true
 	}
@@ -780,6 +869,8 @@ func probeInstallStatus(name string, def Definition, ts time.Time) Status {
 	status := unavailableStatus(name, false, "", ts)
 	status.Protocol = agentDefinitionProtocol(name, def)
 	status.Brief = strings.TrimSpace(def.Brief)
+	status.Label = strings.TrimSpace(def.Label)
+	status.URL = strings.TrimSpace(def.URL)
 	status.InstallCommands = append([]string(nil), def.InstallCommands...)
 	status.UpdateCommands = append([]string(nil), def.UpdateCommands...)
 	if def.Command == "" {
@@ -853,6 +944,7 @@ func populateProbeModels(ctx context.Context, sess agenttypes.Session, status *S
 		status.CurrentModeID = modes.CurrentModeID
 		status.Modes = modes.Modes
 	}
+	supplementACPProviderModels(status)
 	if defaultsReader, ok := sess.(agenttypes.DefaultsReader); ok {
 		defaults, defaultsErr := defaultsReader.RuntimeDefaults(modelsCtx)
 		if defaultsErr != nil {
@@ -1017,6 +1109,14 @@ func (p *Prober) configuredDefinitions() []Definition {
 	defs := make([]Definition, len(p.cfg.Agents))
 	copy(defs, p.cfg.Agents)
 	return defs
+}
+
+// Definitions returns every configured agent definition the prober runs with
+// (base + user + hosted extra layers merged). Enumeration that must cover all
+// agents — not just lookups by name — goes through here instead of
+// agent.LoadConfig(""), which cannot see the hosted extra layer.
+func (p *Prober) Definitions() []Definition {
+	return p.configuredDefinitions()
 }
 
 func (p *Prober) probeConfiguredAgents(ctx context.Context, defs []Definition) {

@@ -61,6 +61,8 @@ type TokenEditorProps = {
   enterKeyHint?: React.HTMLAttributes<HTMLElement>["enterKeyHint"];
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
+  /** Overrides the default 240px content max-height (ignored when fillHeight). */
+  maxHeightOverride?: number;
 };
 
 type SerializedTokenNode = Spread<
@@ -643,6 +645,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
     enterKeyHint,
     onCompositionStart,
     onCompositionEnd,
+    maxHeightOverride,
   },
   ref
 ) {
@@ -874,7 +877,7 @@ const TokenEditor = forwardRef<TokenEditorHandle, TokenEditorProps>(function Tok
                 width: "100%",
                 minHeight: fillHeight ? "100%" : isSingleLine ? "44px" : "20px",
                 height: fillHeight ? "100%" : isSingleLine ? "44px" : "auto",
-                maxHeight: fillHeight ? "none" : "240px",
+                maxHeight: fillHeight ? "none" : (maxHeightOverride && maxHeightOverride > 0 ? `${maxHeightOverride}px` : "240px"),
                 overflowY: "auto",
                 padding: isSingleLine
                   ? `${12 + topInset}px ${rightInset}px 12px 14px`

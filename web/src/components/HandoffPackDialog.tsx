@@ -7,19 +7,24 @@ import {
   loadHandoffTemplate,
   persistHandoffTemplate,
   renderHandoffPack,
+  templateFromRenderedPack,
   type HandoffContext,
 } from "../services/handoff";
 
 type HandoffPackDialogProps = {
   session: SessionItem | null;
+  currentRootId?: string | null;
+  /** Other projects the pack can seed a fresh session in (current root excluded by caller). */
+  roots?: Array<{ id: string; name: string }>;
   onClose: () => void;
   onInsert: (pack: string) => void;
+  onNewSessionInProject?: (rootId: string, pack: string) => void;
 };
 
 const overlayStyle: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(15, 23, 42, 0.32)",
+  background: "rgba(0,0,0,0.4)",
   zIndex: 3000,
   display: "flex",
   alignItems: "center",
@@ -28,12 +33,12 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const dialogStyle: React.CSSProperties = {
-  width: "min(760px, 100%)",
-  maxHeight: "86vh",
-  background: "var(--menu-bg)",
+  width: "min(92vw, 560px)",
+  maxHeight: "min(84vh, 640px)",
+  background: "var(--content-bg, #fff)",
   border: "1px solid var(--border-color)",
-  borderRadius: "10px",
-  boxShadow: "0 24px 60px rgba(15, 23, 42, 0.24)",
+  borderRadius: "14px",
+  boxShadow: "0 18px 48px rgba(0,0,0,0.25)",
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",
@@ -59,18 +64,13 @@ const primaryButtonStyle: React.CSSProperties = {
 };
 
 const dialogScopedStyle = `
-  .mindfs-handoff-textarea:focus {
-    border-color: var(--accent-color) !important;
-    box-shadow: none;
-  }
   @media (max-width: 640px) {
     .mindfs-handoff-overlay {
       top: 36px !important;
       align-items: flex-start !important;
-      padding: 8px 12px 12px !important;
+      padding: 12px !important;
     }
     .mindfs-handoff-dialog {
-      width: 100% !important;
       max-height: calc(100dvh - 56px) !important;
     }
     .mindfs-handoff-textarea {
@@ -79,31 +79,31 @@ const dialogScopedStyle = `
   }
 `;
 
-export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDialogProps) {
+export function HandoffPackDialog({ session, currentRootId, roots = [], onClose, onInsert, onNewSessionInProject }: HandoffPackDialogProps) {
   const { t } = useI18n();
   const [context, setContext] = useState<HandoffContext | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [pack, setPack] = useState("");
   const [copied, setCopied] = useState(false);
-  const [editingTemplate, setEditingTemplate] = useState(false);
-  const [templateDraft, setTemplateDraft] = useState("");
+  const [templateSaved, setTemplateSaved] = useState(false);
   const [templateSaveBlocked, setTemplateSaveBlocked] = useState(false);
+  const [targetRootId, setTargetRootId] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const requestSeqRef = useRef(0);
 
   useEffect(() => {
-    const seq = ++requestSeqRef.current;
     if (!session?.root_id) {
       return;
     }
+    const seq = ++requestSeqRef.current;
     setContext(null);
     setLoadError(false);
     // 清掉上一会话的包，避免加载间隙泄露旧路径
     setPack("");
     setCopied(false);
-    setEditingTemplate(false);
-    setTemplateDraft("");
+    setTemplateSaved(false);
     setTemplateSaveBlocked(false);
+    setTargetRootId("");
     sessionService
       .getSessionLogPath(session.root_id, session.session_key || session.key)
       .then(({ path, agentSessionId }) => {
@@ -132,7 +132,6 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
         setContext(fallbackContext);
         setPack(renderHandoffPack(loadHandoffTemplate(), fallbackContext));
       });
-    return () => { requestSeqRef.current += 1; };
   }, [session]);
 
   useEffect(() => {
@@ -160,30 +159,26 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
       textareaRef.current.focus();
       textareaRef.current.select();
     }
-  }, [context, editingTemplate]);
+  }, [context]);
 
   const handleSaveTemplate = () => {
     if (!context) {
       return;
     }
-    const nextTemplate = templateDraft;
+    const nextTemplate = templateFromRenderedPack(pack, context);
     if (!nextTemplate.includes("{jsonl_path}") || !nextTemplate.includes("{session_key}")) {
+      setTemplateSaved(false);
       setTemplateSaveBlocked(true);
       return;
     }
     persistHandoffTemplate(nextTemplate);
-    setPack(renderHandoffPack(nextTemplate, context));
-    setCopied(false);
     setTemplateSaveBlocked(false);
-    setEditingTemplate(false);
+    setTemplateSaved(true);
   };
 
   if (!session) {
     return null;
   }
-  const title = t("session.handoff.sessionTitle", {
-    name: session.name || `Session ${session.key.slice(0, 8)}`,
-  });
 
   return (
     <div
@@ -202,13 +197,12 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
         style={dialogStyle}
         role="dialog"
         aria-modal="true"
-        aria-label={title}
+        aria-label={t("session.handoff.title")}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div
           style={{
-            height: "48px",
-            padding: "0 16px",
+            padding: "14px 16px 10px",
             borderBottom: "1px solid var(--border-color)",
             display: "flex",
             alignItems: "center",
@@ -217,12 +211,94 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
             flexShrink: 0,
           }}
         >
-          <div title={title} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "15px", fontWeight: 700, color: "var(--text-primary)" }}>
-            {title}
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-primary)" }}>
+              {t("session.handoff.title")}
+            </div>
+            <div
+              style={{
+                fontSize: "11px",
+                color: "var(--text-secondary)",
+                marginTop: "2px",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {session.name || `Session ${session.key.slice(0, 8)}`}
+            </div>
           </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t("common.close")}
+            style={{
+              width: "32px",
+              height: "32px",
+              border: "none",
+              borderRadius: "8px",
+              background: "transparent",
+              color: "var(--text-secondary)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
         </div>
 
         <div style={{ flex: 1, minHeight: 0, padding: "12px 16px", display: "flex", flexDirection: "column" }}>
+          {roots.length > 0 ? (
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
+              <span style={{ fontSize: "11px", color: "var(--text-secondary)", flexShrink: 0 }}>
+                {t("session.handoff.targetSession")}
+              </span>
+              <select
+                value={targetRootId}
+                onChange={(e) => setTargetRootId(e.target.value)}
+                style={{
+                  flex: 1,
+                  minWidth: "160px",
+                  maxWidth: "280px",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  padding: "6px 8px",
+                  background: "transparent",
+                  color: "var(--text-primary)",
+                  fontSize: "12px",
+                  outline: "none",
+                }}
+              >
+                <option value="">{t("session.handoff.targetCurrent")}</option>
+                {roots.map((root) => (
+                  <option key={root.id} value={root.id}>
+                    {t("session.handoff.targetOtherProject", { name: root.name })}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+          {targetRootId ? (
+            <div
+              style={{
+                fontSize: "11px",
+                background: "var(--accent-color, #2563eb)",
+                color: "#fff",
+                borderRadius: "8px",
+                padding: "7px 10px",
+                marginBottom: "10px",
+                lineHeight: 1.5,
+              }}
+            >
+              {t("session.handoff.openInNewSessionHint")}
+            </div>
+          ) : null}
           {!context ? (
             <div style={{ fontSize: "12px", color: "var(--text-secondary)", padding: "18px 0" }}>
               {loadError ? t("session.handoff.pathFailed") : t("session.handoff.loading")}
@@ -230,13 +306,12 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
           ) : null}
           <textarea
             ref={textareaRef}
-            value={editingTemplate ? templateDraft : pack}
-            aria-label={editingTemplate ? t("session.handoff.editTemplate") : title}
+            value={pack}
             className="mindfs-handoff-textarea"
             onChange={(e) => {
-              if (editingTemplate) setTemplateDraft(e.target.value);
-              else setPack(e.target.value);
+              setPack(e.target.value);
               setCopied(false);
+              setTemplateSaved(false);
               setTemplateSaveBlocked(false);
             }}
             spellCheck={false}
@@ -245,27 +320,23 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
               minHeight: "180px",
               resize: "vertical",
               border: "1px solid var(--border-color)",
-              width: "100%",
-              boxSizing: "border-box",
-              borderRadius: "8px",
-              padding: "8px 10px",
-              background: "var(--content-bg, #fff)",
+              borderRadius: "10px",
+              padding: "10px 12px",
+              background: "transparent",
               color: "var(--text-primary)",
-              fontSize: "13px",
+              fontSize: "12.5px",
               lineHeight: 1.65,
               fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
               outline: "none",
             }}
           />
-          {editingTemplate ? (
-            <div style={{ fontSize: "11px", color: "var(--text-secondary)", padding: "8px 2px 0", lineHeight: 1.5 }}>
-              {templateSaveBlocked ? (
-                <span style={{ color: "#dc2626" }}>{t("session.handoff.templateInvalid")}</span>
-              ) : (
-                t("session.handoff.templateHint")
-              )}
-            </div>
-          ) : null}
+          <div style={{ fontSize: "11px", color: "var(--text-secondary)", padding: "8px 2px 0", lineHeight: 1.5 }}>
+            {templateSaveBlocked ? (
+              <span style={{ color: "#dc2626" }}>{t("session.handoff.templateInvalid")}</span>
+            ) : (
+              t("session.handoff.hint")
+            )}
+          </div>
         </div>
 
         <div
@@ -279,58 +350,44 @@ export function HandoffPackDialog({ session, onClose, onInsert }: HandoffPackDia
             flexShrink: 0,
           }}
         >
-          {editingTemplate ? (
-            <>
-              <button type="button" onClick={() => { setEditingTemplate(false); setTemplateSaveBlocked(false); }} style={actionButtonStyle}>
-                {t("session.handoff.back")}
-              </button>
-              <div style={{ flex: 1 }} />
-              <button type="button" disabled={!context} onClick={handleSaveTemplate} style={primaryButtonStyle}>
-                {t("common.save")}
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                disabled={!context}
-                onClick={() => {
-                  setTemplateDraft(loadHandoffTemplate());
-                  setTemplateSaveBlocked(false);
-                  setEditingTemplate(true);
-                }}
-                style={actionButtonStyle}
-              >
-                {t("session.handoff.editTemplate")}
-              </button>
-              <div style={{ flex: 1 }} />
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <button
-                type="button"
-                disabled={!context}
-                onClick={() => {
-                  void copyText(pack)
-                    .then(() => setCopied(true))
-                    .catch((err) => console.error("[Handoff] Failed to copy pack:", err));
-                }}
-                style={actionButtonStyle}
-              >
-                {copied ? t("session.handoff.copied") : t("session.handoff.copy")}
-              </button>
-              <button
-                type="button"
-                disabled={!context}
-                onClick={() => {
-                  onInsert(pack);
-                  onClose();
-                }}
-                style={primaryButtonStyle}
-              >
-                {t("session.handoff.insert")}
-              </button>
-              </div>
-            </>
-          )}
+          <button
+            type="button"
+            disabled={!context}
+            onClick={() => {
+              void copyText(pack)
+                .then(() => setCopied(true))
+                .catch((err) => console.error("[Handoff] Failed to copy pack:", err));
+            }}
+            style={actionButtonStyle}
+          >
+            {copied ? t("session.handoff.copied") : t("session.handoff.copy")}
+          </button>
+          <button
+            type="button"
+            disabled={!context}
+            onClick={handleSaveTemplate}
+            style={actionButtonStyle}
+          >
+            {templateSaved ? t("session.handoff.templateSaved") : t("session.handoff.saveTemplate")}
+          </button>
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            disabled={!context}
+            onClick={() => {
+              if (targetRootId && onNewSessionInProject) {
+                onNewSessionInProject(targetRootId, pack);
+                return;
+              }
+              onInsert(pack);
+              onClose();
+            }}
+            style={primaryButtonStyle}
+          >
+            {targetRootId
+              ? t("session.handoff.startInProject")
+              : t("session.handoff.insert")}
+          </button>
         </div>
       </div>
     </div>

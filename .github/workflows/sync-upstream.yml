@@ -1,0 +1,56 @@
+name: Sync upstream a9gent/mindfs
+
+on:
+  schedule:
+    - cron: '23 2 * * 1'   # 每周一 02:23 UTC（≈10:23 北京）
+  workflow_dispatch: {}     # 允许手动触发
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream
+        id: merge
+        run: |
+          git remote add upstream https://github.com/a9gent/mindfs.git
+          git fetch upstream main
+          git config user.name  "unixcs"
+          git config user.email "unixcs@users.noreply.github.com"
+          if git merge --no-edit upstream/main; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            # 冲突 → 放弃本地合并，改走"同步 PR"路线，人工解冲突
+            git merge --abort
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push clean merge
+        if: steps.merge.outputs.conflict == 'false'
+        run: |
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse upstream/main)" ]; then
+            echo "upstream has nothing new"
+          else
+            git push origin main
+          fi
+
+      - name: Open conflict-sync PR
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="sync/upstream-$(date +%Y%m%d)"
+          git push origin "upstream/main:refs/heads/$BRANCH"
+          gh pr create \
+            --repo unixcs/mindfs \
+            --head "$BRANCH" --base main \
+            --title "sync: upstream conflicts need manual resolution" \
+            --body "Weekly upstream sync conflicted with main. This branch is raw upstream/main; resolve conflicts manually against main, then merge. Nothing was pushed to main automatically."

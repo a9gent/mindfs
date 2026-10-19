@@ -59,6 +59,7 @@ type DefaultListViewProps = {
   onPathClick?: (path: string) => void;
   onSortModeChange?: (mode: DirectorySortControlValue) => void;
   onCreateBlankFile?: () => void | Promise<void>;
+  onCreateFolder?: () => void | Promise<void>;
   onUploadFiles?: (files: File[]) => void | Promise<void>;
   onCancelUpload?: () => void;
   uploadProgress?: UploadProgress | null;
@@ -431,6 +432,7 @@ export function DefaultListView({
   onSortModeChange,
   onUploadFiles,
   onCreateBlankFile,
+  onCreateFolder,
   onCancelUpload,
   uploadProgress = null,
   onRenameRoot,
@@ -1132,6 +1134,21 @@ export function DefaultListView({
                     <path d="M14 2v6h6M12 12v6M9 15h6" />
                   </svg>
                   <span>{t("directory.createBlankFile")}</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={!root || !onCreateFolder}
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    void onCreateFolder?.();
+                  }}
+                  style={{ width: "100%", border: "none", background: "transparent", color: "var(--text-primary)", borderRadius: "8px", padding: "8px 10px", display: "flex", alignItems: "center", gap: "8px", textAlign: "left", cursor: root ? "pointer" : "not-allowed", fontSize: "12px", opacity: root ? 1 : 0.45 }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                    <path d="M12 11v6M9 14h6" />
+                  </svg>
+                  <span>{t("directory.createFolder")}</span>
                 </button>
                 <button
                   type="button"

@@ -1,6 +1,8 @@
 import React from "react";
+import { createPortal } from "react-dom";
 import { ProviderModelSelect } from "./ProviderModelSelect";
 import { rootBadgeStyle } from "./rootBadgeStyle";
+import { menuPopoverCapStyle } from "./popoverStyles";
 import { openExternalURL } from "../services/platformNavigation";
 import { isNativeShellRuntime, shouldEnablePWAInstall } from "../services/runtime";
 import {
@@ -26,7 +28,9 @@ import { AgentSelector } from "./AgentSelector";
 import { SymlinkBadge } from "./SymlinkBadge";
 import { RelayLocalServicesDialog } from "./RelayLocalServicesDialog";
 import { fetchAgentCatalog, fetchAgents, type AgentStatus } from "../services/agents";
+import { backendNodes } from "../services/nodes";
 import {
+  applyProviderToAgents,
   createAgentAPIProvider,
   createAgentConfigBackup,
   deleteAgentAPIProvider,
@@ -34,14 +38,23 @@ import {
   fetchAgentAPIProviders,
   fetchAgentConfigBackups,
   fetchAgentConfigDefaults,
+  saveProviderPinnedModels,
   switchAgentAPIProvider,
   switchAgentConfig,
   syncAllAgentAPIProviders,
   testAgentAPIProviderModel,
+  updateAgentMetadata,
   type AgentAPIProvider,
+  type AgentAPIProviderApplyResult,
   type AgentAPIProviderTestResult,
   type AgentConfigBackup,
+  type AgentVisibility,
 } from "../services/agentConfig";
+import {
+  refreshAgentVisibility,
+  saveAgentVisibility,
+  foldInstanceGroups,
+} from "../services/agentVisibility";
 import {
   getWebPushStatus,
   sendWebPushTest,
@@ -51,12 +64,15 @@ import {
   type WebPushStatus,
 } from "../services/webPush";
 import {
+  fetchForkOwnershipPreference,
   fetchIdleSessionResourceReleasePreference,
   fetchNewProjectMetaLocationPreference,
   fetchSessionNamingPreference,
+  updateForkOwnershipPreference,
   updateIdleSessionResourceReleasePreference,
   updateNewProjectMetaLocationPreference,
   updateSessionNamingPreference,
+  type ForkOwnership,
   type NewProjectMetaLocation,
 } from "../services/preferences";
 import {
@@ -207,12 +223,18 @@ type FileTreeProps = {
   onSidebarsSwappedChange?: (enabled: boolean) => void;
   blueRingGestures?: BlueRingGestureConfig;
   onBlueRingGesturesChange?: (config: BlueRingGestureConfig) => void;
+  /** Timestamp signal from blue-ring "openGestureSettings" action; >0 opens the popover. */
+  openBlueRingSettingsRequest?: number;
   /** Task templates for the "newTask" quick action binding. */
   taskTemplates?: Array<{ id: string; name: string }>;
   gitDiffSideBySide?: boolean;
   onGitDiffSideBySideChange?: (enabled: boolean) => void;
   multiProjectSessionsEnabled?: boolean;
   onMultiProjectSessionsChange?: (enabled: boolean) => void;
+  flatSessionListEnabled?: boolean;
+  onFlatSessionListChange?: (enabled: boolean) => void;
+  collapsedPreviewCount?: number;
+  onCollapsedPreviewCountChange?: (count: number) => void;
   fontSizePreferences?: FontSizePreferences;
   onFontSizePreferencesChange?: (preferences: FontSizePreferences) => void;
   onRunAgentLifecycleCommand?: (agentName: string, action: AgentLifecycleCommandAction, commands: string[]) => void | Promise<void>;
@@ -265,6 +287,11 @@ const fileTreeMenuButtonStyle: React.CSSProperties = {
   cursor: "pointer",
   fontSize: "12px",
 };
+
+// 顶栏菜单弹层统一加视口内上限：矮屏（手机浏览器工具栏占高）下弹层底部会落到
+// 视口外，又被抽屉的 overflow:hidden 裁掉，底部条目（蓝环手势、回车键发送等）
+// 既看不到也点不到——hit-test 连元素都命中不了，不是"开关没反应"。
+const fileTreePopoverCapStyle: React.CSSProperties = menuPopoverCapStyle;
 
 const fontSizeAdjustButtonStyle: React.CSSProperties = {
   width: "26px",
@@ -694,7 +721,13 @@ function AgentConfigPopover({
   providerSyncBusy,
   providerTestBusyID,
   providerTestResults,
+  catalogAgents,
+  agentVisibility,
   onSyncAllProviders,
+  onPinProviderModels,
+  onApplyProviderToAgents,
+  onSaveAgentMetadata,
+  onSaveAgentVisibility,
   onTestProviderModel,
   onProviderTestModelChange,
   providerTestModels,
@@ -741,7 +774,13 @@ function AgentConfigPopover({
   providerSyncBusy: boolean;
   providerTestBusyID: string;
   providerTestResults: Record<string, string>;
+  catalogAgents: AgentStatus[];
+  agentVisibility: AgentVisibility | null;
   onSyncAllProviders: () => void;
+  onPinProviderModels: (providerID: string, pinnedModels: string[]) => Promise<void>;
+  onApplyProviderToAgents: (providerID: string, agentNames: string[]) => Promise<AgentAPIProviderApplyResult[]>;
+  onSaveAgentMetadata: (agent: string, label: string, url: string) => Promise<void>;
+  onSaveAgentVisibility: (hidden: string[], customized: boolean) => Promise<void>;
   onTestProviderModel: (providerID: string, model: string) => void;
   onProviderTestModelChange: (providerID: string, model: string) => void;
   providerTestModels: Record<string, string>;
@@ -775,6 +814,178 @@ function AgentConfigPopover({
   const switchTabs: AgentConfigSwitchTab[] = supportsAPIProvider ? ["backup", "api_provider"] : ["backup"];
   const effectiveAddTab: AgentConfigAddTab = supportsAPIProvider ? addTab : "backup";
   const effectiveSwitchTab: AgentConfigSwitchTab = supportsAPIProvider ? switchTab : "backup";
+
+  const [pinnedExpandedID, setPinnedExpandedID] = React.useState("");
+  const [pinnedSearch, setPinnedSearch] = React.useState("");
+  const [pinnedDrafts, setPinnedDrafts] = React.useState<Record<string, string[]>>({});
+  const [pinnedBusyID, setPinnedBusyID] = React.useState("");
+  const [pinnedSavedID, setPinnedSavedID] = React.useState("");
+  const [applyExpandedID, setApplyExpandedID] = React.useState("");
+  const [applySelection, setApplySelection] = React.useState<string[]>([]);
+  const [applyBusy, setApplyBusy] = React.useState(false);
+  const [applyResults, setApplyResults] = React.useState<Record<string, AgentAPIProviderApplyResult[]>>({});
+  const [manageExpanded, setManageExpanded] = React.useState(false);
+  const [metaDrafts, setMetaDrafts] = React.useState<Record<string, { label: string; url: string }>>({});
+  const [metaBusyAgent, setMetaBusyAgent] = React.useState("");
+  const [metaSavedAgent, setMetaSavedAgent] = React.useState("");
+  const [visibilitySaving, setVisibilitySaving] = React.useState(false);
+
+  const applyCandidates = React.useMemo(
+    () => agents.filter((item) => item.name && item.supports_api_provider_switch),
+    [agents],
+  );
+
+  const effectiveHiddenNames = React.useMemo(() => {
+    const names = catalogAgents.map((item) => item.name).filter(Boolean);
+    if (agentVisibility?.customized) {
+      return new Set(agentVisibility.hidden);
+    }
+    // 从未设置过显隐时，checkbox 按默认折叠策略回显：同名实例组只亮 base。
+    const folded = new Set(foldInstanceGroups(names));
+    return new Set(names.filter((name) => !folded.has(name)));
+  }, [catalogAgents, agentVisibility]);
+
+  const expandPinned = (provider: AgentAPIProvider) => {
+    setPinnedSavedID("");
+    setPinnedSearch("");
+    setPinnedDrafts((previous) => ({
+      ...previous,
+      [provider.id]: provider.pinnedModels ? [...provider.pinnedModels] : [],
+    }));
+    setPinnedExpandedID((previous) => (previous === provider.id ? "" : provider.id));
+  };
+
+  const togglePinnedModel = (providerID: string, model: string) => {
+    setPinnedSavedID("");
+    setPinnedDrafts((previous) => {
+      const current = previous[providerID] || [];
+      const next = current.includes(model)
+        ? current.filter((item) => item !== model)
+        : [...current, model];
+      return { ...previous, [providerID]: next };
+    });
+  };
+
+  const togglePinnedFiltered = (provider: AgentAPIProvider) => {
+    const search = pinnedSearch.trim().toLowerCase();
+    const matched = (provider.models || []).filter((model) => !search || model.toLowerCase().includes(search));
+    if (matched.length === 0) {
+      return;
+    }
+    setPinnedSavedID("");
+    setPinnedDrafts((previous) => {
+      const current = previous[provider.id] || [];
+      const currentSet = new Set(current);
+      const allSelected = matched.every((model) => currentSet.has(model));
+      const next = allSelected
+        ? current.filter((model) => !matched.includes(model))
+        : [...current, ...matched.filter((model) => !currentSet.has(model))];
+      return { ...previous, [provider.id]: next };
+    });
+  };
+
+  const savePinned = async (providerID: string) => {
+    setPinnedBusyID(providerID);
+    try {
+      await onPinProviderModels(providerID, pinnedDrafts[providerID] || []);
+      setPinnedSavedID(providerID);
+    } catch {
+      // 失败原因已由父级写入弹层底部错误区。
+    } finally {
+      setPinnedBusyID("");
+    }
+  };
+
+  const expandApply = (providerID: string) => {
+    if (applyExpandedID === providerID) {
+      setApplyExpandedID("");
+      setApplySelection([]);
+      return;
+    }
+    setApplySelection(applyCandidates.some((item) => item.name === selectedAgent) ? [selectedAgent] : []);
+    setApplyExpandedID(providerID);
+  };
+
+  const toggleApplyAgent = (agentName: string) => {
+    setApplySelection((previous) => (
+      previous.includes(agentName)
+        ? previous.filter((item) => item !== agentName)
+        : [...previous, agentName]
+    ));
+  };
+
+  const runApply = async (providerID: string) => {
+    if (applySelection.length === 0) {
+      return;
+    }
+    setApplyBusy(true);
+    try {
+      const results = await onApplyProviderToAgents(providerID, applySelection);
+      setApplyResults((previous) => ({ ...previous, [providerID]: results }));
+    } catch {
+      // 失败原因已由父级写入弹层底部错误区。
+    } finally {
+      setApplyBusy(false);
+    }
+  };
+
+  const setMetaDraft = (agentName: string, field: "label" | "url", value: string) => {
+    setMetaSavedAgent("");
+    // 没碰过的字段要用目录里的现值兜底，不能用空串：updateAgentMetadata 两个
+    // 字段都会整体提交，空串会把已保存的 label/url 静默清掉。
+    const current = catalogAgents.find((item) => item.name === agentName);
+    setMetaDrafts((previous) => ({
+      ...previous,
+      [agentName]: {
+        label: previous[agentName]?.label ?? current?.label ?? "",
+        url: previous[agentName]?.url ?? current?.url ?? "",
+        [field]: value,
+      },
+    }));
+  };
+
+  const saveMetadata = async (agentName: string) => {
+    const draft = metaDrafts[agentName];
+    if (!draft) {
+      return;
+    }
+    setMetaBusyAgent(agentName);
+    setMetaSavedAgent("");
+    try {
+      await onSaveAgentMetadata(agentName, draft.label.trim(), draft.url.trim());
+      setMetaSavedAgent(agentName);
+    } catch {
+      // 失败原因已由父级写入弹层底部错误区。
+    } finally {
+      setMetaBusyAgent("");
+    }
+  };
+
+  const toggleAgentEntry = async (agentName: string, visible: boolean) => {
+    const nextHidden = catalogAgents
+      .map((item) => item.name)
+      .filter((name) => (name === agentName ? !visible : effectiveHiddenNames.has(name)));
+    setVisibilitySaving(true);
+    try {
+      await onSaveAgentVisibility(nextHidden, true);
+    } catch {
+      // 保存失败时 prop 未变，checkbox 随之回滚。
+    } finally {
+      setVisibilitySaving(false);
+    }
+  };
+
+  const resetAgentVisibility = async () => {
+    setVisibilitySaving(true);
+    try {
+      await onSaveAgentVisibility([], false);
+    } catch {
+      // 失败原因已由父级写入弹层底部错误区。
+    } finally {
+      setVisibilitySaving(false);
+    }
+  };
+
   return (
     <div
       style={{
@@ -875,6 +1086,94 @@ function AgentConfigPopover({
               onSelect={onChooseAgent}
             />
           )}
+          <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: "8px", display: "flex", flexDirection: "column", gap: "8px" }}>
+            <button
+              type="button"
+              onClick={() => setManageExpanded((previous) => !previous)}
+              style={{
+                ...agentConfigMiniButtonStyle(false),
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "6px 8px",
+                color: "var(--text-primary)",
+              }}
+            >
+              <span style={{ flex: 1, textAlign: "left" }}>{t("agentConfig.manageSection")}</span>
+              <span aria-hidden="true">{manageExpanded ? "▾" : "▸"}</span>
+            </button>
+            {manageExpanded ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+                  {t("agentConfig.manageMetaHint")}
+                </div>
+                {catalogAgents.length === 0 ? (
+                  <div style={agentConfigHintStyle}>{t("agentConfig.loading")}</div>
+                ) : catalogAgents.map((catalogAgent) => {
+                  const draft = metaDrafts[catalogAgent.name] || { label: catalogAgent.label || "", url: catalogAgent.url || "" };
+                  const visible = !effectiveHiddenNames.has(catalogAgent.name);
+                  return (
+                    <div key={catalogAgent.name} style={{ border: "1px solid var(--border-color)", borderRadius: "8px", padding: "6px 8px", display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <AgentIcon agentName={catalogAgent.name} size={14} />
+                        <span style={{ minWidth: 0, flex: 1, fontSize: "11px", fontWeight: 700, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {catalogAgent.label || catalogAgent.name}
+                        </span>
+                        {metaSavedAgent === catalogAgent.name ? (
+                          <span style={{ fontSize: "11px", color: "var(--accent-color)" }}>{t("agentConfig.metadataSaved")}</span>
+                        ) : null}
+                        <button
+                          type="button"
+                          disabled={metaBusyAgent !== "" || providerSyncBusy}
+                          onClick={() => void saveMetadata(catalogAgent.name)}
+                          style={agentConfigMiniButtonStyle(metaBusyAgent !== "" || providerSyncBusy)}
+                        >
+                          {metaBusyAgent === catalogAgent.name ? "…" : t("common.save")}
+                        </button>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px" }}>
+                        <input
+                          value={draft.label}
+                          onChange={(event) => setMetaDraft(catalogAgent.name, "label", event.target.value)}
+                          placeholder={t("agentConfig.metadataLabelPlaceholder")}
+                          style={{ ...agentConfigInputStyle, fontSize: "11px", padding: "5px 8px" }}
+                        />
+                        <input
+                          value={draft.url}
+                          onChange={(event) => setMetaDraft(catalogAgent.name, "url", event.target.value)}
+                          placeholder={t("agentConfig.metadataURLPlaceholder")}
+                          style={{ ...agentConfigInputStyle, fontSize: "11px", padding: "5px 8px" }}
+                        />
+                      </div>
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--text-primary)", cursor: visibilitySaving ? "default" : "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={visible}
+                          disabled={visibilitySaving}
+                          onChange={(event) => void toggleAgentEntry(catalogAgent.name, event.target.checked)}
+                          style={{ width: "12px", height: "12px", flexShrink: 0 }}
+                        />
+                        <span>{t("agentConfig.visibilityRow")}</span>
+                      </label>
+                    </div>
+                  );
+                })}
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "6px" }}>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+                    {t("agentConfig.visibilityHint")}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={visibilitySaving}
+                    onClick={() => void resetAgentVisibility()}
+                    style={agentConfigMiniButtonStyle(visibilitySaving)}
+                  >
+                    {t("agentConfig.visibilityReset")}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
         </>
       ) : step === "confirm" ? (
         <>
@@ -1123,7 +1422,7 @@ function AgentConfigPopover({
                     {models.length > 0 ? (
                       <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "4px", minWidth: 0 }}>
                         <ProviderModelSelect
-                          models={models}
+                          models={orderModelsPinnedFirst(models, item.pinnedModels)}
                           value={providerTestModels[item.id] || models[0] || ""}
                           label={t("agentConfig.testModel", { name: item.name })}
                           onChange={(model) => onProviderTestModelChange(item.id, model)}
@@ -1141,6 +1440,158 @@ function AgentConfigPopover({
                         >
                           {testBusy ? "…" : t("agentConfig.testModelShort")}
                         </button>
+                      </div>
+                    ) : null}
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "6px" }}>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          expandPinned(item);
+                        }}
+                        style={{ ...agentConfigMiniButtonStyle(busy), color: pinnedExpandedID === item.id ? "var(--accent-color)" : "var(--text-secondary)" }}
+                      >
+                        {t("agentConfig.pinnedEdit")} · {(item.pinnedModels || []).length}/{models.length}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy || applyCandidates.length === 0}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          expandApply(item.id);
+                        }}
+                        style={{ ...agentConfigMiniButtonStyle(busy || applyCandidates.length === 0), color: applyExpandedID === item.id ? "var(--accent-color)" : "var(--text-secondary)" }}
+                      >
+                        {t("agentConfig.applyToAgents")}
+                      </button>
+                    </div>
+                    {pinnedExpandedID === item.id ? (
+                      <div
+                        onClick={(event) => event.stopPropagation()}
+                        style={{ marginTop: "6px", borderTop: "1px solid var(--border-color)", paddingTop: "6px", display: "flex", flexDirection: "column", gap: "5px" }}
+                      >
+                        <input
+                          value={pinnedSearch}
+                          onChange={(event) => setPinnedSearch(event.target.value)}
+                          placeholder={t("agentConfig.pinnedSearch")}
+                          style={{ ...agentConfigInputStyle, fontSize: "11px", padding: "4px 8px" }}
+                        />
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <span style={{ flex: 1, minWidth: 0, fontSize: "11px", color: "var(--text-secondary)" }}>
+                            {t("agentConfig.pinnedCount", { pinned: (pinnedDrafts[item.id] || []).length, total: models.length })}
+                          </span>
+                          <button type="button" onClick={() => togglePinnedFiltered(item)} style={agentConfigMiniButtonStyle(false)}>
+                            {t("agentConfig.pinnedSelectAll")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPinnedSavedID("");
+                              setPinnedDrafts((previous) => ({ ...previous, [item.id]: [] }));
+                            }}
+                            style={agentConfigMiniButtonStyle(false)}
+                          >
+                            {t("agentConfig.pinnedClear")}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={pinnedBusyID === item.id || providerSyncBusy}
+                            onClick={() => void savePinned(item.id)}
+                            style={{ ...agentConfigMiniButtonStyle(pinnedBusyID === item.id || providerSyncBusy), color: "var(--accent-color)" }}
+                          >
+                            {pinnedBusyID === item.id ? "…" : t("agentConfig.pinnedSave")}
+                          </button>
+                        </div>
+                        {pinnedSavedID === item.id ? (
+                          <div style={{ fontSize: "11px", color: "var(--accent-color)" }}>{t("agentConfig.pinnedSaved")}</div>
+                        ) : null}
+                        {(() => {
+                          const draft = pinnedDrafts[item.id] || [];
+                          const draftSet = new Set(draft);
+                          const search = pinnedSearch.trim().toLowerCase();
+                          const matches = (model: string) => !search || model.toLowerCase().includes(search);
+                          const pinnedGroup = draft.filter(matches);
+                          const restGroup = models.filter((model) => !draftSet.has(model) && matches(model));
+                          return (
+                            <div style={{ maxHeight: "170px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "3px" }}>
+                              {pinnedGroup.length > 0 ? (
+                                <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-secondary)" }}>{t("agentConfig.pinnedGroupActive")}</div>
+                              ) : null}
+                              {pinnedGroup.map((model) => (
+                                <label key={model} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--accent-color)", cursor: "pointer", minWidth: 0 }}>
+                                  <input
+                                    type="checkbox"
+                                    checked
+                                    onChange={() => togglePinnedModel(item.id, model)}
+                                    style={{ width: "12px", height: "12px", flexShrink: 0 }}
+                                  />
+                                  <span title={model} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{model}</span>
+                                </label>
+                              ))}
+                              {restGroup.length > 0 ? (
+                                <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-secondary)" }}>{t("agentConfig.pinnedGroupAll")}</div>
+                              ) : null}
+                              {restGroup.map((model) => (
+                                <label key={model} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--text-primary)", cursor: "pointer", minWidth: 0 }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={false}
+                                    onChange={() => togglePinnedModel(item.id, model)}
+                                    style={{ width: "12px", height: "12px", flexShrink: 0 }}
+                                  />
+                                  <span title={model} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{model}</span>
+                                </label>
+                              ))}
+                              {pinnedGroup.length === 0 && restGroup.length === 0 ? (
+                                <div style={{ ...agentConfigHintStyle, fontSize: "11px" }}>{t("agentConfig.pinnedFilteredEmpty")}</div>
+                              ) : null}
+                            </div>
+                          );
+                        })()}
+                        <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{t("agentConfig.pinnedEmptyHint")}</div>
+                      </div>
+                    ) : null}
+                    {applyExpandedID === item.id ? (
+                      <div
+                        onClick={(event) => event.stopPropagation()}
+                        style={{ marginTop: "6px", borderTop: "1px solid var(--border-color)", paddingTop: "6px", display: "flex", flexDirection: "column", gap: "5px" }}
+                      >
+                        <div style={{ fontSize: "11px", color: "var(--text-secondary)", lineHeight: 1.45 }}>{t("agentConfig.applyHint")}</div>
+                        <div style={{ maxHeight: "120px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "3px" }}>
+                          {applyCandidates.map((candidate) => (
+                            <label key={candidate.name} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--text-primary)", cursor: "pointer", minWidth: 0 }}>
+                              <input
+                                type="checkbox"
+                                checked={applySelection.includes(candidate.name)}
+                                onChange={() => toggleApplyAgent(candidate.name)}
+                                style={{ width: "12px", height: "12px", flexShrink: 0 }}
+                              />
+                              <span title={candidate.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {candidate.label || candidate.name}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={applyBusy || providerSyncBusy || applySelection.length === 0}
+                          onClick={() => void runApply(item.id)}
+                          style={agentConfigPrimaryButtonStyle(applyBusy || providerSyncBusy || applySelection.length === 0)}
+                        >
+                          {applyBusy ? "…" : t("agentConfig.applyRun")}
+                        </button>
+                        {(applyResults[item.id] || []).map((resultItem) => (
+                          <div key={resultItem.agent} style={{ fontSize: "11px", color: resultItem.success ? "var(--accent-color)" : "#dc2626", whiteSpace: "normal", overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                            {resultItem.success ? `✓ ${resultItem.agent}` : `✗ ${resultItem.agent}: ${resultItem.error || ""}`}
+                          </div>
+                        ))}
+                        {(applyResults[item.id] || []).some((resultItem) => resultItem.success) ? (
+                          <div style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{t("agentConfig.applyDoneHint")}</div>
+                        ) : null}
+                        {(applyResults[item.id] || []).some((resultItem) => resultItem.success && resultItem.agent.startsWith("opencode")) ? (
+                          <div style={{ fontSize: "11px", color: "#b45309" }}>{t("agentConfig.applyOpencodeWarn")}</div>
+                        ) : null}
                       </div>
                     ) : null}
                     {testResult ? (
@@ -1443,6 +1894,32 @@ const agentConfigIconButtonStyle = (disabled: boolean): React.CSSProperties => (
   flexShrink: 0,
 });
 
+const agentConfigMiniButtonStyle = (disabled: boolean): React.CSSProperties => ({
+  border: "1px solid var(--border-color)",
+  background: "transparent",
+  color: "var(--text-secondary)",
+  borderRadius: "6px",
+  padding: "2px 8px",
+  fontSize: "11px",
+  fontWeight: 600,
+  lineHeight: "16px",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
+  cursor: disabled ? "not-allowed" : "pointer",
+  opacity: disabled ? 0.6 : 1,
+});
+
+// 测试模型下拉候选：已精选的模型按精选顺序置顶，其余保持原顺序。
+function orderModelsPinnedFirst(models: string[], pinnedModels?: string[]): string[] {
+  const pinned = pinnedModels || [];
+  if (pinned.length === 0) {
+    return models;
+  }
+  const available = new Set(models);
+  const pinnedSet = new Set(pinned);
+  return [...pinned.filter((model) => available.has(model)), ...models.filter((model) => !pinnedSet.has(model))];
+}
+
 export function FileTree({
   entries,
   childrenByPath,
@@ -1503,10 +1980,15 @@ export function FileTree({
   blueRingGestures,
   taskTemplates,
   onBlueRingGesturesChange,
+  openBlueRingSettingsRequest,
   gitDiffSideBySide = false,
   onGitDiffSideBySideChange,
   multiProjectSessionsEnabled = false,
   onMultiProjectSessionsChange,
+  flatSessionListEnabled = false,
+  onFlatSessionListChange,
+  collapsedPreviewCount = 0,
+  onCollapsedPreviewCountChange,
   fontSizePreferences = { fileSidebar: 1, main: 1, sessionSidebar: 1 },
   onFontSizePreferencesChange,
   onRunAgentLifecycleCommand,
@@ -1560,11 +2042,14 @@ export function FileTree({
   const [blueRingMenuOpen, setBlueRingMenuOpen] = React.useState(false);
   const blueRingPopoverRef = React.useRef<HTMLDivElement | null>(null);
   const [blueRingAgents, setBlueRingAgents] = React.useState<AgentStatus[]>([]);
+  const [blueRingNodes, setBlueRingNodes] = React.useState<Array<{ id: string; name: string; url: string }>>([]);
   const [idleReleaseHours, setIdleReleaseHours] = React.useState("72");
   const [idleReleaseBusy, setIdleReleaseBusy] = React.useState(false);
   const [idleReleaseError, setIdleReleaseError] = React.useState("");
   const [newProjectMetaLocation, setNewProjectMetaLocation] = React.useState<NewProjectMetaLocation>("project");
   const [newProjectMetaLocationBusy, setNewProjectMetaLocationBusy] = React.useState(false);
+  const [forkOwnership, setForkOwnership] = React.useState<ForkOwnership>("nested");
+  const [forkOwnershipBusy, setForkOwnershipBusy] = React.useState(false);
   const [appearanceMode, setAppearanceModeState] = React.useState<AppearanceMode>(() => getAppearanceMode());
   const [isUpdateNotesOpen, setIsUpdateNotesOpen] = React.useState(false);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = React.useState<BeforeInstallPromptEvent | null>(null);
@@ -1598,6 +2083,8 @@ export function FileTree({
   const [agentConfigRestartingAgent, setAgentConfigRestartingAgent] = React.useState("");
   const [agentConfigError, setAgentConfigError] = React.useState("");
   const [agentConfigNotice, setAgentConfigNotice] = React.useState("");
+  const [agentConfigCatalog, setAgentConfigCatalog] = React.useState<AgentStatus[]>([]);
+  const [agentConfigVisibility, setAgentConfigVisibility] = React.useState<AgentVisibility | null>(null);
   const agentConfigFlowVersion = React.useRef(0);
   const [providerSyncBusy, setProviderSyncBusy] = React.useState(false);
   const [providerTestBusyID, setProviderTestBusyID] = React.useState("");
@@ -1982,6 +2469,11 @@ export function FileTree({
         if (!cancelled) setNewProjectMetaLocation(location);
       })
       .catch(() => {});
+    fetchForkOwnershipPreference()
+      .then((ownership) => {
+        if (!cancelled) setForkOwnership(ownership);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -2091,6 +2583,13 @@ export function FileTree({
       .catch(() => {
         // The picker stays empty; reopening the settings retries.
       });
+    backendNodes.load()
+      .then((items) => {
+        if (active) setBlueRingNodes(items.map((node) => ({ id: node.id, name: node.name, url: node.url })).filter((node) => node.id));
+      })
+      .catch(() => {
+        // The picker stays empty; reopening the settings retries.
+      });
     return () => { active = false; };
   }, [blueRingMenuOpen]);
 
@@ -2111,6 +2610,24 @@ export function FileTree({
     for (const [gesture] of missing) nextPicks[gesture] = firstAgent;
     onBlueRingGesturesChange?.({ ...config, agentPicks: nextPicks });
   }, [blueRingAgents, blueRingGestures, onBlueRingGesturesChange]);
+
+  // 节点列表晚于绑定时（首次打开面板），给还没指定 pick 的 openNodePick 手势补默认值。
+  // 每个手势只补一次：之后用户主动清空 pick 不应被自动填回。
+  const blueRingNodeAutoFilledRef = React.useRef<Set<string>>(new Set());
+  React.useEffect(() => {
+    if (blueRingNodes.length === 0) return;
+    const config = normalizeBlueRingGestureConfig(blueRingGestures);
+    const missing = (Object.entries(config.actions) as Array<[BlueRingGesture, BlueRingAction]>)
+      .filter(([gesture, action]) => action === "openNodePick" && !config.nodePicks?.[gesture] && !blueRingNodeAutoFilledRef.current.has(gesture));
+    const [firstMissing] = missing.map(([gesture]) => gesture);
+    if (!firstMissing) return;
+    const firstNode = blueRingNodes.find((item) => item.id)?.id;
+    if (!firstNode) return;
+    for (const [gesture] of missing) blueRingNodeAutoFilledRef.current.add(gesture);
+    const nextPicks: Record<string, string> = { ...(config.nodePicks || {}) };
+    for (const [gesture] of missing) nextPicks[gesture] = firstNode;
+    onBlueRingGesturesChange?.({ ...config, nodePicks: nextPicks });
+  }, [blueRingNodes, blueRingGestures, onBlueRingGesturesChange]);
 
   const openAgentConfigFlow = React.useCallback((flow: AgentConfigFlow) => {
 	setIdleReleaseOpen(false);
@@ -2137,6 +2654,8 @@ export function FileTree({
     setAgentConfigConfirmMessage("");
     setAgentConfigError("");
     setAgentConfigRestartingAgent("");
+    setAgentConfigCatalog([]);
+    setAgentConfigVisibility(null);
     setIsMenuOpen(false);
     setAgentConfigBusy(true);
     fetchAgents(true)
@@ -2147,6 +2666,13 @@ export function FileTree({
         setAgentConfigError(error instanceof Error ? error.message : t("agentConfig.loadAgentFailed"));
       })
       .finally(() => setAgentConfigBusy(false));
+    // 设置区（备注/链接 + 入口显隐）需要全量目录：被隐藏的 agent 也必须能找回。
+    fetchAgentCatalog(true)
+      .then((items) => setAgentConfigCatalog(items))
+      .catch(() => {});
+    refreshAgentVisibility(true)
+      .then((next) => setAgentConfigVisibility(next))
+      .catch(() => {});
   }, [t]);
 
   const openSessionNaming = React.useCallback(() => {
@@ -2244,6 +2770,13 @@ export function FileTree({
     setBlueRingMenuOpen(true);
   }, []);
 
+  React.useEffect(() => {
+    if (openBlueRingSettingsRequest && openBlueRingSettingsRequest > 0) {
+      openBlueRingSettings();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openBlueRingSettingsRequest]);
+
   const updateBlueRingAction = React.useCallback((gesture: BlueRingGesture, action: BlueRingAction) => {
     const nextActions = { ...gestureConfig.actions };
     nextActions[gesture] = action;
@@ -2257,8 +2790,12 @@ export function FileTree({
       const firstTemplate = taskTemplates?.find((item) => item.id)?.id;
       if (firstTemplate) nextConfig.taskPicks = { ...(nextConfig.taskPicks || {}), [gesture]: firstTemplate };
     }
+    if (action === "openNodePick" && !nextConfig.nodePicks?.[gesture]) {
+      const firstNode = blueRingNodes.find((item) => item.id)?.id;
+      if (firstNode) nextConfig.nodePicks = { ...(nextConfig.nodePicks || {}), [gesture]: firstNode };
+    }
     onBlueRingGesturesChange?.(nextConfig);
-  }, [gestureConfig, onBlueRingGesturesChange, blueRingAgents, taskTemplates]);
+  }, [gestureConfig, onBlueRingGesturesChange, blueRingAgents, taskTemplates, blueRingNodes]);
 
   const updateBlueRingAgentPick = React.useCallback((gesture: BlueRingGesture, agentName: string) => {
     const nextPicks = { ...(gestureConfig.agentPicks || {}) };
@@ -2278,6 +2815,16 @@ export function FileTree({
       delete nextPicks[gesture];
     }
     onBlueRingGesturesChange?.({ ...gestureConfig, taskPicks: nextPicks });
+  }, [gestureConfig, onBlueRingGesturesChange]);
+
+  const updateBlueRingNodePick = React.useCallback((gesture: BlueRingGesture, nodeId: string) => {
+    const nextPicks = { ...(gestureConfig.nodePicks || {}) };
+    if (nodeId) {
+      nextPicks[gesture] = nodeId;
+    } else {
+      delete nextPicks[gesture];
+    }
+    onBlueRingGesturesChange?.({ ...gestureConfig, nodePicks: nextPicks });
   }, [gestureConfig, onBlueRingGesturesChange]);
 
   const saveIdleSessionResourceRelease = React.useCallback(async () => {
@@ -2714,6 +3261,91 @@ export function FileTree({
       setProviderTestBusyID("");
     }
   }, [providerTestBusyID, t]);
+
+  const pinAgentAPIProviderModels = React.useCallback(async (providerID: string, pinnedModels: string[]) => {
+    const trimmedID = String(providerID || "").trim();
+    if (!trimmedID) {
+      return;
+    }
+    const flowVersion = agentConfigFlowVersion.current;
+    setAgentConfigError("");
+    try {
+      const result = await saveProviderPinnedModels({ providerID: trimmedID, pinnedModels });
+      if (flowVersion !== agentConfigFlowVersion.current) return;
+      const nextProvider = result.provider;
+      setAgentAPIProviders((previous) => previous.map((item) => (item.id === nextProvider.id ? nextProvider : item)));
+    } catch (error) {
+      if (flowVersion !== agentConfigFlowVersion.current) return;
+      setAgentConfigError(error instanceof Error ? error.message : t("agentConfig.pinnedSaveFailed"));
+      throw error;
+    }
+  }, [t]);
+
+  const applyAgentAPIProviderToAgents = React.useCallback(async (providerID: string, agentNames: string[]): Promise<AgentAPIProviderApplyResult[]> => {
+    const trimmedID = String(providerID || "").trim();
+    const names = agentNames.map((item) => String(item || "").trim()).filter(Boolean);
+    if (!trimmedID || names.length === 0) {
+      return [];
+    }
+    const flowVersion = agentConfigFlowVersion.current;
+    setAgentConfigError("");
+    setAgentConfigBusy(true);
+    try {
+      const result = await applyProviderToAgents({ providerID: trimmedID, agents: names });
+      if (flowVersion !== agentConfigFlowVersion.current) return result.results;
+      if (result.provider) {
+        setAgentAPIProviders((previous) => previous.map((item) => (item.id === result.provider?.id ? result.provider : item)));
+      }
+      return result.results;
+    } catch (error) {
+      if (flowVersion === agentConfigFlowVersion.current) {
+        setAgentConfigError(error instanceof Error ? error.message : t("agentConfig.applyFailed"));
+      }
+      throw error;
+    } finally {
+      setAgentConfigBusy(false);
+    }
+  }, [t]);
+
+  const saveAgentMetadata = React.useCallback(async (agentName: string, label: string, url: string) => {
+    const trimmedName = String(agentName || "").trim();
+    if (!trimmedName) {
+      return;
+    }
+    const flowVersion = agentConfigFlowVersion.current;
+    setAgentConfigError("");
+    try {
+      await updateAgentMetadata({ agent: trimmedName, label, url });
+      if (flowVersion !== agentConfigFlowVersion.current) return;
+      const patch = (items: AgentStatus[]) => items.map((item) => (
+        item.name === trimmedName
+          ? { ...item, label: label.trim() || undefined, url: url.trim() || undefined }
+          : item
+      ));
+      setAgentConfigCatalog(patch);
+      setAgentConfigAgents(patch);
+    } catch (error) {
+      if (flowVersion === agentConfigFlowVersion.current) {
+        setAgentConfigError(error instanceof Error ? error.message : t("agentConfig.metadataSaveFailed"));
+      }
+      throw error;
+    }
+  }, [t]);
+
+  const saveAgentEntryVisibility = React.useCallback(async (hidden: string[], customized: boolean) => {
+    const flowVersion = agentConfigFlowVersion.current;
+    setAgentConfigError("");
+    try {
+      const next = await saveAgentVisibility(hidden, customized);
+      if (flowVersion !== agentConfigFlowVersion.current) return;
+      setAgentConfigVisibility(next);
+    } catch (error) {
+      if (flowVersion === agentConfigFlowVersion.current) {
+        setAgentConfigError(error instanceof Error ? error.message : t("agentConfig.visibilitySaveFailed"));
+      }
+      throw error;
+    }
+  }, [t]);
 
   const selectAgentConfigBackup = React.useCallback((id: string) => {
     setSelectedAgentConfigID(id);
@@ -3183,13 +3815,13 @@ export function FileTree({
           {isMenuOpen ? (
             <div
               style={{
+                ...fileTreePopoverCapStyle,
                 position: "absolute",
                 top: "calc(100% + 6px)",
                 right: 0,
                 width: "var(--mindfs-file-menu-width, 182px)",
                 maxWidth: "calc(100vw - 16px)",
                 padding: "6px",
-                boxSizing: "border-box",
                 whiteSpace: "nowrap",
                 borderRadius: "10px",
                 border: "1px solid var(--border-color)",
@@ -3694,6 +4326,98 @@ export function FileTree({
               </button>
               <button
                 type="button"
+                disabled={forkOwnershipBusy}
+                title={t("fileTree.forkOwnershipHint")}
+                onClick={() => {
+                  if (forkOwnershipBusy) return;
+                  const previous = forkOwnership;
+                  const next: ForkOwnership = previous === "nested" ? "detached" : "nested";
+                  setForkOwnership(next);
+                  setForkOwnershipBusy(true);
+                  updateForkOwnershipPreference(next)
+                    .then(setForkOwnership)
+                    .catch(() => setForkOwnership(previous))
+                    .finally(() => setForkOwnershipBusy(false));
+                }}
+                style={{
+                  width: "100%",
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--text-primary)",
+                  borderRadius: "8px",
+                  padding: "8px 10px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  textAlign: "left",
+                  cursor: forkOwnershipBusy ? "default" : "pointer",
+                  fontSize: "12px",
+                  opacity: forkOwnershipBusy ? 0.65 : 1,
+                }}
+              >
+                <span style={{ flex: 1 }}>{t("fileTree.forkOwnership")}</span>
+                <span style={{ color: "var(--text-secondary)", fontSize: "11px" }}>
+                  {t(forkOwnership === "detached" ? "fileTree.forkOwnershipDetached" : "fileTree.forkOwnershipNested")}
+                </span>
+              </button>
+              {multiProjectSessionsEnabled ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onFlatSessionListChange?.(!flatSessionListEnabled);
+                    setIsAppearanceMenuOpen(false);
+                    setIsSortMenuOpen(false);
+                  }}
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    background: flatSessionListEnabled ? "var(--selection-bg)" : "transparent",
+                    color: flatSessionListEnabled ? "var(--accent-color)" : "var(--text-primary)",
+                    borderRadius: "8px",
+                    padding: "8px 10px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    textAlign: "left",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                  }}
+                >
+                  <span>{t("sessionList.flatMode")}</span>
+                  <span style={{ fontSize: "11px", opacity: flatSessionListEnabled ? 1 : 0 }}>✓</span>
+                </button>
+              ) : null}
+              {multiProjectSessionsEnabled ? (
+                <button
+                  type="button"
+                  title={t("sessionList.collapsedPreviewValue", { count: collapsedPreviewCount })}
+                  onClick={() => {
+                    const next = collapsedPreviewCount >= 3 ? 0 : collapsedPreviewCount + 1;
+                    onCollapsedPreviewCountChange?.(next);
+                    setIsAppearanceMenuOpen(false);
+                    setIsSortMenuOpen(false);
+                  }}
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    background: collapsedPreviewCount > 0 ? "var(--selection-bg)" : "transparent",
+                    color: collapsedPreviewCount > 0 ? "var(--accent-color)" : "var(--text-primary)",
+                    borderRadius: "8px",
+                    padding: "8px 10px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    textAlign: "left",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                  }}
+                >
+                  <span>{t("sessionList.collapsedPreview", { count: collapsedPreviewCount })}</span>
+                  <span style={{ fontSize: "11px" }} aria-hidden="true">{collapsedPreviewCount}</span>
+                </button>
+              ) : null}
+              <button
+                type="button"
                 onClick={() => {
                   onSidebarsSwappedChange?.(!sidebarsSwapped);
                   setIsAppearanceMenuOpen(false);
@@ -3814,6 +4538,7 @@ export function FileTree({
           <div
             ref={agentConfigPopoverRef}
             style={{
+              ...fileTreePopoverCapStyle,
               position: "absolute",
               top: "calc(100% + 6px)",
               left: "8px",
@@ -3846,9 +4571,15 @@ export function FileTree({
               providerSyncBusy={providerSyncBusy}
               providerTestBusyID={providerTestBusyID}
               providerTestResults={providerTestResults}
+              catalogAgents={agentConfigCatalog}
+              agentVisibility={agentConfigVisibility}
               onSyncAllProviders={() => {
                 void syncAllAgentAPIProviderModels();
               }}
+              onPinProviderModels={(providerID, pinnedModels) => pinAgentAPIProviderModels(providerID, pinnedModels)}
+              onApplyProviderToAgents={(providerID, agentNames) => applyAgentAPIProviderToAgents(providerID, agentNames)}
+              onSaveAgentMetadata={(agentName, label, url) => saveAgentMetadata(agentName, label, url)}
+              onSaveAgentVisibility={(hidden, customized) => saveAgentEntryVisibility(hidden, customized)}
               onTestProviderModel={(providerID, model) => {
                 void testAgentAPIProviderModelNow(providerID, model);
               }}
@@ -3898,6 +4629,7 @@ export function FileTree({
         {idleReleaseOpen ? (
           <div
             style={{
+              ...fileTreePopoverCapStyle,
               position: "absolute",
               top: "calc(100% + 6px)",
               left: "8px",
@@ -3982,6 +4714,7 @@ export function FileTree({
           <div
             ref={sendShortcutPopoverRef}
             style={{
+              ...fileTreePopoverCapStyle,
               position: "absolute",
               top: "calc(100% + 6px)",
               left: "8px",
@@ -4057,25 +4790,46 @@ export function FileTree({
             </div>
           </div>
         ) : null}
-        {blueRingMenuOpen ? (
-          <div
-            ref={blueRingPopoverRef}
-            style={{
-              position: "absolute",
-              top: "calc(100% + 6px)",
-              left: "8px",
-              right: "3px",
-              zIndex: 40,
-              padding: "14px",
-              borderRadius: "12px",
-              border: "1px solid var(--border-color)",
-              background: "var(--menu-bg)",
-              boxShadow: "0 16px 36px rgba(15, 23, 42, 0.18)",
-              boxSizing: "border-box",
-              maxHeight: "calc(100dvh - 96px)",
-              overflowY: "auto",
-            }}
-          >
+        {blueRingMenuOpen
+          ? createPortal(
+              <div
+                role="presentation"
+                onMouseDown={(event) => {
+                  // 点遮罩空白处关闭；点卡片本身不冒泡到遮罩
+                  if (event.target === event.currentTarget) {
+                    setBlueRingMenuOpen(false);
+                  }
+                }}
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  background: "rgba(0,0,0,0.4)",
+                  zIndex: 3000,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "16px",
+                }}
+              >
+              <div
+                ref={blueRingPopoverRef}
+                role="dialog"
+                aria-label={t("blueRing.title")}
+                onMouseDown={(event) => event.stopPropagation()}
+                style={{
+                  width: "min(92vw, 420px)",
+                  maxHeight: "min(78dvh, 620px)",
+                  overflowY: "auto",
+                  overscrollBehavior: "contain",
+                  WebkitOverflowScrolling: "touch",
+                  boxSizing: "border-box",
+                  padding: "14px",
+                  borderRadius: "12px",
+                  border: "1px solid var(--border-color)",
+                  background: "var(--menu-bg)",
+                  boxShadow: "0 16px 36px rgba(15, 23, 42, 0.18)",
+                }}
+              >
             <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)" }}>
               {t("blueRing.title")}
             </div>
@@ -4149,7 +4903,10 @@ export function FileTree({
                         models={blueRingAgents.map((item) => item.name)}
                         value={gestureConfig.agentPicks?.[gesture] || ""}
                         label={t("blueRing.agentPickHint")}
-                        getOptionLabel={(name) => String(name)}
+                        getOptionLabel={(name) => {
+                          const status = blueRingAgents.find((item) => item.name === name);
+                          return status?.brief || status?.name || String(name);
+                        }}
                         onChange={(name) => updateBlueRingAgentPick(gesture, String(name || ""))}
                         style={{
                           flex: "0 1 58%",
@@ -4197,14 +4954,53 @@ export function FileTree({
                       />
                     </div>
                   ) : null}
+                  {gestureConfig.actions[gesture] === "openNodePick" ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        padding: "0 2px 4px 18px",
+                        fontSize: "11px",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      <span style={{ flex: 1 }}>{t("blueRing.nodePickHint")}</span>
+                      <ProviderModelSelect
+                        models={blueRingNodes.map((node) => node.id)}
+                        value={gestureConfig.nodePicks?.[gesture] || ""}
+                        label={t("blueRing.nodePickHint")}
+                        getOptionLabel={(nodeId) => {
+                          const node = blueRingNodes.find((item) => item.id === nodeId);
+                          return node?.name || String(nodeId);
+                        }}
+                        onChange={(nodeId) => updateBlueRingNodePick(gesture, String(nodeId || ""))}
+                        style={{
+                          flex: "0 1 58%",
+                          maxWidth: "58%",
+                          height: "32px",
+                          padding: "4px 6px",
+                          borderRadius: "8px",
+                          border: "1px solid var(--border-color)",
+                          background: "var(--content-bg)",
+                          color: gestureConfig.nodePicks?.[gesture] ? "var(--text-primary)" : "var(--text-secondary)",
+                          fontSize: "12px",
+                        }}
+                      />
+                    </div>
+                  ) : null}
                 </React.Fragment>
               ))}
             </div>
-          </div>
-        ) : null}
+              </div>
+              </div>,
+              document.body,
+            )
+          : null}
         {sessionNamingOpen ? (
           <div
             style={{
+              ...fileTreePopoverCapStyle,
               position: "absolute",
               top: "calc(100% + 6px)",
               left: "8px",
@@ -4306,6 +5102,7 @@ export function FileTree({
           <div
             ref={relayServicesPopoverRef}
             style={{
+              ...fileTreePopoverCapStyle,
               position: "absolute",
               top: "calc(100% + 6px)",
               left: "8px",
@@ -4327,6 +5124,7 @@ export function FileTree({
           <div
             ref={agentLifecyclePopoverRef}
             style={{
+              ...fileTreePopoverCapStyle,
               position: "absolute",
               top: "calc(100% + 6px)",
               left: "8px",

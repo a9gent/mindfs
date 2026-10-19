@@ -941,6 +941,29 @@ func (m *Manager) Rename(_ context.Context, key, name string) (*Session, error) 
 	return session, nil
 }
 
+// SetTaskID binds a session to a kanban task without touching UpdatedAt —
+// the binding is metadata, not activity, and bumping it would reorder the
+// session list.
+func (m *Manager) SetTaskID(_ context.Context, key, taskID string) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, err := m.getSessionUnsafe(key, 0)
+	if err != nil {
+		return nil, err
+	}
+	if session.TaskID == taskID {
+		return session, nil
+	}
+	if session.TaskID != "" {
+		return nil, errors.New("session is already bound to a task")
+	}
+	session.TaskID = taskID
+	if err := m.upsertSessionMetaUnsafe(session); err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
 func (m *Manager) SetPinned(_ context.Context, key string, pinned bool) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -960,6 +983,69 @@ func (m *Manager) SetPinned(_ context.Context, key string, pinned bool) (*Sessio
 		}
 		session.PinnedAt = nil
 	}
+	if err := m.upsertSessionMetaUnsafe(session); err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
+// Touch marks the session as active without changing its content. Fork
+// creation copies historical exchanges, which rewinds UpdatedAt to the fork
+// point; the fork is new activity and must sort as such or it falls off the
+// updated_at-ordered first page.
+func (m *Manager) Touch(_ context.Context, key string) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, err := m.getSessionUnsafe(key, 0)
+	if err != nil {
+		return nil, err
+	}
+	session.UpdatedAt = m.now().UTC()
+	if err := m.upsertSessionMetaUnsafe(session); err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
+// SetParentSession re-parents a session without touching UpdatedAt: ownership
+// is metadata, not activity, and bumping it would reorder the session list.
+func (m *Manager) SetParentSession(_ context.Context, key, parentKey string) (*Session, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil, errors.New("session key required")
+	}
+	parentKey = strings.TrimSpace(parentKey)
+	if parentKey == key {
+		return nil, errors.New("session cannot be its own parent")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, err := m.getSessionUnsafe(key, 0)
+	if err != nil {
+		return nil, err
+	}
+	if parentKey != "" {
+		// Walk up from the new parent: a session may not become a child of its
+		// own descendant, or the list nesting and cascade delete would loop.
+		ancestor := parentKey
+		for depth := 0; ancestor != "" && depth < 1000; depth++ {
+			if ancestor == key {
+				return nil, errors.New("session cannot be re-parented under its own descendant")
+			}
+			parent, err := m.getSessionUnsafe(ancestor, 0)
+			if err != nil {
+				if depth == 0 {
+					return nil, err
+				}
+				break
+			}
+			ancestor = strings.TrimSpace(parent.ParentSessionKey)
+		}
+	}
+	if session.ParentSessionKey == parentKey {
+		return session, nil
+	}
+	session.ParentSessionKey = parentKey
 	if err := m.upsertSessionMetaUnsafe(session); err != nil {
 		return nil, err
 	}
@@ -2039,6 +2125,12 @@ func cleanRelatedRepoPath(path string) string {
 }
 
 var errSessionNotFound = errors.New("session not found")
+
+// IsNotFound reports whether err means the session key does not exist, so the
+// HTTP layer can answer 404 instead of lumping every failure into one status.
+func IsNotFound(err error) bool {
+	return errors.Is(err, errSessionNotFound)
+}
 
 func normalizeSearchLimit(limit int) int {
 	switch {

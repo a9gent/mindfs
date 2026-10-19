@@ -5,6 +5,7 @@ import { appURL } from "../services/base";
 import { reportError } from "../services/error";
 import { renderToolIcon } from "./stream/ToolCallCard";
 import { LocalPanel, type LocalDirBrowserState } from "./ProjectAddPopover";
+import { menuPopoverCapStyle } from "./popoverStyles";
 
 export function FileMenuIcon({ action }: { action: "download" | "edit" | "delete" | "rename" | "move" }) {
   let icon: React.ReactNode;
@@ -98,6 +99,7 @@ export const moreMenuPopoverStyle: React.CSSProperties = {
   background: "var(--menu-bg)",
   boxShadow: "0 12px 30px rgba(15, 23, 42, 0.14)",
   zIndex: 20,
+  ...menuPopoverCapStyle,
 };
 
 export function MoreMenuButton({ open, label, onClick, onboarding }: {

@@ -606,7 +606,7 @@ func TestDeleteSessionDeletesSubSessionTree(t *testing.T) {
 		t.Fatalf("create sibling: %v", err)
 	}
 
-	if err := service.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: parent.Key}); err != nil {
+	if err := service.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: parent.Key, Cascade: true}); err != nil {
 		t.Fatalf("delete parent: %v", err)
 	}
 	for _, deleted := range []*session.Session{parent, child, grandchild} {
@@ -2558,7 +2558,7 @@ func TestDeleteSessionCleansTaskGroupsBeforeDeletingSessions(t *testing.T) {
 				return []string{execution.Key}, nil
 			}
 			svc := Service{Registry: registry}
-			err = svc.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: parent.Key})
+			err = svc.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: parent.Key, Cascade: true})
 			if !called || (err != nil) != fails {
 				t.Fatalf("called=%v err=%v", called, err)
 			}
@@ -2592,5 +2592,187 @@ func TestBuildPromptAddsMindFSContextOnlyToInitialMessage(t *testing.T) {
 				t.Fatalf("missing task identity: %s", prompt)
 			}
 		}
+	}
+}
+
+func TestListSessionsIncludesDeepForkDescendants(t *testing.T) {
+	ctx := context.Background()
+	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
+	manager := session.NewManager(root)
+	registry := &commandTestRegistry{root: root, manager: manager}
+	service := Service{Registry: registry}
+
+	parent, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, Name: "parent"})
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	child, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, ParentSessionKey: parent.Key, Name: "child"})
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	grandchild, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, ParentSessionKey: child.Key, Name: "grandchild"})
+	if err != nil {
+		t.Fatalf("create grandchild: %v", err)
+	}
+	greatGrandchild, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, ParentSessionKey: grandchild.Key, Name: "great-grandchild"})
+	if err != nil {
+		t.Fatalf("create great-grandchild: %v", err)
+	}
+
+	out, err := service.ListSessions(ctx, ListSessionsInput{
+		RootID:          root.ID,
+		TopLevelOnly:    true,
+		IncludeChildren: true,
+	})
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, item := range out.Sessions {
+		seen[item.Key] = true
+	}
+	for _, want := range []*session.Session{parent, child, grandchild, greatGrandchild} {
+		if !seen[want.Key] {
+			t.Fatalf("session %s (%s) missing from payload", want.Key, want.Name)
+		}
+	}
+}
+
+func TestDeleteSessionKeepChildrenPromotesGrandchildren(t *testing.T) {
+	ctx := context.Background()
+	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
+	manager := session.NewManager(root)
+	registry := &commandTestRegistry{root: root, manager: manager}
+	service := Service{Registry: registry}
+
+	main, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, Name: "main"})
+	if err != nil {
+		t.Fatalf("create main: %v", err)
+	}
+	fork1, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, ParentSessionKey: main.Key, Name: "fork1"})
+	if err != nil {
+		t.Fatalf("create fork1: %v", err)
+	}
+	fork2, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, ParentSessionKey: fork1.Key, Name: "fork2"})
+	if err != nil {
+		t.Fatalf("create fork2: %v", err)
+	}
+
+	if err := service.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: fork1.Key, KeepChildren: true}); err != nil {
+		t.Fatalf("delete fork1 keeping children: %v", err)
+	}
+	if _, err := manager.Get(ctx, fork1.Key, 0); err == nil {
+		t.Fatal("fork1 still exists")
+	}
+	promoted, err := manager.Get(ctx, fork2.Key, 0)
+	if err != nil {
+		t.Fatalf("fork2 should survive: %v", err)
+	}
+	if promoted.ParentSessionKey != main.Key {
+		t.Fatalf("fork2 parent = %q, want %q", promoted.ParentSessionKey, main.Key)
+	}
+	if _, err := manager.Get(ctx, main.Key, 0); err != nil {
+		t.Fatalf("main should survive: %v", err)
+	}
+}
+
+func TestDeleteSessionCascadeRemovesWholeTreeByDefault(t *testing.T) {
+	ctx := context.Background()
+	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
+	manager := session.NewManager(root)
+	registry := &commandTestRegistry{root: root, manager: manager}
+	service := Service{Registry: registry}
+
+	parent, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, Name: "parent"})
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	child, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, ParentSessionKey: parent.Key, Name: "child"})
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	if err := service.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: parent.Key, Cascade: true}); err != nil {
+		t.Fatalf("delete parent: %v", err)
+	}
+	if _, err := manager.Get(ctx, child.Key, 0); err == nil {
+		t.Fatal("child should be deleted with the default cascade")
+	}
+}
+
+func TestDeleteSessionRequiresChoiceWhenChildrenExist(t *testing.T) {
+	ctx := context.Background()
+	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
+	manager := session.NewManager(root)
+	registry := &commandTestRegistry{root: root, manager: manager}
+	service := Service{Registry: registry}
+
+	parent, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, Name: "parent"})
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	if _, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, ParentSessionKey: parent.Key, Name: "child"}); err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+
+	err = service.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: parent.Key})
+	var needsChoice *ErrDeleteNeedsChoice
+	if !errors.As(err, &needsChoice) {
+		t.Fatalf("err = %v, want ErrDeleteNeedsChoice", err)
+	}
+	if needsChoice.ChildCount != 1 {
+		t.Fatalf("child count = %d, want 1", needsChoice.ChildCount)
+	}
+	// Nothing may be touched when the choice is missing.
+	if _, err := manager.Get(ctx, parent.Key, 0); err != nil {
+		t.Fatalf("parent must survive the refused delete: %v", err)
+	}
+
+	// A leaf still deletes without an explicit choice.
+	leaf, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, Name: "leaf"})
+	if err != nil {
+		t.Fatalf("create leaf: %v", err)
+	}
+	if err := service.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: leaf.Key}); err != nil {
+		t.Fatalf("delete leaf: %v", err)
+	}
+}
+
+func TestDeleteSessionKeepChildrenDoesNotPromoteSubagents(t *testing.T) {
+	ctx := context.Background()
+	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
+	manager := session.NewManager(root)
+	registry := &commandTestRegistry{root: root, manager: manager}
+	service := Service{Registry: registry}
+
+	main, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, Name: "main"})
+	if err != nil {
+		t.Fatalf("create main: %v", err)
+	}
+	fork, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, ParentSessionKey: main.Key, Name: "fork"})
+	if err != nil {
+		t.Fatalf("create fork: %v", err)
+	}
+	subagent, err := manager.Create(ctx, session.CreateInput{
+		Type:             session.TypeChat,
+		ParentSessionKey: fork.Key,
+		ParentToolCallID: "call-1",
+		Name:             "subagent",
+	})
+	if err != nil {
+		t.Fatalf("create subagent: %v", err)
+	}
+	subChild, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, ParentSessionKey: subagent.Key, Name: "subchild"})
+	if err != nil {
+		t.Fatalf("create subchild: %v", err)
+	}
+
+	if err := service.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: fork.Key, KeepChildren: true}); err != nil {
+		t.Fatalf("delete fork keeping children: %v", err)
+	}
+	if _, err := manager.Get(ctx, subagent.Key, 0); err == nil {
+		t.Fatal("subagent must not be promoted to top level")
+	}
+	if _, err := manager.Get(ctx, subChild.Key, 0); err == nil {
+		t.Fatal("subagent subtree must go with the deleted parent")
 	}
 }

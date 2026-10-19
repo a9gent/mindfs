@@ -4,6 +4,10 @@ import { e2eeService } from "./e2ee";
 
 // Session service for managing agent sessions
 
+export type DeleteSessionResult =
+  | { ok: true }
+  | { ok: false; needsChoice: boolean; childCount: number };
+
 export type SessionType = "chat" | "plugin" | "command";
 
 export type QueuedUserMessage = {
@@ -1233,6 +1237,11 @@ class SessionService {
         return [];
       }
       console.error("[Session] Failed to fetch multi-root sessions:", err);
+      // Re-throw real failures so the multi-project list can surface its
+      // load-failed + retry UI (api_not_ready stays a silent empty result).
+      if (!(err instanceof Error && err.message === "api_not_ready")) {
+        throw err;
+      }
       return [];
     }
   }
@@ -1265,7 +1274,7 @@ class SessionService {
     rootId: string,
     query: string,
     limit?: number,
-    options?: { multiRoot?: boolean },
+    options?: { multiRoot?: boolean; rethrow?: boolean },
   ): Promise<SessionSearchHit[]> {
     try {
       const trimmed = query.trim();
@@ -1287,6 +1296,9 @@ class SessionService {
         : [];
     } catch (err) {
       console.error("[Session] Failed to search sessions:", err);
+      if (options?.rethrow) {
+        throw err;
+      }
       return [];
     }
   }
@@ -1423,20 +1435,74 @@ class SessionService {
     }
   }
 
-  async deleteSession(rootId: string, sessionKey: string): Promise<boolean> {
+  /**
+   * Deletes a session. The server refuses (409) to delete a session that still
+   * has children unless the caller states the intent, because cascading a whole
+   * subtree is irreversible and the client cannot count children reliably (the
+   * list may be filtered, paginated or in search-results mode).
+   */
+  async deleteSession(
+    rootId: string,
+    sessionKey: string,
+    options?: { keepChildren?: boolean; cascade?: boolean },
+  ): Promise<DeleteSessionResult> {
     try {
       const params = new URLSearchParams({ root: rootId });
+      if (options?.keepChildren) {
+        params.set("keep_children", "true");
+      }
+      if (options?.cascade) {
+        params.set("cascade", "true");
+      }
       const res = await protectedFetch(
         appURL(`/api/sessions/${encodeURIComponent(sessionKey)}`, params),
         { method: "DELETE" },
       );
+      if (res.status === 409) {
+        const payload = (await e2eeService
+          .parseProtectedJSONResponse<{ child_count?: number }>(res)
+          .catch(() => ({}))) as { child_count?: number };
+        const childCount = Number(payload?.child_count);
+        return {
+          ok: false,
+          needsChoice: true,
+          childCount: Number.isFinite(childCount) ? childCount : 0,
+        };
+      }
       if (!res.ok) {
         throw new Error("Failed to delete session");
       }
-      return true;
+      return { ok: true };
     } catch (err) {
       console.error("[Session] Failed to delete session:", err);
-      return false;
+      return { ok: false, needsChoice: false, childCount: 0 };
+    }
+  }
+
+  async setSessionParent(
+    rootId: string,
+    sessionKey: string,
+    parentSessionKey: string,
+  ): Promise<Session | null> {
+    try {
+      const params = new URLSearchParams({ root: rootId });
+      const data = await protectedJSON<Session>(
+        appURL(
+          `/api/sessions/${encodeURIComponent(sessionKey)}/parent`,
+          params,
+        ),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ parent_session_key: parentSessionKey }),
+        },
+      );
+      return data as Session;
+    } catch (err) {
+      console.error("[Session] Failed to move session:", err);
+      return null;
     }
   }
 

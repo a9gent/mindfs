@@ -188,17 +188,30 @@ func (r *Registry) Remove(root string) (RootInfo, error) {
 	if name == "" || name == "." || name == string(filepath.Separator) {
 		return RootInfo{}, errors.New("invalid directory name")
 	}
-	dir, ok := r.dirs[name]
+	key := name
+	if dir, ok := r.dirs[name]; !ok || !sameRegistryPath(dir.RootPath, cleaned) {
+		// IDs come from the directory name, but a registration can outlive a rename
+		// of the directory it pointed at. Match on the recorded path too, otherwise
+		// such a root can never be unregistered.
+		key = ""
+		for id, dir := range r.dirs {
+			if sameRegistryPath(dir.RootPath, cleaned) {
+				key = id
+				break
+			}
+		}
+		if key == "" {
+			return RootInfo{}, errors.New("root not found")
+		}
+	}
+	dir, ok := r.dirs[key]
 	if !ok {
 		return RootInfo{}, errors.New("root not found")
 	}
-	if filepath.Clean(dir.RootPath) != cleaned {
-		return RootInfo{}, errors.New("root not found")
-	}
-	delete(r.dirs, name)
+	delete(r.dirs, key)
 	nextOrder := make([]string, 0, len(r.order))
 	for _, id := range r.order {
-		if id != name {
+		if id != key {
 			nextOrder = append(nextOrder, id)
 		}
 	}
