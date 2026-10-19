@@ -11,6 +11,7 @@ import {
   BLUE_RING_ACTION_LABEL_KEYS,
   BLUE_RING_GESTURE_LABEL_KEYS,
   BLUE_RING_PATH_GESTURES,
+  BLUE_RING_TWO_STAGE_GESTURES,
   recentQuickSwitchGroups,
   ringPathGesture,
   type BlueRingAction,
@@ -42,10 +43,25 @@ export type SessionQuickActionsProps = {
   onCycleKanbanTemplate?: () => void;
   onCreateTask?: (templateId?: string) => void;
   onOpenScheduledTasks?: () => void;
+  onQuickSaveFile?: () => void;
+  onRenameCurrentFile?: () => void;
+  onCopyCurrentFilePath?: () => void;
+  onCopySessionHandoff?: () => void;
+  onGlobalSearch?: () => void;
+  onOpenNodesPage?: () => void;
+  onPickNode?: (nodeId: string) => void;
+  onOpenGestureSettings?: () => void;
+  onKanbanCreateTask?: () => void;
+  onKanbanEditTask?: () => void;
+  onKanbanStartTask?: () => void;
+  onKanbanCompleteTask?: () => void;
+  recentFiles?: Array<{ root: string; path: string; name: string; modifiedInSession?: boolean }>;
+  onOpenFile?: (path: string) => void;
 };
 
 const DOUBLE_TAP_MS = 280;
 const TAP_MOVE_PX = 6;
+const RECENT_FILES_COLLAPSED_KEY = "mindfs-quick-switch-files-collapsed";
 
 export function SessionQuickActions({
   currentRootId,
@@ -69,6 +85,20 @@ export function SessionQuickActions({
   onCycleKanbanTemplate,
   onCreateTask,
   onOpenScheduledTasks,
+  onQuickSaveFile,
+  onRenameCurrentFile,
+  onCopyCurrentFilePath,
+  onCopySessionHandoff,
+  onGlobalSearch,
+  onOpenNodesPage,
+  onPickNode,
+  onOpenGestureSettings,
+  onKanbanCreateTask,
+  onKanbanEditTask,
+  onKanbanStartTask,
+  onKanbanCompleteTask,
+  recentFiles,
+  onOpenFile,
 }: SessionQuickActionsProps) {
   const { t } = useI18n();
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -81,6 +111,9 @@ export function SessionQuickActions({
   const [loading, setLoading] = useState(false);
   const [groups, setGroups] = useState<ReturnType<typeof recentQuickSwitchGroups>>([]);
   const [position, setPosition] = useState({ left: 8, bottom: 64, width: 272, maxHeight: 400 });
+  const [recentFilesCollapsed, setRecentFilesCollapsed] = useState(() => {
+    try { return window.localStorage.getItem(RECENT_FILES_COLLAPSED_KEY) === "1"; } catch { return false; }
+  });
 
   useEffect(() => { setOpen(false); }, [currentRootId, currentSessionKey]);
   // 手动导航到别的目录后，轮切基准要跟着走，否则会从旧目标继续跳
@@ -185,6 +218,22 @@ export function SessionQuickActions({
         break;
       }
       case "openScheduledTasks": setOpen(false); onOpenScheduledTasks?.(); break;
+      case "quickSaveFile": setOpen(false); onQuickSaveFile?.(); break;
+      case "renameCurrentFile": setOpen(false); onRenameCurrentFile?.(); break;
+      case "copyCurrentFilePath": setOpen(false); onCopyCurrentFilePath?.(); break;
+      case "copySessionHandoff": setOpen(false); onCopySessionHandoff?.(); break;
+      case "globalSearch": setOpen(false); onGlobalSearch?.(); break;
+      case "openNodesPage": setOpen(false); onOpenNodesPage?.(); break;
+      case "openNodePick": {
+        const pick = gesture ? gestureConfig?.nodePicks?.[gesture] : undefined;
+        if (pick) { setOpen(false); onPickNode?.(pick); }
+        break;
+      }
+      case "openGestureSettings": setOpen(false); onOpenGestureSettings?.(); break;
+      case "kanbanCreateTask": setOpen(false); onKanbanCreateTask?.(); break;
+      case "kanbanEditTask": setOpen(false); onKanbanEditTask?.(); break;
+      case "kanbanStartTask": setOpen(false); onKanbanStartTask?.(); break;
+      case "kanbanCompleteTask": setOpen(false); onKanbanCompleteTask?.(); break;
       case "recentSession": {
         void sessionService.fetchMultiRootSessions(5).then((items) => {
           for (const group of recentQuickSwitchGroups(items)) {
@@ -214,8 +263,10 @@ export function SessionQuickActions({
   // 10px 分类器就会切到两段式名字，漏一个名字提示条就会中途闪没。
   const hintGesture: BlueRingGesture | null = hint && !hint.ready && actions[hint.gesture] === "none"
     && BLUE_RING_PATH_GESTURES.includes(hint.gesture)
-    ? "up"
-    : hint?.gesture ?? null;
+      ? BLUE_RING_TWO_STAGE_GESTURES.has(hint.gesture)
+        ? "up"
+        : hint.gesture
+      : hint?.gesture ?? null;
   const hintReady = hint?.ready ?? false;
   const hintAction: BlueRingAction | null = hintGesture ? actions[hintGesture] : null;
   const hintText = hintGesture && hintAction && hintAction !== "none"
@@ -301,7 +352,19 @@ export function SessionQuickActions({
       </span> : null}
     </button>
     {open && createPortal(<div ref={panelRef} role="dialog" aria-label={t("action.quickSwitch")} tabIndex={-1} style={{ position: "fixed", ...position, boxSizing: "border-box", zIndex: 1200, overflowY: "auto", padding: "6px 4px", background: "var(--menu-bg)", border: "1px solid var(--menu-border)", borderTop: 0, borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}>
-      {loading ? <div role="status" style={{ padding: "8px 6px" }}>{t("common.loading")}</div> : groups.length === 0 ? <div style={{ padding: "8px 6px", color: "var(--text-secondary)" }}>{t("action.quickSwitchEmpty")}</div> : groups.map((group, index) => <div key={group.rootId} style={{ padding: "2px 0", borderTop: index === 0 ? 0 : "1px solid var(--menu-border)" }}>
+      {!loading && (recentFiles?.length || 0) > 0 && (
+        <div style={{ padding: "2px 0", borderBottom: (groups?.length || 0) > 0 ? "1px solid var(--menu-border)" : 0 }}>
+          <button className="quick-switch-row" type="button" aria-expanded={!recentFilesCollapsed} style={{ ...rowStyle, fontWeight: 600, color: "var(--text-primary)", display: "flex", alignItems: "center", justifyContent: "space-between" }} onClick={() => { const next = !recentFilesCollapsed; setRecentFilesCollapsed(next); try { window.localStorage.setItem(RECENT_FILES_COLLAPSED_KEY, next ? "1" : "0"); } catch { /* ignore */ } }}>
+            <span>{t("quickSwitch.recentFiles")}</span>
+            <span aria-hidden="true" style={{ fontSize: 10, color: "var(--text-secondary)" }}>{recentFilesCollapsed ? "▸" : "▾"}</span>
+          </button>
+          {!recentFilesCollapsed && (recentFiles || []).map((item) => <button className="quick-switch-row" type="button" key={`${item.root}:${item.path}`} title={item.path} style={{ ...rowStyle, paddingLeft: 18, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 6 }} onClick={() => { setOpen(false); onOpenFile?.(item.path); }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
+            {item.modifiedInSession && <span style={{ flexShrink: 0, fontSize: 10, padding: "1px 5px", borderRadius: 6, background: "color-mix(in srgb, var(--accent-color) 12%, transparent)", color: "var(--accent-color)" }}>{t("quickSwitch.modifiedThisSession")}</span>}
+          </button>)}
+        </div>
+      )}
+      {loading ? <div role="status" style={{ padding: "8px 6px" }}>{t("common.loading")}</div> : groups.length === 0 && (recentFiles?.length || 0) === 0 ? <div style={{ padding: "8px 6px", color: "var(--text-secondary)" }}>{t("action.quickSwitchEmpty")}</div> : groups.map((group, index) => <div key={group.rootId} style={{ padding: "2px 0", borderTop: index === 0 && (recentFiles?.length || 0) === 0 ? 0 : "1px solid var(--menu-border)" }}>
         <button className="quick-switch-row" type="button" title={group.rootName || group.rootId} style={{ ...rowStyle, fontWeight: 600, color: group.rootId === currentRootId ? "var(--accent-color)" : "var(--text-primary)" }} onClick={() => { setOpen(false); onSelectProject(group.rootId); }}>{group.rootName || group.rootId}</button>
         {group.items.map((session) => <button className="quick-switch-row" type="button" key={session.key || session.session_key} title={session.name || session.key || session.session_key} aria-current={group.rootId === currentRootId && (session.key || session.session_key) === currentSessionKey ? "true" : undefined} style={{ ...rowStyle, paddingLeft: 18, color: "var(--text-secondary)" }} onClick={() => { setOpen(false); onSelectSession({ ...session, root_id: group.rootId }); }}>{session.name || session.key || session.session_key}</button>)}
       </div>)}

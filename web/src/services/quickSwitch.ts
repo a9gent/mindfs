@@ -14,9 +14,10 @@ export function ringGesture(x: number, y: number): "new" | "switch" | null {
  * Two families:
  * - tap / doubleTap: click-scale gestures, no path needed.
  * - path gestures: single-stroke (left/right/up and the two corner diagonals
- *   upLeft/upRight, judged on displacement like the original ring) and
- *   two-stage trails that go up first and then turn (upDown, upThenLeft/right
- *   and the corner continuations upLeftThenRight / upRightThenLeft/down).
+ *   upLeft/upRight, judged on displacement like the original ring), two-stage
+ *   trails that go up first and then turn (upDown, upThenLeft/right and the
+ *   corner continuations), and round-trip trails that return to the origin
+ *   (rightThenLeft / leftThenRight, judged on path bounding box).
  */
 export type BlueRingGesture =
   | "tap"
@@ -31,7 +32,10 @@ export type BlueRingGesture =
   | "upThenRight"
   | "upLeftThenRight"
   | "upRightThenLeft"
-  | "upRightThenDown";
+  | "upRightThenDown"
+  | "upLeftThenDown"
+  | "rightThenLeft"
+  | "leftThenRight";
 
 /** Actions a blue ring gesture can trigger. */
 export type BlueRingAction =
@@ -54,7 +58,19 @@ export type BlueRingAction =
   | "toggleMainView"
   | "kanbanTemplateCycle"
   | "newTask"
-  | "openScheduledTasks";
+  | "openScheduledTasks"
+  | "quickSaveFile"
+  | "renameCurrentFile"
+  | "copyCurrentFilePath"
+  | "copySessionHandoff"
+  | "globalSearch"
+  | "openNodesPage"
+  | "openNodePick"
+  | "openGestureSettings"
+  | "kanbanCreateTask"
+  | "kanbanEditTask"
+  | "kanbanStartTask"
+  | "kanbanCompleteTask";
 
 export type BlueRingGestureConfig = {
   enabled: boolean;
@@ -63,6 +79,8 @@ export type BlueRingGestureConfig = {
   agentPicks?: Partial<Record<BlueRingGesture, string>>;
   /** Per-gesture task template id for the "newTask" action, chosen in settings. */
   taskPicks?: Partial<Record<BlueRingGesture, string>>;
+  /** Per-gesture launcher node id for the "openNodePick" action, chosen in settings. */
+  nodePicks?: Partial<Record<BlueRingGesture, string>>;
 };
 
 // Keep the persisted key compatible with existing gesture preferences.
@@ -83,6 +101,9 @@ export const DEFAULT_BLUE_RING_ACTIONS: Record<BlueRingGesture, BlueRingAction> 
   upLeftThenRight: "none",
   upRightThenLeft: "none",
   upRightThenDown: "none",
+  upLeftThenDown: "none",
+  rightThenLeft: "none",
+  leftThenRight: "none",
 };
 
 /** Click-scale gestures are handled by the tap/double-tap logic, not path matching. */
@@ -98,6 +119,9 @@ export const BLUE_RING_PATH_GESTURES: readonly BlueRingGesture[] = [
   "upLeftThenRight",
   "upRightThenLeft",
   "upRightThenDown",
+  "upLeftThenDown",
+  "rightThenLeft",
+  "leftThenRight",
 ];
 
 export const BLUE_RING_GESTURES: readonly BlueRingGesture[] = [
@@ -105,6 +129,19 @@ export const BLUE_RING_GESTURES: readonly BlueRingGesture[] = [
   "doubleTap",
   ...BLUE_RING_PATH_GESTURES,
 ];
+
+/** Two-stage trails: while dragging, an unbound two-stage hint falls back to the "up" binding. */
+export const BLUE_RING_TWO_STAGE_GESTURES: ReadonlySet<BlueRingGesture> = new Set([
+  "upDown",
+  "upThenLeft",
+  "upThenRight",
+  "upLeftThenRight",
+  "upRightThenLeft",
+  "upRightThenDown",
+  "upLeftThenDown",
+  "rightThenLeft",
+  "leftThenRight",
+] as const satisfies readonly BlueRingGesture[]);
 
 export const BLUE_RING_ACTION_OPTIONS: readonly BlueRingAction[] = [
   "none",
@@ -127,6 +164,18 @@ export const BLUE_RING_ACTION_OPTIONS: readonly BlueRingAction[] = [
   "kanbanTemplateCycle",
   "newTask",
   "openScheduledTasks",
+  "quickSaveFile",
+  "renameCurrentFile",
+  "copyCurrentFilePath",
+  "copySessionHandoff",
+  "globalSearch",
+  "openNodesPage",
+  "openNodePick",
+  "openGestureSettings",
+  "kanbanCreateTask",
+  "kanbanEditTask",
+  "kanbanStartTask",
+  "kanbanCompleteTask",
 ];
 
 export const BLUE_RING_GESTURE_LABEL_KEYS: Record<BlueRingGesture, MessageKey> = {
@@ -143,6 +192,9 @@ export const BLUE_RING_GESTURE_LABEL_KEYS: Record<BlueRingGesture, MessageKey> =
   upLeftThenRight: "blueRing.gesture.upLeftThenRight",
   upRightThenLeft: "blueRing.gesture.upRightThenLeft",
   upRightThenDown: "blueRing.gesture.upRightThenDown",
+  upLeftThenDown: "blueRing.gesture.upLeftThenDown",
+  rightThenLeft: "blueRing.gesture.rightThenLeft",
+  leftThenRight: "blueRing.gesture.leftThenRight",
 };
 
 export const BLUE_RING_ACTION_LABEL_KEYS: Record<BlueRingAction, MessageKey> = {
@@ -166,6 +218,18 @@ export const BLUE_RING_ACTION_LABEL_KEYS: Record<BlueRingAction, MessageKey> = {
   kanbanTemplateCycle: "blueRing.action.kanbanTemplateCycle",
   newTask: "blueRing.action.newTask",
   openScheduledTasks: "blueRing.action.openScheduledTasks",
+  quickSaveFile: "blueRing.action.quickSaveFile",
+  renameCurrentFile: "blueRing.action.renameCurrentFile",
+  copyCurrentFilePath: "blueRing.action.copyCurrentFilePath",
+  copySessionHandoff: "blueRing.action.copySessionHandoff",
+  globalSearch: "blueRing.action.globalSearch",
+  openNodesPage: "blueRing.action.openNodesPage",
+  openNodePick: "blueRing.action.openNodePick",
+  openGestureSettings: "blueRing.action.openGestureSettings",
+  kanbanCreateTask: "blueRing.action.kanbanCreateTask",
+  kanbanEditTask: "blueRing.action.kanbanEditTask",
+  kanbanStartTask: "blueRing.action.kanbanStartTask",
+  kanbanCompleteTask: "blueRing.action.kanbanCompleteTask",
 };
 
 const BLUE_RING_ACTION_SET = new Set<string>(BLUE_RING_ACTION_OPTIONS);
@@ -212,9 +276,13 @@ export function normalizeBlueRingGestureConfig(value: unknown): BlueRingGestureC
       upLeftThenRight: normalizeBlueRingAction(actions.upLeftThenRight, DEFAULT_BLUE_RING_ACTIONS.upLeftThenRight),
       upRightThenLeft: normalizeBlueRingAction(actions.upRightThenLeft, DEFAULT_BLUE_RING_ACTIONS.upRightThenLeft),
       upRightThenDown: normalizeBlueRingAction(actions.upRightThenDown, DEFAULT_BLUE_RING_ACTIONS.upRightThenDown),
+      upLeftThenDown: normalizeBlueRingAction(actions.upLeftThenDown, DEFAULT_BLUE_RING_ACTIONS.upLeftThenDown),
+      rightThenLeft: normalizeBlueRingAction(actions.rightThenLeft, DEFAULT_BLUE_RING_ACTIONS.rightThenLeft),
+      leftThenRight: normalizeBlueRingAction(actions.leftThenRight, DEFAULT_BLUE_RING_ACTIONS.leftThenRight),
     },
     agentPicks: normalizeBlueRingAgentPicks(input.agentPicks),
     taskPicks: normalizeBlueRingGesturePicks(input.taskPicks),
+    nodePicks: normalizeBlueRingGesturePicks(input.nodePicks),
   };
 }
 
@@ -293,7 +361,9 @@ function mapTwoStageGesture(seg1: UpSegment, seg2: TurnSegment | null): BlueRing
     return null;
   }
   if (seg1 === "upLeft") {
-    return seg2 === "right" ? "upLeftThenRight" : null;
+    if (seg2 === "right") return "upLeftThenRight";
+    if (seg2 === "down") return "upLeftThenDown";
+    return null;
   }
   if (seg1 === "upRight") {
     if (seg2 === "left") return "upRightThenLeft";
@@ -303,10 +373,57 @@ function mapTwoStageGesture(seg1: UpSegment, seg2: TurnSegment | null): BlueRing
   return null;
 }
 
+/**
+ * Round-trip trails: the drag leaves the origin horizontally, then returns
+ * (→← or ←→). Displacement rules can't see these (end ≈ start), so judge the
+ * path bounding box instead; direction comes from the first excursion sign.
+ * Returns null unless the excursion and the return both clear the threshold.
+ */
+function classifyRoundTripPath(points: RingPathPoint[], minSwipe: number): BlueRingGesture | null {
+  const start = points[0];
+  const end = points[points.length - 1];
+  let maxRight = start.x;
+  let maxLeft = start.x;
+  let excursion = 0;
+  for (const point of points) {
+    maxRight = Math.max(maxRight, point.x);
+    maxLeft = Math.min(maxLeft, point.x);
+    if (Math.abs(point.x - start.x) >= minSwipe) {
+      excursion = excursion || point.x - start.x;
+    }
+  }
+  if (excursion > 0 && maxRight - start.x >= minSwipe) {
+    return end.x - start.x <= (maxRight - start.x) - minSwipe && Math.abs(end.x - start.x) < minSwipe
+      ? "rightThenLeft"
+      : null;
+  }
+  if (excursion < 0 && start.x - maxLeft >= minSwipe) {
+    return end.x - start.x >= maxLeft - start.x - minSwipe && Math.abs(end.x - start.x) < minSwipe
+      ? "leftThenRight"
+      : null;
+  }
+  return null;
+}
+
 function classifyRingPath(points: RingPathPoint[], minSwipe: number): BlueRingGesture | null {
   if (points.length < 2) return null;
   const start = points[0];
   const end = points[points.length - 1];
+
+  // Round-trip trails first: they end near the origin, so the displacement
+  // rules below would never see them. Both vertical excursions must stay
+  // small — upward too, otherwise an up-corner-and-back trail (two-stage
+  // territory) would look like a round trip.
+  let maxY = start.y;
+  let minRoundTripY = start.y;
+  for (const point of points) {
+    maxY = Math.max(maxY, point.y);
+    minRoundTripY = Math.min(minRoundTripY, point.y);
+  }
+  if (maxY - start.y < minSwipe && start.y - minRoundTripY < minSwipe) {
+    const roundTrip = classifyRoundTripPath(points, minSwipe);
+    if (roundTrip) return roundTrip;
+  }
 
   // Two-stage trails: find the turn point (first contact with the highest band),
   // classify the upward leg and the leg after the turn.

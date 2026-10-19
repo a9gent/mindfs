@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AgentSelector } from "./AgentSelector";
 import { AgentIcon } from "./AgentIcon";
+import { menuPopoverCapStyle } from "./popoverStyles";
 import {
   deleteStageTemplate,
   fetchStageTemplates,
@@ -950,6 +951,7 @@ const stageMenuStyle: React.CSSProperties = {
   background: "var(--menu-bg)",
   boxShadow: "0 12px 30px rgba(15, 23, 42, 0.14)",
   zIndex: 25,
+  ...menuPopoverCapStyle,
 };
 
 const menuDividerStyle: React.CSSProperties = {

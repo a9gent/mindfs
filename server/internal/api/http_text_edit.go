@@ -90,6 +90,29 @@ func (h *HTTPHandler) handleFileCreate(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusCreated, map[string]any{"path": path})
 }
 
+func (h *HTTPHandler) handleFileDirCreate(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Dir  string `json:"dir"`
+		Name string `json:"name"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&input); err != nil {
+		respondFileEditError(w, err)
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		respondError(w, http.StatusBadRequest, errors.New("invalid request body"))
+		return
+	}
+	path, err := h.service().CreateDir(r.URL.Query().Get("root"), input.Dir, input.Name)
+	if err != nil {
+		respondFileEditError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusCreated, map[string]any{"path": path})
+}
+
 func (h *HTTPHandler) handleFileOperation(w http.ResponseWriter, r *http.Request) {
 	var input usecase.FileOperationInput
 	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)

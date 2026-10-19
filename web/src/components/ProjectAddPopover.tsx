@@ -1,5 +1,6 @@
 import React from "react";
 import { useI18n } from "../i18n";
+import { menuPopoverCapStyle } from "./popoverStyles";
 
 export type ProjectAddMode =
   | "mode"
@@ -185,6 +186,7 @@ function PathBreadcrumb({
             display: "flex",
             flexDirection: "column",
             gap: "2px",
+            ...menuPopoverCapStyle,
           }}
         >
           {volumeItems.map((volume) => {

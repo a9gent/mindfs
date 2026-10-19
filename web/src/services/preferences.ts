@@ -80,8 +80,72 @@ export async function updateNewProjectMetaLocationPreference(
   );
 }
 
-const DEFAULT_IDLE_SESSION_RESOURCE_RELEASE_HOURS = 72;
+export type UILayoutPreference = {
+  configured: boolean;
+  sidebarsSwapped: boolean;
+  gitDiffSideBySide: boolean;
+};
 
+function normalizeUILayoutPreference(value: unknown): UILayoutPreference {
+  const input = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    configured: input.configured === true,
+    sidebarsSwapped: input.sidebars_swapped === true,
+    gitDiffSideBySide: input.git_diff_side_by_side === true,
+  };
+}
+
+export async function fetchUILayoutPreference(): Promise<UILayoutPreference> {
+  return normalizeUILayoutPreference(
+    await protectedJSON(appPath("/api/preferences/ui-layout")),
+  );
+}
+
+export async function updateUILayoutPreference(
+  layout: Pick<UILayoutPreference, "sidebarsSwapped" | "gitDiffSideBySide">,
+): Promise<UILayoutPreference> {
+  return normalizeUILayoutPreference(
+    await protectedJSON(appPath("/api/preferences/ui-layout"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sidebars_swapped: layout.sidebarsSwapped,
+        git_diff_side_by_side: layout.gitDiffSideBySide,
+      }),
+    }),
+  );
+}
+
+export type ForkOwnership = "nested" | "detached";
+
+function normalizeForkOwnership(value: unknown): ForkOwnership {
+  const ownership = value && typeof value === "object" && "ownership" in value
+    ? String((value as { ownership?: unknown }).ownership || "")
+    : "";
+  return ownership === "detached" ? "detached" : "nested";
+}
+
+export async function fetchForkOwnershipPreference(): Promise<ForkOwnership> {
+  return normalizeForkOwnership(
+    await protectedJSON(appPath("/api/preferences/fork-ownership")),
+  );
+}
+
+export async function updateForkOwnershipPreference(
+  ownership: ForkOwnership,
+): Promise<ForkOwnership> {
+  return normalizeForkOwnership(
+    await protectedJSON(appPath("/api/preferences/fork-ownership"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ownership }),
+    }),
+  );
+}
+
+const DEFAULT_IDLE_SESSION_RESOURCE_RELEASE_HOURS = 72;
 function normalizeIdleSessionResourceReleasePreference(
   value: unknown,
 ): IdleSessionResourceReleasePreference {

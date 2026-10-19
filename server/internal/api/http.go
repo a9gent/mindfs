@@ -312,6 +312,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/file", h.handleFile)
 	r.Put("/api/file", h.protectedEndpoint(h.handleFileSave))
 	r.Post("/api/file", h.protectedEndpoint(h.handleFileCreate))
+	r.Post("/api/file/dir", h.protectedEndpoint(h.handleFileDirCreate))
 	r.Post("/api/file/operation", h.protectedEndpoint(h.handleFileOperation))
 	r.Get("/api/git/status", h.protectedEndpoint(h.handleGitStatus))
 	r.Get("/api/git/diff", h.protectedEndpoint(h.handleGitDiff))
@@ -346,6 +347,10 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/agents/release-idle", h.protectedEndpoint(h.handleAgentIdleRelease))
 	r.Get("/api/preferences/new-project-meta-location", h.protectedEndpoint(h.handleNewProjectMetaLocationPreferenceGet))
 	r.Put("/api/preferences/new-project-meta-location", h.protectedEndpoint(h.handleNewProjectMetaLocationPreferencePut))
+	r.Get("/api/preferences/ui-layout", h.protectedEndpoint(h.handleUILayoutPreferenceGet))
+	r.Put("/api/preferences/ui-layout", h.protectedEndpoint(h.handleUILayoutPreferencePut))
+	r.Get("/api/preferences/fork-ownership", h.protectedEndpoint(h.handleForkOwnershipPreferenceGet))
+	r.Put("/api/preferences/fork-ownership", h.protectedEndpoint(h.handleForkOwnershipPreferencePut))
 	r.Get("/api/replying-sessions", h.protectedEndpoint(h.handleReplyingSessions))
 	r.Get("/api/sessions/search", h.protectedEndpoint(h.handleSessionSearch))
 	r.Get("/api/sessions/children", h.protectedEndpoint(h.handleSessionChildren))
@@ -361,6 +366,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/sessions/{key}/messages", h.protectedEndpoint(h.handleSessionUserMessage))
 	r.Get("/api/sessions/{key}/related-files", h.protectedEndpoint(h.handleSessionRelatedFilesGet))
 	r.Post("/api/sessions/{key}/pin", h.protectedEndpoint(h.handleSessionPin))
+	r.Post("/api/sessions/{key}/parent", h.protectedEndpoint(h.handleSessionParent))
 	r.Post("/api/sessions/{key}/rename", h.protectedEndpoint(h.handleSessionRename))
 	r.Delete("/api/sessions/{key}/related-files", h.protectedEndpoint(h.handleSessionRelatedFilesDelete))
 	r.Delete("/api/sessions/{key}", h.protectedEndpoint(h.handleSessionDelete))
@@ -389,6 +395,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Get("/api/tasks/{id}/read/{resource}", h.protectedEndpoint(h.handleTaskRead))
 	r.Post("/api/tasks/{id}/orchestration/{operation}", h.protectedEndpoint(h.handleTaskOrchestration))
 	r.Post("/api/tasks/{id}/input", h.protectedEndpoint(h.handleKanbanTaskInputUpdate))
+	r.Post("/api/tasks/{id}/attach-session", h.protectedEndpoint(h.handleTaskAttachSession))
 	r.Post("/api/tasks/{id}/next", h.protectedEndpoint(h.handleKanbanTaskNext))
 	r.Post("/api/tasks/{id}/run-now", h.protectedEndpoint(h.handleKanbanTaskRunNow))
 	r.Post("/api/tasks/{id}/prev", h.protectedEndpoint(h.handleKanbanTaskPrev))
@@ -437,6 +444,11 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/agent-api-providers/test", h.protectedEndpoint(h.handleAgentAPIProviderTest))
 	r.Delete("/api/agent-api-providers", h.protectedEndpoint(h.handleAgentAPIProviderDelete))
 	r.Post("/api/agent-api-providers/switch", h.protectedEndpoint(h.handleAgentAPIProviderSwitch))
+	r.Put("/api/agent-api-providers/{id}/pinned", h.protectedEndpoint(h.handleAgentAPIProviderPinnedPut))
+	r.Post("/api/agent-api-providers/{id}/apply", h.protectedEndpoint(h.handleAgentAPIProviderApply))
+	r.Patch("/api/agents/{name}/metadata", h.protectedEndpoint(h.handleAgentMetadataPatch))
+	r.Get("/api/preferences/agent-visibility", h.protectedEndpoint(h.handleAgentVisibilityGet))
+	r.Put("/api/preferences/agent-visibility", h.protectedEndpoint(h.handleAgentVisibilityPut))
 	r.NotFound(h.handleNotFound)
 
 	return r
@@ -1151,6 +1163,45 @@ func (h *HTTPHandler) handleSessionPin(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, h.sessionListResponse(updated))
 }
 
+func (h *HTTPHandler) handleSessionParent(w http.ResponseWriter, r *http.Request) {
+	rootID := r.URL.Query().Get("root")
+	key := chi.URLParam(r, "key")
+	if strings.TrimSpace(key) == "" {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("session key required"))
+		return
+	}
+	var req struct {
+		ParentSessionKey string `json:"parent_session_key"`
+	}
+	// An empty body means "detach": the menu action has nothing else to say.
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid json body"))
+		return
+	}
+	updated, err := h.service().SetSessionParent(r.Context(), usecase.SetSessionParentInput{
+		RootID:           rootID,
+		Key:              key,
+		ParentSessionKey: strings.TrimSpace(req.ParentSessionKey),
+	})
+	if err != nil {
+		if session.IsNotFound(err) {
+			respondError(w, http.StatusNotFound, err)
+			return
+		}
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	if h.AppContext != nil {
+		// Re-parenting does not bump updated_at, so peers cannot pick it up with
+		// an incremental after_time fetch; tell them to reload the list instead.
+		h.AppContext.GetSessionStreamHub().BroadcastAll(WSResponse{
+			Type:    "sessions.changed",
+			Payload: map[string]any{"root_id": rootID},
+		})
+	}
+	respondJSON(w, http.StatusOK, h.sessionListResponse(updated))
+}
+
 func (h *HTTPHandler) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 	rootID := r.URL.Query().Get("root")
 	key := chi.URLParam(r, "key")
@@ -1158,13 +1209,62 @@ func (h *HTTPHandler) handleSessionDelete(w http.ResponseWriter, r *http.Request
 		respondError(w, http.StatusBadRequest, errInvalidRequest("session key required"))
 		return
 	}
+	queryBool := func(name string) (bool, error) {
+		raw := strings.TrimSpace(r.URL.Query().Get(name))
+		if raw == "" {
+			return false, nil
+		}
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return false, errInvalidRequest(name + " must be a boolean")
+		}
+		return parsed, nil
+	}
+	keepChildren, err := queryBool("keep_children")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	cascade, err := queryBool("cascade")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	if keepChildren && cascade {
+		// Contradictory: one keeps the subtree, the other removes it.
+		respondError(w, http.StatusBadRequest, errInvalidRequest("keep_children and cascade are mutually exclusive"))
+		return
+	}
 	uc := h.service()
 	if err := uc.DeleteSession(r.Context(), usecase.DeleteSessionInput{
-		RootID: rootID,
-		Key:    key,
+		RootID:       rootID,
+		Key:          key,
+		KeepChildren: keepChildren,
+		Cascade:      cascade,
 	}); err != nil {
+		var needsChoice *usecase.ErrDeleteNeedsChoice
+		if errors.As(err, &needsChoice) {
+			// The client believed the session had no children (its list may be
+			// filtered or paginated) and would have cascaded the whole subtree by
+			// omission. Nothing was deleted; report the real count so the client
+			// can ask the user.
+			respondJSON(w, http.StatusConflict, map[string]any{
+				"error":       "delete_needs_choice",
+				"child_count": needsChoice.ChildCount,
+			})
+			return
+		}
 		respondError(w, http.StatusNotFound, err)
 		return
+	}
+	if h.AppContext != nil {
+		// Re-parenting and cascade deletion both change rows in ways an
+		// incremental after_time fetch cannot see (re-parenting does not bump
+		// updated_at; deleted rows simply disappear), so peers must reload.
+		h.AppContext.GetSessionStreamHub().BroadcastAll(WSResponse{
+			Type:    "sessions.changed",
+			Payload: map[string]any{"root_id": rootID},
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1345,6 +1445,35 @@ type newProjectMetaLocationPreferenceRequest struct {
 	Location string `json:"location"`
 }
 
+type forkOwnershipPreferenceRequest struct {
+	Ownership string `json:"ownership"`
+}
+
+func (h *HTTPHandler) handleForkOwnershipPreferenceGet(w http.ResponseWriter, _ *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetPreferences() == nil {
+		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("preferences not configured"))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ownership": h.AppContext.GetPreferences().ForkOwnership()})
+}
+
+func (h *HTTPHandler) handleForkOwnershipPreferencePut(w http.ResponseWriter, r *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetPreferences() == nil {
+		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("preferences not configured"))
+		return
+	}
+	var req forkOwnershipPreferenceRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest(err.Error()))
+		return
+	}
+	if err := h.AppContext.GetPreferences().UpdateForkOwnership(req.Ownership); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest(err.Error()))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ownership": h.AppContext.GetPreferences().ForkOwnership()})
+}
+
 func (h *HTTPHandler) handleNewProjectMetaLocationPreferenceGet(w http.ResponseWriter, _ *http.Request) {
 	if h.AppContext == nil || h.AppContext.GetPreferences() == nil {
 		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("preferences not configured"))
@@ -1368,6 +1497,49 @@ func (h *HTTPHandler) handleNewProjectMetaLocationPreferencePut(w http.ResponseW
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"location": h.AppContext.GetPreferences().NewProjectMetaLocation()})
+}
+
+type uiLayoutPreferenceRequest struct {
+	SidebarsSwapped   *bool `json:"sidebars_swapped"`
+	GitDiffSideBySide *bool `json:"git_diff_side_by_side"`
+}
+
+func uiLayoutPreferenceResponse(layout preferences.UILayout) map[string]any {
+	return map[string]any{
+		"configured":            layout.Configured,
+		"sidebars_swapped":      layout.SidebarsSwapped,
+		"git_diff_side_by_side": layout.GitDiffSideBySide,
+	}
+}
+
+func (h *HTTPHandler) handleUILayoutPreferenceGet(w http.ResponseWriter, _ *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetPreferences() == nil {
+		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("preferences not configured"))
+		return
+	}
+	respondJSON(w, http.StatusOK, uiLayoutPreferenceResponse(h.AppContext.GetPreferences().UILayout()))
+}
+
+func (h *HTTPHandler) handleUILayoutPreferencePut(w http.ResponseWriter, r *http.Request) {
+	if h.AppContext == nil || h.AppContext.GetPreferences() == nil {
+		respondError(w, http.StatusServiceUnavailable, errInvalidRequest("preferences not configured"))
+		return
+	}
+	var req uiLayoutPreferenceRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest(err.Error()))
+		return
+	}
+	// Pointers, so a client that omits a key cannot silently flip it to false.
+	if req.SidebarsSwapped == nil || req.GitDiffSideBySide == nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest("sidebars_swapped and git_diff_side_by_side are required"))
+		return
+	}
+	if err := h.AppContext.GetPreferences().UpdateUILayout(*req.SidebarsSwapped, *req.GitDiffSideBySide); err != nil {
+		respondError(w, http.StatusBadRequest, errInvalidRequest(err.Error()))
+		return
+	}
+	respondJSON(w, http.StatusOK, uiLayoutPreferenceResponse(h.AppContext.GetPreferences().UILayout()))
 }
 
 func (h *HTTPHandler) handleIdleSessionResourceReleasePreferenceGet(w http.ResponseWriter, _ *http.Request) {
