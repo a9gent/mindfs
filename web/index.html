@@ -44,7 +44,9 @@
     <div id="root"></div>
     <script>
       (function () {
-        var notice = "版本太老，请重新安装最新版 mindfs";
+        // Resource error events do not expose the HTTP status or TLS failure reason.
+        // A failed entry asset alone is not evidence of an outdated installation.
+        var notice = "MindFS 页面资源加载失败。请检查网络连接和 HTTPS 证书，恢复后刷新页面；若仍失败，请检查服务端静态资源是否完整。";
         var shown = false;
         function isRelayNodePage() {
           return /^\/n\/[^/]+(?:\/|$)/.test(window.location.pathname);
@@ -62,7 +64,7 @@
           if (parsed.origin !== window.location.origin) {
             return false;
           }
-          return /^\/(?:mindfs-assets|assets)\/index-[^/]+\.(?:js|css)$/i.test(parsed.pathname);
+          return /^\/(?:n\/[^/]+\/)?(?:mindfs-assets|assets)\/index-[^/]+\.(?:js|css)$/i.test(parsed.pathname);
         }
         function showNotice() {
           if (shown || !isRelayNodePage()) {

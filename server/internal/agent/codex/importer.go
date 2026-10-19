@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"mindfs/server/internal/agent/historycache"
 	"mindfs/server/internal/apperr"
 
 	agenttypes "mindfs/server/internal/agent/types"
@@ -121,7 +122,13 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		return agenttypes.ImportedExternalSession{}, errors.New("agent session id required")
 	}
 	if file, ok := i.lookupSessionFile(targetID, rootPath); ok {
-		return i.importSessionFile(file, in.AfterTimestamp, in.Cursor)
+		return i.importSessionFile(file, in.AfterTimestamp, in.Cursor, in.LookupCursor)
+	}
+	if in.Cursor.SourcePath != "" {
+		if file, ok, err := inspectCodexSessionFile(in.Cursor.SourcePath); err == nil && ok && file.AgentSessionID == targetID {
+			i.storeSessionFiles([]codexSessionFile{file})
+			return i.importSessionFile(file, in.AfterTimestamp, in.Cursor, in.LookupCursor)
+		}
 	}
 	files, err := i.scanSessionFiles(context.Background(), time.Time{}, time.Time{}, int(^uint(0)>>1), nil)
 	if err != nil {
@@ -131,25 +138,29 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		if file.AgentSessionID != targetID {
 			continue
 		}
-		return i.importSessionFile(file, in.AfterTimestamp, in.Cursor)
+		return i.importSessionFile(file, in.AfterTimestamp, in.Cursor, in.LookupCursor)
 	}
 	return agenttypes.ImportedExternalSession{}, errors.New("external session not found")
 }
 
-func (i *Importer) importSessionFile(file codexSessionFile, after time.Time, previous agenttypes.ExternalSessionCursor) (agenttypes.ImportedExternalSession, error) {
+func (i *Importer) importSessionFile(file codexSessionFile, after time.Time, previous agenttypes.ExternalSessionCursor, lookup func(string) (agenttypes.ExternalSessionCursor, error)) (agenttypes.ImportedExternalSession, error) {
+	if after.IsZero() {
+		codexHistoryCache.Forget(file.Path)
+		codexRelationsCache.Forget(file.Path)
+	}
 	cursor, unchanged, err := externalSessionFileCursor(file.Path, previous)
 	if err != nil {
 		return agenttypes.ImportedExternalSession{}, err
 	}
-	if unchanged {
-		return agenttypes.ImportedExternalSession{Agent: i.agentName, AgentSessionID: file.AgentSessionID, Cwd: file.Cwd, Title: file.Title, Cursor: cursor}, nil
+	var exchanges []agenttypes.ImportedExchange
+	if !unchanged {
+		exchanges, err = readCodexImportedExchanges(file.Path, after)
 	}
-	exchanges, err := readCodexImportedExchanges(file.Path, after)
 	if err != nil {
 		log.Printf("[agent/codex/importer] import session read failed session_id=%s path=%s err=%v", file.AgentSessionID, file.Path, err)
 		return agenttypes.ImportedExternalSession{}, err
 	}
-	subagents, err := i.readImportedSubagents(file)
+	subagents, err := i.readImportedSubagents(file, lookup)
 	if err != nil {
 		return agenttypes.ImportedExternalSession{}, err
 	}
@@ -170,6 +181,9 @@ func externalSessionFileCursor(path string, previous agenttypes.ExternalSessionC
 		return agenttypes.ExternalSessionCursor{}, false, err
 	}
 	cursor := agenttypes.ExternalSessionCursor{SourcePath: filepath.Clean(path), Offset: info.Size(), ModTimeUnixNano: info.ModTime().UnixNano()}
+	if !historycache.Complete(path, info.Size()) {
+		cursor.Offset = 0
+	}
 	unchanged := previous.Offset > 0 && filepath.Clean(previous.SourcePath) == cursor.SourcePath && previous.Offset == cursor.Offset && previous.ModTimeUnixNano == cursor.ModTimeUnixNano
 	return cursor, unchanged, nil
 }
@@ -179,7 +193,7 @@ type codexSpawnRelation struct {
 	Title            string
 }
 
-func (i *Importer) readImportedSubagents(root codexSessionFile) ([]agenttypes.ImportedSubagentSession, error) {
+func (i *Importer) readImportedSubagents(root codexSessionFile, lookups ...func(string) (agenttypes.ExternalSessionCursor, error)) ([]agenttypes.ImportedSubagentSession, error) {
 	candidates, err := sortedSessionJSONLFiles(i.baseDir)
 	if err != nil {
 		return nil, err
@@ -195,13 +209,6 @@ func (i *Importer) readImportedSubagents(root codexSessionFile) ([]agenttypes.Im
 		}
 	}
 	relationsByParent := make(map[string]map[string]codexSpawnRelation)
-	for id, file := range files {
-		relations, err := readCodexSpawnRelations(file.Path)
-		if err != nil {
-			return nil, err
-		}
-		relationsByParent[id] = relations
-	}
 	items := make([]agenttypes.ImportedSubagentSession, 0)
 	added := map[string]bool{root.AgentSessionID: true}
 	for {
@@ -210,9 +217,38 @@ func (i *Importer) readImportedSubagents(root codexSessionFile) ([]agenttypes.Im
 			if id == root.AgentSessionID || added[id] || !added[file.ParentAgentSessionID] {
 				continue
 			}
-			exchanges, err := readCodexImportedExchanges(file.Path, time.Time{})
+			var previous agenttypes.ExternalSessionCursor
+			if len(lookups) > 0 && lookups[0] != nil {
+				previous, err = lookups[0](id)
+				if err != nil {
+					return nil, err
+				}
+			}
+			cursor, unchanged, err := externalSessionFileCursor(file.Path, previous)
 			if err != nil {
 				return nil, err
+			}
+			var exchanges []agenttypes.ImportedExchange
+			if len(lookups) == 0 || lookups[0] == nil {
+				codexHistoryCache.Forget(file.Path)
+				codexRelationsCache.Forget(file.Path)
+			}
+			if !unchanged {
+				exchanges, err = readCodexImportedExchanges(file.Path, time.Time{})
+			}
+			if err != nil {
+				return nil, err
+			}
+			if _, ok := relationsByParent[file.ParentAgentSessionID]; !ok {
+				parentFile := files[file.ParentAgentSessionID]
+				if file.ParentAgentSessionID == root.AgentSessionID {
+					parentFile = root
+				}
+				relations, err := readCodexSpawnRelations(parentFile.Path)
+				if err != nil {
+					return nil, err
+				}
+				relationsByParent[file.ParentAgentSessionID] = relations
 			}
 			relation := relationsByParent[file.ParentAgentSessionID][id]
 			parentID := file.ParentAgentSessionID
@@ -226,6 +262,8 @@ func (i *Importer) readImportedSubagents(root codexSessionFile) ([]agenttypes.Im
 				ParentToolCallID:     relation.ParentToolCallID,
 				Title:                title,
 				Exchanges:            exchanges,
+				Cursor:               cursor,
+				Unchanged:            unchanged,
 			})
 			added[id] = true
 			progressed = true
@@ -237,15 +275,16 @@ func (i *Importer) readImportedSubagents(root codexSessionFile) ([]agenttypes.Im
 	return items, nil
 }
 
+var codexRelationsCache historycache.Cache[map[string]codexSpawnRelation]
+
 func readCodexSpawnRelations(path string) (map[string]codexSpawnRelation, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, apperr.Wrap("open", path, err)
-	}
-	defer file.Close()
+	return codexRelationsCache.Read(path, newCodexRelationsParser, nil)
+}
+
+func newCodexRelationsParser() historycache.Parser[map[string]codexSpawnRelation] {
 	callDetails := make(map[string]codexSpawnRelation)
 	relations := make(map[string]codexSpawnRelation)
-	err = forEachJSONLLine(file, func(line string) error {
+	feed := func(line string) error {
 		var raw map[string]any
 		if json.Unmarshal([]byte(line), &raw) != nil || raw["type"] != "response_item" {
 			return nil
@@ -282,8 +321,8 @@ func readCodexSpawnRelations(path string) (map[string]codexSpawnRelation, error)
 			}
 		}
 		return nil
-	})
-	return relations, err
+	}
+	return historycache.Parser[map[string]codexSpawnRelation]{Feed: feed, Snapshot: func() map[string]codexSpawnRelation { return relations }}
 }
 
 func (i *Importer) ResolveForkPointByAgentTurnIndex(ctx context.Context, in agenttypes.ResolveForkPointInput) (agenttypes.ResolveForkPointOutput, error) {
@@ -488,7 +527,22 @@ func readCodexSessionTitles(path string) map[string]string {
 	return titles
 }
 
+type codexFileMetadata struct {
+	File  codexSessionFile
+	Valid bool
+}
+
+var codexMetadataCache historycache.Metadata[codexFileMetadata]
+
 func inspectCodexSessionFile(path string) (codexSessionFile, bool, error) {
+	meta, err := codexMetadataCache.Read(path, func() (codexFileMetadata, error) {
+		file, valid, err := inspectCodexSessionFileUncached(path)
+		return codexFileMetadata{File: file, Valid: valid}, err
+	})
+	return meta.File, meta.Valid, err
+}
+
+func inspectCodexSessionFileUncached(path string) (codexSessionFile, bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return codexSessionFile{}, false, apperr.Wrap("open", path, err)
@@ -581,12 +635,32 @@ func readCodexImportedExchanges(path string, after time.Time) ([]agenttypes.Impo
 	return items, nil
 }
 
+var codexHistoryCache historycache.Cache[[]importedExchangeLocator]
+
 func readCodexImportedExchangeLocators(path string, after time.Time) ([]importedExchangeLocator, error) {
+	return codexHistoryCache.Read(path, func() historycache.Parser[[]importedExchangeLocator] {
+		return newCodexHistoryParser(path)
+	}, func(items []importedExchangeLocator) []importedExchangeLocator {
+		if after.IsZero() {
+			return items
+		}
+		filtered := make([]importedExchangeLocator, 0)
+		for _, item := range items {
+			if !item.Timestamp.IsZero() && item.Timestamp.After(after) {
+				filtered = append(filtered, item)
+			}
+		}
+		return filtered
+	})
+}
+
+func newCodexHistoryParser(path string) historycache.Parser[[]importedExchangeLocator] {
 	items := make([]agenttypes.ImportedExchange, 0)
 	toolLocations := make(map[string]importedToolLocation)
 	toolOrdinal := 0
 	sessionShell := ""
-	err := forEachCodexHistoryLine(path, -1, map[string]bool{}, func(line string) error {
+	reusable := true
+	feed := func(line string) error {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			return nil
@@ -659,11 +733,18 @@ func readCodexImportedExchangeLocators(path string, after time.Time) ([]imported
 			}
 		}
 		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	return codexExchangeLocatorsAfter(items, after), nil
+	return historycache.Parser[[]importedExchangeLocator]{
+		Feed: func(line string) error {
+			// Fork bases have independent lifetimes; revalidate them on each read.
+			if strings.Contains(line, "\"history_base\"") {
+				reusable = false
+			}
+			return visitCodexHistoryLine(path, map[string]bool{path: true}, feed, line)
+		},
+		Snapshot: func() []importedExchangeLocator { return codexExchangeLocatorsAfter(items, time.Time{}) },
+		Reusable: func() bool { return reusable },
+	}
 }
 
 // Paginated forks store a reference to an immutable parent prefix, not a copy.
@@ -691,56 +772,60 @@ func forEachCodexHistoryLine(path string, limit int64, visiting map[string]bool,
 		reader = io.LimitReader(f, limit)
 	}
 	return forEachJSONLLine(reader, func(line string) error {
-		var record struct {
-			Type    string `json:"type"`
-			Payload struct {
-				HistoryMode string `json:"history_mode"`
-				Base        *struct {
-					ThreadID      string `json:"thread_id"`
-					EndByteOffset int64  `json:"end_byte_offset"`
-				} `json:"history_base"`
-			} `json:"payload"`
-		}
-		if json.Unmarshal([]byte(line), &record) == nil && record.Type == "session_meta" && record.Payload.HistoryMode == "paginated" && record.Payload.Base != nil {
-			base := record.Payload.Base
-			if base.ThreadID == "" || base.EndByteOffset <= 0 {
-				return errors.New("invalid Codex history base")
-			}
-			searchRoot := filepath.Dir(path)
-			sessionsRoot := false
-			for dir := searchRoot; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
-				if filepath.Base(dir) == "sessions" || filepath.Base(dir) == "archived_sessions" {
-					searchRoot = filepath.Dir(dir)
-					sessionsRoot = true
-					break
-				}
-			}
-			parent := ""
-			err := filepath.WalkDir(searchRoot, func(candidate string, entry os.DirEntry, walkErr error) error {
-				if walkErr != nil {
-					return nil
-				}
-				if sessionsRoot && entry.IsDir() && filepath.Dir(candidate) == searchRoot && entry.Name() != "sessions" && entry.Name() != "archived_sessions" {
-					return filepath.SkipDir
-				}
-				if !entry.IsDir() && strings.HasSuffix(entry.Name(), "-"+base.ThreadID+".jsonl") {
-					parent = candidate
-					return filepath.SkipAll
-				}
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-			if parent == "" {
-				return fmt.Errorf("Codex history base %s not found", base.ThreadID)
-			}
-			if err := forEachCodexHistoryLine(parent, base.EndByteOffset, visiting, visit); err != nil {
-				return err
-			}
-		}
-		return visit(line)
+		return visitCodexHistoryLine(path, visiting, visit, line)
 	})
+}
+
+func visitCodexHistoryLine(path string, visiting map[string]bool, visit func(string) error, line string) error {
+	var record struct {
+		Type    string `json:"type"`
+		Payload struct {
+			HistoryMode string `json:"history_mode"`
+			Base        *struct {
+				ThreadID      string `json:"thread_id"`
+				EndByteOffset int64  `json:"end_byte_offset"`
+			} `json:"history_base"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal([]byte(line), &record) == nil && record.Type == "session_meta" && record.Payload.HistoryMode == "paginated" && record.Payload.Base != nil {
+		base := record.Payload.Base
+		if base.ThreadID == "" || base.EndByteOffset <= 0 {
+			return errors.New("invalid Codex history base")
+		}
+		searchRoot := filepath.Dir(path)
+		sessionsRoot := false
+		for dir := searchRoot; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+			if filepath.Base(dir) == "sessions" || filepath.Base(dir) == "archived_sessions" {
+				searchRoot = filepath.Dir(dir)
+				sessionsRoot = true
+				break
+			}
+		}
+		parent := ""
+		err := filepath.WalkDir(searchRoot, func(candidate string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if sessionsRoot && entry.IsDir() && filepath.Dir(candidate) == searchRoot && entry.Name() != "sessions" && entry.Name() != "archived_sessions" {
+				return filepath.SkipDir
+			}
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), "-"+base.ThreadID+".jsonl") {
+				parent = candidate
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if parent == "" {
+			return fmt.Errorf("Codex history base %s not found", base.ThreadID)
+		}
+		if err := forEachCodexHistoryLine(parent, base.EndByteOffset, visiting, visit); err != nil {
+			return err
+		}
+	}
+	return visit(line)
 }
 
 func extractImportedCodexProposedPlan(text string) (string, []agenttypes.ImportedExchangeAux) {

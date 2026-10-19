@@ -852,6 +852,7 @@ func (s *AppContext) BroadcastAgentStatusChanged(agentName string) {
 			"default_model_id":                 status.DefaultModelID,
 			"default_effort":                   status.DefaultEffort,
 			"default_fast_service":             status.DefaultFastService,
+			"last_used":                        status.LastUsed,
 			"supports_api_provider_switch":     status.SupportsAPIProviderSwitch,
 			"supported_api_provider_protocols": status.SupportedAPIProviderProtocols,
 			"supports_fast_service":            status.SupportsFastService,

@@ -1,5 +1,11 @@
 import type { AgentModelInfo } from "../services/agents";
 
+/** Keep the original order within both groups; pinning only changes priority. */
+export function orderPinnedModels(models: AgentModelInfo[], pinned: readonly string[]): AgentModelInfo[] {
+  const ids = new Set(pinned);
+  return [...models.filter((model) => ids.has(model.id)), ...models.filter((model) => !ids.has(model.id))];
+}
+
 /** 输入关键词实时过滤：按 id / 名称 / 描述做大小写不敏感匹配。 */
 export function filterAgentModels(models: AgentModelInfo[], query: string): AgentModelInfo[] {
   const keyword = query.trim().toLowerCase();

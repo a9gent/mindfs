@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"mindfs/server/internal/agent/historycache"
 	"mindfs/server/internal/apperr"
 
 	agenttypes "mindfs/server/internal/agent/types"
@@ -121,7 +122,13 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		return agenttypes.ImportedExternalSession{}, errors.New("agent session id required")
 	}
 	if file, ok := i.lookupSessionFile(targetID, rootPath); ok {
-		return i.importSessionFile(file, in.AfterTimestamp, in.Cursor)
+		return i.importSessionFile(file, in.AfterTimestamp, in.Cursor, in.LookupCursor)
+	}
+	if in.Cursor.SourcePath != "" {
+		if file, ok, err := inspectClaudeSessionFile(in.Cursor.SourcePath); err == nil && ok && file.AgentSessionID == targetID {
+			i.storeSessionFiles([]claudeSessionFile{file})
+			return i.importSessionFile(file, in.AfterTimestamp, in.Cursor, in.LookupCursor)
+		}
 	}
 	files, err := i.scanSessionFiles(context.Background(), rootPath, time.Time{}, time.Time{}, int(^uint(0)>>1), nil)
 	if err != nil {
@@ -131,25 +138,29 @@ func (i *Importer) ImportExternalSession(_ context.Context, in agenttypes.Import
 		if file.AgentSessionID != targetID {
 			continue
 		}
-		return i.importSessionFile(file, in.AfterTimestamp, in.Cursor)
+		return i.importSessionFile(file, in.AfterTimestamp, in.Cursor, in.LookupCursor)
 	}
 	return agenttypes.ImportedExternalSession{}, errors.New("external session not found")
 }
 
-func (i *Importer) importSessionFile(file claudeSessionFile, after time.Time, previous agenttypes.ExternalSessionCursor) (agenttypes.ImportedExternalSession, error) {
+func (i *Importer) importSessionFile(file claudeSessionFile, after time.Time, previous agenttypes.ExternalSessionCursor, lookup func(string) (agenttypes.ExternalSessionCursor, error)) (agenttypes.ImportedExternalSession, error) {
+	if after.IsZero() {
+		claudeHistoryCache.Forget(file.Path)
+		claudeRelationsCache.Forget(file.Path)
+	}
 	cursor, unchanged, err := externalSessionFileCursor(file.Path, previous)
 	if err != nil {
 		return agenttypes.ImportedExternalSession{}, err
 	}
-	if unchanged {
-		return agenttypes.ImportedExternalSession{Agent: i.agentName, AgentSessionID: file.AgentSessionID, Cwd: file.Cwd, Cursor: cursor}, nil
+	var exchanges []agenttypes.ImportedExchange
+	if !unchanged {
+		exchanges, err = readClaudeImportedExchanges(file.Path, after)
 	}
-	exchanges, err := readClaudeImportedExchanges(file.Path, after)
 	if err != nil {
 		log.Printf("[agent/claude/importer] import session read failed session_id=%s path=%s err=%v", file.AgentSessionID, file.Path, err)
 		return agenttypes.ImportedExternalSession{}, err
 	}
-	subagents, err := readClaudeImportedSubagents(file.Path)
+	subagents, err := readClaudeImportedSubagents(file.Path, lookup)
 	if err != nil {
 		log.Printf("[agent/claude/importer] import subagents failed session_id=%s path=%s err=%v", file.AgentSessionID, file.Path, err)
 		return agenttypes.ImportedExternalSession{}, err
@@ -170,6 +181,9 @@ func externalSessionFileCursor(path string, previous agenttypes.ExternalSessionC
 		return agenttypes.ExternalSessionCursor{}, false, err
 	}
 	cursor := agenttypes.ExternalSessionCursor{SourcePath: filepath.Clean(path), Offset: info.Size(), ModTimeUnixNano: info.ModTime().UnixNano()}
+	if !historycache.Complete(path, info.Size()) {
+		cursor.Offset = 0
+	}
 	unchanged := previous.Offset > 0 && filepath.Clean(previous.SourcePath) == cursor.SourcePath && previous.Offset == cursor.Offset && previous.ModTimeUnixNano == cursor.ModTimeUnixNano
 	return cursor, unchanged, nil
 }
@@ -182,7 +196,7 @@ type claudeSubagentRelation struct {
 	Model            string
 }
 
-func readClaudeImportedSubagents(parentPath string) ([]agenttypes.ImportedSubagentSession, error) {
+func readClaudeImportedSubagents(parentPath string, lookups ...func(string) (agenttypes.ExternalSessionCursor, error)) ([]agenttypes.ImportedSubagentSession, error) {
 	dir := filepath.Join(strings.TrimSuffix(parentPath, filepath.Ext(parentPath)), "subagents")
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -213,6 +227,10 @@ func readClaudeImportedSubagents(parentPath string) ([]agenttypes.ImportedSubage
 		return nil, err
 	}
 	for agentID, path := range pathsByAgentID {
+		if len(lookups) == 0 || lookups[0] == nil {
+			claudeHistoryCache.Forget(path)
+			claudeRelationsCache.Forget(path)
+		}
 		if err := collectClaudeSubagentRelations(path, agentID, relations); err != nil {
 			return nil, err
 		}
@@ -231,7 +249,21 @@ func readClaudeImportedSubagents(parentPath string) ([]agenttypes.ImportedSubage
 			if relation.ParentAgentID != "" && !added[relation.ParentAgentID] {
 				continue
 			}
-			exchanges, err := readClaudeImportedExchanges(pathsByAgentID[agentID], time.Time{})
+			var previous agenttypes.ExternalSessionCursor
+			if len(lookups) > 0 && lookups[0] != nil {
+				previous, err = lookups[0]("claude-subagent:" + agentID)
+				if err != nil {
+					return nil, err
+				}
+			}
+			cursor, unchanged, err := externalSessionFileCursor(pathsByAgentID[agentID], previous)
+			if err != nil {
+				return nil, err
+			}
+			var exchanges []agenttypes.ImportedExchange
+			if !unchanged {
+				exchanges, err = readClaudeImportedExchanges(pathsByAgentID[agentID], time.Time{})
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -246,6 +278,8 @@ func readClaudeImportedSubagents(parentPath string) ([]agenttypes.ImportedSubage
 				Title:                relation.Title,
 				Model:                relation.Model,
 				Exchanges:            exchanges,
+				Cursor:               cursor,
+				Unchanged:            unchanged,
 			})
 			added[agentID] = true
 			delete(remaining, agentID)
@@ -281,14 +315,24 @@ func inspectClaudeSubagentID(path string) (string, error) {
 	return agentID, err
 }
 
+var claudeRelationsCache historycache.Cache[map[string]claudeSubagentRelation]
+
 func collectClaudeSubagentRelations(path, parentAgentID string, relations map[string]claudeSubagentRelation) error {
-	file, err := os.Open(path)
+	items, err := claudeRelationsCache.Read(path, newClaudeRelationsParser, nil)
 	if err != nil {
-		return apperr.Wrap("open", path, err)
+		return err
 	}
-	defer file.Close()
+	for id, relation := range items {
+		relation.ParentAgentID = parentAgentID
+		relations[id] = relation
+	}
+	return nil
+}
+
+func newClaudeRelationsParser() historycache.Parser[map[string]claudeSubagentRelation] {
+	relations := make(map[string]claudeSubagentRelation)
 	callDetails := make(map[string]claudeSubagentRelation)
-	return forEachJSONLLine(file, func(line string) error {
+	feed := func(line string) error {
 		var raw map[string]any
 		if json.Unmarshal([]byte(line), &raw) != nil {
 			return nil
@@ -305,7 +349,6 @@ func collectClaudeSubagentRelations(path, parentAgentID string, relations map[st
 				input, _ := block["input"].(map[string]any)
 				callID := strings.TrimSpace(asString(block["id"]))
 				callDetails[callID] = claudeSubagentRelation{
-					ParentAgentID:    parentAgentID,
 					ParentToolCallID: callID,
 					Title:            firstNonEmpty(asString(input["description"]), asString(input["subagent_type"]), "Subagent"),
 					Model:            strings.TrimSpace(asString(input["model"])),
@@ -327,7 +370,6 @@ func collectClaudeSubagentRelations(path, parentAgentID string, relations map[st
 		}
 		relation := callDetails[callID]
 		relation.AgentID = agentID
-		relation.ParentAgentID = parentAgentID
 		relation.ParentToolCallID = callID
 		if relation.Title == "" {
 			relation.Title = firstNonEmpty(asString(result["agentType"]), "Subagent")
@@ -337,7 +379,8 @@ func collectClaudeSubagentRelations(path, parentAgentID string, relations map[st
 		}
 		relations[agentID] = relation
 		return nil
-	})
+	}
+	return historycache.Parser[map[string]claudeSubagentRelation]{Feed: feed, Snapshot: func() map[string]claudeSubagentRelation { return relations }}
 }
 
 func (i *Importer) ResolveForkPointByAgentTurnIndex(ctx context.Context, in agenttypes.ResolveForkPointInput) (agenttypes.ResolveForkPointOutput, error) {
@@ -661,16 +704,27 @@ func readClaudeImportedExchanges(path string, after time.Time) ([]agenttypes.Imp
 	return items, nil
 }
 
-func readClaudeImportedExchangeLocators(path string, after time.Time) ([]importedExchangeLocator, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, apperr.Wrap("open", path, err)
-	}
-	defer file.Close()
+var claudeHistoryCache historycache.Cache[[]importedExchangeLocator]
 
+func readClaudeImportedExchangeLocators(path string, after time.Time) ([]importedExchangeLocator, error) {
+	return claudeHistoryCache.Read(path, newClaudeHistoryParser, func(items []importedExchangeLocator) []importedExchangeLocator {
+		if after.IsZero() {
+			return items
+		}
+		filtered := make([]importedExchangeLocator, 0)
+		for _, item := range items {
+			if !item.Timestamp.IsZero() && item.Timestamp.After(after) {
+				filtered = append(filtered, item)
+			}
+		}
+		return filtered
+	})
+}
+
+func newClaudeHistoryParser() historycache.Parser[[]importedExchangeLocator] {
 	items := make([]importedExchangeLocator, 0)
 	toolLocations := make(map[string]importedToolLocation)
-	err = forEachJSONLLine(file, func(line string) error {
+	feed := func(line string) error {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			return nil
@@ -722,21 +776,8 @@ func readClaudeImportedExchangeLocators(path string, after time.Time) ([]importe
 			}
 		}
 		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	if after.IsZero() {
-		return items, nil
-	}
-	filtered := make([]importedExchangeLocator, 0, len(items))
-	for _, item := range items {
-		if item.Timestamp.IsZero() || !item.Timestamp.After(after) {
-			continue
-		}
-		filtered = append(filtered, item)
-	}
-	return filtered, nil
+	return historycache.Parser[[]importedExchangeLocator]{Feed: feed, Snapshot: func() []importedExchangeLocator { return items }}
 }
 
 var errStopJSONL = errors.New("stop jsonl")

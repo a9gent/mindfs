@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"mindfs/server/internal/agent"
@@ -79,7 +78,7 @@ func TestSwitchAgentConfigClearsExistingEnvWhenBackupHasNoEnv(t *testing.T) {
 	}
 }
 
-func TestSwitchAgentConfigPreservesProviderForCustomNamedCodexAgent(t *testing.T) {
+func TestSwitchAgentConfigRestoresProviderFromBackupForCustomNamedCodexAgent(t *testing.T) {
 	home := t.TempDir()
 	testutil.IsolateUserDirs(t, home)
 	configPath := filepath.Join(home, "agents.json")
@@ -119,8 +118,23 @@ func TestSwitchAgentConfigPreservesProviderForCustomNamedCodexAgent(t *testing.T
 		t.Fatalf("read switched config: %v", err)
 	}
 	got := string(payload)
-	if !strings.Contains(got, `model_provider = "custom"`) || !strings.Contains(got, "[model_providers.custom]") || strings.Contains(got, "[model_providers.target]") {
-		t.Fatalf("switched config changed channel identity: %s", got)
+	if got != "model_provider = \"target\"\n[model_providers.target]\nname = \"target\"\n" {
+		t.Fatalf("switched config differs from backup: %s", got)
+	}
+	// A backup using the default provider must not regain a custom selector.
+	const officialConfig = "model = \"gpt-test\"\n"
+	if err := os.WriteFile(backupPath, []byte(officialConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, needsConfirm, err := switchAgentConfig(agentConfigSwitchRequest{ID: entry.ID, ConfirmOverwrite: true}, nil); err != nil || needsConfirm {
+		t.Fatalf("switch default-provider backup: needsConfirm=%t err=%v", needsConfirm, err)
+	}
+	payload, err = os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(payload) != officialConfig {
+		t.Fatalf("default-provider backup was rewritten: %s", payload)
 	}
 }
 

@@ -311,16 +311,15 @@ func (s *Service) SyncExternalSessionDelta(ctx context.Context, in SyncExternalS
 		Agent:          agentName,
 		AgentSessionID: binding.AgentSessionID,
 	}
-	// Child-agent JSONL files may keep growing without changing the root file.
-	// Keep the root cursor fast path only when there are no imported children.
-	children, err := manager.List(ctx, session.ListOptions{ParentSessionKey: current.Key, Limit: 1})
-	if err != nil {
-		return out, err
-	}
 	if !in.Full {
 		importInput.AfterTimestamp = lastTimestamp
-		if len(children) == 0 {
-			importInput.Cursor = binding.ExternalCursor()
+		importInput.Cursor = binding.ExternalCursor()
+		importInput.LookupCursor = func(agentSessionID string) (agenttypes.ExternalSessionCursor, error) {
+			childBinding, err := manager.FindAgentBindingByAgentSession(ctx, agentName, agentSessionID)
+			if err != nil || childBinding == nil {
+				return agenttypes.ExternalSessionCursor{}, err
+			}
+			return childBinding.ExternalCursor(), nil
 		}
 	}
 	imported, err := importer.ImportExternalSession(ctx, importInput)
@@ -428,6 +427,11 @@ func syncImportedSubagentSessions(
 			if err != nil {
 				return importedCount, err
 			}
+			if item.Unchanged && binding != nil {
+				sessionsByAgentID[agentSessionID] = child
+				progressed = true
+				continue
+			}
 			for _, exchange := range externalSessionDeltaAfterCtxSeq(item.Exchanges, start) {
 				added, err := appendImportedExchange(ctx, manager, child, agentName, exchange)
 				if err != nil {
@@ -443,6 +447,11 @@ func syncImportedSubagentSessions(
 			}
 			if err := manager.UpdateAgentState(ctx, latest, agentName, len(latest.Exchanges), agentSessionID); err != nil {
 				return importedCount, err
+			}
+			if item.Cursor.SourcePath != "" {
+				if err := manager.UpdateExternalSessionCursor(ctx, child.Key, agentName, item.Cursor); err != nil {
+					return importedCount, err
+				}
 			}
 			sessionsByAgentID[agentSessionID] = latest
 			progressed = true

@@ -1,6 +1,48 @@
 import { protectedJSON } from "./api";
 import { appPath } from "./base";
 
+function pinnedModels(value: unknown): string[] {
+  const models = (value as { models?: unknown } | null)?.models;
+  return Array.isArray(models) ? models.filter((id): id is string => typeof id === "string") : [];
+}
+
+let modelPinsRevision = 0;
+const modelPinListeners = new Set<() => void>();
+const modelPinCache = new Map<string, { models: string[]; revision: number }>();
+const modelPinKey = (scope: string, agent: string) => `${scope}\u0000${agent}`;
+export const getModelPinsRevision = () => modelPinsRevision;
+export function subscribeModelPins(listener: () => void): () => void {
+  modelPinListeners.add(listener);
+  return () => { modelPinListeners.delete(listener); };
+}
+export function getModelPins(agent: string, fallback: string[] = []): string[] {
+  return modelPinCache.get(modelPinKey(appPath("/"), agent))?.models ?? fallback;
+}
+
+// Hydrate from the existing Agent list. A response that started before a pin
+// was saved must not overwrite that newer local result.
+export function hydrateModelPins(agents: { name: string; pinned_models?: string[] }[], scope: string, requestRevision: number): void {
+  const revision = ++modelPinsRevision;
+  for (const agent of agents) {
+    const key = modelPinKey(scope, agent.name);
+    if ((modelPinCache.get(key)?.revision ?? 0) > requestRevision) continue;
+    modelPinCache.set(key, { models: agent.pinned_models ?? [], revision });
+  }
+  modelPinListeners.forEach((listener) => listener());
+}
+
+export async function setModelPinned(agent: string, model: string, pinned: boolean): Promise<string[]> {
+  const scope = appPath("/");
+  const models = pinnedModels(await protectedJSON(appPath("/api/preferences/model-pins"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent, model, pinned }),
+  }));
+  modelPinCache.set(modelPinKey(scope, agent), { models, revision: ++modelPinsRevision });
+  modelPinListeners.forEach((listener) => listener());
+  return models;
+}
+
 export type SessionNamingPreference = {
   agent: string;
   model: string;

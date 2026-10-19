@@ -52,8 +52,8 @@ github.com/tklauser/numcpus v0.11.0 h1:nSTwhKH5e1dMNsCdVBukSZrURJRoHbSEQjdEbY+9R
 github.com/tklauser/numcpus v0.11.0/go.mod h1:z+LwcLq54uWZTX0u/bGobaV34u6V7KNlTZejzM6/3MQ=
 github.com/yandc/acp-go-sdk v0.0.0-20260709074204-a1ec7b200d08 h1:LRTQubOsvE3qqfmXFL1LXgZdAaYr6fwIoyHEdsHpyC4=
 github.com/yandc/acp-go-sdk v0.0.0-20260709074204-a1ec7b200d08/go.mod h1:yKzM/3R9uELp4+nBAwwtkS0aN1FOFjo11CNPy37yFko=
-github.com/yandc/claude-agent-sdk-go v0.0.0-20260831075240-a5d51881486c h1:2qCaVJM5GEBswJxPVB5ucBPpkkg4OwteIFZj8ooyBS0=
-github.com/yandc/claude-agent-sdk-go v0.0.0-20260831075240-a5d51881486c/go.mod h1:F0UH/dW/gpCuTfWRWa2qwT18HeiYwUTSd+Q6KSFHIjo=
+github.com/yandc/claude-agent-sdk-go v0.0.0-20261013070940-2ec07cb10268 h1:Tghiv6sowxVyXT2+zLZuWVL/TxWdyuG8sHzKkyl45MM=
+github.com/yandc/claude-agent-sdk-go v0.0.0-20261013070940-2ec07cb10268/go.mod h1:F0UH/dW/gpCuTfWRWa2qwT18HeiYwUTSd+Q6KSFHIjo=
 github.com/yandc/codex-go-sdk v0.0.0-20260928161246-a990e9b37338 h1:XjjIj9s+YL15cNb6ehbzPmXrOB/xPc/I0shyh63KdLQ=
 github.com/yandc/codex-go-sdk v0.0.0-20260928161246-a990e9b37338/go.mod h1:YTvQqlQmaABafBpZf5dftTiLj03hBgoR8a9UTZR/TNQ=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=

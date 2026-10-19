@@ -1,9 +1,11 @@
 import { appPath } from "./base";
 import { protectedAPIReady, protectedJSON } from "./api";
+import { getModelPinsRevision, hydrateModelPins } from "./preferences";
 
 // Agent status service
 
 export type AgentStatus = {
+	pinned_models?: string[];
   name: string;
   protocol?: string;
   brief?: string;
@@ -19,6 +21,7 @@ export type AgentStatus = {
   default_model_id?: string;
   default_effort?: string;
   default_fast_service?: string;
+  last_used?: boolean;
   last_config_selection?: AgentLastConfigSelection;
   supports_api_provider_switch?: boolean;
   supported_api_provider_protocols?: string[];
@@ -164,12 +167,15 @@ async function fetchAgentRuntime(force = false, includeAll = false): Promise<{ a
   }
 
   const request = (async () => {
+    const pinsRevision = getModelPinsRevision();
+    const pinsScope = appPath("/");
     const data = await protectedJSON<any>(appPath(includeAll ? "/api/agents?all=1" : "/api/agents"));
     const agentItems: unknown[] = Array.isArray(data) ? data : Array.isArray(data?.agents) ? data.agents : [];
     const shellItems: unknown[] = Array.isArray(data?.shells) ? data.shells : [];
     const nextAgents = agentItems
       ? agentItems.map(normalizeAgentStatus).filter((item): item is AgentStatus => item !== null)
       : [];
+    hydrateModelPins(nextAgents, pinsScope, pinsRevision);
     if (includeAll) {
       cachedAgentCatalog = nextAgents;
       lastCatalogFetch = now;

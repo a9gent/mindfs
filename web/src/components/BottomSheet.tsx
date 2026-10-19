@@ -47,6 +47,9 @@ export function BottomSheet({
     bottom: 0,
     width: "100%",
     height: "75vh",
+    // AppShell's main (contain: paint) is the fixed-position containing block.
+    // Cap the original height to its available space when the IME shrinks it.
+    maxHeight: "100%",
     borderTopLeftRadius: "20px",
     borderTopRightRadius: "20px",
     transform: isOpen ? "translateY(0)" : "translateY(100%)",

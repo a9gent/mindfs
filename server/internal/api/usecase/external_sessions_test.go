@@ -242,6 +242,7 @@ func TestImportExternalSessionCreatesNativeSubagentSession(t *testing.T) {
 			AgentSessionID:   "child-agent-1",
 			ParentToolCallID: "spawn-1",
 			Title:            "Investigate tests",
+			Cursor:           agenttypes.ExternalSessionCursor{SourcePath: "/agent/child.jsonl", Offset: 100, ModTimeUnixNano: 123},
 			Exchanges: []agenttypes.ImportedExchange{
 				{Role: "user", Content: "inspect tests"},
 				{Role: "agent", Content: "done"},
@@ -271,6 +272,23 @@ func TestImportExternalSessionCreatesNativeSubagentSession(t *testing.T) {
 	}
 	if child.Name != "Investigate tests" || len(child.Exchanges) != 2 {
 		t.Fatalf("subagent = %#v", child)
+	}
+	if binding.ExternalCursor() != importer.subagents[0].Cursor {
+		t.Fatalf("child cursor not persisted: %+v", binding)
+	}
+	importer.subagents[0].Unchanged = true
+	importer.subagents[0].Exchanges = nil
+	parent, err := manager.Get(ctx, out.SessionKey, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := syncImportedSubagentSessions(ctx, manager, parent, "codex", importer.subagents)
+	if err != nil || count != 0 {
+		t.Fatalf("unchanged child sync: count=%d err=%v", count, err)
+	}
+	latest, err := manager.Get(ctx, child.Key, 0)
+	if err != nil || len(latest.Exchanges) != 2 {
+		t.Fatalf("unchanged child history: %+v %v", latest, err)
 	}
 }
 

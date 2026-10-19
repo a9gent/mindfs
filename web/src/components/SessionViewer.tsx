@@ -19,6 +19,7 @@ import { useI18n, type Locale } from "../i18n";
 import { formatSessionDuration } from "../services/sessionDuration";
 import { DEFAULT_REPLY_INFO_PREFERENCES, useReplyInfoPreferences } from "../services/replyInfoPreferences";
 import { ReplyInfoMenu } from "./ReplyInfoMenu";
+import { SessionHeader, type SessionHeaderActions } from "./SessionHeader";
 import {
   relatedFileStatKey,
   useRelatedFileStats,
@@ -59,7 +60,7 @@ type SessionItem = {
   exchange_aux?: Record<string, ExchangeAux[]>;
 };
 
-type SessionViewerProps = {
+type SessionViewerProps = SessionHeaderActions & {
   session: SessionItem | null;
   loading?: boolean;
   slashCommandResult?: {
@@ -1107,19 +1108,31 @@ function SessionViewerInner({
   const [editingMessage, setEditingMessage] = useState<{ seq: number; original: string; timestamp: string; content: string } | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState("");
-  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
-  const [headerCopied, setHeaderCopied] = useState(false);
-  const [headerCopyingPath, setHeaderCopyingPath] = useState(false);
-  const [headerRenaming, setHeaderRenaming] = useState(false);
-  const [headerDraftName, setHeaderDraftName] = useState("");
-  const [headerSavingName, setHeaderSavingName] = useState(false);
-  const headerMenuRef = useRef<HTMLDivElement | null>(null);
-  const headerRenameInputRef = useRef<HTMLInputElement | null>(null);
-  const headerComposingRef = useRef(false);
-  const headerSubmittingRef = useRef(false);
-  // Set while the rename input is being torn down on purpose (Enter/Escape), so the
-  // resulting blur does not fire a second submit.
-  const headerRenameClosingRef = useRef(false);
+  const editSubmitting = useRef(false);
+  const editVersion = useRef(0);
+  const editComposing = useRef(false);
+  useEffect(() => {
+    ++editVersion.current;
+    editSubmitting.current = false;
+    editComposing.current = false;
+    setSavingEdit(false);
+    return () => { ++editVersion.current; };
+  }, [rootId, sessionKey]);
+  const submitEdit = async () => {
+    if (!rootId || !sessionKey || !editingMessage?.content.trim() || editSubmitting.current) return;
+    const version = editVersion.current;
+    editSubmitting.current = true;
+    setSavingEdit(true);
+    setEditError("");
+    try {
+      await sessionService.editMessage(rootId, sessionKey, editingMessage.seq, editingMessage.content, editingMessage.original, editingMessage.timestamp);
+      if (version === editVersion.current) setEditingMessage(null);
+    } catch (error) {
+      if (version === editVersion.current) setEditError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (version === editVersion.current) { editSubmitting.current = false; setSavingEdit(false); }
+    }
+  };
   useEffect(() => { setEditingMessage(null); setEditError(""); }, [rootId, sessionKey]);
   useEffect(() => {
     setHeaderMenuOpen(false);
@@ -2191,23 +2204,18 @@ function SessionViewerInner({
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <textarea autoFocus aria-label={t("session.editMessage")} value={editingMessage.content} disabled={savingEdit}
                   onChange={(event) => setEditingMessage({ ...editingMessage, content: event.target.value })}
+                  onCompositionStart={() => { editComposing.current = true; }}
+                  onCompositionEnd={() => { editComposing.current = false; }}
                   onKeyDown={(event) => {
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      setEditingMessage(null);
-                      return;
-                    }
-                    if (event.key !== "Enter" || event.shiftKey) return;
-                    const nativeEvent = event.nativeEvent as KeyboardEvent;
-                    if (nativeEvent.isComposing || nativeEvent.keyCode === 229) return;
-                    event.preventDefault();
-                    void submitEdit();
+                    if (editComposing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+                    if (event.key === "Escape" && !editSubmitting.current) { event.preventDefault(); setEditingMessage(null); }
+                    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitEdit(); }
                   }}
                   rows={3} style={{ width: "100%", boxSizing: "border-box", resize: "vertical", padding: "10px 16px", border: "1px solid var(--border-color, #d1d5db)", borderRadius: "18px 18px 4px 18px", font: "inherit", fontSize: 14, lineHeight: 1.5, color: "var(--text-primary)", background: "rgba(148,163,184,0.14)" }} />
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <span style={{ flex: "1 1 auto", minWidth: 0, fontSize: 11, lineHeight: 1.5, color: "var(--text-secondary, #64748b)" }}><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={{ verticalAlign: "-2px", marginRight: 4 }}><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7v1" /></svg>{t("session.editNotice")}</span>
                   <button type="button" disabled={savingEdit} style={{ flexShrink: 0, padding: "2px 8px", fontSize: 12, lineHeight: "16px", borderRadius: 5, border: "1px solid var(--border-color, #d1d5db)", background: "transparent", color: "var(--text-primary)" }} onClick={() => setEditingMessage(null)}>{t("common.cancel")}</button>
-                  <button type="button" disabled={savingEdit || !editingMessage.content.trim()} style={{ flexShrink: 0, padding: "2px 8px", fontSize: 12, lineHeight: "16px", borderRadius: 5, border: "1px solid transparent", background: "#2563eb", color: "white", opacity: savingEdit || !editingMessage.content.trim() ? 0.5 : 1 }} onClick={() => { void submitEdit(); }}>{t(savingEdit ? "session.editSaving" : "session.editRegenerate")}</button>
+                  <button type="button" disabled={savingEdit || !editingMessage.content.trim()} style={{ flexShrink: 0, padding: "2px 8px", fontSize: 12, lineHeight: "16px", borderRadius: 5, border: "1px solid transparent", background: "#2563eb", color: "white", opacity: savingEdit || !editingMessage.content.trim() ? 0.5 : 1 }} onClick={() => void submitEdit()}>{t(savingEdit ? "session.editSaving" : "session.editRegenerate")}</button>
                 </div>
                 {editError && <span role="alert" style={{ fontSize: 12, color: "var(--text-danger, #dc2626)" }}>{editError}</span>}
               </div>
@@ -3657,5 +3665,9 @@ export const SessionViewer = memo(
     prev.targetSeqRequestKey === next.targetSeqRequestKey &&
     prev.composerOverlayInset === next.composerOverlayInset &&
     prev.gitFileStatsByPath === next.gitFileStatsByPath &&
-    prev.onRootClick === next.onRootClick,
+    prev.onRootClick === next.onRootClick &&
+    prev.onRenameSession === next.onRenameSession &&
+    prev.onDeleteSession === next.onDeleteSession &&
+    prev.onHandoffPack === next.onHandoffPack &&
+    prev.onScheduledTask === next.onScheduledTask,
 );

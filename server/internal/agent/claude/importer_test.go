@@ -171,6 +171,31 @@ func TestReadClaudeImportedSubagentsLinksAgentToolCall(t *testing.T) {
 	if len(item.Exchanges) != 2 {
 		t.Fatalf("len(exchanges) = %d, want 2", len(item.Exchanges))
 	}
+	lookup := func(string) (agenttypes.ExternalSessionCursor, error) { return item.Cursor, nil }
+	rootCursor, _, err := externalSessionFileCursor(parentPath, agenttypes.ExternalSessionCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	importer := NewImporter(ImporterOptions{AgentName: "claude"})
+	root := claudeSessionFile{Path: parentPath, AgentSessionID: "parent", Cwd: dir}
+	after := time.Date(2026, 7, 28, 1, 0, 6, 0, time.UTC)
+	unchanged, err := importer.importSessionFile(root, after, rootCursor, lookup)
+	if err != nil || len(unchanged.Exchanges) != 0 || len(unchanged.Subagents) != 1 || !unchanged.Subagents[0].Unchanged {
+		t.Fatalf("unchanged: %+v %v", unchanged, err)
+	}
+	f, err := os.OpenFile(filepath.Join(subagentDir, "agent-child-1.jsonl"), os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString("{\"type\":\"user\",\"message\":{\"content\":\"next\"}}\n")
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := importer.importSessionFile(root, after, rootCursor, lookup)
+	if err != nil || len(changed.Subagents) != 1 || changed.Subagents[0].Unchanged || len(changed.Subagents[0].Exchanges) != 3 {
+		t.Fatalf("child-only growth: %+v %v", changed, err)
+	}
 }
 
 func TestClaudeProjectDirNameMatchesClaudeCodeOnDiskEncoding(t *testing.T) {

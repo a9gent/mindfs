@@ -247,7 +247,9 @@ const SESSION_PAGE_SIZE = 50;
 const MULTI_PROJECT_SESSION_STORAGE_KEY = "mindfs-multi-project-session-list";
 const FLAT_SESSION_LIST_STORAGE_KEY = "mindfs-flat-session-list";
 const COLLAPSED_PREVIEW_COUNT_STORAGE_KEY = "mindfs-collapsed-preview-count";
-const APP_DOCUMENT_TITLE = "MindFS";
+// Capture the server-rendered title before relay status updates add a node name.
+const APP_DOCUMENT_TITLE =
+  (typeof document !== "undefined" ? document.title.trim() : "") || "MindFS";
 
 function formatDocumentTitle(relayStatus: RelayStatusPayload | null): string {
   if (!isRelayNodePage()) {
@@ -12229,6 +12231,10 @@ export function App({ onGoHome }: AppProps) {
   const sessionView = (
     <SessionViewer
       session={selectedSessionSnapshot}
+      onRenameSession={selectedSessionSnapshot ? (name) => handleRenameSession(selectedSessionSnapshot, name) : undefined}
+      onDeleteSession={selectedSessionSnapshot ? () => void handleDeleteSession(selectedSessionSnapshot) : undefined}
+      onHandoffPack={selectedSessionSnapshot ? () => handleHandoffPack(selectedSessionSnapshot) : undefined}
+      onScheduledTask={selectedSessionSnapshot ? () => openSessionScheduledTask(selectedSessionSnapshot) : undefined}
       agents={availableAgents}
       slashCommandResult={slashCommandResultForSession(
         selectedSession?.root_id || currentRootId,
@@ -15446,6 +15452,7 @@ export function App({ onGoHome }: AppProps) {
               currentDirPath={selectedDir}
               roots={managedRootIds.map((id) => ({ id, name: managedRootByIdRef.current[id]?.display_name || id }))}
               onOpenRecentDirectory={(target) => {
+                if (!managedRootIdsRef.current.has(target.rootId)) return;
                 // 轮切目标不回写最近列表：该列表只收“手动点击”的目录，
                 // 否则每次轮切都会把目标顶到队首，永远在两个目录之间打转。
                 void actionHandlers.open_dir({

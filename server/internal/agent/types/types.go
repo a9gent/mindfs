@@ -172,10 +172,14 @@ type ImportExternalSessionInput struct {
 	AgentSessionID string
 	AfterTimestamp time.Time
 	Cursor         ExternalSessionCursor
+	// LookupCursor is supplied only for automatic sync, for independent child logs.
+	LookupCursor func(agentSessionID string) (ExternalSessionCursor, error)
 }
 
 type ExternalSessionCursor struct {
-	SourcePath      string
+	SourcePath string
+	// Offset is the size of the successfully synchronized file snapshot.
+	// Incremental parser offsets/state are maintained separately in historycache.
 	Offset          int64
 	ModTimeUnixNano int64
 }
@@ -217,6 +221,8 @@ type ImportedSubagentSession struct {
 	Title                string
 	Model                string
 	Exchanges            []ImportedExchange
+	Cursor               ExternalSessionCursor
+	Unchanged            bool
 }
 
 type ExternalSessionImporter interface {

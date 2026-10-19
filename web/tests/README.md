@@ -27,3 +27,12 @@ or session is required. The fixture is not a production build entry point.
 `tests/lexical-ime/` in a system Chromium via `playwright-core` and replays the
 iFlytek-style empty-`compositionend` commit sequence over CDP. It guards the
 Lexical 0.46.0 upgrade (upstream facebook/lexical#8701): committed English text
+
+# Drawer inline edit viewport regression
+
+Run `node --test tests/drawer-edit-viewport.e2e.test.mjs`. It mounts the real
+AppShell, BottomSheet, and SessionViewer and edits the last user message. It
+checks native IME overlay height changes with an unchanged layout viewport,
+keyboard dismissal, layout viewport resizing, draft/focus retention, and desktop
+drawer height. It replays viewport geometry; physical-device IME behavior still
+requires device verification.

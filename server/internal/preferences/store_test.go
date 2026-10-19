@@ -1,9 +1,79 @@
 package preferences
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
+
+	"mindfs/server/internal/agent"
 )
+
+func TestLastAgentPersistsWithAgentDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), preferencesFileName)
+	store := &Store{path: path}
+	for _, name := range []string{"claude", "codex", " claude "} {
+		// Switching back must persist even when this agent's model is unchanged.
+		changed, err := store.UpdateAgentDefaultsIfChanged(name, " model ", " high ", " on ")
+		if err != nil || !changed {
+			t.Fatalf("update %q: changed=%v, err=%v", name, changed, err)
+		}
+	}
+	if changed, err := store.UpdateAgentDefaultsIfChanged("claude", "model", "high", "on"); err != nil || changed {
+		t.Fatalf("unchanged update: changed=%v, err=%v", changed, err)
+	}
+	if changed, err := store.UpdateAgentDefaultsIfChanged(" ", "", "", ""); err != nil || changed {
+		t.Fatalf("empty agent update: changed=%v, err=%v", changed, err)
+	}
+	reloaded := &Store{path: path}
+	if err := reloaded.load(); err != nil {
+		t.Fatal(err)
+	}
+	statuses := []agent.Status{{Name: "codex", Available: true}, {Name: "claude", Available: true}}
+	got := reloaded.ApplyAgentDefaults(statuses)
+	if got[0].LastUsed || !got[1].LastUsed {
+		t.Fatalf("last agent not restored: %#v", got)
+	}
+	if got[1].DefaultModelID != "model" || got[1].DefaultEffort != "high" || got[1].DefaultFastService != "on" {
+		t.Fatalf("agent defaults not restored: %#v", got[1])
+	}
+	if statuses[1].LastUsed {
+		t.Fatal("ApplyAgentDefaults mutated the probe statuses")
+	}
+}
+
+func TestLastAgentLegacyPreferences(t *testing.T) {
+	path := filepath.Join(t.TempDir(), preferencesFileName)
+	if err := os.WriteFile(path, []byte(`{"agents":{"claude":{"model":"sonnet"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{path: path}
+	if err := store.load(); err != nil {
+		t.Fatal(err)
+	}
+	got := store.ApplyAgentDefaults([]agent.Status{{Name: "claude"}})
+	if got[0].LastUsed || got[0].DefaultModelID != "sonnet" {
+		t.Fatalf("legacy preferences changed: %#v", got)
+	}
+	if changed, err := store.UpdateAgentDefaultsIfChanged("claude", "sonnet", "", ""); err != nil || !changed {
+		t.Fatalf("first use after upgrade: changed=%v, err=%v", changed, err)
+	}
+}
+
+func TestLastAgentSaveFailureCanBeRetried(t *testing.T) {
+	dir := t.TempDir()
+	blockedDir := filepath.Join(dir, "blocked")
+	if err := os.WriteFile(blockedDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{path: filepath.Join(blockedDir, preferencesFileName)}
+	if changed, err := store.UpdateAgentDefaultsIfChanged("claude", "sonnet", "", ""); err == nil || changed {
+		t.Fatalf("failed save: changed=%v, err=%v", changed, err)
+	}
+	store.path = filepath.Join(dir, preferencesFileName)
+	if changed, err := store.UpdateAgentDefaultsIfChanged("claude", "sonnet", "", ""); err != nil || !changed {
+		t.Fatalf("retry: changed=%v, err=%v", changed, err)
+	}
+}
 
 func TestSessionNamingDefaultsPersistAndReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), preferencesFileName)
