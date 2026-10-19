@@ -12233,8 +12233,16 @@ export function App({ onGoHome }: AppProps) {
       session={selectedSessionSnapshot}
       onRenameSession={selectedSessionSnapshot ? (name) => handleRenameSession(selectedSessionSnapshot, name) : undefined}
       onDeleteSession={selectedSessionSnapshot ? () => void handleDeleteSession(selectedSessionSnapshot) : undefined}
-      onHandoffPack={selectedSessionSnapshot ? () => handleHandoffPack(selectedSessionSnapshot) : undefined}
-      onScheduledTask={selectedSessionSnapshot ? () => openSessionScheduledTask(selectedSessionSnapshot) : undefined}
+      onHandoffPack={
+        selectedSessionSnapshot
+          ? () => handleHandoffPack(selectedSessionSnapshot)
+          : undefined
+      }
+      onScheduledTask={
+        selectedSessionSnapshot
+          ? () => openSessionScheduledTask(selectedSessionSnapshot)
+          : undefined
+      }
       agents={availableAgents}
       slashCommandResult={slashCommandResultForSession(
         selectedSession?.root_id || currentRootId,
@@ -12279,26 +12287,6 @@ export function App({ onGoHome }: AppProps) {
           selectedSessionSnapshot?.key || selectedSessionSnapshot?.session_key,
           seq,
         )
-      }
-      onRenameSession={
-        selectedSessionSnapshot
-          ? (nextName) => handleRenameSession(selectedSessionSnapshot, nextName)
-          : undefined
-      }
-      onDeleteSession={
-        selectedSessionSnapshot
-          ? () => void handleDeleteSession(selectedSessionSnapshot)
-          : undefined
-      }
-      onHandoffPack={
-        selectedSessionSnapshot
-          ? () => handleHandoffPack(selectedSessionSnapshot)
-          : undefined
-      }
-      onScheduledTask={
-        selectedSessionSnapshot
-          ? () => openSessionScheduledTask(selectedSessionSnapshot)
-          : undefined
       }
     />
   );

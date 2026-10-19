@@ -1108,6 +1108,19 @@ function SessionViewerInner({
   const [editingMessage, setEditingMessage] = useState<{ seq: number; original: string; timestamp: string; content: string } | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState("");
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [headerCopied, setHeaderCopied] = useState(false);
+  const [headerCopyingPath, setHeaderCopyingPath] = useState(false);
+  const [headerRenaming, setHeaderRenaming] = useState(false);
+  const [headerDraftName, setHeaderDraftName] = useState("");
+  const [headerSavingName, setHeaderSavingName] = useState(false);
+  const headerMenuRef = useRef<HTMLDivElement | null>(null);
+  const headerRenameInputRef = useRef<HTMLInputElement | null>(null);
+  const headerComposingRef = useRef(false);
+  const headerSubmittingRef = useRef(false);
+  // Set while the rename input is being torn down on purpose (Enter/Escape), so the
+  // resulting blur does not fire a second submit.
+  const headerRenameClosingRef = useRef(false);
   const editSubmitting = useRef(false);
   const editVersion = useRef(0);
   const editComposing = useRef(false);
@@ -1118,21 +1131,6 @@ function SessionViewerInner({
     setSavingEdit(false);
     return () => { ++editVersion.current; };
   }, [rootId, sessionKey]);
-  const submitEdit = async () => {
-    if (!rootId || !sessionKey || !editingMessage?.content.trim() || editSubmitting.current) return;
-    const version = editVersion.current;
-    editSubmitting.current = true;
-    setSavingEdit(true);
-    setEditError("");
-    try {
-      await sessionService.editMessage(rootId, sessionKey, editingMessage.seq, editingMessage.content, editingMessage.original, editingMessage.timestamp);
-      if (version === editVersion.current) setEditingMessage(null);
-    } catch (error) {
-      if (version === editVersion.current) setEditError(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (version === editVersion.current) { editSubmitting.current = false; setSavingEdit(false); }
-    }
-  };
   useEffect(() => { setEditingMessage(null); setEditError(""); }, [rootId, sessionKey]);
   useEffect(() => {
     setHeaderMenuOpen(false);
