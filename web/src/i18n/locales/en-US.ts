@@ -308,7 +308,7 @@ export const enUS = {
   "agentConfig.metadataSaved": "Saved",
   "agentConfig.metadataSaveFailed": "Failed to save label",
   "agentConfig.visibilityRow": "Show in entry",
-  "agentConfig.visibilityHint": "Uncheck to hide from the entry row (quick-switch gestures unaffected); after reset, duplicate instances (zcode-1/2/…) fold into the main one",
+  "agentConfig.visibilityHint": "Uncheck to hide from the entry row (quick-switch gestures unaffected); after reset, duplicate instances (name-1/2/…) fold into the main one",
   "agentConfig.visibilityReset": "Reset to default",
   "agentConfig.visibilitySaveFailed": "Failed to save visibility",
   "agent.openConsole": "Open {name} console",

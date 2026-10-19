@@ -11,7 +11,7 @@ import (
 	"mindfs/server/internal/config"
 )
 
-// ACP agents (zcode bridges etc.) often report a thin model catalog: the
+// ACP agents often report a thin model catalog: the
 // app-server's session/read may only echo the current model. When the agent is
 // bound to a MindFS API provider (last_config_selection), the provider's
 // projection list (PinnedModels ∩ Models, or all Models) is merged into the
@@ -74,11 +74,8 @@ func supplementACPProviderModels(status *Status) {
 }
 
 // MFSProviderRuleID derives the mfs-managed provider rule id (mfs-<slug>)
-// used by BOTH writers: the api package projects rules into zcode's
-// provider_config.json with this id, and the ACP supplement emits
-// `<ruleID>␟<model>` model ids that must match it. One implementation,
-// not two "kept in sync" copies — ids with leading separators/spaces would
-// otherwise slug differently and silently break model selection round-trips.
+// used in the `<ruleID>␟<model>` ids this supplement emits, so a bridge that
+// projects the same rule id sees the selection round-trip unchanged.
 func MFSProviderRuleID(providerID string) string {
 	var b strings.Builder
 	b.WriteString("mfs-")

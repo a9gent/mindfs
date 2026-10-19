@@ -27,7 +27,6 @@ const ICON_URLS: Record<string, { src: string; alt: string }> = {
   qoder: { src: appPath('/assets/agents/qoder.svg'), alt: 'Qoder' },
   qwen: { src: appPath('/assets/agents/qwen.svg'), alt: 'Qwen' },
   reasonix: { src: appPath('/assets/agents/reasonix.svg'), alt: 'Reasonix' },
-  zcode: { src: appPath('/assets/agents/zcode.svg'), alt: 'ZCode' },
 };
 
 const iconCache = new Map<string, string>();
@@ -120,8 +119,6 @@ export function AgentIcon({ agentName, ...props }: AgentIconProps) {
   let icon: { src: string; alt: string } | null = null;
   if (lowerAgentName.includes('augment')) {
     icon = ICON_URLS.augment;
-  } else if (lowerAgentName === 'zcode' || /^zcode-\d+$/.test(lowerAgentName)) {
-    icon = ICON_URLS.zcode;
   } else if (lowerAgentName.includes('cursor')) {
     icon = ICON_URLS.cursor;
   } else if (lowerAgentName.includes('openclaw')) {
