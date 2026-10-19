@@ -72,6 +72,9 @@ import {
   updateUILayoutPreference,
   type UILayoutPreference,
 } from "./services/preferences";
+import { backendNodes } from "./services/nodes";
+import { nodeDestinationURL } from "./services/nodePage";
+import { getStoredLauncherNodes, type LauncherNode } from "./services/storage";
 import { loadHandoffTemplate, renderHandoffPack } from "./services/handoff";
 import {
   loadFontSizePreferences,
@@ -243,6 +246,7 @@ const MULTI_PROJECT_SESSION_LIMIT = 6;
 const SESSION_PAGE_SIZE = 50;
 const MULTI_PROJECT_SESSION_STORAGE_KEY = "mindfs-multi-project-session-list";
 const FLAT_SESSION_LIST_STORAGE_KEY = "mindfs-flat-session-list";
+const COLLAPSED_PREVIEW_COUNT_STORAGE_KEY = "mindfs-collapsed-preview-count";
 const APP_DOCUMENT_TITLE = "MindFS";
 
 function formatDocumentTitle(relayStatus: RelayStatusPayload | null): string {
@@ -1631,6 +1635,12 @@ export function App({ onGoHome }: AppProps) {
   const [flatSessionListEnabled, setFlatSessionListEnabled] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem(FLAT_SESSION_LIST_STORAGE_KEY) === "1";
+  });
+  // 项目组折叠时的预览会话数：默认 0（完整折叠），可选 1/2/3
+  const [collapsedPreviewCount, setCollapsedPreviewCount] = useState(() => {
+    if (typeof window === "undefined") return 0;
+    const raw = Number(window.localStorage.getItem(COLLAPSED_PREVIEW_COUNT_STORAGE_KEY));
+    return [0, 1, 2, 3].includes(raw) ? raw : 0;
   });
   const [multiProjectSessionGroups, setMultiProjectSessionGroups] = useState<MultiProjectSessionGroup[]>([]);
   const multiProjectSessionGroupsRef = useRef<MultiProjectSessionGroup[]>([]);
@@ -3084,6 +3094,12 @@ export function App({ onGoHome }: AppProps) {
     );
   }, [flatSessionListEnabled]);
   useEffect(() => {
+    window.localStorage.setItem(
+      COLLAPSED_PREVIEW_COUNT_STORAGE_KEY,
+      String(collapsedPreviewCount),
+    );
+  }, [collapsedPreviewCount]);
+  useEffect(() => {
     sessionListModeRef.current = sessionListMode;
     if (sessionListMode !== "local") {
       setSessionSearchOpen(false);
@@ -3371,7 +3387,32 @@ export function App({ onGoHome }: AppProps) {
     setAddToKanbanSession(session);
   }, []);
   const handleOpenNodesPage = useCallback(() => {
-    setNodePickerOpen(true);
+    // 仅配置了一个节点时手势直接跳到该节点的节点页 URL；多个/零个节点才弹选择卡片。
+    void (async () => {
+      let nodes: LauncherNode[] = [];
+      try {
+        nodes = await backendNodes.load();
+      } catch {
+        nodes = [];
+      }
+      if (nodes.length === 1 && nodes[0]?.url) {
+        window.location.assign(nodeDestinationURL(nodes[0].url));
+        return;
+      }
+      setNodePickerOpen(true);
+    })();
+  }, []);
+  const handlePickNode = useCallback((nodeId: string) => {
+    void (async () => {
+      let nodes: LauncherNode[] = [];
+      try {
+        nodes = await backendNodes.load();
+      } catch {
+        nodes = [];
+      }
+      const target = nodes.find((node) => node.id === nodeId) || getStoredLauncherNodes().find((node) => node.id === nodeId);
+      if (target?.url) window.location.assign(nodeDestinationURL(target.url));
+    })();
   }, []);
   const handleOpenGestureSettings = useCallback(() => {
     setOpenBlueRingSettingsRequest(Date.now());
@@ -5863,6 +5904,32 @@ export function App({ onGoHome }: AppProps) {
       reportError("file.write_failed", err instanceof ProtectedAPIError && err.status === 409
         ? t("directory.fileExists")
         : String((err as Error)?.message || t("directory.createFileFailed")));
+    }
+  }, [refreshTreeDir, t]);
+
+  const handleCreateFolder = useCallback(async () => {
+    const rootID = currentRootIdRef.current;
+    if (!rootID) return;
+    const targetDir = (selectedDirRef.current === rootID ? "." : selectedDirRef.current) || ".";
+    const input = window.prompt(t("directory.folderNamePrompt"), "");
+    if (input === null) return;
+    const name = input.trim();
+    if (!name || name === "." || name === ".." || /[/\\\x00]/.test(name)) {
+      window.alert(t("directory.invalidFileName"));
+      return;
+    }
+    try {
+      await apiProtectedJSON(appPath(`/api/file/dir?${new URLSearchParams({ root: rootID })}`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dir: targetDir, name }),
+      });
+      const currentDir = (selectedDirRef.current === rootID ? "." : selectedDirRef.current) || ".";
+      await refreshTreeDir(rootID, targetDir, rootID === currentRootIdRef.current && currentDir === targetDir);
+    } catch (err) {
+      reportError("file.write_failed", err instanceof ProtectedAPIError && err.status === 409
+        ? t("directory.fileExists")
+        : String((err as Error)?.message || t("directory.createFolderFailed")));
     }
   }, [refreshTreeDir, t]);
 
@@ -14435,6 +14502,7 @@ export function App({ onGoHome }: AppProps) {
         }}
         onUploadFiles={handleTreeUpload}
         onCreateBlankFile={handleCreateBlankFile}
+        onCreateFolder={handleCreateFolder}
         onRenameRoot={handleRenameCurrentRoot}
         onRemoveRoot={handleRemoveCurrentRoot}
         isGitRepo={managedRootByIdRef.current[currentRootId || ""]?.is_git_repo === true}
@@ -14887,6 +14955,7 @@ export function App({ onGoHome }: AppProps) {
         filter={sessionFilter}
         onFilterChange={handleSessionFilterChange}
         flatMode={multiProjectSessionsEnabled && flatSessionListEnabled}
+        collapsedPreviewCount={collapsedPreviewCount}
         onBatchDelete={handleBatchDeleteSessions}
         currentSessionKey={selectedSession?.key || ""}
       />
@@ -15261,6 +15330,8 @@ export function App({ onGoHome }: AppProps) {
             onMultiProjectSessionsChange={setMultiProjectSessionsEnabled}
             flatSessionListEnabled={flatSessionListEnabled}
             onFlatSessionListChange={setFlatSessionListEnabled}
+            collapsedPreviewCount={collapsedPreviewCount}
+            onCollapsedPreviewCountChange={setCollapsedPreviewCount}
             fontSizePreferences={fontSizePreferences}
             onFontSizePreferencesChange={setFontSizePreferences}
             onRunAgentLifecycleCommand={handleRunAgentLifecycleCommand}
@@ -15397,6 +15468,7 @@ export function App({ onGoHome }: AppProps) {
               onCopySessionHandoff={handleCopySessionHandoff}
               onGlobalSearch={handleGlobalSearchOpen}
               onOpenNodesPage={handleOpenNodesPage}
+              onPickNode={handlePickNode}
               onOpenGestureSettings={handleOpenGestureSettings}
               onKanbanCreateTask={handleKanbanCreateTask}
               onKanbanEditTask={handleKanbanEditTask}

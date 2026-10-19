@@ -28,6 +28,7 @@ import { AgentSelector } from "./AgentSelector";
 import { SymlinkBadge } from "./SymlinkBadge";
 import { RelayLocalServicesDialog } from "./RelayLocalServicesDialog";
 import { fetchAgentCatalog, fetchAgents, type AgentStatus } from "../services/agents";
+import { backendNodes } from "../services/nodes";
 import {
   applyProviderToAgents,
   createAgentAPIProvider,
@@ -232,6 +233,8 @@ type FileTreeProps = {
   onMultiProjectSessionsChange?: (enabled: boolean) => void;
   flatSessionListEnabled?: boolean;
   onFlatSessionListChange?: (enabled: boolean) => void;
+  collapsedPreviewCount?: number;
+  onCollapsedPreviewCountChange?: (count: number) => void;
   fontSizePreferences?: FontSizePreferences;
   onFontSizePreferencesChange?: (preferences: FontSizePreferences) => void;
   onRunAgentLifecycleCommand?: (agentName: string, action: AgentLifecycleCommandAction, commands: string[]) => void | Promise<void>;
@@ -1984,6 +1987,8 @@ export function FileTree({
   onMultiProjectSessionsChange,
   flatSessionListEnabled = false,
   onFlatSessionListChange,
+  collapsedPreviewCount = 0,
+  onCollapsedPreviewCountChange,
   fontSizePreferences = { fileSidebar: 1, main: 1, sessionSidebar: 1 },
   onFontSizePreferencesChange,
   onRunAgentLifecycleCommand,
@@ -2037,6 +2042,7 @@ export function FileTree({
   const [blueRingMenuOpen, setBlueRingMenuOpen] = React.useState(false);
   const blueRingPopoverRef = React.useRef<HTMLDivElement | null>(null);
   const [blueRingAgents, setBlueRingAgents] = React.useState<AgentStatus[]>([]);
+  const [blueRingNodes, setBlueRingNodes] = React.useState<Array<{ id: string; name: string; url: string }>>([]);
   const [idleReleaseHours, setIdleReleaseHours] = React.useState("72");
   const [idleReleaseBusy, setIdleReleaseBusy] = React.useState(false);
   const [idleReleaseError, setIdleReleaseError] = React.useState("");
@@ -2577,6 +2583,13 @@ export function FileTree({
       .catch(() => {
         // The picker stays empty; reopening the settings retries.
       });
+    backendNodes.load()
+      .then((items) => {
+        if (active) setBlueRingNodes(items.map((node) => ({ id: node.id, name: node.name, url: node.url })).filter((node) => node.id));
+      })
+      .catch(() => {
+        // The picker stays empty; reopening the settings retries.
+      });
     return () => { active = false; };
   }, [blueRingMenuOpen]);
 
@@ -2597,6 +2610,24 @@ export function FileTree({
     for (const [gesture] of missing) nextPicks[gesture] = firstAgent;
     onBlueRingGesturesChange?.({ ...config, agentPicks: nextPicks });
   }, [blueRingAgents, blueRingGestures, onBlueRingGesturesChange]);
+
+  // 节点列表晚于绑定时（首次打开面板），给还没指定 pick 的 openNodePick 手势补默认值。
+  // 每个手势只补一次：之后用户主动清空 pick 不应被自动填回。
+  const blueRingNodeAutoFilledRef = React.useRef<Set<string>>(new Set());
+  React.useEffect(() => {
+    if (blueRingNodes.length === 0) return;
+    const config = normalizeBlueRingGestureConfig(blueRingGestures);
+    const missing = (Object.entries(config.actions) as Array<[BlueRingGesture, BlueRingAction]>)
+      .filter(([gesture, action]) => action === "openNodePick" && !config.nodePicks?.[gesture] && !blueRingNodeAutoFilledRef.current.has(gesture));
+    const [firstMissing] = missing.map(([gesture]) => gesture);
+    if (!firstMissing) return;
+    const firstNode = blueRingNodes.find((item) => item.id)?.id;
+    if (!firstNode) return;
+    for (const [gesture] of missing) blueRingNodeAutoFilledRef.current.add(gesture);
+    const nextPicks: Record<string, string> = { ...(config.nodePicks || {}) };
+    for (const [gesture] of missing) nextPicks[gesture] = firstNode;
+    onBlueRingGesturesChange?.({ ...config, nodePicks: nextPicks });
+  }, [blueRingNodes, blueRingGestures, onBlueRingGesturesChange]);
 
   const openAgentConfigFlow = React.useCallback((flow: AgentConfigFlow) => {
 	setIdleReleaseOpen(false);
@@ -2759,8 +2790,12 @@ export function FileTree({
       const firstTemplate = taskTemplates?.find((item) => item.id)?.id;
       if (firstTemplate) nextConfig.taskPicks = { ...(nextConfig.taskPicks || {}), [gesture]: firstTemplate };
     }
+    if (action === "openNodePick" && !nextConfig.nodePicks?.[gesture]) {
+      const firstNode = blueRingNodes.find((item) => item.id)?.id;
+      if (firstNode) nextConfig.nodePicks = { ...(nextConfig.nodePicks || {}), [gesture]: firstNode };
+    }
     onBlueRingGesturesChange?.(nextConfig);
-  }, [gestureConfig, onBlueRingGesturesChange, blueRingAgents, taskTemplates]);
+  }, [gestureConfig, onBlueRingGesturesChange, blueRingAgents, taskTemplates, blueRingNodes]);
 
   const updateBlueRingAgentPick = React.useCallback((gesture: BlueRingGesture, agentName: string) => {
     const nextPicks = { ...(gestureConfig.agentPicks || {}) };
@@ -2780,6 +2815,16 @@ export function FileTree({
       delete nextPicks[gesture];
     }
     onBlueRingGesturesChange?.({ ...gestureConfig, taskPicks: nextPicks });
+  }, [gestureConfig, onBlueRingGesturesChange]);
+
+  const updateBlueRingNodePick = React.useCallback((gesture: BlueRingGesture, nodeId: string) => {
+    const nextPicks = { ...(gestureConfig.nodePicks || {}) };
+    if (nodeId) {
+      nextPicks[gesture] = nodeId;
+    } else {
+      delete nextPicks[gesture];
+    }
+    onBlueRingGesturesChange?.({ ...gestureConfig, nodePicks: nextPicks });
   }, [gestureConfig, onBlueRingGesturesChange]);
 
   const saveIdleSessionResourceRelease = React.useCallback(async () => {
@@ -4342,6 +4387,35 @@ export function FileTree({
                   <span style={{ fontSize: "11px", opacity: flatSessionListEnabled ? 1 : 0 }}>✓</span>
                 </button>
               ) : null}
+              {multiProjectSessionsEnabled ? (
+                <button
+                  type="button"
+                  title={t("sessionList.collapsedPreviewValue", { count: collapsedPreviewCount })}
+                  onClick={() => {
+                    const next = collapsedPreviewCount >= 3 ? 0 : collapsedPreviewCount + 1;
+                    onCollapsedPreviewCountChange?.(next);
+                    setIsAppearanceMenuOpen(false);
+                    setIsSortMenuOpen(false);
+                  }}
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    background: collapsedPreviewCount > 0 ? "var(--selection-bg)" : "transparent",
+                    color: collapsedPreviewCount > 0 ? "var(--accent-color)" : "var(--text-primary)",
+                    borderRadius: "8px",
+                    padding: "8px 10px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    textAlign: "left",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                  }}
+                >
+                  <span>{t("sessionList.collapsedPreview", { count: collapsedPreviewCount })}</span>
+                  <span style={{ fontSize: "11px" }} aria-hidden="true">{collapsedPreviewCount}</span>
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => {
@@ -4875,6 +4949,41 @@ export function FileTree({
                           border: "1px solid var(--border-color)",
                           background: "var(--content-bg)",
                           color: gestureConfig.taskPicks?.[gesture] ? "var(--text-primary)" : "var(--text-secondary)",
+                          fontSize: "12px",
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                  {gestureConfig.actions[gesture] === "openNodePick" ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        padding: "0 2px 4px 18px",
+                        fontSize: "11px",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      <span style={{ flex: 1 }}>{t("blueRing.nodePickHint")}</span>
+                      <ProviderModelSelect
+                        models={blueRingNodes.map((node) => node.id)}
+                        value={gestureConfig.nodePicks?.[gesture] || ""}
+                        label={t("blueRing.nodePickHint")}
+                        getOptionLabel={(nodeId) => {
+                          const node = blueRingNodes.find((item) => item.id === nodeId);
+                          return node?.name || String(nodeId);
+                        }}
+                        onChange={(nodeId) => updateBlueRingNodePick(gesture, String(nodeId || ""))}
+                        style={{
+                          flex: "0 1 58%",
+                          maxWidth: "58%",
+                          height: "32px",
+                          padding: "4px 6px",
+                          borderRadius: "8px",
+                          border: "1px solid var(--border-color)",
+                          background: "var(--content-bg)",
+                          color: gestureConfig.nodePicks?.[gesture] ? "var(--text-primary)" : "var(--text-secondary)",
                           fontSize: "12px",
                         }}
                       />

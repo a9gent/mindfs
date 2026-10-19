@@ -76,7 +76,6 @@ type SessionListProps = {
 };
 
 const COLLAPSED_CHILD_SESSION_LIMIT = 3;
-const MULTI_PROJECT_VISIBLE_LIMIT = 6;
 const MAIN_SESSION_ICON_OFFSET = "2px";
 const SUB_SESSION_ICON_OFFSET = "0px";
 const PINNED_PROJECTS_STORAGE_KEY = "mindfs-pinned-session-projects";
@@ -136,6 +135,8 @@ type ProjectSessionListProps = {
   filter?: SessionFilterState;
   onFilterChange?: (filter: SessionFilterState) => void;
   flatMode?: boolean;
+  /** 项目组折叠时预览显示的会话数量：0 = 完整折叠（默认），可选 1/2/3 */
+  collapsedPreviewCount?: number;
   onBatchDelete?: (sessions: SessionItem[]) => Promise<void> | void;
   currentSessionKey?: string;
 };
@@ -887,6 +888,7 @@ export function MultiProjectSessionList({
   filter,
   onFilterChange,
   flatMode = false,
+  collapsedPreviewCount = 0,
   onBatchDelete,
   currentSessionKey = "",
 }: ProjectSessionListProps) {
@@ -1328,6 +1330,12 @@ export function MultiProjectSessionList({
     return sessions.filter((session) => included.has(session.key));
   };
 
+  // 折叠预览：取前 limit 个顶层会话（含其子会话）；limit=0 返回空数组（完整折叠）
+  const collapsedPreviewSessions = (sessions: SessionItem[], limit: number) => {
+    if (limit <= 0) return [] as SessionItem[];
+    return sessionsForTopLevelLimit(sessions, limit);
+  };
+
   return (
     <div style={{ flex: 1, width: "100%", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", background: "transparent" }}>
       <div
@@ -1345,12 +1353,15 @@ export function MultiProjectSessionList({
         }}
       >
         <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-          {onBatchDelete && orderedGroups.length > 0 && !cleanupMode ? (
+          {onBatchDelete && orderedGroups.length > 0 ? (
             <button
               type="button"
-              aria-label={t("sessionList.cleanupIdle")}
-              title={t("sessionList.cleanupIdle")}
-              onClick={() => setCleanupMode(true)}
+              aria-label={cleanupMode ? t("sessionList.cleanupExit") : t("sessionList.cleanupIdle")}
+              title={cleanupMode ? t("sessionList.cleanupExit") : t("sessionList.cleanupIdle")}
+              onClick={() => {
+                if (cleanupMode) exitCleanupMode();
+                else setCleanupMode(true);
+              }}
               style={{
                 width: "34px",
                 height: "34px",
@@ -1358,44 +1369,62 @@ export function MultiProjectSessionList({
                 border: "none",
                 borderRadius: "8px",
                 padding: 0,
-                background: "transparent",
-                color: "var(--text-secondary)",
+                background: cleanupMode ? "var(--selection-bg)" : "transparent",
+                color: cleanupMode ? "var(--accent-color)" : "var(--text-secondary)",
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
                 cursor: "pointer",
+                flexShrink: 0,
               }}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <polyline points="3 6 5 6 21 6" />
-                <path d="M19 6l-1 14H6L5 6" />
-                <path d="M10 11v6" />
-                <path d="M14 11v6" />
-              </svg>
+              {cleanupMode ? (
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6l-1 14H6L5 6" />
+                  <path d="M10 11v6" />
+                  <path d="M14 11v6" />
+                </svg>
+              )}
             </button>
           ) : null}
           {cleanupMode ? (
             <div style={{ display: "inline-flex", alignItems: "center", gap: "4px", flex: 1, minWidth: 0, overflow: "auto" }}>
-              {([3, 5, 7] as const).map((days) => (
-                <button
-                  key={days}
-                  type="button"
-                  onClick={() => { setCleanupAgeDays(days); setCleanupSelected(new Set()); }}
-                  style={{
-                    border: "1px solid",
-                    borderColor: cleanupAgeDays === days ? "var(--accent-color)" : "var(--border-color)",
-                    background: cleanupAgeDays === days ? "var(--selection-bg)" : "transparent",
-                    color: cleanupAgeDays === days ? "var(--accent-color)" : "var(--text-secondary)",
-                    borderRadius: "999px",
-                    padding: "2px 8px",
-                    fontSize: "11px",
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {t(`sessionList.cleanupAge${days}`)}
-                </button>
-              ))}
+              {(() => {
+                // 三档合并为一个循环按钮：7 天 → 5 天 → 3 天 → 7 天（默认 7）。
+                const cycleNext = cleanupAgeDays === 7 ? 5 : cleanupAgeDays === 5 ? 3 : 7;
+                return (
+                  <button
+                    type="button"
+                    title={t("sessionList.cleanupAgeCycle")}
+                    onClick={() => { setCleanupAgeDays(cycleNext); setCleanupSelected(new Set()); }}
+                    style={{
+                      border: "1px solid var(--accent-color)",
+                      background: "var(--selection-bg)",
+                      color: "var(--accent-color)",
+                      borderRadius: "999px",
+                      padding: "2px 8px",
+                      fontSize: "11px",
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {cleanupAgeDays === 7
+                      ? t("sessionList.cleanupAge7")
+                      : cleanupAgeDays === 5
+                        ? t("sessionList.cleanupAge5")
+                        : cleanupAgeDays === 3
+                          ? t("sessionList.cleanupAge3")
+                          : t("sessionList.cleanupAgeAll")}
+                  </button>
+                );
+              })()}
               <button
                 type="button"
                 onClick={() => { setCleanupAgeDays(0); setCleanupSelected(new Set()); }}
@@ -1735,10 +1764,16 @@ export function MultiProjectSessionList({
                     childCountByParent.set(parentKey, (childCountByParent.get(parentKey) || 0) + 1);
                   }
                 }
+                // 平铺 = 真平铺：不按父子嵌套，全部会话平铺到项目标题下
+                // （服务端 appendChildSessions 已随父会话带出全部子会话，
+                //  load-more 也以 includeChildren 重新拉取，这里不会丢子会话）
                 const visibleSessions = expanded
                   ? sessions
-                  : sessionsForTopLevelLimit(sessions, MULTI_PROJECT_VISIBLE_LIMIT);
-                const rows = buildRows(visibleSessions, group.rootId);
+                  : collapsedPreviewSessions(sessions, collapsedPreviewCount);
+                const rows: VisibleSessionRow[] = visibleSessions.map((session) => ({
+                  type: "session" as const,
+                  session,
+                }));
                 return (
                   <section key={`flat-group:${group.rootId}`} style={{ minWidth: 0 }}>
                     <div
@@ -1843,7 +1878,7 @@ export function MultiProjectSessionList({
                         }
                         return renderCard(row.session, group.rootId, group.rootName || group.rootId, "flat");
                       })}
-                      {group.totalCount > MULTI_PROJECT_VISIBLE_LIMIT ? (
+                      {group.totalCount > Math.max(collapsedPreviewCount, 1) ? (
                         <ToggleRowButton
                           loading={projectLoading}
                           label={
@@ -1959,7 +1994,7 @@ export function MultiProjectSessionList({
                 : group.sessions;
               const sessions = expanded
                 ? unpinnedSessions
-                : sessionsForTopLevelLimit(unpinnedSessions, MULTI_PROJECT_VISIBLE_LIMIT);
+                : collapsedPreviewSessions(unpinnedSessions, collapsedPreviewCount);
               const rows = buildRows(sessions, group.rootId);
               const childCountByParent = new Map<string, number>();
               const sessionKeys = new Set(group.sessions.map((item) => item.key));
@@ -2148,7 +2183,7 @@ export function MultiProjectSessionList({
                         />
                       );
                     })}
-                    {group.totalCount > MULTI_PROJECT_VISIBLE_LIMIT ? (
+                    {group.totalCount > Math.max(collapsedPreviewCount, 1) ? (
                       <ToggleRowButton
                         loading={projectLoading}
                         label={
