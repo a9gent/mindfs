@@ -461,6 +461,10 @@ export const enUS = {
   "task.closeErrorInfo": "Close error details",
 
   "sessionList.empty": "No sessions yet",
+  "sessionList.viewMode": "Session view mode",
+  "sessionList.grouped": "Grouped",
+  "sessionList.flat": "Flat",
+  "sessionList.off": "Off",
   "sessionList.back": "Back to session list",
   "sessionList.search": "Search sessions",
   "sessionList.closeSearch": "Close session search",

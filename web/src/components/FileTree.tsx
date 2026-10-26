@@ -27,6 +27,7 @@ import { SymlinkBadge } from "./SymlinkBadge";
 import { RelayLocalServicesDialog } from "./RelayLocalServicesDialog";
 import { ConfigTransferDialog } from "./ConfigTransferDialog";
 import { FileTreeMenu } from "./FileTreeMenu";
+import type { ProjectSessionView } from "../hooks/useProjectSessionView";
 import { fetchAgentCatalog, fetchAgents, type AgentStatus } from "../services/agents";
 import {
   createAgentAPIProvider,
@@ -215,6 +216,8 @@ type FileTreeProps = {
   onGitDiffSideBySideChange?: (enabled: boolean) => void;
   multiProjectSessionsEnabled?: boolean;
   onMultiProjectSessionsChange?: (enabled: boolean) => void;
+  projectSessionView?: ProjectSessionView;
+  onProjectSessionViewChange?: (view: ProjectSessionView) => void;
   fontSizePreferences?: FontSizePreferences;
   onFontSizePreferencesChange?: (preferences: FontSizePreferences) => void;
   onRunAgentLifecycleCommand?: (agentName: string, action: AgentLifecycleCommandAction, commands: string[]) => void | Promise<void>;
@@ -283,14 +286,6 @@ const fontSizeAdjustButtonStyle: React.CSSProperties = {
   lineHeight: 1,
 };
 
-function NotificationIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 7h18s-3 0-3-7" />
-      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-    </svg>
-  );
-}
 
 function InfoIcon() {
   return (
@@ -391,7 +386,6 @@ function WebPushMenuItem() {
             whiteSpace: "nowrap",
           }}
         >
-          <NotificationIcon />
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{busy ? t("fileTree.notificationBusy") : label}</span>
         </button>
         <button
@@ -418,7 +412,7 @@ function WebPushMenuItem() {
       </div>
       {expanded ? (
         <>
-          <div style={{ padding: "0 10px 6px 32px", color: "var(--text-secondary)", fontSize: "11px", lineHeight: 1.35 }}>
+          <div style={{ padding: "0 10px 6px", color: "var(--text-secondary)", fontSize: "11px", lineHeight: 1.35 }}>
             {detail}
           </div>
           {subscribed ? (
@@ -528,36 +522,8 @@ const getFileIcon = (filename: string) => {
   );
 };
 
-function ConfigArchiveIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 512 512" aria-hidden="true">
-      <path d="M0 0h512v512H0z" fill="none" />
-      <path fill="currentColor" fillRule="evenodd" d="M352 168.296c64.802 0 117.334 29.715 117.334 66.37q0 1.34-.093 2.665l.028-.294h.065v165.925c0 36.656-52.532 66.37-117.334 66.37c-63.361 0-114.992-28.408-117.256-63.936l-.077-2.434V237.037h.073a38 38 0 0 1-.073-2.37c0-36.656 52.532-66.371 117.333-66.371m0 218.074c-28.365 0-54.38-5.694-74.667-15.171v22.317l.018 1.196c.684 12.202 32.466 31.954 74.657 31.954c23.075 0 44.362-5.789 59.26-15.367c10.256-6.594 14.782-12.873 15.34-16.01l.059-.623V371.2c-20.286 9.477-46.3 15.17-74.667 15.17m0-85.333c-28.361 0-54.373-5.693-74.658-15.167l-.002 35.906l1.446-.01c1.73 1.73 5.179 4.59 11.254 8.027c15.143 8.566 37.48 13.91 61.96 13.91s46.818-5.344 61.96-13.91c7.501-4.242 11-7.608 12.2-9.05l.507-.003l.003-34.875c-20.287 9.477-46.303 15.172-74.67 15.172m0-90.075c-41.237 0-74.666 10.984-74.666 24.534s33.43 24.533 74.666 24.533c41.238 0 74.667-10.984 74.667-24.533s-33.43-24.534-74.667-24.534M101.72 51.61l30.173 30.173C109.67 104.807 96 136.14 96 170.666c0 42.82 21.026 80.728 53.316 103.965l.018-82.632H192v149.334H42.667v-42.667l68.446.001c-35.432-31.272-57.78-77.027-57.78-128c0-46.309 18.444-88.31 48.386-119.057" />
-    </svg>
-  );
-}
 
-function ConfigSwitchIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M7 7h11" />
-      <path d="m15 4 3 3-3 3" />
-      <path d="M17 17H6" />
-      <path d="m9 14-3 3 3 3" />
-    </svg>
-  );
-}
 
-function AgentInstallIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 48 48" fill="none" aria-hidden="true">
-      <path d="M0 0h48v48H0z" fill="none" />
-      <path fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" d="M24 26v16.5m0-37V15m14.932 5.35L42.5 25.5l-14.932 5.65L24 26zm0 0L33 18" />
-      <path fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" d="M38.932 26.85v8a2.895 2.895 0 0 1-1.87 2.708L23.998 42.5l-13.062-4.942a2.895 2.895 0 0 1-1.87-2.708v-8m20.184-10.1l5.5-5.5" />
-      <path fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" d="M9.068 20.35L5.5 25.5l14.932 5.65L24 26Zm0 0L15 18m3.75-1.25l-5.5-5.5" />
-    </svg>
-  );
-}
 
 function TrashIcon({ size = 13 }: { size?: number }) {
   return (
@@ -1509,6 +1475,8 @@ export function FileTree({
   onGitDiffSideBySideChange,
   multiProjectSessionsEnabled = false,
   onMultiProjectSessionsChange,
+  projectSessionView = "grouped",
+  onProjectSessionViewChange,
   fontSizePreferences = { fileSidebar: 1, main: 1, sessionSidebar: 1 },
   onFontSizePreferencesChange,
   onRunAgentLifecycleCommand,
@@ -3231,7 +3199,6 @@ export function FileTree({
                   data-menu-category="agents"
                   style={fileTreeMenuButtonStyle}
                 >
-                  <ConfigArchiveIcon />
                   <span>{t("fileTree.menu.addAgentConfig")}</span>
                 </button>
                 <button type="button" data-menu-action="transfer" onClick={() => { setConfigTransferOpen(true); setIsMenuOpen(false); }} style={fileTreeMenuButtonStyle}>
@@ -3252,7 +3219,6 @@ export function FileTree({
                   data-menu-category="agents"
                   style={fileTreeMenuButtonStyle}
                 >
-                  <ConfigSwitchIcon />
                   <span>{t("fileTree.menu.switchAgentConfig")}</span>
                 </button>
                 <button
@@ -3261,7 +3227,6 @@ export function FileTree({
                   data-menu-category="agents"
                   style={fileTreeMenuButtonStyle}
                 >
-                  <AgentInstallIcon />
                   <span>{t("fileTree.menu.agentInstallUpdate")}</span>
                 </button>
                 <button
@@ -3270,12 +3235,6 @@ export function FileTree({
                   data-menu-category="sessions"
                   style={fileTreeMenuButtonStyle}
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M4 6h16" />
-                    <path d="M4 12h10" />
-                    <path d="M4 18h7" />
-                    <path d="m17 16 2 2 3-4" />
-                  </svg>
                   <span>{t("fileTree.menu.sessionNaming")}</span>
                 </button>
                 <button
@@ -3284,10 +3243,6 @@ export function FileTree({
                   data-menu-category="sessions"
                   style={fileTreeMenuButtonStyle}
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <circle cx="12" cy="12" r="9" />
-                    <path d="M12 7v5l3 2" />
-                  </svg>
                   <span>{t("fileTree.idleSessionResourceRelease")}</span>
                   <span
                     style={{
@@ -3315,12 +3270,6 @@ export function FileTree({
                   }}
                   style={fileTreeMenuButtonStyle}
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M4 17V7a2 2 0 0 1 2-2h6" />
-                    <path d="M8 21h8a2 2 0 0 0 2-2v-6" />
-                    <path d="M14 3h7v7" />
-                    <path d="m21 3-9 9" />
-                  </svg>
                   <span>{t("fileTree.relayLocalServices")}</span>
                 </button>
                 {!isNativeApp ? <div data-menu-category="connections"><WebPushMenuItem /></div> : null}
@@ -3690,33 +3639,42 @@ export function FileTree({
                   {t(newProjectMetaLocation === "home" ? "fileTree.metaLocationHome" : "fileTree.metaLocationProject")}
                 </span>
               </button>
-              <button
-                type="button"
-                data-menu-category="sessions"
-                onClick={() => {
-                  onMultiProjectSessionsChange?.(!multiProjectSessionsEnabled);
-                  setIsAppearanceMenuOpen(false);
-                  setIsSortMenuOpen(false);
-                }}
-                aria-pressed={multiProjectSessionsEnabled}
-                style={{
-                  width: "100%",
-                  border: "none",
-                  background: multiProjectSessionsEnabled ? "var(--selection-bg)" : "transparent",
-                  color: multiProjectSessionsEnabled ? "var(--accent-color)" : "var(--text-primary)",
-                  borderRadius: "8px",
-                  padding: "8px 10px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  textAlign: "left",
-                  cursor: "pointer",
-                  fontSize: "12px",
-                }}
-              >
-                <span>{t("fileTree.multiProjectSessions")}</span>
-                <span aria-hidden="true" style={{ fontSize: "11px", opacity: multiProjectSessionsEnabled ? 1 : 0 }}>✓</span>
-              </button>
+                <button
+                  type="button"
+                  data-menu-category="sessions"
+                  onClick={() => {
+                    if (!multiProjectSessionsEnabled) {
+                      onProjectSessionViewChange?.("grouped");
+                      onMultiProjectSessionsChange?.(true);
+                    } else if (projectSessionView === "grouped") {
+                      onProjectSessionViewChange?.("flat");
+                    } else {
+                      onMultiProjectSessionsChange?.(false);
+                    }
+                    setIsAppearanceMenuOpen(false);
+                    setIsSortMenuOpen(false);
+                  }}
+                  aria-pressed={multiProjectSessionsEnabled}
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    background: multiProjectSessionsEnabled ? "var(--selection-bg)" : "transparent",
+                    color: multiProjectSessionsEnabled ? "var(--accent-color)" : "var(--text-primary)",
+                    borderRadius: "8px",
+                    padding: "8px 10px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    textAlign: "left",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                  }}
+                >
+                  <span>{t("fileTree.multiProjectSessions")}</span>
+                  <span style={{ color: "var(--text-secondary)", fontSize: "11px" }}>
+                    {t(multiProjectSessionsEnabled ? `sessionList.${projectSessionView}` : "sessionList.off")}
+                  </span>
+                </button>
               <button
                 type="button"
                 data-menu-category="appearance"
@@ -3778,10 +3736,6 @@ export function FileTree({
                 data-menu-category="sessions"
                 style={fileTreeMenuButtonStyle}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <circle cx="12" cy="12" r="3.2" />
-                  <path d="M12 4.5V2M12 22v-2.5M4.5 12H2M22 12h-2.5M6.7 6.7 4.9 4.9M19.1 19.1l-1.8-1.8M6.7 17.3l-1.8 1.8M19.1 4.9l-1.8 1.8" />
-                </svg>
                 <span style={{ flex: 1 }}>{t("blueRing.title")}</span>
                 <span style={{ color: "var(--text-secondary)", fontSize: "11px" }}>
                   {t(gestureConfig.enabled ? "blueRing.settings.on" : "blueRing.settings.off")}
@@ -3818,10 +3772,6 @@ export function FileTree({
               ) : null}
               {showSendShortcutOption ? (
                 <button type="button" data-menu-category="sessions" onClick={openSendShortcut} style={fileTreeMenuButtonStyle}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <rect x="3" y="5" width="18" height="14" rx="2" />
-                    <path d="M7 9h.01M11 9h.01M15 9h.01M7 13h.01M11 13h6" />
-                  </svg>
                   <span style={{ flex: 1 }}>{t("fileTree.sendShortcut")}</span>
                   <span style={{ color: "var(--text-secondary)", fontSize: "11px" }}>
                     {sendShortcut ? formatSendShortcut(sendShortcut) : t("sendShortcut.notSet")}

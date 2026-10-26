@@ -11,6 +11,7 @@ import React, {
   useSyncExternalStore,
 } from "react";
 import { resolveInputSession } from "./services/inputSession";
+import { useProjectSessionView } from "./hooks/useProjectSessionView";
 import { FileEditStore, fileEditKey } from "./services/fileEditing";
 import { normalizePathForRoot, shouldRedirectToRelayNodes } from "./services/fileNavigation";
 import { getViewModeSystemPrompt } from "./renderer/viewCatalog";
@@ -1606,6 +1607,7 @@ export function App({ onGoHome }: AppProps) {
     return window.localStorage.getItem(MULTI_PROJECT_SESSION_STORAGE_KEY) === "1";
   });
   const [multiProjectSessionGroups, setMultiProjectSessionGroups] = useState<MultiProjectSessionGroup[]>([]);
+  const [projectSessionView, setProjectSessionView] = useProjectSessionView();
   const [multiProjectSessionsLoading, setMultiProjectSessionsLoading] = useState(false);
   const [multiProjectPendingByKey, setMultiProjectPendingByKey] = useState<Record<string, boolean>>({});
   const multiProjectPendingRef = useRef<Record<string, boolean>>({});
@@ -14263,6 +14265,7 @@ export function App({ onGoHome }: AppProps) {
       />
     ) : multiProjectSessionsEnabled && !sessionSearchOpen && !sessionSearchResultsMode ? (
       <MultiProjectSessionList
+        viewMode={projectSessionView}
         groups={multiProjectSessionGroups}
         selectedKey={selectedSession?.key}
         selectedRootId={(selectedSession?.root_id as string | undefined) || currentRootId || ""}
@@ -14664,6 +14667,8 @@ export function App({ onGoHome }: AppProps) {
             onGitDiffSideBySideChange={setGitDiffSideBySide}
             multiProjectSessionsEnabled={multiProjectSessionsEnabled}
             onMultiProjectSessionsChange={setMultiProjectSessionsEnabled}
+            projectSessionView={projectSessionView}
+            onProjectSessionViewChange={setProjectSessionView}
             fontSizePreferences={fontSizePreferences}
             onFontSizePreferencesChange={setFontSizePreferences}
             onRunAgentLifecycleCommand={handleRunAgentLifecycleCommand}

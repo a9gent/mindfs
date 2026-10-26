@@ -7,6 +7,7 @@ import { useI18n, type Locale } from "../i18n";
 import { copyText } from "../services/clipboard";
 import { reportError } from "../services/error";
 import { sessionService } from "../services/session";
+import type { ProjectSessionView } from "../hooks/useProjectSessionView";
 
 export type SessionType = "chat" | "plugin" | "command";
 
@@ -90,6 +91,7 @@ export type ProjectSessionGroup = {
 
 type ProjectSessionListProps = {
   groups: ProjectSessionGroup[];
+  viewMode?: ProjectSessionView;
   selectedKey?: string;
   selectedRootId?: string;
   headerAction?: React.ReactNode;
@@ -731,6 +733,7 @@ export function SessionList({
 
 export function MultiProjectSessionList({
   groups,
+  viewMode = "grouped",
   selectedKey = "",
   selectedRootId = "",
   headerAction,
@@ -750,6 +753,36 @@ export function MultiProjectSessionList({
   onLoadChildren,
 }: ProjectSessionListProps) {
   const { t } = useI18n();
+  const [loadingFlat, setLoadingFlat] = useState(false);
+  const flatSessions = useMemo(() => groups.flatMap((group) =>
+    group.sessions.map((session) => ({
+      session: { ...session, root_id: session.root_id || group.rootId },
+    })),
+  ).sort((left, right) => {
+    const time = (session: SessionItem) => Date.parse(session.updated_at || "") || Date.parse(session.created_at || "") || 0;
+    const pinnedTime = (session: SessionItem) => Date.parse(session.pinned_at || "") || 0;
+    return pinnedTime(right.session) - pinnedTime(left.session)
+      || time(right.session) - time(left.session)
+      || left.session.root_id.localeCompare(right.session.root_id)
+      || left.session.key.localeCompare(right.session.key);
+  }), [groups]);
+  const remainingGroups = groups.filter((group) =>
+    group.totalCount > group.sessions.filter((session) => !session.parent_session_key).length,
+  );
+  const loadMoreFlat = async () => {
+    if (!onLoadMoreProject || loadingFlat) return;
+    setLoadingFlat(true);
+    try {
+      const results = await Promise.allSettled(remainingGroups.map((group) => onLoadMoreProject(group)));
+      for (const result of results) {
+        if (result.status === "rejected") {
+          reportError("session.sync_failed", String(result.reason));
+        }
+      }
+    } finally {
+      setLoadingFlat(false);
+    }
+  };
   const effectiveEmptyText = emptyText || t("sessionList.empty");
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const [loadingProjects, setLoadingProjects] = useState<Record<string, boolean>>({});
@@ -1011,6 +1044,35 @@ export function MultiProjectSessionList({
         ) : groups.length === 0 ? (
           <div style={{ fontSize: "12px", color: "var(--text-secondary)", minHeight: "100%", padding: "12px 18px", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", lineHeight: 1.6 }}>
             {effectiveEmptyText}
+          </div>
+        ) : viewMode === "flat" ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+            {flatSessions.map(({ session }) => (
+              <div key={`${session.root_id}:${session.key}`} data-session-root={session.root_id} data-session-key={session.key}>
+                <SessionCard
+                  session={session}
+                  sessionByKey={sessionByKey}
+                  selected={session.key === selectedKey && session.root_id === selectedRootId}
+                  syncing={isSessionSyncing(session, syncingSessionKeys)}
+                  onSelect={onSelect}
+                  onSync={onSync}
+                  onPin={onPin}
+                  onRename={onRename}
+                  onScheduledTask={onScheduledTask}
+                  onDelete={onDelete}
+                  onHandoffPack={onHandoffPack}
+                />
+              </div>
+            ))}
+            {remainingGroups.length > 0 && onLoadMoreProject ? (
+              <ToggleRowButton
+                label={t(loadingFlat ? "sessionList.loading" : "sessionList.loadMore")}
+                loading={loadingFlat}
+                marginLeft={MAIN_SESSION_ICON_OFFSET}
+                showExpandIcon={!loadingFlat}
+                onClick={() => void loadMoreFlat()}
+              />
+            ) : null}
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "9px" }}>

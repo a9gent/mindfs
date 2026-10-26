@@ -459,6 +459,10 @@ export const zhCN = {
   "task.closeErrorInfo": "关闭错误信息",
 
   "sessionList.empty": "暂无会话记录",
+  "sessionList.viewMode": "会话展示模式",
+  "sessionList.grouped": "分组",
+  "sessionList.flat": "平铺",
+  "sessionList.off": "关闭",
   "sessionList.back": "返回会话列表",
   "sessionList.search": "搜索会话",
   "sessionList.closeSearch": "关闭会话搜索",

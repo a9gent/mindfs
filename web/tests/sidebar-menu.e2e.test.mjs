@@ -35,8 +35,15 @@ for (const mobile of [false, true]) test(`sidebar categories preserve settings a
   const menu = () => page.getByRole("group", { name: "侧栏菜单", exact: true });
   const group = name => page.getByRole("group", { name, exact: true });
   const openMenu = () => page.locator('[data-onboarding="sidebar-menu"]').click();
-  const openCategory = name => menu().getByRole("button", { name, exact: true }).click();
-  const firstLabels = scope => scope.locator(":scope > button").evaluateAll(buttons => buttons.map(button => button.querySelector("span")?.textContent));
+  const openCategory = async name => {
+    const trigger = menu().getByRole("button", { name, exact: true });
+    assert.equal(await trigger.locator(":scope > svg").count(), 2, "category keeps its icon and expand arrow");
+    await trigger.click();
+    assert.deepEqual(await group(name).getByRole("button").evaluateAll(buttons => buttons
+      .filter(button => button.textContent.trim() && button.firstElementChild?.tagName.toLowerCase() === "svg")
+      .map(button => button.textContent.trim())), [], "expanded menu items have no leading icons");
+  };
+  const firstLabels = scope => scope.locator(":scope > button, :scope > div[data-menu-category] > button:first-child").evaluateAll(buttons => buttons.map(button => button.querySelector("span")?.textContent));
   try {
     await page.goto(`${server.resolvedUrls.local[0]}tests/sidebar-menu.html`);
     await openMenu();
@@ -59,7 +66,16 @@ for (const mobile of [false, true]) test(`sidebar categories preserve settings a
     await openCategory("会话与输入");
     assert.equal(await group("Agent 管理").count(), 0);
     assert.deepEqual(await firstLabels(group("会话与输入")), ["会话自动命名", "空闲会话释放", "多项目会话列表", "输入框蓝环手势", "回车键发送", "发送快捷键"]);
-    for (const name of ["多项目会话列表", "回车键发送"]) {
+    const multiProject = () => group("会话与输入").getByRole("button", { name: /^多项目会话列表 / });
+    assert.equal(await multiProject().textContent(), "多项目会话列表关闭");
+    for (const state of ["分组", "平铺", "关闭", "分组"]) {
+      await multiProject().click();
+      assert.equal(await multiProject().textContent(), `多项目会话列表${state}`);
+      assert.equal(await multiProject().getAttribute("aria-pressed"), state === "关闭" ? "false" : "true");
+      assert.equal(await multiProject().getAttribute("aria-expanded"), null);
+      assert.equal(await group("会话与输入").getByRole("button", { name: /^会话展示模式/ }).count(), 0);
+    }
+    for (const name of ["回车键发送"]) {
       const button = group("会话与输入").getByRole("button", { name, exact: true });
       await button.click();
       assert.equal(await button.getAttribute("aria-pressed"), "true");

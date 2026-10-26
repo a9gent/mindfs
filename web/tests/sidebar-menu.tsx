@@ -7,6 +7,7 @@ import { e2eeService } from "../src/services/e2ee";
 import type { DirectorySortMode } from "../src/services/directorySort";
 import { DEFAULT_FONT_SIZE_PREFERENCES } from "../src/services/fontSize";
 import "../src/index.css";
+import { useProjectSessionView } from "../src/hooks/useProjectSessionView";
 
 bootstrapService.canUseProtectedAPI = () => true;
 e2eeService.protectedFetch = (input, init) => fetch(input, init);
@@ -16,6 +17,7 @@ function Fixture() {
   const [sort, setSort] = React.useState<DirectorySortMode>("name-asc");
   const [hidden, setHidden] = React.useState(false);
   const [multi, setMulti] = React.useState(false);
+  const [view, setView] = useProjectSessionView();
   const [swapped, setSwapped] = React.useState(false);
   const [diff, setDiff] = React.useState(false);
   const [enter, setEnter] = React.useState(false);
@@ -26,6 +28,7 @@ function Fixture() {
       <FileTree entries={[]} childrenByPath={{}} expanded={[]} sortMode={sort} onSortModeChange={setSort}
         showHiddenFiles={hidden} onShowHiddenFilesChange={setHidden}
         multiProjectSessionsEnabled={multi} onMultiProjectSessionsChange={setMulti}
+        projectSessionView={view} onProjectSessionViewChange={setView}
         sidebarsSwapped={swapped} onSidebarsSwappedChange={setSwapped}
         gitDiffSideBySide={diff} onGitDiffSideBySideChange={setDiff}
         showEnterKeySendOption enterKeySends={enter} onEnterKeySendsChange={setEnter}
