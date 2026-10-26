@@ -47,9 +47,9 @@ func (s *Store) LauncherNodes() []LauncherNode {
 	return append([]LauncherNode{}, s.data.LauncherNodes...)
 }
 
-func (s *Store) UpdateLauncherNodes(nodes []LauncherNode) error {
+func normalizeLauncherNodes(nodes []LauncherNode) ([]LauncherNode, error) {
 	if len(nodes) > 1000 {
-		return errors.New("too many nodes")
+		return nil, errors.New("too many nodes")
 	}
 	next := append([]LauncherNode{}, nodes...)
 	ids, urls := map[string]bool{}, map[string]bool{}
@@ -58,12 +58,20 @@ func (s *Store) UpdateLauncherNodes(nodes []LauncherNode) error {
 		n.ID, n.Name, n.URL = strings.TrimSpace(n.ID), strings.TrimSpace(n.Name), strings.TrimSpace(n.URL)
 		u, err := url.Parse(n.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || n.ID == "" || n.Name == "" || n.CreatedAt == "" {
-			return errors.New("invalid node: name, id, creation time and HTTP(S) URL are required")
+			return nil, errors.New("invalid node: name, id, creation time and HTTP(S) URL are required")
 		}
 		if ids[n.ID] || urls[n.URL] {
-			return errors.New("duplicate node")
+			return nil, errors.New("duplicate node")
 		}
 		ids[n.ID], urls[n.URL] = true, true
+	}
+	return next, nil
+}
+
+func (s *Store) UpdateLauncherNodes(nodes []LauncherNode) error {
+	next, err := normalizeLauncherNodes(nodes)
+	if err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

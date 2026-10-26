@@ -111,7 +111,7 @@ export async function getNativeLauncherNodes(): Promise<LauncherNode[]> {
   }
 }
 
-export async function setNativeLauncherNodes(nodes: LauncherNode[]): Promise<void> {
+export async function setNativeLauncherNodes(nodes: LauncherNode[], strict = false): Promise<void> {
   if (!isNativeShellRuntime()) {
     return;
   }
@@ -122,10 +122,12 @@ export async function setNativeLauncherNodes(nodes: LauncherNode[]): Promise<voi
       return;
     }
     if (isHarmonyRuntime()) {
+      if (strict) throw new Error("Native launcher node bridge is unavailable");
       return;
     }
     await LauncherNodeSync.setLauncherNodes({ nodes });
   } catch (error) {
     console.warn("[launcher-node-sync] persist failed", error);
+    if (strict) throw error;
   }
 }

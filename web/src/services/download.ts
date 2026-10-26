@@ -167,6 +167,16 @@ export async function downloadURL(url: string, filename = "download"): Promise<v
   triggerBrowserDownload(absoluteURL, safeFilename);
 }
 
+// Save generated files through the same native bridge used for file downloads.
+export async function downloadBlob(blob: Blob, filename: string): Promise<void> {
+  const safeFilename = sanitizeDownloadName(filename, filename);
+  if (isNativeShellRuntime()) {
+    await saveBlobWithNativeShell(blob, safeFilename);
+    return;
+  }
+  triggerBlobDownload(blob, safeFilename);
+}
+
 export async function downloadFile(params: DownloadFileParams): Promise<void> {
   const filename = sanitizeDownloadName(params.path, params.name);
   if (e2eeService.isRequired()) {

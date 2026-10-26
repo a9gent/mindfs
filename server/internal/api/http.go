@@ -336,6 +336,8 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Delete("/api/prompts", h.protectedEndpoint(h.handlePromptDelete))
 	r.Get("/api/sessions", h.protectedEndpoint(h.handleSessions))
 	r.Get("/api/preferences/session-naming", h.protectedEndpoint(h.handleSessionNamingPreferenceGet))
+	r.Post("/api/config/export", h.protectedEndpoint(h.handleConfigExport))
+	r.Post("/api/config/import", h.protectedEndpoint(h.handleConfigImport))
 	r.Put("/api/preferences/model-pins", h.protectedEndpoint(h.handleModelPinsPut))
 	r.Get("/api/nodes", h.protectedEndpoint(h.handleLauncherNodes))
 	r.Put("/api/nodes", h.protectedEndpoint(h.handleLauncherNodes))

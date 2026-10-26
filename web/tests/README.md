@@ -1,3 +1,11 @@
+# Sidebar menu regression
+
+Run `node --test tests/sidebar-menu.e2e.test.mjs` to exercise the actual FileTree at desktop and mobile sizes: the eight main entries, exclusive category expansion, existing toggles and nested preferences, menu scrolling on short screens, and the configuration panel remaining inside the sidebar. All backend requests are mocked.
+
+# Configuration transfer regression
+
+Configuration migration checks: `node --test tests/config-transfer.test.mjs tests/config-transfer.e2e.test.mjs` verifies archive validation, category defaults, node persistence, failed-import rollback, exclusion of project registrations and preferences, restart reminders, and the import/export dialog at desktop and mobile sizes. The browser fixture uses isolated mocked endpoints; it never imports into a running user's MindFS instance. Android/Harmony file saving and native node synchronization still need physical-device verification.
+
 # Session virtualization browser regression
 
 Start `npm run dev` in `web`, then open `/tests/session-virtualization.html`.

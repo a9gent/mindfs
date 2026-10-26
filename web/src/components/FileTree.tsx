@@ -25,6 +25,8 @@ import { AgentIcon } from "./AgentIcon";
 import { AgentSelector } from "./AgentSelector";
 import { SymlinkBadge } from "./SymlinkBadge";
 import { RelayLocalServicesDialog } from "./RelayLocalServicesDialog";
+import { ConfigTransferDialog } from "./ConfigTransferDialog";
+import { FileTreeMenu } from "./FileTreeMenu";
 import { fetchAgentCatalog, fetchAgents, type AgentStatus } from "../services/agents";
 import {
   createAgentAPIProvider,
@@ -1547,6 +1549,7 @@ export function FileTree({
   const [isLocaleMenuOpen, setIsLocaleMenuOpen] = React.useState(false);
   const [isSortMenuOpen, setIsSortMenuOpen] = React.useState(false);
   const [sessionNamingOpen, setSessionNamingOpen] = React.useState(false);
+  const [configTransferOpen, setConfigTransferOpen] = React.useState(false);
   const [sessionNamingAgents, setSessionNamingAgents] = React.useState<AgentStatus[]>([]);
   const [sessionNamingAgent, setSessionNamingAgent] = React.useState("");
   const [sessionNamingModel, setSessionNamingModel] = React.useState("");
@@ -3181,24 +3184,14 @@ export function FileTree({
             </svg>
           </button>
           {isMenuOpen ? (
-            <div
-              style={{
-                position: "absolute",
-                top: "calc(100% + 6px)",
-                right: 0,
-                width: "var(--mindfs-file-menu-width, 182px)",
-                maxWidth: "calc(100vw - 16px)",
-                padding: "6px",
-                boxSizing: "border-box",
-                whiteSpace: "nowrap",
-                borderRadius: "10px",
-                border: "1px solid var(--border-color)",
-                background: "var(--menu-bg)",
-                boxShadow: "0 12px 30px rgba(15, 23, 42, 0.14)",
-                zIndex: 20,
-              }}
-            >
+            <FileTreeMenu onCategoryChange={() => {
+              setIsAppearanceMenuOpen(false);
+              setIsFontSizeMenuOpen(false);
+              setIsLocaleMenuOpen(false);
+              setIsSortMenuOpen(false);
+            }}>
                 <button
+                  data-menu-action="add-project"
                   type="button"
                   onClick={() => {
                     if (onOpenProjectAdd) {
@@ -3235,30 +3228,46 @@ export function FileTree({
                 <button
                   type="button"
                   onClick={() => openAgentConfigFlow("backup")}
+                  data-menu-category="agents"
                   style={fileTreeMenuButtonStyle}
                 >
                   <ConfigArchiveIcon />
-                  <span>{t("fileTree.addAgentConfig")}</span>
+                  <span>{t("fileTree.menu.addAgentConfig")}</span>
+                </button>
+                <button type="button" data-menu-action="transfer" onClick={() => { setConfigTransferOpen(true); setIsMenuOpen(false); }} style={fileTreeMenuButtonStyle}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M0 0h24v24H0z" fill="none" />
+                    <g fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5">
+                      <path d="M2 8a2 2 0 0 1 2 -2h3a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2H4a2 2 0 0 1 -2 -2Z" />
+                      <path d="M15 8a2 2 0 0 1 2 -2h3a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-3a2 2 0 0 1 -2 -2Z" />
+                      <path d="M9 12h6" />
+                      <path d="m12 9 3 3 -3 3" />
+                    </g>
+                  </svg>
+                  <span>{t("configTransfer.title")}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => openAgentConfigFlow("switch")}
+                  data-menu-category="agents"
                   style={fileTreeMenuButtonStyle}
                 >
                   <ConfigSwitchIcon />
-                  <span>{t("fileTree.switchAgentConfig")}</span>
+                  <span>{t("fileTree.menu.switchAgentConfig")}</span>
                 </button>
                 <button
                   type="button"
                   onClick={openAgentLifecycleFlow}
+                  data-menu-category="agents"
                   style={fileTreeMenuButtonStyle}
                 >
                   <AgentInstallIcon />
-                  <span>{t("fileTree.agentInstallUpdate")}</span>
+                  <span>{t("fileTree.menu.agentInstallUpdate")}</span>
                 </button>
                 <button
                   type="button"
                   onClick={openSessionNaming}
+                  data-menu-category="sessions"
                   style={fileTreeMenuButtonStyle}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -3267,11 +3276,12 @@ export function FileTree({
                     <path d="M4 18h7" />
                     <path d="m17 16 2 2 3-4" />
                   </svg>
-                  <span>{t("fileTree.sessionNamingAgent")}</span>
+                  <span>{t("fileTree.menu.sessionNaming")}</span>
                 </button>
                 <button
                   type="button"
                   onClick={openIdleSessionResourceRelease}
+                  data-menu-category="sessions"
                   style={fileTreeMenuButtonStyle}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -3292,6 +3302,7 @@ export function FileTree({
                 </button>
                 <button
                   type="button"
+                  data-menu-category="connections"
                   onClick={() => {
                     setRelayServicesOpen(true);
                     setRelayServicesEditing(false);
@@ -3312,10 +3323,10 @@ export function FileTree({
                   </svg>
                   <span>{t("fileTree.relayLocalServices")}</span>
                 </button>
-                {!isNativeApp ? <WebPushMenuItem /> : null}
-                <div style={{ height: "1px", background: "var(--border-color)", margin: "6px 4px" }} />
+                {!isNativeApp ? <div data-menu-category="connections"><WebPushMenuItem /></div> : null}
                 <button
                   type="button"
+                  data-menu-category="appearance"
                   onClick={() => {
                     setIsAppearanceMenuOpen((open) => !open);
                     setIsFontSizeMenuOpen(false);
@@ -3349,6 +3360,7 @@ export function FileTree({
                   return (
                     <button
                       key={option.value}
+                      data-menu-category="appearance"
                       type="button"
                       onClick={() => {
                         setAppearanceMode(option.value);
@@ -3380,6 +3392,7 @@ export function FileTree({
                 }) : null}
                 <button
                   type="button"
+                  data-menu-category="appearance"
                   onClick={() => {
                     setIsFontSizeMenuOpen((open) => !open);
                     setIsAppearanceMenuOpen(false);
@@ -3396,7 +3409,7 @@ export function FileTree({
                   <ChevronRight isOpen={isFontSizeMenuOpen} />
                 </button>
                 {isFontSizeMenuOpen ? (
-                  <div style={{ padding: "2px 6px 6px", display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <div data-menu-category="appearance" style={{ padding: "2px 6px 6px", display: "flex", flexDirection: "column", gap: "3px" }}>
                     {fontSizeRows.map(({ region, labelKey }) => {
                       const label = t(labelKey);
                       const scale = fontSizePreferences[region];
@@ -3465,6 +3478,7 @@ export function FileTree({
                 ) : null}
                 <button
                   type="button"
+                  data-menu-category="appearance"
                   onClick={() => {
                     setIsLocaleMenuOpen((open) => !open);
                     setIsAppearanceMenuOpen(false);
@@ -3498,6 +3512,7 @@ export function FileTree({
                   return (
                     <button
                       key={option.value}
+                      data-menu-category="appearance"
                       type="button"
                       onClick={() => {
                         setLocale(option.value);
@@ -3526,9 +3541,10 @@ export function FileTree({
                     </button>
                   );
                 }) : null}
-                <div style={{ height: "1px", background: "var(--border-color)", margin: "6px 4px" }} />
                 <button
                   type="button"
+                  data-menu-category="files"
+                  data-menu-order={10}
                   onClick={() => {
                     setIsSortMenuOpen((open) => !open);
                     setIsAppearanceMenuOpen(false);
@@ -3562,6 +3578,8 @@ export function FileTree({
                 return (
                   <button
                     key={option.value}
+                    data-menu-category="files"
+                    data-menu-order={10}
                     type="button"
                     onClick={() => {
                       onSortModeChange?.(option.value as DirectorySortMode);
@@ -3590,10 +3608,10 @@ export function FileTree({
                   </button>
                 );
               }) : null}
-              <div style={{ height: "1px", background: "var(--border-color)", margin: "6px 4px" }} />
               {onStartOnboarding ? (
                 <button
                   type="button"
+                  data-menu-action="guide"
                   onClick={() => {
                     onStartOnboarding();
                     setIsMenuOpen(false);
@@ -3609,6 +3627,9 @@ export function FileTree({
               ) : null}
               <button
                 type="button"
+                data-menu-category="files"
+                data-menu-order={20}
+                aria-pressed={showHiddenFiles}
                 onClick={() => {
                   onShowHiddenFilesChange?.(!showHiddenFiles);
                   setIsAppearanceMenuOpen(false);
@@ -3630,10 +3651,12 @@ export function FileTree({
                 }}
               >
                 <span>{t("fileTree.showHiddenFiles")}</span>
-                <span style={{ fontSize: "11px", opacity: showHiddenFiles ? 1 : 0 }}>✓</span>
+                <span aria-hidden="true" style={{ fontSize: "11px", opacity: showHiddenFiles ? 1 : 0 }}>✓</span>
               </button>
               <button
                 type="button"
+                data-menu-category="files"
+                data-menu-order={40}
                 disabled={newProjectMetaLocationBusy}
                 onClick={() => {
                   if (newProjectMetaLocationBusy) return;
@@ -3669,11 +3692,13 @@ export function FileTree({
               </button>
               <button
                 type="button"
+                data-menu-category="sessions"
                 onClick={() => {
                   onMultiProjectSessionsChange?.(!multiProjectSessionsEnabled);
                   setIsAppearanceMenuOpen(false);
                   setIsSortMenuOpen(false);
                 }}
+                aria-pressed={multiProjectSessionsEnabled}
                 style={{
                   width: "100%",
                   border: "none",
@@ -3690,15 +3715,17 @@ export function FileTree({
                 }}
               >
                 <span>{t("fileTree.multiProjectSessions")}</span>
-                <span style={{ fontSize: "11px", opacity: multiProjectSessionsEnabled ? 1 : 0 }}>✓</span>
+                <span aria-hidden="true" style={{ fontSize: "11px", opacity: multiProjectSessionsEnabled ? 1 : 0 }}>✓</span>
               </button>
               <button
                 type="button"
+                data-menu-category="appearance"
                 onClick={() => {
                   onSidebarsSwappedChange?.(!sidebarsSwapped);
                   setIsAppearanceMenuOpen(false);
                   setIsSortMenuOpen(false);
                 }}
+                aria-pressed={sidebarsSwapped}
                 style={{
                   width: "100%",
                   border: "none",
@@ -3715,10 +3742,13 @@ export function FileTree({
                 }}
               >
                 <span>{t("fileTree.swapSidebars")}</span>
-                <span style={{ fontSize: "11px", opacity: sidebarsSwapped ? 1 : 0 }}>✓</span>
+                <span aria-hidden="true" style={{ fontSize: "11px", opacity: sidebarsSwapped ? 1 : 0 }}>✓</span>
               </button>
               <button
                 type="button"
+                data-menu-category="files"
+                data-menu-order={30}
+                aria-pressed={gitDiffSideBySide}
                 onClick={() => {
                   onGitDiffSideBySideChange?.(!gitDiffSideBySide);
                   setIsAppearanceMenuOpen(false);
@@ -3740,11 +3770,12 @@ export function FileTree({
                 }}
               >
                 <span>{t("fileTree.sideBySideDiff")}</span>
-                <span style={{ fontSize: "11px", opacity: gitDiffSideBySide ? 1 : 0 }}>✓</span>
+                <span aria-hidden="true" style={{ fontSize: "11px", opacity: gitDiffSideBySide ? 1 : 0 }}>✓</span>
               </button>
               <button
                 type="button"
                 onClick={openBlueRingSettings}
+                data-menu-category="sessions"
                 style={fileTreeMenuButtonStyle}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -3759,11 +3790,13 @@ export function FileTree({
               {showEnterKeySendOption ? (
                 <button
                   type="button"
+                  data-menu-category="sessions"
                   onClick={() => {
                     onEnterKeySendsChange?.(!enterKeySends);
                     setIsAppearanceMenuOpen(false);
                     setIsSortMenuOpen(false);
                   }}
+                  aria-pressed={enterKeySends}
                   style={{
                     width: "100%",
                     border: "none",
@@ -3780,11 +3813,11 @@ export function FileTree({
                   }}
                 >
                   <span>{t("fileTree.enterKeySend")}</span>
-                  <span style={{ fontSize: "11px", opacity: enterKeySends ? 1 : 0 }}>✓</span>
+                  <span aria-hidden="true" style={{ fontSize: "11px", opacity: enterKeySends ? 1 : 0 }}>✓</span>
                 </button>
               ) : null}
               {showSendShortcutOption ? (
-                <button type="button" onClick={openSendShortcut} style={fileTreeMenuButtonStyle}>
+                <button type="button" data-menu-category="sessions" onClick={openSendShortcut} style={fileTreeMenuButtonStyle}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <rect x="3" y="5" width="18" height="14" rx="2" />
                     <path d="M7 9h.01M11 9h.01M15 9h.01M7 13h.01M11 13h6" />
@@ -3795,7 +3828,7 @@ export function FileTree({
                   </span>
                 </button>
               ) : null}
-            </div>
+            </FileTreeMenu>
           ) : null}
           {projectAddOverlay ? (
             <div
@@ -3895,6 +3928,11 @@ export function FileTree({
             />
           </div>
         ) : null}
+        {configTransferOpen && (
+          <div style={{ position: "absolute", top: "calc(100% + 6px)", left: "8px", right: "3px", zIndex: 40 }}>
+            <ConfigTransferDialog onClose={() => setConfigTransferOpen(false)} />
+          </div>
+        )}
         {idleReleaseOpen ? (
           <div
             style={{

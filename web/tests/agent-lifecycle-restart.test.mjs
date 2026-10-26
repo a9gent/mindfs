@@ -8,13 +8,13 @@ const enUS = readFileSync(new URL("../src/i18n/locales/en-US.ts", import.meta.ur
 
 assert.match(
   zhCN,
-  /"fileTree\.agentInstallUpdate": "Agent 安装和更新"/,
+  /"fileTree\.menu\.agentInstallUpdate": "安装和更新"/,
   "Chinese install/update menu label should not mention restart",
 );
 
 assert.match(
   zhCN,
-  /"fileTree\.switchAgentConfig": "Agent 配置切换重启"/,
+  /"fileTree\.menu\.switchAgentConfig": "切换配置并重启"/,
   "Chinese config switch menu label should mention restart",
 );
 
@@ -26,13 +26,13 @@ assert.match(
 
 assert.match(
   enUS,
-  /"fileTree\.agentInstallUpdate": "Install and update Agent"/,
+  /"fileTree\.menu\.agentInstallUpdate": "Install & update"/,
   "English install/update menu label should not mention restart",
 );
 
 assert.match(
   enUS,
-  /"fileTree\.switchAgentConfig": "Switch and restart Agent config"/,
+  /"fileTree\.menu\.switchAgentConfig": "Switch config & restart"/,
   "English config switch menu label should mention restart",
 );
 
