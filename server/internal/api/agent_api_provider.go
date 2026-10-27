@@ -125,7 +125,7 @@ func (h *HTTPHandler) handleAgentAPIProvidersList(w http.ResponseWriter, r *http
 
 func (h *HTTPHandler) handleAgentAPIProviderCreate(w http.ResponseWriter, r *http.Request) {
 	var req agentAPIProviderCreateRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxJSONRequestBytes)).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
 		return
 	}
@@ -143,7 +143,7 @@ func (h *HTTPHandler) handleAgentAPIProviderCreate(w http.ResponseWriter, r *htt
 
 func (h *HTTPHandler) handleAgentAPIProvidersSync(w http.ResponseWriter, r *http.Request) {
 	var req agentAPIProviderSyncRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxJSONRequestBytes)).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
 		return
 	}
@@ -174,7 +174,7 @@ func (h *HTTPHandler) handleAgentAPIProvidersSyncAll(w http.ResponseWriter, r *h
 
 func (h *HTTPHandler) handleAgentAPIProviderTest(w http.ResponseWriter, r *http.Request) {
 	var req agentAPIProviderTestRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxJSONRequestBytes)).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
 		return
 	}
@@ -206,7 +206,7 @@ func (h *HTTPHandler) handleAgentAPIProviderDelete(w http.ResponseWriter, r *htt
 
 func (h *HTTPHandler) handleAgentAPIProviderSwitch(w http.ResponseWriter, r *http.Request) {
 	var req agentAPIProviderSwitchRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxJSONRequestBytes)).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
 		return
 	}

@@ -57,7 +57,8 @@ type protectedResponseWriter struct {
 }
 
 const (
-	maxUploadRequestBytes = 64 << 20
+	maxJSONRequestBytes   = 64 << 20
+	uploadMemoryBytes     = 8 << 20
 	maxUploadFileCount    = 20
 	sessionListPageSize   = 50
 	multiRootSessionLimit = 6
@@ -188,7 +189,7 @@ func (h *HTTPHandler) protectedEndpoint(next http.HandlerFunc) http.HandlerFunc 
 		}
 		if r.Body != nil && r.ContentLength != 0 && r.Method != http.MethodGet && r.Method != http.MethodHead {
 			var envelope e2ee.CipherEnvelope
-			if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&envelope); err != nil {
+			if err := json.NewDecoder(io.LimitReader(r.Body, maxJSONRequestBytes)).Decode(&envelope); err != nil {
 				respondError(w, http.StatusBadRequest, errInvalidRequest("invalid protected payload"))
 				return
 			}
@@ -2332,8 +2333,8 @@ func (h *HTTPHandler) handleUpload(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusUnauthorized, err)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadRequestBytes)
-	if err := r.ParseMultipartForm(maxUploadRequestBytes); err != nil {
+	// Bound memory use, not file size: larger files spill to temporary disk storage.
+	if err := r.ParseMultipartForm(uploadMemoryBytes); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid multipart form"))
 		return
 	}
@@ -2341,6 +2342,7 @@ func (h *HTTPHandler) handleUpload(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("files required"))
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	fileHeaders := r.MultipartForm.File["files"]
 	if len(fileHeaders) == 0 {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("files required"))

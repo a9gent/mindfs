@@ -99,7 +99,7 @@ func (h *HTTPHandler) handleAgentConfigBackupsList(w http.ResponseWriter, r *htt
 
 func (h *HTTPHandler) handleAgentConfigBackupCreate(w http.ResponseWriter, r *http.Request) {
 	var req agentConfigBackupRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxJSONRequestBytes)).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
 		return
 	}
@@ -131,7 +131,7 @@ func (h *HTTPHandler) handleAgentConfigBackupDelete(w http.ResponseWriter, r *ht
 
 func (h *HTTPHandler) handleAgentConfigSwitch(w http.ResponseWriter, r *http.Request) {
 	var req agentConfigSwitchRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxJSONRequestBytes)).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
 		return
 	}
@@ -156,7 +156,7 @@ func (h *HTTPHandler) handleAgentConfigSwitch(w http.ResponseWriter, r *http.Req
 
 func (h *HTTPHandler) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
 	var req agentRestartRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadRequestBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxJSONRequestBytes)).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, errInvalidRequest("invalid request body"))
 		return
 	}
