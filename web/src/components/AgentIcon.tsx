@@ -21,6 +21,7 @@ const ICON_URLS: Record<string, { src: string; alt: string }> = {
   hermes: { src: appPath('/assets/agents/hermes.webp'), alt: 'Hermes' },
   kiro: { src: appPath('/assets/agents/kiro.svg'), alt: 'Kiro' },
   kimi: { src: appPath('/assets/agents/kimi.svg'), alt: 'Kimi' },
+  minimax: { src: appPath('/assets/agents/minimax.svg'), alt: 'MiniMax Code' },
   openclaw: { src: appPath('/assets/agents/openclaw.svg'), alt: 'OpenClaw' },
   opencode: { src: appPath('/assets/agents/opencode.svg'), alt: 'OpenCode' },
   omp: { src: appPath('/assets/agents/omp.svg'), alt: 'OMP' },
@@ -28,6 +29,7 @@ const ICON_URLS: Record<string, { src: string; alt: string }> = {
   qoder: { src: appPath('/assets/agents/qoder.svg'), alt: 'Qoder' },
   qwen: { src: appPath('/assets/agents/qwen.svg'), alt: 'Qwen' },
   reasonix: { src: appPath('/assets/agents/reasonix.svg'), alt: 'Reasonix' },
+  zcode: { src: appPath('/assets/agents/zcode.png'), alt: 'ZCode' },
 };
 
 const iconCache = new Map<string, string>();
@@ -118,7 +120,13 @@ export function AgentIcon({ agentName, ...props }: AgentIconProps) {
   const width = style.width ?? props.width ?? 16;
   const height = style.height ?? props.height ?? 16;
   let icon: { src: string; alt: string } | null = null;
-  if (lowerAgentName.includes('augment')) {
+  if (lowerAgentName.includes('antigravity')) {
+    icon = ICON_URLS.antigravity;
+  } else if (lowerAgentName.includes('zcode')) {
+    icon = ICON_URLS.zcode;
+  } else if (lowerAgentName.includes('minimax')) {
+    icon = ICON_URLS.minimax;
+  } else if (lowerAgentName.includes('augment')) {
     icon = ICON_URLS.augment;
   } else if (lowerAgentName.includes('cursor')) {
     icon = ICON_URLS.cursor;

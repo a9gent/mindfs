@@ -469,6 +469,61 @@
       }
     },
     {
+      "name": "zcode",
+      "brief": "智谱 ZCode 开发 agent，通过 william0wang/zcode-acp 桥接官方 CLI，支持流式输出、工具权限和会话恢复；需要 Node.js 22+，先安装并登录 ZCode，桥接器会自动查找桌面端 CLI，也可通过 ZCODE_BIN 指定。",
+      "installCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g zcode-acp-server@latest" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g zcode-acp-server@latest" }
+      ],
+      "command": "zcode-acp-server",
+      "protocol": "acp",
+      "args": [],
+      "configBackup": {
+        "fileSources": [
+          "~/.zcode/v2/config.json",
+          "~/.zcode/cli/config.json",
+          "~/.config/zcode-acp/config.json"
+        ],
+        "envKeys": [
+          "ZCODE_BIN",
+          "ZCODE_NODE",
+          "ZCODE_HOME",
+          "ZCODE_PROVIDER",
+          "ZCODE_MODEL",
+          "ZCODE_ACP_MODE",
+          "XDG_CONFIG_HOME"
+        ]
+      }
+    },
+    {
+      "name": "minimax",
+      "brief": "MiniMax 官方终端 coding agent，支持代码读写、命令执行、会话恢复和 MCP，通过 mcode acp 接入；首次使用前运行 mcode login 完成登录，也可配置自有模型 API。",
+      "installCommands": [
+        { "os": ["darwin", "linux"], "command": "curl -fsSL https://filecdn.minimax.chat/public/install.sh | bash" },
+        { "os": "windows", "command": "irm https://filecdn.minimax.chat/public/install.ps1 | iex" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "mcode update" }
+      ],
+      "command": "mcode",
+      "protocol": "acp",
+      "args": [
+        "acp"
+      ],
+      "configBackup": {
+        "fileSources": [
+          "~/.minimax/config.yaml"
+        ],
+        "envKeys": [
+          "MINIMAX_DATA_DIR",
+          "MAVIS_DATA_DIR",
+          "MCODE_PROVIDER_API_KEY"
+        ]
+      }
+    },
+    {
       "name": "reasonix",
       "brief": "DeepSeek 原生终端 coding agent，重点在长会话推理和 prefix-cache 友好工作流；适合追求低成本、可持续上下文和推理型代码任务。",
       "installCommands": [
