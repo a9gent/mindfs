@@ -5012,7 +5012,10 @@ export function App({ onGoHome }: AppProps) {
           ...payload.pinnedItems,
         ].map((item) => toSessionItem(rootID, item)).filter((item): item is SessionItem => !!item);
         if (!options?.force && currentRootIdRef.current !== rootID) return;
-        setHasMoreSessions(payload.totalCount > payload.items.length);
+        // Newer-session counts say nothing about unloaded older sessions.
+        if (!options?.afterTime) {
+          setHasMoreSessions(payload.totalCount > payload.items.length);
+        }
         if (shouldReplace) {
           setSessions(applyPinnedSnapshotToSessions(mergeSessionItems([], next), rootID, payload.pinnedKeys));
           void saveCachedSessionList(rootID, payload);
