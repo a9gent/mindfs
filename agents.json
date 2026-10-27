@@ -81,6 +81,32 @@
       }
     },
     {
+      "name": "antigravity",
+      "brief": "Google 的 Antigravity 开发 agent，通过 shindgew/agy-acp 适配器接入，复用本机 agy CLI 的登录状态；首次使用前请运行 agy 完成登录，需要 Node.js 22+。",
+      "installCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g agy-acp@0.5.2" }
+      ],
+      "updateCommands": [
+        { "os": ["darwin", "linux", "windows"], "command": "agy update" },
+        { "os": ["darwin", "linux", "windows"], "command": "npm install -g agy-acp@0.5.2" }
+      ],
+      "command": "agy-acp",
+      "protocol": "acp",
+      "args": [],
+      "configBackup": {
+        "fileSources": [
+          "~/.gemini/antigravity-cli/settings.json",
+          "~/.gemini/config/mcp_config.json"
+        ],
+        "envKeys": [
+          "AGY_BIN",
+          "GEMINI_HOME",
+          "GEMINI_API_KEY",
+          "GOOGLE_GEMINI_BASE_URL"
+        ]
+      }
+    },
+    {
       "name": "codex",
       "brief": "OpenAI 的本地终端 coding agent，强调读代码、改文件、运行命令和测试；适合把明确的软件任务交给一个能在仓库里实际执行的 agent。",
       "installCommands": [

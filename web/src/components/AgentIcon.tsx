@@ -7,6 +7,7 @@ type AgentIconProps = {
 };
 
 const ICON_URLS: Record<string, { src: string; alt: string }> = {
+  antigravity: { src: appPath('/assets/agents/antigravity.svg'), alt: 'Antigravity' },
   augment: { src: appPath('/assets/agents/augment.svg'), alt: 'Augment' },
   codex: { src: appPath('/assets/agents/codex.svg'), alt: 'Codex' },
   claude: { src: appPath('/assets/agents/claude.svg'), alt: 'Claude' },

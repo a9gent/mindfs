@@ -9,6 +9,7 @@ import { MoreMenuButton } from "./FileOperations";
 export type SessionHeaderActions = {
   onRenameSession?: (name: string) => boolean | Promise<boolean>;
   onDeleteSession?: () => void;
+  onDetachSession?: () => void;
   onHandoffPack?: () => void;
   onScheduledTask?: () => void;
 };
@@ -24,7 +25,7 @@ type Props = SessionHeaderActions & {
 
 const itemStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 9px", borderRadius: 7, border: 0, background: "transparent", color: "var(--text-primary)", cursor: "pointer", fontSize: 13, textAlign: "left", whiteSpace: "nowrap" };
 
-export function SessionHeader({ title, sessionKey, rootId, pending, chat = true, onRootClick, onRenameSession, onDeleteSession, onHandoffPack, onScheduledTask }: Props) {
+export function SessionHeader({ title, sessionKey, rootId, pending, chat = true, onRootClick, onRenameSession, onDeleteSession, onDetachSession, onHandoffPack, onScheduledTask }: Props) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -107,6 +108,7 @@ export function SessionHeader({ title, sessionKey, rootId, pending, chat = true,
         <button type="button" disabled={copyingPath || !rootId || pending} style={{ ...itemStyle, opacity: copyingPath || !rootId || pending ? 0.55 : 1 }} onClick={() => void copyPath()}>{icon(<><path d="M14 2H6v20h14V8zM14 2v6h6M8 13h8M8 17h8" /></>)}{t("sessionList.copyPath")}</button>
         {onHandoffPack ? <button type="button" disabled={!rootId || pending} style={{ ...itemStyle, opacity: !rootId || pending ? 0.55 : 1 }} onClick={() => run(onHandoffPack)}>{icon(<><path d="M15 3h6v18h-6M10 17l5-5-5-5M15 12H3" /></>)}{t("sessionList.handoffPack")}</button> : null}
         {onScheduledTask && chat && !pending ? <button type="button" style={itemStyle} onClick={() => run(onScheduledTask)}>{icon(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>)}{t("scheduled.title")}</button> : null}
+        {onDetachSession ? <button type="button" style={itemStyle} onClick={() => run(onDetachSession)}>{icon(<path d="M14 3h7v7M21 3l-9 9M10 3H3v18h18v-7" />)}{t("session.detach")}</button> : null}
         {onDeleteSession ? <button type="button" style={{ ...itemStyle, color: "#dc2626" }} onClick={() => run(onDeleteSession)}>{icon(<><path d="M3 6h18M19 6l-1 14H6L5 6M9 6V4h6v2M10 11v6M14 11v6" /></>)}{t("common.delete")}</button> : null}
       </div> : null}
     </div>

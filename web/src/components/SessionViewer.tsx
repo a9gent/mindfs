@@ -17,6 +17,7 @@ import { useI18n, type Locale } from "../i18n";
 import { formatSessionDuration } from "../services/sessionDuration";
 import { DEFAULT_REPLY_INFO_PREFERENCES, useReplyInfoPreferences } from "../services/replyInfoPreferences";
 import { ReplyInfoMenu } from "./ReplyInfoMenu";
+import { ForkSessionButton } from "./ForkSessionButton";
 import { SessionHeader, type SessionHeaderActions } from "./SessionHeader";
 import {
   relatedFileStatKey,
@@ -54,6 +55,7 @@ type SessionItem = {
   }>;
   closed_at?: string;
   source?: string;
+  parent_session_key?: string;
   related_files?: RelatedFile[];
   exchange_aux?: Record<string, ExchangeAux[]>;
 };
@@ -96,7 +98,7 @@ type SessionViewerProps = SessionHeaderActions & {
     answers: Record<string, string>;
   }) => void | Promise<void>;
   onEditUserMessage?: (content: string) => void;
-  onForkAgentMessage?: (seq: number) => void | Promise<void>;
+  onForkAgentMessage?: (seq: number, independent: boolean) => void | Promise<void>;
   targetSeqRequestKey?: string | number;
   agents?: AgentStatus[];
   composerOverlayInset?: number;
@@ -1072,6 +1074,7 @@ function SessionViewerInner({
   composerOverlayInset = 0,
   onRenameSession,
   onDeleteSession,
+  onDetachSession,
   onHandoffPack,
   onScheduledTask,
 }: SessionViewerProps) {
@@ -2381,20 +2384,17 @@ function SessionViewerInner({
                     )}
                   </button>
                   {canForkAgentMessage ? (
-                    <button
-                      type="button"
-                      onClick={() => {
+                    <ForkSessionButton
+                      onFork={(independent) => {
                         const seq = Number(item.seq || 0);
                         if (seq > 0) {
-                          void onForkAgentMessage?.(seq);
+                          void onForkAgentMessage?.(seq, independent);
                         }
                       }}
                       style={userMetaButtonStyle}
-                      aria-label={t("session.forkFromMessage")}
-                      title={t("session.forkFromMessage")}
                     >
                       <ForkIcon />
-                    </button>
+                    </ForkSessionButton>
                   ) : null}
                   {visibleReplyInfo.agent && <AgentIcon
                     agentName={item.agent || ""}
@@ -2698,6 +2698,7 @@ function SessionViewerInner({
           onRootClick={onRootClick}
           onRenameSession={onRenameSession}
           onDeleteSession={onDeleteSession}
+          onDetachSession={session.parent_session_key ? onDetachSession : undefined}
           onHandoffPack={onHandoffPack}
           onScheduledTask={onScheduledTask}
         />
@@ -3315,6 +3316,7 @@ export const SessionViewer = memo(
     prev.onRootClick === next.onRootClick &&
     prev.onRenameSession === next.onRenameSession &&
     prev.onDeleteSession === next.onDeleteSession &&
+    prev.onDetachSession === next.onDetachSession &&
     prev.onHandoffPack === next.onHandoffPack &&
     prev.onScheduledTask === next.onScheduledTask,
 );

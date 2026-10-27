@@ -72,6 +72,68 @@ for (const mobile of [false, true]) test(`header menu actions and rename (${mobi
   } finally { await page.close(); }
 });
 
+for (const mobile of [false, true]) test(`detach appears only for child sessions in header (${mobile ? "mobile" : "desktop"})`, async () => {
+  const { page, errors } = await fixture(mobile);
+  try {
+    const menu = page.getByRole("button", { name: "会话菜单", exact: true });
+    const detach = page.getByRole("button", { name: "分离为独立会话", exact: true });
+    await menu.click(); assert.equal(await detach.count(), 0);
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => window.editCheck.child());
+    await menu.click(); await detach.click();
+    assert.deepEqual(await page.evaluate(() => window.editCheck.headerActions), [["detach"]]);
+    await menu.click(); assert.equal(await detach.count(), 0);
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+for (const mobile of [false, true]) test(`fork choices and delete confirmation (${mobile ? "mobile" : "desktop"})`, async () => {
+  const { page, errors } = await fixture(mobile);
+  try {
+    const fork = page.getByRole("button", { name: "从此消息 fork", exact: true }).last();
+    await fork.click();
+    const popup = page.getByRole("dialog", { name: "从此消息 fork" });
+    await popup.waitFor();
+    assert.equal((await page.evaluate(() => window.editCheck.headerActions)).length, 0);
+    const rect = await popup.boundingBox();
+    assert.ok(rect.width < 200 && rect.height <= 30);
+    assert.ok(rect.x >= 0 && rect.x + rect.width <= (mobile ? 390 : 1280));
+    await page.keyboard.press("Escape"); await popup.waitFor({ state: "detached" });
+    await fork.click(); await page.getByRole("button", { name: "子会话", exact: true }).click();
+    await fork.click(); await page.getByRole("button", { name: "独立会话", exact: true }).click();
+    assert.deepEqual(await page.evaluate(() => window.editCheck.headerActions), [["fork", 4, false], ["fork", 4, true]]);
+    await fork.click(); await page.getByRole("heading", { name: /Edit check/ }).click();
+    await popup.waitFor({ state: "detached" });
+
+    const dialog = page.getByRole("alertdialog");
+    const openDelete = async (kind) => { await page.evaluate(kind => window.editCheck.openDelete(kind), kind); await dialog.waitFor(); };
+    await openDelete("parent");
+    await page.getByRole("radio", { name: "全部删除", exact: true }).waitFor();
+    await page.getByRole("radio", { name: "只删主会话", exact: true }).check();
+    await page.getByRole("button", { name: "取消", exact: true }).click();
+    assert.equal((await page.evaluate(() => window.editCheck.headerActions)).length, 2);
+    await openDelete("parent");
+    await dialog.getByRole("button", { name: "删除", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+    await openDelete("parent");
+    await page.getByRole("radio", { name: "只删主会话", exact: true }).check();
+    await dialog.getByRole("button", { name: "删除", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+    for (const kind of ["child", "single"]) {
+      await openDelete(kind);
+      await dialog.getByRole("button", { name: "删除", exact: true }).click();
+      assert.equal(await dialog.getByRole("radio").count(), 0);
+      await dialog.waitFor({ state: "detached" });
+    }
+    assert.deepEqual((await page.evaluate(() => window.editCheck.headerActions)).slice(2), [["confirmDelete", false], ["confirmDelete", true], ["confirmDelete", false], ["confirmDelete", false]]);
+    await openDelete("error");
+    await dialog.getByText("无法检查会话信息，请关闭后重试。").waitFor();
+    assert.equal(await dialog.getByRole("button", { name: "删除", exact: true }).isDisabled(), true);
+    await page.keyboard.press("Escape"); await dialog.waitFor({ state: "detached" });
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
 test("message editing shortcuts preserve IME, cancellation and prevent duplicate submits", async () => {
   const { page, errors } = await fixture();
   try {

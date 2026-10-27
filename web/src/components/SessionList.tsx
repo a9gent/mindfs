@@ -55,6 +55,7 @@ type SessionListProps = {
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onScheduledTask?: (session: SessionItem) => void;
   onDelete?: (session: SessionItem) => void;
+  onDetach?: (session: SessionItem) => void;
   onHandoffPack?: (session: SessionItem) => void;
   onLoadChildren?: (
     session: SessionItem,
@@ -105,6 +106,7 @@ type ProjectSessionListProps = {
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onScheduledTask?: (session: SessionItem) => void;
   onDelete?: (session: SessionItem) => void;
+  onDetach?: (session: SessionItem) => void;
   onHandoffPack?: (session: SessionItem) => void;
   onProjectClick?: (rootId: string) => void;
   onLoadMoreProject?: (group: ProjectSessionGroup) => Promise<void> | void;
@@ -308,6 +310,7 @@ export function SessionList({
   onRename,
   onScheduledTask,
   onDelete,
+  onDetach,
   onHandoffPack,
   onLoadChildren,
   onLoadOlder,
@@ -691,6 +694,7 @@ export function SessionList({
                   onRename={onRename}
                   onScheduledTask={onScheduledTask}
                   onDelete={onDelete}
+                  onDetach={onDetach}
                   onHandoffPack={onHandoffPack}
                 />
               );
@@ -747,6 +751,7 @@ export function MultiProjectSessionList({
   onRename,
   onScheduledTask,
   onDelete,
+  onDetach,
   onHandoffPack,
   onProjectClick,
   onLoadMoreProject,
@@ -1060,6 +1065,7 @@ export function MultiProjectSessionList({
                   onRename={onRename}
                   onScheduledTask={onScheduledTask}
                   onDelete={onDelete}
+                  onDetach={onDetach}
                   onHandoffPack={onHandoffPack}
                 />
               </div>
@@ -1229,6 +1235,7 @@ export function MultiProjectSessionList({
                           onRename={onRename}
                           onScheduledTask={onScheduledTask}
                           onDelete={onDelete}
+                          onDetach={onDetach}
                           onHandoffPack={onHandoffPack}
                         />
                       );
@@ -1287,6 +1294,7 @@ function SessionCard({
   onRename,
   onScheduledTask,
   onDelete,
+  onDetach,
   onHandoffPack,
 }: {
   session: SessionItem;
@@ -1302,6 +1310,7 @@ function SessionCard({
   onRename?: (session: SessionItem, nextName: string) => Promise<boolean> | boolean;
   onScheduledTask?: (session: SessionItem) => void;
   onDelete?: (session: SessionItem) => void;
+  onDetach?: (session: SessionItem) => void;
   onHandoffPack?: (session: SessionItem) => void;
 }) {
   const { locale, t } = useI18n();
@@ -2016,6 +2025,14 @@ function SessionCard({
               </svg>
               {copyingPath ? t("common.loading") : t("sessionList.copyPath")}
             </button>
+            {isSubagent && onDetach ? <button type="button"
+              onClick={(event) => { event.stopPropagation(); setMenuOpen(false); onDetach(session); }}
+              style={{ ...menuItemStyle, color: "var(--text-primary)", whiteSpace: "nowrap" }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M14 3h7v7M21 3l-9 9M10 3H3v18h18v-7" />
+              </svg>
+              {t("session.detach")}
+            </button> : null}
             {onHandoffPack ? (
               <button
                 type="button"

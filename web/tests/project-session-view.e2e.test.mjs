@@ -19,6 +19,40 @@ before(async () => {
 });
 after(async () => { await browser?.close(); await server?.close(); });
 
+for (const width of [390, 1280]) for (const view of ["single", "grouped", "flat"]) test(`detach child from ${view} session list (${width}px)`, async () => {
+  const page = await browser.newPage({ viewport: { width, height: 844 }, locale: "zh-CN" });
+  page.setDefaultTimeout(10000);
+  const requests = [];
+  let fail = true;
+  await page.addInitScript(view => { if (view === "flat") localStorage.setItem("mindfs-project-session-view", "flat"); }, view);
+  await page.route("**/api/**", route => {
+    if (route.request().url().includes("/child/detach")) {
+      requests.push({ url: route.request().url(), method: route.request().method() });
+      return fail ? route.fulfill({ status: 500, json: { error: "failed" } }) : route.fulfill({ json: { key: "child", parent_session_key: "", parent_tool_call_id: "" } });
+    }
+    return route.fulfill({ json: [] });
+  });
+  try {
+    await page.goto(`${server.resolvedUrls.local[0]}tests/project-session-view.html${view === "single" ? "?single=1" : ""}`);
+    const child = page.getByRole("button", { name: "Child session", exact: true }).locator("../..");
+    const parent = page.getByRole("button", { name: "B newest", exact: true }).locator("../..");
+    await parent.getByRole("button", { name: "会话菜单", exact: true }).click();
+    assert.equal(await page.getByRole("button", { name: "分离为独立会话", exact: true }).count(), 0);
+    await parent.getByRole("button", { name: "会话菜单", exact: true }).click();
+    await child.getByRole("button", { name: "会话菜单", exact: true }).click();
+    await page.getByRole("button", { name: "分离为独立会话", exact: true }).click();
+    await page.getByText("detach failed", { exact: true }).waitFor();
+    await child.getByRole("button", { name: "会话菜单", exact: true }).click();
+    fail = false;
+    await page.getByRole("button", { name: "分离为独立会话", exact: true }).click();
+    await page.getByText("detached", { exact: true }).waitFor();
+    await child.getByRole("button", { name: "会话菜单", exact: true }).click();
+    assert.equal(await page.getByRole("button", { name: "分离为独立会话", exact: true }).count(), 0);
+    assert.equal(requests.length, 2);
+    assert.ok(requests.every(request => request.method === "POST" && new URL(request.url).searchParams.get("root") === "b"));
+  } finally { await page.close(); }
+});
+
 for (const width of [390, 1280]) test(`project view switching, global ordering and pagination (${width}px)`, async () => {
   const page = await browser.newPage({ viewport: { width, height: 844 }, locale: "zh-CN" });
   const errors = [];

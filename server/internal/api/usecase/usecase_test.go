@@ -619,6 +619,58 @@ func TestDeleteSessionDeletesSubSessionTree(t *testing.T) {
 	}
 }
 
+func TestDeleteSessionKeepsChildrenAsIndependentSessions(t *testing.T) {
+	ctx := context.Background()
+	root := rootfs.NewRootInfo("mindfs", "mindfs", t.TempDir())
+	manager := session.NewManager(root)
+	parent, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, Name: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, ParentSessionKey: parent.Key, ParentToolCallID: "tool", Source: `{"type":"fork"}`, Name: "child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grandchild, err := manager.Create(ctx, session.CreateInput{Type: session.TypeChat, ParentSessionKey: child.Key, Name: "grandchild"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AddExchangeForAgent(ctx, child, "user", "keep this history", "codex", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	registry := &sessionCleanupRegistry{commandTestRegistry: &commandTestRegistry{root: root, manager: manager}}
+	registry.cleanup = func(_ context.Context, _ string, keys []string) ([]string, error) {
+		if len(keys) != 1 || keys[0] != parent.Key {
+			t.Fatalf("cleanup keys: %v", keys)
+		}
+		return []string{child.Key}, nil
+	}
+	service := Service{Registry: registry}
+	if err := service.DeleteSession(ctx, DeleteSessionInput{RootID: root.ID, Key: parent.Key, KeepChildren: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Get(ctx, parent.Key, 0); err == nil {
+		t.Fatal("parent still exists")
+	}
+	// Verify both the live manager and persisted metadata, including later writes.
+	if _, err := manager.Rename(ctx, child.Key, "kept child"); err != nil {
+		t.Fatal(err)
+	}
+	for _, reader := range []*session.Manager{manager, session.NewManager(root)} {
+		kept, err := reader.Get(ctx, child.Key, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kept.ParentSessionKey != "" || kept.ParentToolCallID != "" || kept.Source != child.Source || len(kept.Exchanges) != 1 {
+			t.Fatalf("incorrect retained child: %+v", kept)
+		}
+		nested, err := reader.Get(ctx, grandchild.Key, 0)
+		if err != nil || nested.ParentSessionKey != child.Key {
+			t.Fatalf("grandchild hierarchy lost: %+v %v", nested, err)
+		}
+	}
+}
+
 func TestSubSessionSyntheticDonePersistsPartialResponse(t *testing.T) {
 	ctx := context.Background()
 	rootDir := t.TempDir()
