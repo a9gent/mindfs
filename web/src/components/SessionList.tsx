@@ -952,7 +952,7 @@ export function MultiProjectSessionList({
 
   const handleProjectToggle = async (group: ProjectSessionGroup) => {
     const expanded = !!expandedProjects[group.rootId];
-    const remaining = Math.max(0, group.totalCount - group.sessions.length);
+    const remaining = Math.max(0, group.totalCount - topLevelSessionsForGroup(group.sessions).length);
     if (!expanded) {
       setExpandedProjects((prev) => ({ ...prev, [group.rootId]: true }));
       if (remaining > 0 && onLoadMoreProject) {

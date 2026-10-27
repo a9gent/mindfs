@@ -19,6 +19,47 @@ before(async () => {
 });
 after(async () => { await browser?.close(); await server?.close(); });
 
+for (const width of [390, 1280]) test(`grouped pagination counts main sessions with many children (${width}px)`, async () => {
+  const page = await browser.newPage({ viewport: { width, height: 844 }, locale: "zh-CN" });
+  page.setDefaultTimeout(5000);
+  const requests = [];
+  await page.route("**/api/**", route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/sessions") {
+      requests.push(url);
+      const start = requests.length === 1 ? 6 : 10;
+      const end = requests.length === 1 ? 10 : 15;
+      return route.fulfill({ json: {
+        total_count: 15 - start,
+        items: Array.from({ length: end - start }, (_, offset) => {
+          const i = start + offset;
+          return { key: `main-${i}`, session_key: `main-${i}`, name: `Main ${i}`,
+            updated_at: new Date(Date.UTC(2026, 9, 27 - i)).toISOString() };
+        }),
+      } });
+    }
+    return route.fulfill({ json: [] });
+  });
+  try {
+    await page.goto(`${server.resolvedUrls.local[0]}tests/project-session-view.html?pagination=1`);
+    await page.getByRole("button", { name: "Main 5", exact: true }).waitFor();
+    const remaining = page.getByRole("button", { name: "还有 9 个会话", exact: true });
+    await remaining.click();
+    await page.getByRole("button", { name: "Main 9", exact: true }).waitFor();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].searchParams.get("before_time"), "2026-10-22T00:00:00.000Z");
+    await page.getByRole("button", { name: /^还有 5 个会话/ }).click();
+    await page.getByRole("button", { name: "Main 14", exact: true }).waitFor();
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1].searchParams.get("before_time"), "2026-10-18T00:00:00.000Z");
+    assert.ok(requests.every(url => url.searchParams.get("top_level") === "1" && url.searchParams.get("include_children") === "1"));
+    await page.getByRole("button", { name: "收起", exact: true }).click();
+    await remaining.waitFor();
+    assert.equal(await page.getByRole("button", { name: "Main 14", exact: true }).count(), 0);
+    assert.equal(requests.length, 2, "Collapsing a fully loaded project must not fetch again");
+  } finally { await page.close(); }
+});
+
 for (const width of [390, 1280]) for (const view of ["single", "grouped", "flat"]) test(`detach child from ${view} session list (${width}px)`, async () => {
   const page = await browser.newPage({ viewport: { width, height: 844 }, locale: "zh-CN" });
   page.setDefaultTimeout(10000);
