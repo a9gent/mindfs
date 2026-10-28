@@ -12,6 +12,8 @@ import { isNativeShellRuntime } from "../services/runtime";
 import { useI18n } from "../i18n";
 
 import type { FilePayload } from "../services/file";
+import { fetchFile } from "../services/file";
+import { MAX_FULL_PREVIEW_BYTES, shouldAutoLoadMarkdown } from "../services/filePreview";
 import { FileEditStore, fileEditKey, MAX_EDITABLE_FILE_BYTES } from "../services/fileEditing";
 import { FileEditor } from "./FileEditor";
 import { FileOperationItems, FileMenuIcon, fileMenuItemStyle, MoreMenuButton, moreMenuPopoverStyle, menuOverlayStyle, MoveFilePopover } from "./FileOperations";
@@ -150,6 +152,51 @@ export function FileViewer({ rootPath, onFileOperationComplete, editStore, onFil
   const showOutline = useSyncExternalStore(subscribeMarkdownOutline, isMarkdownOutlineEnabled, () => true);
   const editKey = fileEditKey(file?.root || "", file?.path || "");
   const editSession = useSyncExternalStore(editStore.subscribe, () => editStore.get(editKey));
+  const [fullLoad, setFullLoad] = useState({ key: "", loading: false, failed: false });
+  const fullLoadKey = `${editKey}:${file?.mtime || ""}:${file?.revision || ""}`;
+  const fullRequestRef = useRef(0);
+  const autoLoadAttemptRef = useRef("");
+  const latestPreviewRef = useRef({ file, editSession, onFileUpdated });
+  latestPreviewRef.current = { file, editSession, onFileUpdated };
+
+  useEffect(() => {
+    // Navigating or editing must invalidate any in-flight preview upgrade.
+    fullRequestRef.current += 1;
+    setFullLoad({ key: fullLoadKey, loading: false, failed: false });
+  }, [fullLoadKey, !!editSession]);
+
+  const loadFullContent = useCallback(async () => {
+    const source = latestPreviewRef.current.file;
+    if (!source?.root || latestPreviewRef.current.editSession) return;
+    const request = ++fullRequestRef.current;
+    setFullLoad({ key: fullLoadKey, loading: true, failed: false });
+    try {
+      const next = await fetchFile({ rootId: source.root, path: source.path, readMode: "full", fresh: true });
+      if (request !== fullRequestRef.current) return;
+      const latest = latestPreviewRef.current;
+      if (latest.editSession || latest.file?.root !== source.root || latest.file?.path !== source.path
+        || latest.file?.mtime !== source.mtime || latest.file?.revision !== source.revision) return;
+      if (!next || next.truncated) throw new Error("Incomplete full read");
+      latestPreviewRef.current.onFileUpdated(next);
+      setFullLoad({ key: fullLoadKey, loading: false, failed: false });
+    } catch {
+      if (request === fullRequestRef.current) {
+        setFullLoad({ key: fullLoadKey, loading: false, failed: true });
+      }
+    }
+  }, [fullLoadKey]);
+
+  useEffect(() => {
+    if (!isVisible || editSession || !file?.root || !shouldAutoLoadMarkdown(file)) return;
+    if (autoLoadAttemptRef.current === fullLoadKey) return;
+    autoLoadAttemptRef.current = fullLoadKey;
+    void loadFullContent();
+    return () => {
+      if (autoLoadAttemptRef.current === fullLoadKey) autoLoadAttemptRef.current = "";
+    };
+  }, [file, editSession, isVisible, fullLoadKey, loadFullContent]);
+
+  useEffect(() => () => { fullRequestRef.current += 1; }, []);
   const canEdit = !!file?.root && file.encoding === "utf-8" && file.size <= MAX_EDITABLE_FILE_BYTES
     && !/^(?:\/|[A-Za-z]:)/.test(file.path);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -215,7 +262,7 @@ export function FileViewer({ rootPath, onFileOperationComplete, editStore, onFil
 
   const ext = file?.ext || (file?.path.includes(".") ? `.${file.path.split(".").pop()}` : "");
   const documentPreviewKind = getDocumentPreviewKind(ext, file?.mime);
-  const usesMarkdownViewer = ext === ".md" || ext === ".markdown";
+  const usesMarkdownViewer = ext.toLowerCase() === ".md" || ext.toLowerCase() === ".markdown";
   const lineSelectionEnabled = !editSession && !!file
     && !usesMarkdownViewer
     && file.encoding !== "binary"
@@ -462,6 +509,15 @@ export function FileViewer({ rootPath, onFileOperationComplete, editStore, onFil
             {!editSession && <FileViewerMenu key={editKey} root={file.root || ""} rootPath={rootPath} path={file.path} downloading={isDownloading} onDownload={() => { void handleDownload(); }} onEdit={canEdit ? () => { void editStore.open(file.root!, file.path); } : undefined} onComplete={onFileOperationComplete} />}
           </div>
       </header>
+
+      {!editSession && file.truncated && file.encoding !== "binary" && !documentPreviewKind && !file.mime?.startsWith("image/") && (
+        <div role="status" className="file-preview-warning" style={{ padding: "4px 16px", display: "flex", alignItems: "center", flexWrap: "wrap", columnGap: "12px", rowGap: "4px", fontSize: "13px", flexShrink: 0 }}>
+          <span>{t(fullLoad.key === fullLoadKey && fullLoad.failed ? "fileViewer.fullLoadFailed" : "fileViewer.partialContent")}</span>
+          {file.size <= MAX_FULL_PREVIEW_BYTES && <button type="button" disabled={!file.root || (fullLoad.key === fullLoadKey && fullLoad.loading)} onClick={() => { void loadFullContent(); }}>
+            {t(fullLoad.key === fullLoadKey && fullLoad.loading ? "fileViewer.loadingFull" : "fileViewer.loadFull")}
+          </button>}
+        </div>
+      )}
 
       {editSession ? <FileEditor key={editKey} actionsTarget={editorActions} store={editStore} editKey={editKey} session={editSession} isVisible={isVisible} onFileUpdated={onFileUpdated} onFileSaved={onFileSaved} onExitError={(error) => showToast(error, false)} /> : <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflow: documentPreviewKind === "powerpoint" ? "hidden" : "auto", position: "relative", WebkitOverflowScrolling: "touch" }}>
         <div style={{ minWidth: "100%", height: documentPreviewKind === "powerpoint" ? "100%" : undefined, display: "block", background: "transparent" }}>

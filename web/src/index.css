@@ -1382,3 +1382,23 @@ body[data-plugin-theme="1"] [data-slot="drawer-content"] {
     padding: 4px !important;
   }
 }
+
+.file-preview-warning {
+  color: #92400e;
+  background: #fffbeb;
+  border-bottom: 1px solid #fcd34d;
+}
+
+:root[data-theme="dark"] .file-preview-warning {
+  color: #fcd34d;
+  background: #332509;
+  border-bottom-color: #785419;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .file-preview-warning {
+    color: #fcd34d;
+    background: #332509;
+    border-bottom-color: #785419;
+  }
+}

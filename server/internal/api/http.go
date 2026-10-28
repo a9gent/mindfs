@@ -1916,7 +1916,7 @@ func (h *HTTPHandler) handleFile(w http.ResponseWriter, r *http.Request) {
 	out, err := uc.ReadFile(r.Context(), usecase.ReadFileInput{
 		RootID:   rootID,
 		Path:     path,
-		MaxBytes: 128 * 1024,
+		MaxBytes: 1024 * 1024,
 		Cursor:   cursor,
 		ReadMode: readMode,
 	})

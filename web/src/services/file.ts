@@ -90,7 +90,10 @@ const RAW_FILE_FAILURE_TTL_MS = 60_000;
 let dbPromise: Promise<IDBDatabase> | null = null;
 
 function buildCacheKey(rootId: string, path: string, readMode: ReadMode, cursor: number): string {
-  return [rootId, path, readMode, String(cursor)].join("::");
+  // Incremental reads return 1 MiB. Invalidate earlier chunks, including the
+  // temporary 10 KiB test cache, instead of preserving them through a 304.
+  const modeKey = readMode === "incremental" ? "incremental-v4-1m" : readMode;
+  return [rootId, path, modeKey, String(cursor)].join("::");
 }
 
 function buildGitDiffCacheKey(rootId: string, path: string, signature?: string): string {
