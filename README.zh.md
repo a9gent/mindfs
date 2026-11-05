@@ -1,6 +1,6 @@
 # MindFS
 
-[English](./README.md) | [简体中文](./README.zh.md) | [官网](https://relay.a9gent.com/) | [Discord](https://discord.gg/YPJMqeWSn) | [Twitter](https://x.com/yandc18) | [【微信群】](#微信群) | [竞品对比报告](./docs/remote-vibe-project-comparison.md) | [竞品对比ppt](./docs/remote-vibe-project-comparison.pdf)
+[English](./README.md) | [简体中文](./README.zh.md) | [官网](https://relay.a9gent.com/) | [Token 加油站](https://token.a9gent.com/) | [Discord](https://discord.gg/YPJMqeWSn) | [Twitter](https://x.com/yandc18) | [【微信群】](#微信群) | [竞品对比报告](./docs/remote-vibe-project-comparison.md) | [竞品对比ppt](./docs/remote-vibe-project-comparison.pdf)
 
 > **AI Agent 远程访问网关 · 结果可视化**
 
@@ -16,6 +16,24 @@
 <p align="center">
   <img src="docs/images/mindfs-mobile.webp" alt="MindFS 移动端界面" width="92%" />
 </p>
+
+---
+
+## 模型 API 中转站
+
+MindFS 内置[**Token 加油站**](https://token.a9gent.com/)，支持余额实时展示与一键切换生效。提供 GPT、Claude、Gemini、Grok、DeepSeek 及国产模型等分组，可按模型、任务和预算选择。**充值 1:1 到账**。
+
+| 分组 | 分组倍率 | 介绍 |
+| --- | --- | --- |
+| 国产模型 | 0.16 | Kimi、GLM、MiniMax、MiMo，集中接入常用国产模型。 |
+| `deepseek-官key` | 0.46 | 纯官方 Key，支持 Search、Fetch，可直接调用。 |
+| `gpt-pro-保真` | 0.24 | 官方一手 Pro 账号池。 |
+| `gpt-pro` | 0.16 | 低价 Pro 账号池，适合关注调用成本的用户。 |
+| `claude-ccmax-0注入` | 1.1 | CCMax 零注入，面向 Coding 任务，不限制客户端。 |
+| `claude-ccmax-微注入` | 0.9 | CCMax 微注入，支持蒸馏与思维输出。 |
+| `claude-kiro` | 0.35 | 适合写文案、小型任务。 |
+| `grok-heavy` | 0.18 | Grok Heavy 账号池。 |
+| `gemini-ultra` | 0.36 | Gemini Ultra 账号池。 |
 
 ---
 
@@ -36,7 +54,7 @@
 - **会话 fork**: 可从历史回复 fork 出新的会话。
 - **定时任务**：在指定时间触发 Agent 执行任务。
 - **codex 远程登录**: 通过/login 命令实现 codex 远程登录。
-- **内置 token 加油站**：余额实时展示、一键切换生效。
+- **内置 [Token 加油站](https://token.a9gent.com/)**：余额实时展示、一键切换生效。
 - **Token 用量数据**：记录并展示 token 用量和上下文窗口用量。
 
 ### 任务看板
