@@ -3147,10 +3147,11 @@ export function App({ onGoHome }: AppProps) {
     relayWSAuthCheckRef.current = true;
     try {
       const response = await fetch("/api/auth/me", { cache: "no-cache" });
-      if (!response.ok) {
+      if (response.status === 401) {
         redirectToRelayLogin();
         return;
       }
+      if (!response.ok) return;
       const nodeID = relayNodeIdFromPathname(window.location.pathname);
       if (!nodeID) {
         return;
@@ -3161,12 +3162,7 @@ export function App({ onGoHome }: AppProps) {
           Accept: "application/json",
         },
       });
-      if (
-        nodeResponse.status === 403 ||
-        nodeResponse.status === 404 ||
-        nodeResponse.status === 502 ||
-        nodeResponse.status === 503
-      ) {
+      if (await shouldRedirectToRelayNodes(nodeResponse.status, "", async () => nodeResponse.status)) {
         redirectToRelayNodes();
       }
     } catch {
@@ -3186,10 +3182,12 @@ export function App({ onGoHome }: AppProps) {
       if (status === 401 || code === "unauthorized") {
         try {
           const response = await fetch("/api/auth/me");
-          if (response.ok) {
+          if (response.status !== 401) {
             return false;
           }
-        } catch {}
+        } catch {
+          return false;
+        }
         redirectToRelayLogin();
         return true;
       }

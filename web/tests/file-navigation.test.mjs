@@ -12,10 +12,21 @@ assert.equal(normalizePathForRoot("C:\\other\\REPORT.md", "C:\\project"), "C:/ot
 assert.equal(normalizePathForRoot("C:\\project\\README.md", "C:\\project"), "README.md");
 for (const status of [403, 404, 502, 503]) {
   assert.equal(await shouldRedirectToRelayNodes(status, "", async () => 200), false);
-  assert.equal(await shouldRedirectToRelayNodes(status, "", async () => 503), true);
+  assert.equal(await shouldRedirectToRelayNodes(status, "", async () => 503), false);
   assert.equal(await shouldRedirectToRelayNodes(status, "", async () => { throw new Error("offline"); }), false);
 }
-for (const code of ["node_not_found", "node_offline", "connector_unavailable", "forbidden"]) {
+for (const status of [403, 404]) {
+  for (const probeStatus of [403, 404]) {
+    assert.equal(await shouldRedirectToRelayNodes(status, "", async () => probeStatus), true);
+  }
+}
+for (const status of [502, 503]) {
+  assert.equal(await shouldRedirectToRelayNodes(status, "", async () => { assert.fail("outage must not probe or redirect"); }), false);
+}
+for (const code of ["node_offline", "connector_unavailable"]) {
+  assert.equal(await shouldRedirectToRelayNodes(503, code, async () => { assert.fail("outage must not probe or redirect"); }), false);
+}
+for (const code of ["node_not_found", "forbidden"]) {
   assert.equal(await shouldRedirectToRelayNodes(404, code, async () => { assert.fail("unnecessary probe"); }), true);
 }
 assert.equal(await shouldRedirectToRelayNodes(400, "", async () => { assert.fail("unnecessary probe"); }), false);
