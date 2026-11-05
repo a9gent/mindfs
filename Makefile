@@ -1,6 +1,8 @@
 .PHONY: help dev dev-backend dev-web build-web build build-android build-harmony install uninstall build-all start start-server test dist-clean publish-release-notes verify-release release tag
 
 GO ?= go
+CGO_ENABLED ?= 0
+export CGO_ENABLED
 NPM ?= npm
 WEB_DIR ?= web
 ANDROID_DIR ?= android

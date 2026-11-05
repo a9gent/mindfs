@@ -1,3 +1,7 @@
+# Background reply completion regression
+
+Run `node --test tests/background-session-stream.e2e.test.mjs` to verify the real session stream hook stays idle on the first visit to a background session after completion, error, or history truncation, while active background replies and subsequent turns still stream.
+
 # Sidebar menu regression
 
 Run `node --test tests/sidebar-menu.e2e.test.mjs` to exercise the actual FileTree at desktop and mobile sizes: the eight main entries, exclusive category expansion, existing toggles and nested preferences, menu scrolling on short screens, and the configuration panel remaining inside the sidebar. All backend requests are mocked.

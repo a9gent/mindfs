@@ -766,6 +766,7 @@ class SessionService {
       this.activeStreams.delete(sessionKey);
       this.clearEventCursor(String(payload.root_id || ""), sessionKey);
     }
+    this.updateActiveStreamState(type, sessionKey, nextPayload);
     this.emit({ type, sessionKey, payload: nextPayload });
 
     if (!sessionKey) return;
@@ -782,7 +783,6 @@ class SessionService {
     } else if (type === "session.done" && cursorKey) {
       this.eventCursors.delete(cursorKey);
     }
-    this.updateActiveStreamState(type, sessionKey, nextPayload);
 
     const handlers = this.handlers.get(sessionKey);
     if ((!handlers || handlers.size === 0) && type === "session.stream") {
@@ -861,6 +861,7 @@ class SessionService {
     payload: Record<string, unknown>,
   ) {
     if (type === "session.done" || type === "session.error") {
+      this.pendingStreams.delete(sessionKey);
       this.activeStreams.delete(sessionKey);
       return;
     }
