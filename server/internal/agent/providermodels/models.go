@@ -1,4 +1,4 @@
-package codex
+package providermodels
 
 import (
 	"encoding/json"
@@ -10,12 +10,14 @@ import (
 	"mindfs/server/internal/config"
 )
 
-// supplementSavedProviderModels augments model/list without changing Codex's
-// native catalog or fetching a second catalog over the network. The binding is
+// Supplement augments the native catalog with models from the agent's bound
+// provider without fetching a second catalog over the network. The binding is
 // recorded by the existing provider-switch flow; match its ID, not a URL shared
 // by potentially different accounts. Read on each call so provider syncs and
 // config switches are reflected without a separate model cache.
-func supplementSavedProviderModels(agentName string, models []types.ModelInfo) []types.ModelInfo {
+// requiredProtocol, when nonempty, limits supplementation to providers that
+// explicitly advertise that protocol. Model families do not restrict the list.
+func Supplement(agentName, requiredProtocol string, models []types.ModelInfo) []types.ModelInfo {
 	agentName = strings.TrimSpace(agentName)
 	if agentName == "" {
 		return models
@@ -42,8 +44,9 @@ func supplementSavedProviderModels(agentName string, models []types.ModelInfo) [
 		return models
 	}
 	var providers []struct {
-		ID     string   `json:"id"`
-		Models []string `json:"models"`
+		ID        string   `json:"id"`
+		Protocols []string `json:"protocols"`
+		Models    []string `json:"models"`
 	}
 	if !readProviderModelJSON(filepath.Join(dir, "api-providers.json"), &providers) {
 		return models
@@ -51,6 +54,18 @@ func supplementSavedProviderModels(agentName string, models []types.ModelInfo) [
 	for _, provider := range providers {
 		if provider.ID != selection.ID {
 			continue
+		}
+		if requiredProtocol != "" {
+			compatible := false
+			for _, protocol := range provider.Protocols {
+				if strings.EqualFold(strings.TrimSpace(protocol), requiredProtocol) {
+					compatible = true
+					break
+				}
+			}
+			if !compatible {
+				return models
+			}
 		}
 		seen := make(map[string]bool, len(models))
 		for _, model := range models {

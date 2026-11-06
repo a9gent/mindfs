@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"mindfs/server/internal/agent/logs"
+	"mindfs/server/internal/agent/providermodels"
 	types "mindfs/server/internal/agent/types"
 
 	codexsdk "github.com/fanwenlin/codex-go-sdk/codex"
@@ -751,7 +752,7 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 	if strings.TrimSpace(defaults.Model) != "" {
 		currentModelID = strings.TrimSpace(defaults.Model)
 	}
-	models = supplementSavedProviderModels(s.agentName, models)
+	models = providermodels.Supplement(s.agentName, "", models)
 	return types.ModelList{
 		CurrentModelID: currentModelID,
 		Models:         models,

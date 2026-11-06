@@ -78,6 +78,49 @@ func stringMapsEqual(left, right map[string]string) bool {
 	return true
 }
 
+func TestApplyOMPAPIProviderUsesProtocolBaseURL(t *testing.T) {
+	for _, tc := range []struct {
+		name, protocol, baseURL, wantURL, wantAPI string
+	}{
+		{"openai-root", apiProviderProtocolOpenAICompatible, "https://gateway.example", "https://gateway.example/v1", "openai-completions"},
+		{"openai-versioned", apiProviderProtocolOpenAICompatible, "https://gateway.example/v1/", "https://gateway.example/v1", "openai-completions"},
+		{"openai-prefix", apiProviderProtocolOpenAICompatible, "https://gateway.example/proxy/", "https://gateway.example/proxy/v1", "openai-completions"},
+		{"anthropic-root", apiProviderProtocolAnthropicCompatible, "https://gateway.example", "https://gateway.example", "anthropic-messages"},
+		{"anthropic-versioned", apiProviderProtocolAnthropicCompatible, "https://gateway.example/v1/", "https://gateway.example", "anthropic-messages"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			testutil.IsolateUserDirs(t, home)
+			path := filepath.Join(home, ".omp", "agent", "models.yml")
+			if err := writeYAMLMap(path, map[string]any{
+				"providers":  map[string]any{"existing": map[string]any{"baseUrl": "https://existing.example/v1"}},
+				"modelRoles": map[string]any{"smol": "existing/small"},
+			}, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := applyOMPAPIProvider(agentAPIProvider{
+				Name: "a9-deepseek", BaseURL: tc.baseURL, APIKey: "test-key",
+				Protocols: []string{tc.protocol}, Models: []string{"deepseek-v4-pro"},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := readYAMLMap(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			providers := ensureYAMLMap(cfg, "providers")
+			provider, ok := providers["a9-deepseek"].(map[string]any)
+			if !ok || provider["baseUrl"] != tc.wantURL || provider["api"] != tc.wantAPI || provider["authHeader"] != (tc.protocol == apiProviderProtocolOpenAICompatible) {
+				t.Fatalf("unexpected OMP provider URL, protocol, or auth header: %#v", provider)
+			}
+			roles := ensureYAMLMap(cfg, "modelRoles")
+			if providers["existing"] == nil || roles["smol"] != "existing/small" || roles["main"] != "a9-deepseek/deepseek-v4-pro" {
+				t.Fatal("OMP role selection or existing provider changed unexpectedly")
+			}
+		})
+	}
+}
+
 func TestMergeCodexAPIProviderConfigKeepsExistingModelProviderKey(t *testing.T) {
 	existing := `model_provider = "custom"
 model = "old-model"

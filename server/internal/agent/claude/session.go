@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"mindfs/server/internal/agent/logs"
+	"mindfs/server/internal/agent/providermodels"
 	types "mindfs/server/internal/agent/types"
 
 	claudeagent "github.com/roasbeef/claude-agent-sdk-go"
@@ -69,6 +70,7 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 	}
 
 	s := &session{
+		agentName:     strings.TrimSpace(opts.AgentName),
 		sessionKey:    opts.SessionKey,
 		model:         strings.TrimSpace(opts.Model),
 		planMode:      opts.PlanMode,
@@ -195,6 +197,7 @@ type session struct {
 	onUpdate   func(types.Event)
 	sessionID  string
 	sessionKey string
+	agentName  string
 	model      string
 	planMode   bool
 	context    types.ContextWindow
@@ -416,7 +419,7 @@ func (s *session) SetPlanMode(ctx context.Context, enabled bool) error {
 
 func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 	_ = ctx
-	if s.client == nil {
+	if s == nil || s.client == nil {
 		return types.ModelList{}, errors.New("claude session not initialized")
 	}
 	supported := s.client.SupportedModelsFromInit()
@@ -424,9 +427,10 @@ func (s *session) ListModels(ctx context.Context) (types.ModelList, error) {
 	for _, model := range supported {
 		models = append(models, claudeModelInfo(model))
 	}
+	models = providermodels.Supplement(s.agentName, "anthropic-compatible", models)
 	log.Printf("[agent/claude] models.cached session=%s count=%d", s.sessionKey, len(models))
 	currentModelID := ""
-	if selected := strings.TrimSpace(s.model); selected != "" {
+	if selected := s.CurrentModel(); selected != "" {
 		for _, item := range models {
 			if strings.TrimSpace(item.ID) == selected {
 				currentModelID = selected

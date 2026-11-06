@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"mindfs/server/internal/agent/providermodels"
 	"mindfs/server/internal/agent/types"
 	"mindfs/server/internal/config"
 	"mindfs/server/internal/testutil"
@@ -60,19 +61,19 @@ func TestSupplementSavedProviderModelsPreservesNativeMetadataAndDoesNotFetch(t *
 		map[string]any{"id": "api-one", "baseUrl": upstream.URL, "apiKey": "fake-key", "models": []string{" native ", " glm-test ", "", "glm-test", "qwen-test"}},
 	})
 	native := []types.ModelInfo{{ID: "native", Name: "Original name", Description: "Original metadata", Hidden: true, SupportEffort: true, Efforts: []string{"high"}}}
-	got := supplementSavedProviderModels("codex", native)
+	got := providermodels.Supplement("codex", "", native)
 	want := append(append([]types.ModelInfo{}, native...), types.ModelInfo{ID: "glm-test", Name: "glm-test"}, types.ModelInfo{ID: "qwen-test", Name: "qwen-test"})
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("models = %+v, want %+v", got, want)
 	}
-	other := supplementSavedProviderModels("codex-other", nil)
+	other := providermodels.Supplement("codex-other", "", nil)
 	if len(other) != 1 || other[0].ID != "other-account-model" {
 		t.Fatalf("wrong agent binding: %+v", other)
 	}
 	if requests.Load() != 0 {
 		t.Fatalf("unexpected provider requests: %d", requests.Load())
 	}
-	if len(supplementSavedProviderModels("unbound", nil)) != 0 {
+	if len(providermodels.Supplement("unbound", "", nil)) != 0 {
 		t.Fatal("unbound agent received provider models")
 	}
 }
@@ -87,7 +88,7 @@ func TestSavedProviderModelsReflectSyncAndConfigSwitch(t *testing.T) {
 	}
 	check := func(want []types.ModelInfo) {
 		t.Helper()
-		if got := supplementSavedProviderModels("codex", nil); !reflect.DeepEqual(got, want) {
+		if got := providermodels.Supplement("codex", "", nil); !reflect.DeepEqual(got, want) {
 			t.Fatalf("models = %+v, want %+v", got, want)
 		}
 	}
@@ -123,7 +124,7 @@ func TestSavedProviderModelsMissingOrCorruptFilesKeepNativeList(t *testing.T) {
 					t.Fatal(err)
 				}
 				native := []types.ModelInfo{{ID: "native", Name: "Original"}}
-				if got := supplementSavedProviderModels("codex", native); !reflect.DeepEqual(got, native) {
+				if got := providermodels.Supplement("codex", "", native); !reflect.DeepEqual(got, native) {
 					t.Fatalf("native list changed: %+v", got)
 				}
 			})

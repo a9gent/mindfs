@@ -1322,7 +1322,7 @@ func applyOMPAPIProvider(provider agentAPIProvider) error {
 		return err
 	}
 	activeProtocol := agentAPIProviderActiveProtocol(provider)
-	baseURL := provider.BaseURL
+	baseURL := openAIModelsBaseURL(provider.BaseURL)
 	if activeProtocol == apiProviderProtocolAnthropicCompatible {
 		baseURL = anthropicBaseURL(provider.BaseURL)
 	}
