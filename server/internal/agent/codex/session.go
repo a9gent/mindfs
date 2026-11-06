@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -194,9 +195,9 @@ func newClient(opts OpenOptions) *codexsdk.Codex {
 		Env:                   opts.Env,
 		Verbose:               true,
 	}
-	if len(opts.Args) > 0 {
-		codexOptions.AppServerArgs = append([]string{}, opts.Args...)
-	}
+	// MindFS already owns the idle-release policy. Codex's additional retention
+	// period would keep unsubscribed threads loaded (and locked by this process).
+	codexOptions.AppServerArgs = append(append([]string{}, opts.Args...), "-c", "thread_unload_delay_secs=0")
 	return codexsdk.NewCodex(codexOptions)
 }
 
@@ -894,7 +895,68 @@ func (s *session) Close() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return s.thread.Close(ctx)
+	return s.closeThread(ctx)
+}
+
+func (s *session) closeThread(ctx context.Context) error {
+	response, err := s.thread.Unsubscribe(ctx)
+	if err != nil {
+		return err
+	}
+	switch response.Status {
+	case codextypes.ThreadUnsubscribeStatusNotLoaded:
+		return nil
+	case codextypes.ThreadUnsubscribeStatusUnsubscribed, codextypes.ThreadUnsubscribeStatusNotSubscribed:
+	default:
+		return fmt.Errorf("codex thread/unsubscribe returned unknown status %q", response.Status)
+	}
+	id := s.thread.ID()
+	if id == nil || strings.TrimSpace(*id) == "" {
+		return errors.New("codex thread id required to confirm unload")
+	}
+	// Unsubscribe acknowledges removal of the subscription, not completion of
+	// shutdown. Loaded-list only drops the thread after shutdown has finished.
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		loaded, err := codexThreadLoaded(ctx, s.client, *id)
+		if err != nil {
+			return fmt.Errorf("confirm codex thread %s unloaded: %w", *id, err)
+		}
+		if !loaded {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for codex thread %s to unload: %w", *id, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func codexThreadLoaded(ctx context.Context, client *codexsdk.Codex, threadID string) (bool, error) {
+	params := map[string]any{}
+	for {
+		var response struct {
+			Data       *[]string `json:"data"`
+			NextCursor *string   `json:"nextCursor"`
+		}
+		if err := client.AppServerRPCTyped(ctx, "thread/loaded/list", params, &response); err != nil {
+			return false, err
+		}
+		if response.Data == nil {
+			return false, errors.New("codex thread/loaded/list returned no data")
+		}
+		for _, id := range *response.Data {
+			if id == threadID {
+				return true, nil
+			}
+		}
+		if response.NextCursor == nil || *response.NextCursor == "" {
+			return false, nil
+		}
+		params["cursor"] = *response.NextCursor
+	}
 }
 
 func (s *session) updateThreadIDFromThread() {

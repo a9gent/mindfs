@@ -3,7 +3,10 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	agenttypes "mindfs/server/internal/agent/types"
 
@@ -14,16 +17,23 @@ import (
 type closeSessionRPCExec struct {
 	method string
 	params map[string]any
+	call   func(context.Context, string, map[string]any) (json.RawMessage, error)
 }
 
 func (e *closeSessionRPCExec) Run(codexsdk.CodexExecArgs) <-chan codexsdk.ExecResult {
 	return make(chan codexsdk.ExecResult)
 }
 
-func (e *closeSessionRPCExec) RPCCall(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+func (e *closeSessionRPCExec) RPCCall(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+	if e.call != nil {
+		return e.call(ctx, method, params.(map[string]any))
+	}
+	if method == "thread/loaded/list" {
+		return json.RawMessage(`{"data":[]}`), nil
+	}
 	e.method = method
 	e.params, _ = params.(map[string]any)
-	return json.RawMessage(`{}`), nil
+	return json.RawMessage(`{"status":"unsubscribed"}`), nil
 }
 
 func TestSessionCloseUnsubscribesCodexThread(t *testing.T) {
@@ -39,6 +49,85 @@ func TestSessionCloseUnsubscribesCodexThread(t *testing.T) {
 	}
 	if exec.method != "thread/unsubscribe" || exec.params["threadId"] != "thread-1" {
 		t.Fatalf("RPC = %q %#v", exec.method, exec.params)
+	}
+}
+
+func TestSessionCloseWaitsForUnloadAcrossPages(t *testing.T) {
+	listCalls := 0
+	exec := &closeSessionRPCExec{call: func(_ context.Context, method string, params map[string]any) (json.RawMessage, error) {
+		if method == "thread/unsubscribe" {
+			return json.RawMessage(`{"status":"unsubscribed"}`), nil
+		}
+		if method != "thread/loaded/list" {
+			t.Fatalf("unexpected RPC: %s", method)
+		}
+		listCalls++
+		switch listCalls {
+		case 1:
+			return json.RawMessage(`{"data":["other-thread"],"nextCursor":"page-2"}`), nil
+		case 2:
+			if params["cursor"] != "page-2" {
+				t.Fatalf("cursor = %v", params["cursor"])
+			}
+			return json.RawMessage(`{"data":["thread-1"]}`), nil
+		default:
+			if _, ok := params["cursor"]; ok {
+				t.Fatal("unload check did not restart pagination")
+			}
+			return json.RawMessage(`{"data":["other-thread"]}`), nil
+		}
+	}}
+	client := codexsdk.NewCodexWithExec(exec, codexsdk.CodexOptions{})
+	s := &session{client: client, thread: client.ResumeThread("thread-1", codexsdk.ThreadOptions{})}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if listCalls != 3 {
+		t.Fatalf("loaded-list calls = %d, want 3", listCalls)
+	}
+}
+
+func TestSessionCloseRequiresConfirmedUnload(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, loaded, wantErr string
+		rpcErr                        error
+	}{
+		{name: "already unloaded", status: "notLoaded"},
+		{name: "already unsubscribed", status: "notSubscribed", loaded: `{"data":[]}`},
+		{name: "still loaded", status: "unsubscribed", loaded: `{"data":["thread-1"]}`, wantErr: "deadline exceeded"},
+		{name: "missing list", status: "unsubscribed", loaded: `{}`, wantErr: "returned no data"},
+		{name: "invalid list", status: "unsubscribed", loaded: `!`, wantErr: "invalid character"},
+		{name: "list failed", status: "unsubscribed", rpcErr: errors.New("list failed"), wantErr: "list failed"},
+		{name: "unsubscribe failed", rpcErr: errors.New("unsubscribe failed"), wantErr: "unsubscribe failed"},
+		{name: "unknown status", status: "future-status", wantErr: "unknown status"},
+		{name: "missing status", wantErr: "unknown status"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := &closeSessionRPCExec{call: func(_ context.Context, method string, _ map[string]any) (json.RawMessage, error) {
+				if method == "thread/unsubscribe" {
+					if tc.status == "" && tc.rpcErr != nil {
+						return nil, tc.rpcErr
+					}
+					return json.Marshal(map[string]string{"status": tc.status})
+				}
+				if tc.loaded == "" && tc.rpcErr == nil {
+					t.Fatal("unexpected loaded-list RPC")
+				}
+				return json.RawMessage(tc.loaded), tc.rpcErr
+			}}
+			client := codexsdk.NewCodexWithExec(exec, codexsdk.CodexOptions{})
+			s := &session{client: client, thread: client.ResumeThread("thread-1", codexsdk.ThreadOptions{})}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			err := s.closeThread(ctx)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tc.wantErr)
+			}
+		})
 	}
 }
 
