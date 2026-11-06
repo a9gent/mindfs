@@ -67,12 +67,14 @@ func NewManager(localAddr string, noRelayer bool, relayBaseURL string, useTLS bo
 	if resolvedRelayBase == "" {
 		resolvedRelayBase = strings.TrimSpace(relayBaseURL)
 	}
-	return &Manager{
+	manager := &Manager{
 		service:   service,
 		noRelayer: noRelayer,
 		relayBase: strings.TrimSuffix(defaultIfEmpty(resolvedRelayBase, defaultRelayBaseURL), "/"),
 		nodeName:  defaultNodeName(),
-	}, nil
+	}
+	service.onConnectionModeSaved = manager.SetConnectionMode
+	return manager, nil
 }
 
 func (m *Manager) Start(ctx context.Context) error {

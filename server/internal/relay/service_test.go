@@ -319,6 +319,7 @@ func TestManagerPollConfirmedStartsRelay(t *testing.T) {
 			}
 		}),
 	}
+	manager.service.localClient = manager.service.client
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

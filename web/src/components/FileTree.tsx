@@ -56,6 +56,9 @@ import {
 import {
   fetchIdleSessionResourceReleasePreference,
   fetchNewProjectMetaLocationPreference,
+  fetchRelayConnectionPreference,
+  updateRelayConnectionPreference,
+  type RelayConnectionMode,
   fetchSessionNamingPreference,
   updateIdleSessionResourceReleasePreference,
   updateNewProjectMetaLocationPreference,
@@ -1536,6 +1539,10 @@ export function FileTree({
   const [idleReleaseError, setIdleReleaseError] = React.useState("");
   const [newProjectMetaLocation, setNewProjectMetaLocation] = React.useState<NewProjectMetaLocation>("project");
   const [newProjectMetaLocationBusy, setNewProjectMetaLocationBusy] = React.useState(false);
+  const [relayConnectionMode, setRelayConnectionMode] = React.useState<RelayConnectionMode>("auto");
+  const [relayConnectionBusy, setRelayConnectionBusy] = React.useState(false);
+  const [relayConnectionError, setRelayConnectionError] = React.useState(false);
+  const [isRelayConnectionMenuOpen, setIsRelayConnectionMenuOpen] = React.useState(false);
   const [appearanceMode, setAppearanceModeState] = React.useState<AppearanceMode>(() => getAppearanceMode());
   const [isUpdateNotesOpen, setIsUpdateNotesOpen] = React.useState(false);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = React.useState<BeforeInstallPromptEvent | null>(null);
@@ -1947,6 +1954,9 @@ export function FileTree({
       .then((preference) => {
         if (!cancelled) setIdleReleaseHours(String(preference.hours));
       })
+      .catch(() => {});
+    fetchRelayConnectionPreference()
+      .then((mode) => { if (!cancelled) setRelayConnectionMode(mode); })
       .catch(() => {});
     fetchNewProjectMetaLocationPreference()
       .then((location) => {
@@ -3121,6 +3131,7 @@ export function FileTree({
               setIsMenuOpen((open) => {
                 const nextOpen = !open;
                 if (nextOpen) {
+                  setIsRelayConnectionMenuOpen(false);
                   setIsAppearanceMenuOpen(false);
                   setIsFontSizeMenuOpen(false);
                   setIsLocaleMenuOpen(false);
@@ -3153,6 +3164,7 @@ export function FileTree({
           </button>
           {isMenuOpen ? (
             <FileTreeMenu onCategoryChange={() => {
+              setIsRelayConnectionMenuOpen(false);
               setIsAppearanceMenuOpen(false);
               setIsFontSizeMenuOpen(false);
               setIsLocaleMenuOpen(false);
@@ -3273,6 +3285,57 @@ export function FileTree({
                   <span>{t("fileTree.relayLocalServices")}</span>
                 </button>
                 {!isNativeApp ? <div data-menu-category="connections"><WebPushMenuItem /></div> : null}
+                {!relayNoRelayer ? <button
+                  type="button"
+                  data-menu-category="connections"
+                  aria-expanded={isRelayConnectionMenuOpen}
+                  disabled={relayConnectionBusy || !protectedAPIReady}
+                  title={t("fileTree.relayConnectionHelp")}
+                  onClick={() => {
+                    setIsRelayConnectionMenuOpen((open) => !open);
+                  }}
+                  style={fileTreeMenuButtonStyle}
+                >
+                  <span>{t("fileTree.relayConnection")}</span>
+                  <span style={{ marginLeft: "auto", color: "var(--text-secondary)", fontSize: "11px" }}>
+                    {t(relayConnectionError ? "relayLocal.saveFailed" : relayConnectionMode === "auto" ? "fileTree.relayConnectionAuto" : relayConnectionMode === "direct" ? "fileTree.relayConnectionDirect" : "fileTree.relayConnectionSystem")}
+                  </span>
+                  <ChevronRight isOpen={isRelayConnectionMenuOpen} />
+                </button> : null}
+                {!relayNoRelayer && isRelayConnectionMenuOpen ? (["auto", "direct", "system"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    data-menu-category="connections"
+                    aria-pressed={relayConnectionMode === mode}
+                    disabled={relayConnectionBusy || !protectedAPIReady}
+                    onClick={() => {
+                      if (relayConnectionBusy) return;
+                      if (relayConnectionMode === mode) {
+                        setIsRelayConnectionMenuOpen(false);
+                        return;
+                      }
+                      setRelayConnectionBusy(true);
+                      setRelayConnectionError(false);
+                      updateRelayConnectionPreference(mode)
+                        .then((value) => {
+                          setRelayConnectionMode(value);
+                          setIsRelayConnectionMenuOpen(false);
+                        })
+                        .catch(() => setRelayConnectionError(true))
+                        .finally(() => setRelayConnectionBusy(false));
+                    }}
+                    style={{
+                      ...fileTreeMenuButtonStyle,
+                      paddingLeft: "24px",
+                      background: relayConnectionMode === mode ? "var(--selection-bg)" : "transparent",
+                      color: relayConnectionMode === mode ? "var(--accent-color)" : "var(--text-primary)",
+                    }}
+                  >
+                    <span>{t(mode === "auto" ? "fileTree.relayConnectionAuto" : mode === "direct" ? "fileTree.relayConnectionDirect" : "fileTree.relayConnectionSystem")}</span>
+                    <span aria-hidden="true" style={{ marginLeft: "auto", opacity: relayConnectionMode === mode ? 1 : 0 }}>✓</span>
+                  </button>
+                )) : null}
                 <button
                   type="button"
                   data-menu-category="appearance"

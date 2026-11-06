@@ -40,7 +40,8 @@ func NewTipsService(manager *Manager) *TipsService {
 	return &TipsService{
 		manager: manager,
 		client: &http.Client{
-			Timeout: 5 * time.Second,
+			Timeout:   20 * time.Second,
+			Transport: manager.service.client.Transport,
 		},
 	}
 }

@@ -349,6 +349,8 @@ func (h *HTTPHandler) Routes() http.Handler {
 	r.Post("/api/agents/release-idle", h.protectedEndpoint(h.handleAgentIdleRelease))
 	r.Get("/api/preferences/new-project-meta-location", h.protectedEndpoint(h.handleNewProjectMetaLocationPreferenceGet))
 	r.Put("/api/preferences/new-project-meta-location", h.protectedEndpoint(h.handleNewProjectMetaLocationPreferencePut))
+	r.Get("/api/preferences/relay-connection", h.protectedEndpoint(h.handleRelayConnectionPreference))
+	r.Put("/api/preferences/relay-connection", h.protectedEndpoint(h.handleRelayConnectionPreference))
 	r.Get("/api/replying-sessions", h.protectedEndpoint(h.handleReplyingSessions))
 	r.Get("/api/sessions/search", h.protectedEndpoint(h.handleSessionSearch))
 	r.Get("/api/sessions/children", h.protectedEndpoint(h.handleSessionChildren))

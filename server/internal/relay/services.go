@@ -254,7 +254,7 @@ func (m *Manager) saveRemoteService(ctx context.Context, slug, name string, enab
 	}
 	req.Header.Set("Authorization", "Bearer "+creds.Relay.DeviceToken)
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Second, Transport: m.service.client.Transport}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -280,7 +280,7 @@ func (m *Manager) deleteRemoteService(ctx context.Context, slug string) error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+creds.Relay.DeviceToken)
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Second, Transport: m.service.client.Transport}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

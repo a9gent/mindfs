@@ -25,6 +25,7 @@ type Store struct {
 }
 
 type UserPreferences struct {
+	RelayConnectionMode             string                   `json:"relay_connection_mode,omitempty"`
 	AgentPinnedModels               map[string][]string      `json:"agent_pinned_models,omitempty"`
 	LauncherNodes                   []LauncherNode           `json:"launcher_nodes,omitempty"`
 	Agents                          map[string]AgentDefaults `json:"agents,omitempty"`
@@ -32,6 +33,33 @@ type UserPreferences struct {
 	SessionNaming                   SessionNamingDefaults    `json:"session_naming,omitempty"`
 	IdleSessionResourceReleaseHours int                      `json:"idle_session_resource_release_hours,omitempty"`
 	NewProjectMetaLocation          string                   `json:"new_project_meta_location,omitempty"`
+}
+
+func (s *Store) RelayConnectionMode() string {
+	if s == nil {
+		return "auto"
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if mode := s.data.RelayConnectionMode; mode == "auto" || mode == "direct" || mode == "system" {
+		return mode
+	}
+	return "auto"
+}
+
+func (s *Store) UpdateRelayConnectionMode(mode string) error {
+	if mode != "auto" && mode != "direct" && mode != "system" {
+		return errors.New("invalid relay connection mode")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.data.RelayConnectionMode
+	s.data.RelayConnectionMode = mode
+	if err := s.saveLocked(); err != nil {
+		s.data.RelayConnectionMode = previous
+		return err
+	}
+	return nil
 }
 
 type LauncherNode struct {

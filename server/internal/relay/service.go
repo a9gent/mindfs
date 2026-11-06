@@ -31,13 +31,20 @@ const (
 const relayDeviceIDHeader = "X-MindFS-Device-ID"
 const relayNodeNameHeader = "X-MindFS-Relay-Node-Name"
 
+// ConnectionModeResponseHeader defers a relayed mode change until the connector
+// has forwarded the save response. The connector consumes this internal header.
+const ConnectionModeResponseHeader = "X-MindFS-Relay-Connection-Mode"
+
 type Service struct {
-	localAddr string
-	localURL  string
-	store     *CredentialsStore
-	services  *ServiceStore
-	client    *http.Client
-	useTLS    bool
+	localAddr             string
+	localURL              string
+	store                 *CredentialsStore
+	services              *ServiceStore
+	client                *http.Client
+	localClient           *http.Client
+	network               *relayNetwork
+	useTLS                bool
+	onConnectionModeSaved func(string)
 }
 
 type credentialResponse struct {
@@ -127,13 +134,16 @@ func NewService(localAddr string, useTLS bool) (*Service, error) {
 		client = &http.Client{}
 	}
 
+	network := &relayNetwork{}
 	return &Service{
-		localAddr: localAddr,
-		localURL:  addrToURL(localAddr, "", useTLS),
-		store:     store,
-		services:  services,
-		client:    client,
-		useTLS:    useTLS,
+		localAddr:   localAddr,
+		localURL:    addrToURL(localAddr, "", useTLS),
+		store:       store,
+		services:    services,
+		client:      &http.Client{Transport: network.transport()},
+		localClient: client,
+		network:     network,
+		useTLS:      useTLS,
 	}, nil
 }
 
@@ -331,7 +341,7 @@ func (s *Service) FetchTokenStationUserInfo(ctx context.Context, baseURL string,
 func (s *Service) runSession(ctx context.Context, creds RelayCredentials) error {
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer "+creds.DeviceToken)
-	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, creds.Endpoint, headers)
+	conn, resp, err := s.network.dialWebSocket(ctx, creds.Endpoint, headers, *websocket.DefaultDialer)
 	if err != nil {
 		if resp != nil {
 			return newRelayDialError(resp, err)
@@ -429,13 +439,27 @@ func (s *Service) proxyHTTPToBase(req *http.Request, stream io.Writer, baseURL s
 	outbound.Host = targetURL.Host
 	prepareLocalProxyHeaders(outbound, req, targetURL, stripRelayInternalHeaders)
 
-	resp, err := s.client.Do(outbound)
+	resp, err := s.localClient.Do(outbound)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	rewriteLocalProxyResponse(resp, req, targetURL)
-	return resp.Write(stream)
+	mode := resp.Header.Get(ConnectionModeResponseHeader)
+	resp.Header.Del(ConnectionModeResponseHeader)
+	err = resp.Write(stream)
+	if !stripRelayInternalHeaders && req.Method == http.MethodPut && req.URL.Path == "/api/preferences/relay-connection" && resp.StatusCode == http.StatusOK && s.onConnectionModeSaved != nil {
+		switch mode {
+		case "auto", "direct", "system":
+			// Finish the response stream before cancelling the tunnel that carries
+			// it. Applying the saved mode is still necessary if the client left.
+			if closer, ok := stream.(io.Closer); ok {
+				_ = closer.Close()
+			}
+			s.onConnectionModeSaved(mode)
+		}
+	}
+	return err
 }
 
 func (s *Service) proxyWebSocket(req *http.Request, stream io.ReadWriter) error {
@@ -506,7 +530,7 @@ func (s *Service) waitForLocalServer(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		resp, err := s.client.Do(req)
+		resp, err := s.localClient.Do(req)
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {

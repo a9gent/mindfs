@@ -55,6 +55,22 @@ export type IdleSessionResourceReleasePreference = {
 
 export type NewProjectMetaLocation = "project" | "home";
 
+export type RelayConnectionMode = "auto" | "direct" | "system";
+
+export async function fetchRelayConnectionPreference(): Promise<RelayConnectionMode> {
+  const result = await protectedJSON<{ mode: RelayConnectionMode }>(appPath("/api/preferences/relay-connection"));
+  return result.mode;
+}
+
+export async function updateRelayConnectionPreference(mode: RelayConnectionMode): Promise<RelayConnectionMode> {
+  const result = await protectedJSON<{ mode: RelayConnectionMode }>(appPath("/api/preferences/relay-connection"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+  return result.mode;
+}
+
 function normalizeNewProjectMetaLocation(value: unknown): NewProjectMetaLocation {
   const location = value && typeof value === "object" && "location" in value
     ? String((value as { location?: unknown }).location || "")

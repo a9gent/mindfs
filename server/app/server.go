@@ -184,6 +184,7 @@ func Start(ctx context.Context, addr string, opts StartOptions) error {
 		return err
 	}
 	services.Relay = relayMgr
+	relayMgr.SetConnectionMode(prefs.RelayConnectionMode())
 	services.RelayTips = relay.NewTipsService(relayMgr)
 	if err := relayMgr.Start(ctx); err != nil {
 		return err

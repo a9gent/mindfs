@@ -8,6 +8,31 @@ import (
 	"mindfs/server/internal/agent"
 )
 
+func TestRelayConnectionModeDefaultAndPersist(t *testing.T) {
+	store := &Store{path: filepath.Join(t.TempDir(), preferencesFileName)}
+	if got := store.RelayConnectionMode(); got != "auto" {
+		t.Fatalf("default mode = %q", got)
+	}
+	for _, mode := range []string{"auto", "direct", "system", "auto"} {
+		if err := store.UpdateRelayConnectionMode(mode); err != nil {
+			t.Fatal(err)
+		}
+		reloaded := &Store{path: store.path}
+		if err := reloaded.load(); err != nil {
+			t.Fatal(err)
+		}
+		if got := reloaded.RelayConnectionMode(); got != mode {
+			t.Fatalf("persisted mode = %q, want %q", got, mode)
+		}
+	}
+	if err := store.UpdateRelayConnectionMode("invalid"); err == nil {
+		t.Fatal("accepted invalid mode")
+	}
+	if store.RelayConnectionMode() != "auto" {
+		t.Fatal("invalid update changed mode")
+	}
+}
+
 func TestLastAgentPersistsWithAgentDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), preferencesFileName)
 	store := &Store{path: path}
