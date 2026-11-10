@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +13,27 @@ import (
 )
 
 const configPathEnvKey = "MINDFS_AGENTS_CONFIG"
+
+// Process isolation modes for ACP agents.
+const (
+	// ProcessIsolationAgent keeps one ACP process per agent (legacy behavior).
+	ProcessIsolationAgent = "agent"
+	// ProcessIsolationCwd keeps one ACP process per (agent, working directory).
+	ProcessIsolationCwd = "cwd"
+)
+
+func normalizeProcessIsolation(value string) string {
+	switch trimmed := strings.ToLower(strings.TrimSpace(value)); trimmed {
+	case "":
+		// Keep empty so mergeAgentDefinition can inherit the installed default.
+		return ""
+	case ProcessIsolationAgent, ProcessIsolationCwd:
+		return trimmed
+	default:
+		log.Printf("[agent/config] unknown processIsolation=%q fallback=%s", value, ProcessIsolationAgent)
+		return ProcessIsolationAgent
+	}
+}
 
 // Config holds all agent configurations.
 type Config struct {
@@ -90,6 +112,11 @@ type Definition struct {
 
 	// CwdTemplate is the working directory template ({root} is replaced).
 	CwdTemplate string `json:"cwdTemplate,omitempty"`
+
+	// ProcessIsolation controls ACP process keying.
+	// "cwd" keeps one ACP process per (agent, working directory).
+	// Empty or "agent" keeps the legacy single process per agent.
+	ProcessIsolation string `json:"processIsolation,omitempty"`
 
 	// ProbeArgs are arguments for availability check.
 	ProbeArgs []string `json:"probeArgs,omitempty"`
@@ -236,6 +263,7 @@ func normalizeConfig(cfg Config) (Config, error) {
 		if cfg.Agents[i].Protocol == "" {
 			cfg.Agents[i].Protocol = DefaultProtocol(name)
 		}
+		cfg.Agents[i].ProcessIsolation = normalizeProcessIsolation(cfg.Agents[i].ProcessIsolation)
 		cfg.Agents[i].InstallCommands = normalizeCommandList(cfg.Agents[i].InstallCommands)
 		cfg.Agents[i].UpdateCommands = normalizeCommandList(cfg.Agents[i].UpdateCommands)
 	}
@@ -306,6 +334,9 @@ func mergeAgentDefinition(base Definition, override Definition) Definition {
 	}
 	if merged.CwdTemplate == "" {
 		merged.CwdTemplate = base.CwdTemplate
+	}
+	if merged.ProcessIsolation == "" {
+		merged.ProcessIsolation = base.ProcessIsolation
 	}
 	if len(merged.ProbeArgs) == 0 {
 		merged.ProbeArgs = append([]string(nil), base.ProbeArgs...)
@@ -508,4 +539,9 @@ func (d Definition) ResolveCwd(rootPath string) string {
 		return rootPath
 	}
 	return strings.ReplaceAll(d.CwdTemplate, "{root}", rootPath)
+}
+
+// IsolateByCwd reports whether ACP processes should be keyed by working directory.
+func (d Definition) IsolateByCwd() bool {
+	return strings.EqualFold(strings.TrimSpace(d.ProcessIsolation), ProcessIsolationCwd)
 }

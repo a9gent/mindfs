@@ -405,6 +405,7 @@ func (p *Pool) openSession(ctx context.Context, protocol Protocol, def Definitio
 			Args:            def.BuildArgs(in.RootPath),
 			Env:             cloneEnv(def.Env),
 			Cwd:             def.ResolveCwd(in.RootPath),
+			IsolateByCwd:    def.IsolateByCwd(),
 			ResumeSessionID: in.AgentSessionID,
 		})
 	}

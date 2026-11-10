@@ -549,6 +549,56 @@ func TestMergeConfigsKeepsBundledAgentsAndAppliesUserOverrides(t *testing.T) {
 	}
 }
 
+func TestMergeConfigsInheritsProcessIsolation(t *testing.T) {
+	base := Config{Agents: []Definition{
+		{Name: "CodeBuddy", Command: "codebuddy", Protocol: ProtocolACP, ProcessIsolation: ProcessIsolationCwd},
+		{Name: "kiro", Command: "kiro-cli", Protocol: ProtocolACP},
+	}}
+	// A user override that omits processIsolation must inherit the bundled default.
+	override := Config{Agents: []Definition{
+		{Name: "CodeBuddy", Command: "custom-codebuddy", Protocol: ProtocolACP},
+		{Name: "kiro", Command: "custom-kiro", Protocol: ProtocolACP},
+	}}
+	cfg := mergeConfigs(base, override)
+	codebuddy, ok := cfg.GetAgent("CodeBuddy")
+	if !ok {
+		t.Fatalf("expected CodeBuddy")
+	}
+	if !codebuddy.IsolateByCwd() {
+		t.Fatalf("CodeBuddy should inherit processIsolation=cwd, got %q", codebuddy.ProcessIsolation)
+	}
+	kiro, ok := cfg.GetAgent("kiro")
+	if !ok {
+		t.Fatalf("expected kiro")
+	}
+	if kiro.IsolateByCwd() {
+		t.Fatalf("kiro should stay on agent isolation, got %q", kiro.ProcessIsolation)
+	}
+
+	// An explicit override must be able to turn isolation off.
+	override.Agents[0].ProcessIsolation = ProcessIsolationAgent
+	cfg = mergeConfigs(base, override)
+	codebuddy, _ = cfg.GetAgent("CodeBuddy")
+	if codebuddy.IsolateByCwd() {
+		t.Fatalf("explicit agent override was ignored: %q", codebuddy.ProcessIsolation)
+	}
+}
+
+func TestNormalizeProcessIsolation(t *testing.T) {
+	cases := map[string]string{
+		"":       "",
+		"cwd":    ProcessIsolationCwd,
+		"  CWD ": ProcessIsolationCwd,
+		"agent":  ProcessIsolationAgent,
+		"weird":  ProcessIsolationAgent,
+	}
+	for in, want := range cases {
+		if got := normalizeProcessIsolation(in); got != want {
+			t.Fatalf("normalizeProcessIsolation(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestLoadConfigFiltersLifecycleCommandsByOS(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "agents.json")

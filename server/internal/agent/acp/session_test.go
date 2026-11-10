@@ -393,3 +393,40 @@ func TestConvertEventSuppressesACPTodoWriteToolCards(t *testing.T) {
 		})
 	}
 }
+
+func TestACPProcessKeyIsolatesByCwd(t *testing.T) {
+	const agent = "CodeBuddy"
+	rootA := "/tmp/project-a"
+	rootB := "/tmp/project-b"
+
+	// Legacy mode keeps one key per agent regardless of cwd.
+	if got, want := acpProcessKey(agent, false, rootA), agent; got != want {
+		t.Fatalf("legacy key = %q, want %q", got, want)
+	}
+	if got, want := acpProcessKey(agent, false, rootB), agent; got != want {
+		t.Fatalf("legacy key = %q, want %q", got, want)
+	}
+
+	// cwd isolation yields distinct keys per working directory.
+	keyA := acpProcessKey(agent, true, rootA)
+	keyB := acpProcessKey(agent, true, rootB)
+	if keyA == keyB {
+		t.Fatalf("cwd keys must differ, both = %q", keyA)
+	}
+	if got := processKeyAgent(keyA); got != agent {
+		t.Fatalf("processKeyAgent(%q) = %q, want %q", keyA, got, agent)
+	}
+	if got := processKeyAgent(agent); got != agent {
+		t.Fatalf("processKeyAgent(legacy key) = %q, want %q", got, agent)
+	}
+
+	// A non-normalized path must map to the same key as its cleaned form.
+	if got, want := acpProcessKey(agent, true, rootA+"/./"), acpProcessKey(agent, true, rootA); got != want {
+		t.Fatalf("normalized key = %q, want %q", got, want)
+	}
+
+	// Empty cwd falls back to legacy keying instead of producing a bogus key.
+	if got, want := acpProcessKey(agent, true, "  "), agent; got != want {
+		t.Fatalf("empty cwd key = %q, want %q", got, want)
+	}
+}
