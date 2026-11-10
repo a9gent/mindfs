@@ -71,13 +71,16 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 	if opts.SessionKey == "" {
 		return nil, errors.New("session key required")
 	}
+	// Resolve the working directory before creating the process so the process
+	// key, cmd.Dir, session cwd and resume cwd all use the same value.
+	// Fall back to RootPath when the resolved cwd is empty.
+	if strings.TrimSpace(opts.Cwd) == "" {
+		opts.Cwd = strings.TrimSpace(opts.RootPath)
+	}
 	proc, err := r.getOrCreateProcess(opts)
 	if err != nil {
 		return nil, err
 	}
-
-	// Keep the process cwd, session cwd and resume cwd consistent.
-	// Fall back to RootPath when the resolved cwd is empty.
 	sessionCwd := strings.TrimSpace(opts.Cwd)
 	if sessionCwd == "" {
 		sessionCwd = strings.TrimSpace(opts.RootPath)
@@ -202,16 +205,31 @@ func (r *Runtime) Close(agentName string) error {
 	if len(procs) == 0 {
 		return nil
 	}
-	var firstErr error
-	var hint string
+	// Close concurrently: waitForRecentStderrHint adds up to 750ms per process,
+	// which would serialize into seconds once several cwds are isolated.
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+		hint     string
+	)
 	for _, proc := range procs {
-		if err := proc.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		if h, ok := waitForRecentStderrHint(proc, 750*time.Millisecond); ok {
-			hint = h
-		}
+		wg.Add(1)
+		go func(p *Process) {
+			defer wg.Done()
+			err := p.Close()
+			h, ok := waitForRecentStderrHint(p, 750*time.Millisecond)
+			mu.Lock()
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+			if ok && hint == "" {
+				hint = h
+			}
+			mu.Unlock()
+		}(proc)
 	}
+	wg.Wait()
 	if hint != "" {
 		r.mu.Lock()
 		r.closeHints[agentName] = hint

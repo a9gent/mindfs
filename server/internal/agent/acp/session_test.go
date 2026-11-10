@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -428,5 +429,33 @@ func TestACPProcessKeyIsolatesByCwd(t *testing.T) {
 	// Empty cwd falls back to legacy keying instead of producing a bogus key.
 	if got, want := acpProcessKey(agent, true, "  "), agent; got != want {
 		t.Fatalf("empty cwd key = %q, want %q", got, want)
+	}
+}
+
+func TestRuntimeCloseRemovesAllCwdKeysForAgent(t *testing.T) {
+	r := NewRuntime(context.Background())
+	keyA := acpProcessKey("CodeBuddy", true, "/tmp/a")
+	keyB := acpProcessKey("CodeBuddy", true, "/tmp/b")
+	otherAgentKey := acpProcessKey("kiro", true, "/tmp/a")
+	legacyKey := acpProcessKey("gemini", false, "/tmp/a")
+	r.processes[keyA] = &Process{agentName: "CodeBuddy"}
+	r.processes[keyB] = &Process{agentName: "CodeBuddy"}
+	r.processes[otherAgentKey] = &Process{agentName: "kiro"}
+	r.processes[legacyKey] = &Process{agentName: "gemini"}
+
+	if err := r.Close("CodeBuddy"); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if _, ok := r.processes[keyA]; ok {
+		t.Fatalf("close left %q behind", keyA)
+	}
+	if _, ok := r.processes[keyB]; ok {
+		t.Fatalf("close left %q behind", keyB)
+	}
+	if _, ok := r.processes[otherAgentKey]; !ok {
+		t.Fatalf("close removed another agent's process")
+	}
+	if _, ok := r.processes[legacyKey]; !ok {
+		t.Fatalf("close removed the legacy process of another agent")
 	}
 }

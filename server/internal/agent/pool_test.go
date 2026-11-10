@@ -599,6 +599,31 @@ func TestNormalizeProcessIsolation(t *testing.T) {
 	}
 }
 
+func TestDecodeConfigDropsCwdIsolationForNonACP(t *testing.T) {
+	payload := []byte(`{"agents":[
+		{"name":"codex","command":"codex","protocol":"codex-sdk","processIsolation":"cwd"},
+		{"name":"CodeBuddy","command":"codebuddy","protocol":"acp","processIsolation":"cwd"}
+	]}`)
+	cfg, err := DecodeConfig(payload)
+	if err != nil {
+		t.Fatalf("DecodeConfig: %v", err)
+	}
+	codex, ok := cfg.GetAgent("codex")
+	if !ok {
+		t.Fatalf("expected codex")
+	}
+	if codex.ProcessIsolation != "" {
+		t.Fatalf("non-ACP agent kept processIsolation=%q, want empty", codex.ProcessIsolation)
+	}
+	codebuddy, ok := cfg.GetAgent("CodeBuddy")
+	if !ok {
+		t.Fatalf("expected CodeBuddy")
+	}
+	if !codebuddy.IsolateByCwd() {
+		t.Fatalf("ACP agent isolation = %q, want cwd", codebuddy.ProcessIsolation)
+	}
+}
+
 func TestLoadConfigFiltersLifecycleCommandsByOS(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "agents.json")

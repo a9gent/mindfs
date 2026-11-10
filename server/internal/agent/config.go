@@ -264,6 +264,10 @@ func normalizeConfig(cfg Config) (Config, error) {
 			cfg.Agents[i].Protocol = DefaultProtocol(name)
 		}
 		cfg.Agents[i].ProcessIsolation = normalizeProcessIsolation(cfg.Agents[i].ProcessIsolation)
+		if cfg.Agents[i].ProcessIsolation == ProcessIsolationCwd && cfg.Agents[i].Protocol != ProtocolACP {
+			log.Printf("[agent/config] processIsolation=cwd ignored agent=%s protocol=%s", name, cfg.Agents[i].Protocol)
+			cfg.Agents[i].ProcessIsolation = ""
+		}
 		cfg.Agents[i].InstallCommands = normalizeCommandList(cfg.Agents[i].InstallCommands)
 		cfg.Agents[i].UpdateCommands = normalizeCommandList(cfg.Agents[i].UpdateCommands)
 	}
