@@ -411,6 +411,7 @@ func (p *Pool) openSession(ctx context.Context, protocol Protocol, def Definitio
 	}
 }
 
+// KillAgentProcess terminates the agent's process tree.
 func (p *Pool) KillAgentProcess(agentName string, wait time.Duration) (string, bool) {
 	_ = wait
 	def, ok := p.cfg.GetAgent(agentName)
@@ -446,6 +447,16 @@ func (p *Pool) KillAgentProcess(agentName string, wait time.Duration) (string, b
 	default:
 		return "", false
 	}
+}
+
+// CloseACPProcessForCwd releases the ACP process isolated to (agent, cwd).
+// Probes use it to clean up the process they created in their temp root
+// without touching the processes that serve real user sessions.
+func (p *Pool) CloseACPProcessForCwd(agentName, cwd string) {
+	if p == nil || p.acp == nil {
+		return
+	}
+	_ = p.acp.CloseCwd(agentName, cwd)
 }
 
 func (p *Pool) closeSessionsForAgent(agentName string, protocol Protocol) {

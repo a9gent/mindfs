@@ -558,7 +558,16 @@ func probeInstalledAgentWithPool(ctx context.Context, name string, def Definitio
 	}
 
 	sessionKey := fmt.Sprintf("probe-%s", name)
-	defer pool.Close(sessionKey)
+	defer func() {
+		pool.Close(sessionKey)
+		// With cwd isolation the probe runs in its own process keyed by the
+		// temp root. Release it instead of leaving it resident in the shared
+		// pool. Legacy mode shares the agent process, so closing it here would
+		// kill real user sessions.
+		if !ownsPool && def.IsolateByCwd() {
+			pool.CloseACPProcessForCwd(name, def.ResolveCwd(tmpRoot))
+		}
+	}()
 	openCtx := ctx
 	sessionCancel := func() {}
 	if timeout, ok := probeSessionTimeoutForPhase(phase); ok {

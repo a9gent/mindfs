@@ -459,3 +459,34 @@ func TestRuntimeCloseRemovesAllCwdKeysForAgent(t *testing.T) {
 		t.Fatalf("close removed the legacy process of another agent")
 	}
 }
+
+func TestRuntimeCloseCwdRemovesOnlyTargetKey(t *testing.T) {
+	r := NewRuntime(context.Background())
+	probeKey := acpProcessKey("CodeBuddy", true, "/tmp/probe")
+	projectKey := acpProcessKey("CodeBuddy", true, "/tmp/project")
+	legacyKey := acpProcessKey("CodeBuddy", false, "/tmp/probe")
+	r.processes[probeKey] = &Process{agentName: "CodeBuddy"}
+	r.processes[projectKey] = &Process{agentName: "CodeBuddy"}
+	r.processes[legacyKey] = &Process{agentName: "CodeBuddy"}
+
+	if err := r.CloseCwd("CodeBuddy", "/tmp/probe"); err != nil {
+		t.Fatalf("CloseCwd returned error: %v", err)
+	}
+	if _, ok := r.processes[probeKey]; ok {
+		t.Fatalf("CloseCwd left %q behind", probeKey)
+	}
+	if _, ok := r.processes[projectKey]; !ok {
+		t.Fatalf("CloseCwd removed another cwd process")
+	}
+	if _, ok := r.processes[legacyKey]; !ok {
+		t.Fatalf("CloseCwd removed the legacy process")
+	}
+
+	// An empty cwd must be a no-op rather than falling back to the legacy key.
+	if err := r.CloseCwd("CodeBuddy", "  "); err != nil {
+		t.Fatalf("CloseCwd empty returned error: %v", err)
+	}
+	if _, ok := r.processes[legacyKey]; !ok {
+		t.Fatalf("CloseCwd with empty cwd removed the legacy process")
+	}
+}

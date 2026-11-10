@@ -238,6 +238,27 @@ func (r *Runtime) Close(agentName string) error {
 	return firstErr
 }
 
+// CloseCwd closes the cwd-isolated process for (agent, cwd), if one exists.
+// It is used by probes to release the process they created in their temp root
+// without touching the processes serving real user sessions.
+func (r *Runtime) CloseCwd(agentName, cwd string) error {
+	agentName = strings.TrimSpace(agentName)
+	cwd = strings.TrimSpace(cwd)
+	if agentName == "" || cwd == "" {
+		return nil
+	}
+	key := acpProcessKey(agentName, true, cwd)
+	r.mu.Lock()
+	proc := r.processes[key]
+	delete(r.processes, key)
+	delete(r.closeHints, key)
+	r.mu.Unlock()
+	if proc == nil {
+		return nil
+	}
+	return proc.Close()
+}
+
 func (r *Runtime) RecentCloseHint(agentName string) (string, bool) {
 	if strings.TrimSpace(agentName) == "" {
 		return "", false
