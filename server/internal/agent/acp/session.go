@@ -31,16 +31,27 @@ type OpenOptions struct {
 	ResumeSessionID string
 }
 
+// normalizeCwd canonicalizes a working directory for process keying and for
+// the ACP session cwd, so trailing spaces or "a/./b" spelling cannot create a
+// second process for the same directory.
+func normalizeCwd(cwd string) string {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return ""
+	}
+	return filepath.Clean(cwd)
+}
+
 // acpProcessKey identifies the ACP process that serves a session.
 // Legacy mode keys processes by agent name only. Cwd isolation also includes
 // the working directory so projects with different roots never share a process.
 func acpProcessKey(agentName string, isolateByCwd bool, cwd string) string {
 	agentName = strings.TrimSpace(agentName)
-	cwd = strings.TrimSpace(cwd)
+	cwd = normalizeCwd(cwd)
 	if !isolateByCwd || cwd == "" {
 		return agentName
 	}
-	return agentName + "\x00" + filepath.Clean(cwd)
+	return agentName + "\x00" + cwd
 }
 
 // processKeyAgent extracts the agent name from an ACP process key.
@@ -71,20 +82,17 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 	if opts.SessionKey == "" {
 		return nil, errors.New("session key required")
 	}
-	// Resolve the working directory before creating the process so the process
-	// key, cmd.Dir, session cwd and resume cwd all use the same value.
-	// Fall back to RootPath when the resolved cwd is empty.
-	if strings.TrimSpace(opts.Cwd) == "" {
-		opts.Cwd = strings.TrimSpace(opts.RootPath)
+	// Canonicalize once so the process key, cmd.Dir, session/new and
+	// session/load all use the same value. Fall back to RootPath.
+	opts.Cwd = normalizeCwd(opts.Cwd)
+	if opts.Cwd == "" {
+		opts.Cwd = normalizeCwd(opts.RootPath)
 	}
 	proc, err := r.getOrCreateProcess(opts)
 	if err != nil {
 		return nil, err
 	}
-	sessionCwd := strings.TrimSpace(opts.Cwd)
-	if sessionCwd == "" {
-		sessionCwd = strings.TrimSpace(opts.RootPath)
-	}
+	sessionCwd := opts.Cwd
 	if strings.TrimSpace(opts.ResumeSessionID) != "" {
 		if err := proc.ResumeSession(ctx, opts.SessionKey, opts.ResumeSessionID, sessionCwd); err != nil {
 			return nil, err
@@ -250,6 +258,13 @@ func (r *Runtime) CloseCwd(agentName, cwd string) error {
 	key := acpProcessKey(agentName, true, cwd)
 	r.mu.Lock()
 	proc := r.processes[key]
+	if proc != nil && proc.sessionCount() > 0 {
+		// A live session still uses this process. This can happen when a
+		// cwdTemplate collapses several roots onto one directory; closing the
+		// process would abort that session mid-turn.
+		r.mu.Unlock()
+		return nil
+	}
 	delete(r.processes, key)
 	delete(r.closeHints, key)
 	r.mu.Unlock()

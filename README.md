@@ -258,7 +258,7 @@ mindfs -agent-config /path/to/agents.json
 
 The extra file can add new agents or override a bundled definition with the same `name`.
 
-Set `processIsolation` on an agent entry to control how MindFS keys ACP processes. The default, `agent`, keeps one process per agent and reuses it across projects. `cwd` keeps one process per `(agent, project directory)`, which is needed for agents that resolve relative paths from the process working directory instead of the ACP session `cwd`. The bundled config enables `cwd` for `CodeBuddy` only. Add `"processIsolation": "cwd"` to an agent entry to opt in.
+Set `processIsolation` on an agent entry to control how MindFS keys ACP processes. The default, `agent`, keeps one process per agent and reuses it across projects. `cwd` keeps one process per `(agent, project directory)`, which is needed for agents that resolve relative paths from the process working directory instead of the ACP session `cwd`. The bundled config enables `cwd` for `CodeBuddy` only. Add `"processIsolation": "cwd"` to an agent entry to opt in. This is a workaround for agents that ignore the ACP session `cwd`; enable it per agent after confirming that the CLI supports multiple instances.
 
 ### CLI Reference
 

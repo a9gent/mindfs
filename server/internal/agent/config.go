@@ -546,6 +546,11 @@ func (d Definition) ResolveCwd(rootPath string) string {
 }
 
 // IsolateByCwd reports whether ACP processes should be keyed by working directory.
+// Non-ACP protocols ignore the setting so a protocol override cannot leave a
+// stale cwd isolation behind after config merging.
 func (d Definition) IsolateByCwd() bool {
+	if d.Protocol != "" && d.Protocol != ProtocolACP {
+		return false
+	}
 	return strings.EqualFold(strings.TrimSpace(d.ProcessIsolation), ProcessIsolationCwd)
 }

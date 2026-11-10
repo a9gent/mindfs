@@ -430,6 +430,36 @@ func TestACPProcessKeyIsolatesByCwd(t *testing.T) {
 	if got, want := acpProcessKey(agent, true, "  "), agent; got != want {
 		t.Fatalf("empty cwd key = %q, want %q", got, want)
 	}
+
+	// Trailing whitespace must not create a second key for the same directory.
+	if got, want := acpProcessKey(agent, true, rootA+" "), acpProcessKey(agent, true, rootA); got != want {
+		t.Fatalf("trailing space key = %q, want %q", got, want)
+	}
+}
+
+func TestCloseCwdSkipsProcessWithLiveSessions(t *testing.T) {
+	r := NewRuntime(context.Background())
+	key := acpProcessKey("CodeBuddy", true, "/tmp/shared")
+	proc := &Process{agentName: "CodeBuddy", sessions: map[string]*sessionState{"live": {}}}
+	r.processes[key] = proc
+
+	if err := r.CloseCwd("CodeBuddy", "/tmp/shared"); err != nil {
+		t.Fatalf("CloseCwd returned error: %v", err)
+	}
+	if _, ok := r.processes[key]; !ok {
+		t.Fatalf("CloseCwd removed a process that still serves a session")
+	}
+
+	// Once the last session is gone the process is released.
+	proc.mu.Lock()
+	delete(proc.sessions, "live")
+	proc.mu.Unlock()
+	if err := r.CloseCwd("CodeBuddy", "/tmp/shared"); err != nil {
+		t.Fatalf("CloseCwd returned error: %v", err)
+	}
+	if _, ok := r.processes[key]; ok {
+		t.Fatalf("CloseCwd kept an idle process")
+	}
 }
 
 func TestRuntimeCloseRemovesAllCwdKeysForAgent(t *testing.T) {

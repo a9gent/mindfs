@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -43,6 +44,9 @@ type sessionEntry struct {
 	activeUses int
 	closing    bool
 	closeDone  chan struct{}
+	// processCwd is set only for cwd-isolated ACP sessions. It lets the pool
+	// release the per-directory process once no session references it.
+	processCwd string
 }
 
 // NewPool creates a new agent pool.
@@ -164,6 +168,7 @@ retryExisting:
 		protocol:   protocol,
 		session:    sess,
 		lastUsedAt: time.Now(),
+		processCwd: isolatedProcessCwd(def, in.RootPath),
 	}
 	p.mu.Unlock()
 	return sess, nil
@@ -278,6 +283,9 @@ func (p *Pool) releaseSessionsDetailed(now time.Time, reason string, eligible fu
 		}
 		close(entry.closeDone)
 		p.mu.Unlock()
+		if err == nil {
+			p.closeCwdProcessIfUnused(entry.agentName, entry.processCwd)
+		}
 		if err != nil {
 			log.Printf("[agent/pool] idle_release.error session=%s agent=%s protocol=%s err=%v", entry.sessionKey, entry.agentName, entry.protocol, err)
 		} else {
@@ -518,6 +526,52 @@ func (p *Pool) closeSessions(entries []*sessionEntry) {
 			continue
 		}
 		_ = entry.session.Close()
+	}
+	p.releaseUnusedCwdProcesses(entries)
+}
+
+// normalizeProcessCwd canonicalizes a working directory for process keying.
+func normalizeProcessCwd(cwd string) string {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return ""
+	}
+	return filepath.Clean(cwd)
+}
+
+// isolatedProcessCwd returns the cwd key for a session when the agent uses cwd
+// isolation, or "" for legacy agents.
+func isolatedProcessCwd(def Definition, rootPath string) string {
+	if !def.IsolateByCwd() {
+		return ""
+	}
+	return normalizeProcessCwd(def.ResolveCwd(rootPath))
+}
+
+// closeCwdProcessIfUnused releases the cwd-isolated ACP process once no session
+// in the pool still references it. Otherwise a pool with many projects would
+// keep one process per project for the lifetime of the service.
+func (p *Pool) closeCwdProcessIfUnused(agentName, cwd string) {
+	if p == nil || p.acp == nil || cwd == "" {
+		return
+	}
+	p.mu.Lock()
+	for _, entry := range p.sessions {
+		if entry != nil && entry.agentName == agentName && entry.processCwd == cwd {
+			p.mu.Unlock()
+			return
+		}
+	}
+	p.mu.Unlock()
+	_ = p.acp.CloseCwd(agentName, cwd)
+}
+
+func (p *Pool) releaseUnusedCwdProcesses(entries []*sessionEntry) {
+	for _, entry := range entries {
+		if entry == nil || entry.processCwd == "" {
+			continue
+		}
+		p.closeCwdProcessIfUnused(entry.agentName, entry.processCwd)
 	}
 }
 

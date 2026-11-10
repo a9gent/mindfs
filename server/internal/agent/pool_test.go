@@ -624,6 +624,28 @@ func TestDecodeConfigDropsCwdIsolationForNonACP(t *testing.T) {
 	}
 }
 
+func TestIsolateByCwdRequiresACP(t *testing.T) {
+	acpDef := Definition{Name: "x", Protocol: ProtocolACP, ProcessIsolation: ProcessIsolationCwd}
+	if !acpDef.IsolateByCwd() {
+		t.Fatalf("ACP definition should isolate by cwd")
+	}
+	codexDef := Definition{Name: "x", Protocol: ProtocolCodexSDK, ProcessIsolation: ProcessIsolationCwd}
+	if codexDef.IsolateByCwd() {
+		t.Fatalf("non-ACP definition must ignore processIsolation")
+	}
+}
+
+func TestIsolatedProcessCwd(t *testing.T) {
+	def := Definition{Name: "x", Protocol: ProtocolACP, ProcessIsolation: ProcessIsolationCwd}
+	if got, want := isolatedProcessCwd(def, "/tmp/a/./"), filepath.Clean("/tmp/a"); got != want {
+		t.Fatalf("isolatedProcessCwd = %q, want %q", got, want)
+	}
+	def.ProcessIsolation = ProcessIsolationAgent
+	if got := isolatedProcessCwd(def, "/tmp/a"); got != "" {
+		t.Fatalf("legacy isolatedProcessCwd = %q, want empty", got)
+	}
+}
+
 func TestLoadConfigFiltersLifecycleCommandsByOS(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "agents.json")
