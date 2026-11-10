@@ -31,6 +31,7 @@ import (
 // - codex (via codex-acp wrapper)
 type Process struct {
 	agentName string
+	startCwd  string
 	cmd       *exec.Cmd
 	conn      *acp.ClientSideConnection
 	client    *mindfsClient
@@ -291,6 +292,16 @@ func (p *Process) agentLabel() string {
 	return p.agentName
 }
 
+// sessionCount reports how many ACP sessions this process currently serves.
+func (p *Process) sessionCount() int {
+	if p == nil {
+		return 0
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.sessions)
+}
+
 func (p *Process) getSessionUpdateHandler(sessionID string) sessionUpdateHandler {
 	session := p.getSessionByID(sessionID)
 	if session == nil {
@@ -527,11 +538,15 @@ func Start(ctx context.Context, agentName, command string, args []string, cwd st
 
 	proc := &Process{
 		agentName:    agentName,
+		startCwd:     cwd,
 		cmd:          cmd,
 		sessions:     make(map[string]*sessionState),
 		sessionsByID: make(map[string]*sessionState),
 		waitCh:       make(chan error, 1),
 		tree:         tree,
+	}
+	if cmd.Process != nil {
+		log.Printf("[agent/acp] process.start agent=%s pid=%d cwd=%q", agentName, cmd.Process.Pid, cwd)
 	}
 	proc.client = &mindfsClient{proc: proc}
 	go streamProcessStderr(proc, stderr)

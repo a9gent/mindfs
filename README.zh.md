@@ -258,6 +258,8 @@ mindfs -agent-config /path/to/agents.json
 
 这个额外配置既可以新增 Agent，也可以用相同 `name` 覆盖已有定义。
 
+`processIsolation` 用于控制 MindFS 如何为 ACP Agent 分配进程。默认值 `agent` 表示每个 Agent 复用一个进程、跨项目共享；`cwd` 表示每个 `(Agent, 项目目录)` 各用一个进程。对于按进程工作目录（而不是 ACP 会话 `cwd`）解析相对路径的 Agent，需要设为 `cwd`。内置配置仅对 `CodeBuddy` 启用。在 Agent 条目中加上 `"processIsolation": "cwd"` 即可开启。这是针对不读取 ACP 会话 `cwd` 的 Agent 的兼容措施；请先确认该 CLI 支持同机多实例，再逐个 Agent 开启。
+
 ### MindFS CLI 命令说明
 
 ```bash

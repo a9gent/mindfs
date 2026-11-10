@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +27,39 @@ type OpenOptions struct {
 	Args            []string
 	Env             map[string]string
 	Cwd             string
+	IsolateByCwd    bool
 	ResumeSessionID string
+}
+
+// normalizeCwd canonicalizes a working directory for process keying and for
+// the ACP session cwd, so trailing spaces or "a/./b" spelling cannot create a
+// second process for the same directory.
+func normalizeCwd(cwd string) string {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return ""
+	}
+	return filepath.Clean(cwd)
+}
+
+// acpProcessKey identifies the ACP process that serves a session.
+// Legacy mode keys processes by agent name only. Cwd isolation also includes
+// the working directory so projects with different roots never share a process.
+func acpProcessKey(agentName string, isolateByCwd bool, cwd string) string {
+	agentName = strings.TrimSpace(agentName)
+	cwd = normalizeCwd(cwd)
+	if !isolateByCwd || cwd == "" {
+		return agentName
+	}
+	return agentName + "\x00" + cwd
+}
+
+// processKeyAgent extracts the agent name from an ACP process key.
+func processKeyAgent(key string) string {
+	if idx := strings.IndexByte(key, 0); idx >= 0 {
+		return key[:idx]
+	}
+	return key
 }
 
 type Runtime struct {
@@ -49,17 +82,23 @@ func (r *Runtime) OpenSession(ctx context.Context, opts OpenOptions) (types.Sess
 	if opts.SessionKey == "" {
 		return nil, errors.New("session key required")
 	}
+	// Canonicalize once so the process key, cmd.Dir, session/new and
+	// session/load all use the same value. Fall back to RootPath.
+	opts.Cwd = normalizeCwd(opts.Cwd)
+	if opts.Cwd == "" {
+		opts.Cwd = normalizeCwd(opts.RootPath)
+	}
 	proc, err := r.getOrCreateProcess(opts)
 	if err != nil {
 		return nil, err
 	}
-
+	sessionCwd := opts.Cwd
 	if strings.TrimSpace(opts.ResumeSessionID) != "" {
-		if err := proc.ResumeSession(ctx, opts.SessionKey, opts.ResumeSessionID, opts.Cwd); err != nil {
+		if err := proc.ResumeSession(ctx, opts.SessionKey, opts.ResumeSessionID, sessionCwd); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := proc.NewSession(ctx, opts.SessionKey, opts.RootPath); err != nil {
+		if err := proc.NewSession(ctx, opts.SessionKey, sessionCwd); err != nil {
 			return nil, err
 		}
 	}
@@ -156,24 +195,83 @@ func (r *Runtime) CloseSession(sessionKey string) {
 }
 
 func (r *Runtime) Close(agentName string) error {
-	if strings.TrimSpace(agentName) == "" {
+	agentName = strings.TrimSpace(agentName)
+	if agentName == "" {
 		return nil
 	}
 	r.mu.Lock()
-	proc := r.processes[agentName]
-	delete(r.processes, agentName)
-	delete(r.closeHints, agentName)
-	r.mu.Unlock()
-	if proc != nil {
-		closeErr := proc.Close()
-		if hint, ok := waitForRecentStderrHint(proc, 750*time.Millisecond); ok {
-			r.mu.Lock()
-			r.closeHints[agentName] = hint
-			r.mu.Unlock()
+	procs := make([]*Process, 0, 1)
+	for key, proc := range r.processes {
+		if processKeyAgent(key) != agentName {
+			continue
 		}
-		return closeErr
+		procs = append(procs, proc)
+		delete(r.processes, key)
+		delete(r.closeHints, key)
 	}
-	return nil
+	r.mu.Unlock()
+	if len(procs) == 0 {
+		return nil
+	}
+	// Close concurrently: waitForRecentStderrHint adds up to 750ms per process,
+	// which would serialize into seconds once several cwds are isolated.
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+		hint     string
+	)
+	for _, proc := range procs {
+		wg.Add(1)
+		go func(p *Process) {
+			defer wg.Done()
+			err := p.Close()
+			h, ok := waitForRecentStderrHint(p, 750*time.Millisecond)
+			mu.Lock()
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+			if ok && hint == "" {
+				hint = h
+			}
+			mu.Unlock()
+		}(proc)
+	}
+	wg.Wait()
+	if hint != "" {
+		r.mu.Lock()
+		r.closeHints[agentName] = hint
+		r.mu.Unlock()
+	}
+	return firstErr
+}
+
+// CloseCwd closes the cwd-isolated process for (agent, cwd), if one exists.
+// It is used by probes to release the process they created in their temp root
+// without touching the processes serving real user sessions.
+func (r *Runtime) CloseCwd(agentName, cwd string) error {
+	agentName = strings.TrimSpace(agentName)
+	cwd = strings.TrimSpace(cwd)
+	if agentName == "" || cwd == "" {
+		return nil
+	}
+	key := acpProcessKey(agentName, true, cwd)
+	r.mu.Lock()
+	proc := r.processes[key]
+	if proc != nil && proc.sessionCount() > 0 {
+		// A live session still uses this process. This can happen when a
+		// cwdTemplate collapses several roots onto one directory; closing the
+		// process would abort that session mid-turn.
+		r.mu.Unlock()
+		return nil
+	}
+	delete(r.processes, key)
+	delete(r.closeHints, key)
+	r.mu.Unlock()
+	if proc == nil {
+		return nil
+	}
+	return proc.Close()
 }
 
 func (r *Runtime) RecentCloseHint(agentName string) (string, bool) {
@@ -238,6 +336,8 @@ func (r *Runtime) listProcesses() []*Process {
 }
 
 // ProcessIDs returns the live shared process PID keyed by configured agent.
+// When cwd isolation creates several processes for one agent, only the first
+// one is reported so the legacy map shape used by resource telemetry holds.
 func (r *Runtime) ProcessIDs() map[string]int {
 	if r == nil {
 		return nil
@@ -245,9 +345,12 @@ func (r *Runtime) ProcessIDs() map[string]int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make(map[string]int, len(r.processes))
-	for agentName, proc := range r.processes {
+	for key, proc := range r.processes {
 		if pid := proc.ProcessID(); pid > 0 {
-			out[agentName] = pid
+			agentName := processKeyAgent(key)
+			if _, exists := out[agentName]; !exists {
+				out[agentName] = pid
+			}
 		}
 	}
 	return out
@@ -266,13 +369,17 @@ func (r *Runtime) listProcessesAndReset() []*Process {
 }
 
 func (r *Runtime) getOrCreateProcess(opts OpenOptions) (*Process, error) {
+	key := acpProcessKey(opts.AgentName, opts.IsolateByCwd, opts.Cwd)
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
 		return nil, errors.New("agent runtime closed")
 	}
-	if proc, ok := r.processes[opts.AgentName]; ok {
+	if proc, ok := r.processes[key]; ok {
 		r.mu.Unlock()
+		if proc.startCwd != "" && strings.TrimSpace(opts.Cwd) != "" && proc.startCwd != opts.Cwd {
+			log.Printf("[agent/acp] cwd.mismatch agent=%s process_cwd=%q session_cwd=%q hint=enable processIsolation=cwd", opts.AgentName, proc.startCwd, opts.Cwd)
+		}
 		return proc, nil
 	}
 	r.mu.Unlock()
@@ -293,12 +400,12 @@ func (r *Runtime) getOrCreateProcess(opts OpenOptions) (*Process, error) {
 		proc.Close()
 		return nil, errors.New("agent runtime closed")
 	}
-	if existing, ok := r.processes[opts.AgentName]; ok {
+	if existing, ok := r.processes[key]; ok {
 		r.mu.Unlock()
 		proc.Close()
 		return existing, nil
 	}
-	r.processes[opts.AgentName] = proc
+	r.processes[key] = proc
 	r.mu.Unlock()
 	return proc, nil
 }

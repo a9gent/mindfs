@@ -549,6 +549,103 @@ func TestMergeConfigsKeepsBundledAgentsAndAppliesUserOverrides(t *testing.T) {
 	}
 }
 
+func TestMergeConfigsInheritsProcessIsolation(t *testing.T) {
+	base := Config{Agents: []Definition{
+		{Name: "CodeBuddy", Command: "codebuddy", Protocol: ProtocolACP, ProcessIsolation: ProcessIsolationCwd},
+		{Name: "kiro", Command: "kiro-cli", Protocol: ProtocolACP},
+	}}
+	// A user override that omits processIsolation must inherit the bundled default.
+	override := Config{Agents: []Definition{
+		{Name: "CodeBuddy", Command: "custom-codebuddy", Protocol: ProtocolACP},
+		{Name: "kiro", Command: "custom-kiro", Protocol: ProtocolACP},
+	}}
+	cfg := mergeConfigs(base, override)
+	codebuddy, ok := cfg.GetAgent("CodeBuddy")
+	if !ok {
+		t.Fatalf("expected CodeBuddy")
+	}
+	if !codebuddy.IsolateByCwd() {
+		t.Fatalf("CodeBuddy should inherit processIsolation=cwd, got %q", codebuddy.ProcessIsolation)
+	}
+	kiro, ok := cfg.GetAgent("kiro")
+	if !ok {
+		t.Fatalf("expected kiro")
+	}
+	if kiro.IsolateByCwd() {
+		t.Fatalf("kiro should stay on agent isolation, got %q", kiro.ProcessIsolation)
+	}
+
+	// An explicit override must be able to turn isolation off.
+	override.Agents[0].ProcessIsolation = ProcessIsolationAgent
+	cfg = mergeConfigs(base, override)
+	codebuddy, _ = cfg.GetAgent("CodeBuddy")
+	if codebuddy.IsolateByCwd() {
+		t.Fatalf("explicit agent override was ignored: %q", codebuddy.ProcessIsolation)
+	}
+}
+
+func TestNormalizeProcessIsolation(t *testing.T) {
+	cases := map[string]string{
+		"":       "",
+		"cwd":    ProcessIsolationCwd,
+		"  CWD ": ProcessIsolationCwd,
+		"agent":  ProcessIsolationAgent,
+		"weird":  ProcessIsolationAgent,
+	}
+	for in, want := range cases {
+		if got := normalizeProcessIsolation(in); got != want {
+			t.Fatalf("normalizeProcessIsolation(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDecodeConfigDropsCwdIsolationForNonACP(t *testing.T) {
+	payload := []byte(`{"agents":[
+		{"name":"codex","command":"codex","protocol":"codex-sdk","processIsolation":"cwd"},
+		{"name":"CodeBuddy","command":"codebuddy","protocol":"acp","processIsolation":"cwd"}
+	]}`)
+	cfg, err := DecodeConfig(payload)
+	if err != nil {
+		t.Fatalf("DecodeConfig: %v", err)
+	}
+	codex, ok := cfg.GetAgent("codex")
+	if !ok {
+		t.Fatalf("expected codex")
+	}
+	if codex.ProcessIsolation != "" {
+		t.Fatalf("non-ACP agent kept processIsolation=%q, want empty", codex.ProcessIsolation)
+	}
+	codebuddy, ok := cfg.GetAgent("CodeBuddy")
+	if !ok {
+		t.Fatalf("expected CodeBuddy")
+	}
+	if !codebuddy.IsolateByCwd() {
+		t.Fatalf("ACP agent isolation = %q, want cwd", codebuddy.ProcessIsolation)
+	}
+}
+
+func TestIsolateByCwdRequiresACP(t *testing.T) {
+	acpDef := Definition{Name: "x", Protocol: ProtocolACP, ProcessIsolation: ProcessIsolationCwd}
+	if !acpDef.IsolateByCwd() {
+		t.Fatalf("ACP definition should isolate by cwd")
+	}
+	codexDef := Definition{Name: "x", Protocol: ProtocolCodexSDK, ProcessIsolation: ProcessIsolationCwd}
+	if codexDef.IsolateByCwd() {
+		t.Fatalf("non-ACP definition must ignore processIsolation")
+	}
+}
+
+func TestIsolatedProcessCwd(t *testing.T) {
+	def := Definition{Name: "x", Protocol: ProtocolACP, ProcessIsolation: ProcessIsolationCwd}
+	if got, want := isolatedProcessCwd(def, "/tmp/a/./"), filepath.Clean("/tmp/a"); got != want {
+		t.Fatalf("isolatedProcessCwd = %q, want %q", got, want)
+	}
+	def.ProcessIsolation = ProcessIsolationAgent
+	if got := isolatedProcessCwd(def, "/tmp/a"); got != "" {
+		t.Fatalf("legacy isolatedProcessCwd = %q, want empty", got)
+	}
+}
+
 func TestLoadConfigFiltersLifecycleCommandsByOS(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "agents.json")

@@ -553,6 +553,7 @@
       "args": [
         "--acp"
       ],
+      "processIsolation": "cwd",
       "configBackup": {
         "fileSources": [
           "~/.codebuddy/mcp.json",
